@@ -332,8 +332,8 @@ generator, so you can use them out of the box:
   `https://api.groq.com/openai/v1/responses`.
 - **OpenAI Codex (Codex app-server + ChatGPT sign-in):** `gpt-5.1`,
   `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`,
-  `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.5`
-  (the live-catalog default for OpenAI) under the `openai-codex`
+  `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`,
+  and `gpt-5.6` (the live-catalog default for OpenAI) under the `openai-codex`
   provider. These use `api: "openai-codex-app-server"` and require
   `maestro codex login` to Sign in with ChatGPT through Codex app-server.
   Published Maestro installs use the packaged `@openai/codex` app-server first

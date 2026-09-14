@@ -1343,7 +1343,7 @@ pub fn compose_model_route(provider: Option<&str>, model: Option<&str>) -> Optio
                 provider.to_owned()
             };
             let default_model = crate::model_catalog::default_model_for_provider(&model_provider)
-                .unwrap_or("gpt-5.5");
+                .unwrap_or("gpt-5.6");
             Some(format!("{provider}/{default_model}"))
         }
     }
@@ -2432,6 +2432,14 @@ sandbox_mode = "danger-full-access"
             Some("openai/o4-mini")
         );
         assert_eq!(compose_model_route(None, None), None);
+        assert_eq!(
+            compose_model_route(Some("openai"), None).as_deref(),
+            Some("openai/gpt-5.6")
+        );
+        assert_eq!(
+            compose_model_route(Some("openai-codex"), None).as_deref(),
+            Some("openai-codex/gpt-5.6")
+        );
     }
 
     #[test]

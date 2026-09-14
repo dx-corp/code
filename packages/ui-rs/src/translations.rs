@@ -13245,6 +13245,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Model credits",
+        [
+            "Créditos para modelos",
+            "Crédits de modèles",
+            "Modellguthaben",
+            "モデルクレジット",
+            "모델 크레딧",
+            "模型额度",
+        ],
+    ),
+    (
         "Model name",
         [
             "Nombre del modelo",

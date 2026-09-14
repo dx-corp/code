@@ -15,6 +15,8 @@ use crate::headless::messages::{CodexSubagentContinuityEdge, ToolRetryDecisionAc
 use crate::headless::{NativeToolCapability, PendingApproval};
 use crate::hosted_runner::rendezvous_protocol::RendezvousMode;
 
+mod transport_flush;
+
 #[test]
 fn append_turn_dispatch_preserves_managed_inference_authorization() {
     let message = append_turn_message(AppendTurnRequest {
@@ -6437,7 +6439,7 @@ fn snapshot_manifest_parser_accepts_typescript_hosted_shape() {
                 "connection_count": 0,
                 "subscriber_count": 0,
                 "connections": [],
-                "model": "gpt-5.4",
+                "model": "gpt-5.6",
                 "provider": "openai",
                 "session_id": "session_ts",
                 "cwd": workspace.path(),
@@ -6554,7 +6556,7 @@ fn runtime_state_snapshot_serializes_empty_codex_subagent_edges() {
             controller_subscription_id: None,
             controller_connection_id: None,
             connections: Vec::new(),
-            model: Some("gpt-5.4".to_string()),
+            model: Some("gpt-5.6".to_string()),
             provider: Some("rust".to_string()),
             session_id: Some("session_empty_edges".to_string()),
             cwd: None,
@@ -6603,7 +6605,7 @@ fn work_continuity_manifest_extracts_codex_subagent_ids() {
             "connection_count": 0,
             "subscriber_count": 0,
             "connections": [],
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "rust",
             "session_id": "session_rust",
             "pending_approvals": [{
@@ -6699,7 +6701,7 @@ fn work_continuity_manifest_preserves_restored_codex_subagent_edges() {
             "connection_count": 0,
             "subscriber_count": 0,
             "connections": [],
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "rust",
             "session_id": "session_rust_restored",
             "pending_approvals": [],
@@ -6792,7 +6794,7 @@ fn work_continuity_manifest_counts_mixed_codex_and_regular_tools() {
             "connection_count": 0,
             "subscriber_count": 0,
             "connections": [],
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "rust",
             "session_id": "session_rust_mixed",
             "pending_approvals": [],
@@ -6861,7 +6863,7 @@ fn work_continuity_manifest_keeps_spawned_and_resumed_codex_subagents_active() {
             "connection_count": 0,
             "subscriber_count": 0,
             "connections": [],
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "rust",
             "session_id": "session_rust_active_subagents",
             "pending_approvals": [],
@@ -9096,7 +9098,7 @@ async fn state_snapshot_redacts_sensitive_supervisor_state() {
         },
     );
     let supervisor_state = AgentState {
-        model: Some("gpt-5.4".to_string()),
+        model: Some("gpt-5.6".to_string()),
         provider: Some("openai".to_string()),
         session_id: Some("supervisor-session-1".to_string()),
         cwd: Some("/runtime/workspace".to_string()),
@@ -9153,7 +9155,7 @@ async fn state_snapshot_redacts_sensitive_supervisor_state() {
         .json()
         .await
         .expect("controller json");
-    assert_eq!(controller["snapshot"]["state"]["model"], "gpt-5.4");
+    assert_eq!(controller["snapshot"]["state"]["model"], "gpt-5.6");
     assert_eq!(controller["snapshot"]["state"]["connection_count"], 1);
 
     let subscribe: serde_json::Value = client
@@ -9191,7 +9193,7 @@ async fn state_snapshot_redacts_sensitive_supervisor_state() {
         .json()
         .await
         .expect("state json");
-    assert_eq!(state["state"]["model"], "gpt-5.4");
+    assert_eq!(state["state"]["model"], "gpt-5.6");
     assert_eq!(state["state"]["provider"], "openai");
     assert_eq!(state["state"]["session_id"], "supervisor-session-1");
     assert_eq!(state["state"]["cwd"], "/runtime/workspace");

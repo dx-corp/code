@@ -2,6 +2,57 @@
 
 use super::*;
 
+/// Hosted AgentRun / A2A ids the worker injects into Maestro's environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct HostedCodexTurnCorrelation {
+    pub agent_run_id: Option<String>,
+    pub a2a_task_id: Option<String>,
+}
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(super) fn hosted_codex_turn_correlation_from(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> HostedCodexTurnCorrelation {
+    HostedCodexTurnCorrelation {
+        agent_run_id: lookup("MAESTRO_AGENT_RUN_ID").or_else(|| lookup("EVALOPS_AGENT_RUN_ID")),
+        a2a_task_id: lookup("MAESTRO_A2A_TASK_ID")
+            .or_else(|| lookup("MAESTRO_A2A_DELEGATION_ID"))
+            .or_else(|| lookup("A2A_TASK_ID")),
+    }
+}
+
+pub(super) fn hosted_codex_turn_correlation() -> HostedCodexTurnCorrelation {
+    hosted_codex_turn_correlation_from(env_nonempty)
+}
+
+/// Connector mounts listed context files but hydration wrote none of them.
+#[allow(dead_code)]
+pub(super) fn vfs_hydration_yielded_no_files(
+    context_file_count: i64,
+    hydrated_file_count: i64,
+) -> bool {
+    context_file_count > 0 && hydrated_file_count == 0
+}
+
+fn warn_codex_turn_failed(event: &'static str, thread_id: &str, turn_id: &str) {
+    let correlation = hosted_codex_turn_correlation();
+    tracing::warn!(
+        target: "maestro.codex",
+        event,
+        thread_id = %thread_id,
+        turn_id = %turn_id,
+        agent_run_id = correlation.agent_run_id.as_deref().unwrap_or(""),
+        a2a_task_id = correlation.a2a_task_id.as_deref().unwrap_or(""),
+        "Codex turn failed"
+    );
+}
+
 impl NativeAgentRunner {
     /// Ensure a Codex app-server thread exists for `openai-codex/*`.
     pub(super) async fn ensure_codex_session(&mut self) -> Result<()> {
@@ -257,11 +308,10 @@ impl NativeAgentRunner {
                         usage: usage.clone(),
                     });
                     if let Some(failure) = result.provider_failure().map(str::to_owned) {
-                        tracing::warn!(
-                            target: "maestro.codex",
-                            event = "codex_turn_failed",
-                            thread_id = %result.thread_id,
-                            turn_id = %result.turn_id,
+                        warn_codex_turn_failed(
+                            "codex_turn_failed",
+                            &result.thread_id,
+                            &result.turn_id,
                         );
                         let _ = self.event_tx.send(FromAgent::CodexTurnState {
                             state: "failed".to_owned(),
@@ -271,13 +321,17 @@ impl NativeAgentRunner {
                         return Err(anyhow::anyhow!(failure));
                     }
                     if final_text.trim().is_empty() {
+                        let correlation = hosted_codex_turn_correlation();
                         tracing::warn!(
                             target: "maestro.codex",
                             event = "codex_turn_empty_assistant_response",
                             thread_id = %result.thread_id,
                             turn_id = %result.turn_id,
+                            agent_run_id = correlation.agent_run_id.as_deref().unwrap_or(""),
+                            a2a_task_id = correlation.a2a_task_id.as_deref().unwrap_or(""),
                             assistant_text_chars = result.assistant_text.chars().count(),
                             assistant_text_is_full = result.assistant_text_is_full,
+                            "Codex turn failed"
                         );
                         let _ = self.event_tx.send(FromAgent::CodexTurnState {
                             state: "failed".to_owned(),
@@ -1201,5 +1255,28 @@ impl NativeAgentRunner {
         let _ = self.event_tx.send(FromAgent::Status {
             message: status_message,
         });
+    }
+}
+
+#[cfg(test)]
+mod hosted_turn_diagnostics_tests {
+    use super::vfs_hydration_yielded_no_files;
+
+    #[test]
+    fn vfs_hydration_gap_is_context_files_with_zero_hydrated() {
+        assert!(vfs_hydration_yielded_no_files(4, 0));
+        assert!(!vfs_hydration_yielded_no_files(4, 1));
+        assert!(!vfs_hydration_yielded_no_files(0, 0));
+    }
+
+    #[test]
+    fn hosted_correlation_reads_agent_run_and_a2a_task_ids() {
+        let correlation = super::hosted_codex_turn_correlation_from(|name| match name {
+            "MAESTRO_AGENT_RUN_ID" => Some("run-9047".to_string()),
+            "MAESTRO_A2A_TASK_ID" => Some("task-9047".to_string()),
+            _ => None,
+        });
+        assert_eq!(correlation.agent_run_id.as_deref(), Some("run-9047"));
+        assert_eq!(correlation.a2a_task_id.as_deref(), Some("task-9047"));
     }
 }

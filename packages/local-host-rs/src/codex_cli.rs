@@ -617,7 +617,7 @@ async fn login_with_client(
             println!(
                 "{}",
                 crate::localization::cli_locale().format(
-                    "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.5\".",
+                    "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.6\".",
                     &[]
                 )
             );
@@ -635,7 +635,7 @@ async fn login_with_client(
             println!(
                 "{}",
                 crate::localization::cli_locale().format(
-                    "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.5\".",
+                    "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.6\".",
                     &[]
                 )
             );
@@ -663,7 +663,7 @@ async fn login_with_client(
     println!(
         "{}",
         crate::localization::cli_locale().format(
-            "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.5\".",
+            "Select provider \"openai-codex\" or a model like \"openai-codex/gpt-5.6\".",
             &[]
         )
     );
@@ -1704,13 +1704,13 @@ mod tests {
             "--profile".to_owned(),
             "work".to_owned(),
             "--model".to_owned(),
-            "openai-codex/gpt-5.4".to_owned(),
+            "openai-codex/gpt-5.6".to_owned(),
             "--json".to_owned(),
         ])
         .unwrap();
 
         assert_eq!(options.profile.as_deref(), Some("work"));
-        assert_eq!(options.model.as_deref(), Some("openai-codex/gpt-5.4"));
+        assert_eq!(options.model.as_deref(), Some("openai-codex/gpt-5.6"));
         assert!(options.json);
     }
 
@@ -1719,9 +1719,9 @@ mod tests {
         let result = run_codex(&[
             "ready".to_owned(),
             "--model".to_owned(),
-            "openai-codex/gpt-5.4".to_owned(),
+            "openai-codex/gpt-5.6".to_owned(),
             "--model".to_owned(),
-            "openai-codex/gpt-5.5".to_owned(),
+            "openai-codex/gpt-5.6".to_owned(),
         ])
         .await;
 
@@ -1745,7 +1745,7 @@ mod tests {
         let key = crate::codex_session::CodexSessionKey::new(
             "work",
             workspace.path(),
-            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.6",
         )?;
         crate::codex_session::CodexThreadBinding::new(key, "thread-model-54", None, 1)
             .store_at(state_root.path())?;
@@ -1756,7 +1756,7 @@ mod tests {
             &identity,
             state_root.path(),
             workspace.path(),
-            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.6",
             &resume_unsupported_compatibility(),
             &json!({ "protocolVersion": "2025-01-01" }),
         )
@@ -1782,7 +1782,7 @@ mod tests {
             &identity,
             state_root.path(),
             workspace.path(),
-            "gpt-5.4",
+            "gpt-5.6",
             &resume_unsupported_compatibility(),
             &json!({ "protocolVersion": "2025-01-01" }),
         )
@@ -1790,7 +1790,7 @@ mod tests {
         assert_eq!(absent.state, "ready");
         assert_eq!(absent.detail, "no binding yet");
 
-        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.4")?;
+        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.6")?;
         let path =
             crate::codex_session::CodexThreadBinding::path_for_key_at(state_root.path(), &key);
         fs::create_dir_all(path.parent().unwrap())?;
@@ -1801,7 +1801,7 @@ mod tests {
             &identity,
             state_root.path(),
             workspace.path(),
-            "gpt-5.4",
+            "gpt-5.6",
             &resume_unsupported_compatibility(),
             &json!({ "protocolVersion": "2025-01-01" }),
         )
@@ -1824,14 +1824,14 @@ mod tests {
         let key = crate::codex_session::CodexSessionKey::new(
             "work",
             workspace.path(),
-            "openai-codex/gpt-5.5",
+            "openai-codex/gpt-5.6",
         )
         .unwrap();
         crate::codex_session::CodexThreadBinding::new(key, "thread-remote", None, 1)
             .store_at(state_root.path())
             .unwrap();
         let options = CodexReadinessOptions {
-            model: "openai-codex/gpt-5.5".to_owned(),
+            model: "openai-codex/gpt-5.6".to_owned(),
             cwd: workspace.path().to_path_buf(),
             state_root: state_root.path().to_path_buf(),
         };
@@ -1844,7 +1844,7 @@ mod tests {
         let resume = mock.next_request().await.expect("resume validation");
         assert_eq!(resume["method"], "thread/resume");
         assert_eq!(resume["params"]["threadId"], "thread-remote");
-        assert_eq!(resume["params"]["model"], "gpt-5.5");
+        assert_eq!(resume["params"]["model"], "gpt-5.6");
         mock.respond(
             resume["id"].as_u64().unwrap(),
             json!({ "thread": { "id": "thread-remote" } }),
@@ -1866,13 +1866,13 @@ mod tests {
             codex_home: codex_home.path().to_path_buf(),
             workspace_boundary: None,
         };
-        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
+        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.6")
             .unwrap();
         crate::codex_session::CodexThreadBinding::new(key.clone(), "missing-thread", None, 1)
             .store_at(state_root.path())
             .unwrap();
         let options = CodexReadinessOptions {
-            model: "openai-codex/gpt-5.5".to_owned(),
+            model: "openai-codex/gpt-5.6".to_owned(),
             cwd: workspace.path().to_path_buf(),
             state_root: state_root.path().to_path_buf(),
         };
@@ -1921,13 +1921,13 @@ mod tests {
             codex_home: codex_home.path().to_path_buf(),
             workspace_boundary: None,
         };
-        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
+        let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.6")
             .unwrap();
         crate::codex_session::CodexThreadBinding::new(key, "thread-unvalidated", None, 1)
             .store_at(state_root.path())
             .unwrap();
         let options = CodexReadinessOptions {
-            model: "openai-codex/gpt-5.5".to_owned(),
+            model: "openai-codex/gpt-5.6".to_owned(),
             cwd: workspace.path().to_path_buf(),
             state_root: state_root.path().to_path_buf(),
         };
@@ -2114,7 +2114,7 @@ mod tests {
             workspace_boundary: None,
         };
         let options = CodexReadinessOptions {
-            model: "openai-codex/gpt-5.5".to_owned(),
+            model: "openai-codex/gpt-5.6".to_owned(),
             cwd: std::env::current_dir().unwrap(),
             state_root: state_root.path().to_path_buf(),
         };
@@ -2164,7 +2164,7 @@ mod tests {
             workspace_boundary: None,
         };
         let options = CodexReadinessOptions {
-            model: "openai-codex/gpt-5.5".to_owned(),
+            model: "openai-codex/gpt-5.6".to_owned(),
             cwd: std::env::current_dir().unwrap(),
             state_root: state_root.path().to_path_buf(),
         };

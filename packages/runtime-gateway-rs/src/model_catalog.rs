@@ -508,7 +508,7 @@ pub(crate) fn default_model_from_registry(registry: &ModelRegistry) -> ModelInfo
 
 pub(crate) fn emergency_default_model() -> ModelInfo {
     let models = builtin_models();
-    let default_id = shared_catalog::default_model_for_provider("openai").unwrap_or("gpt-5.5");
+    let default_id = shared_catalog::default_model_for_provider("openai").unwrap_or("gpt-5.6");
     models
         .iter()
         .find(|model| model.provider == "openai-codex" && model.id == default_id)
@@ -668,7 +668,7 @@ mod tests {
         let model = emergency_default_model();
 
         assert_eq!(model.provider, "openai-codex");
-        assert_eq!(model.id, "gpt-5.5");
+        assert_eq!(model.id, "gpt-5.6");
         assert_eq!(model.api, "openai-codex-app-server");
     }
 
@@ -703,7 +703,7 @@ mod tests {
 
         let codex = models
             .iter()
-            .find(|model| model.provider == "openai-codex" && model.id == "gpt-5.5")
+            .find(|model| model.provider == "openai-codex" && model.id == "gpt-5.6")
             .expect("codex app-server mirror of the default model");
         assert_eq!(codex.api, "openai-codex-app-server");
         assert!(codex.capabilities.reasoning);
@@ -712,8 +712,8 @@ mod tests {
             codex.context_window,
             shared
                 .iter()
-                .find(|model| model.provider == "openai" && model.id == "gpt-5.5")
-                .expect("shared gpt-5.5")
+                .find(|model| model.provider == "openai" && model.id == "gpt-5.6")
+                .expect("shared gpt-5.6")
                 .capabilities
                 .context_tokens,
         );

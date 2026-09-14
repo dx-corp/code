@@ -465,15 +465,15 @@ pub fn model_for_tier(tier: ModelTier, provider: ModelProvider) -> &'static str 
     match (tier, provider) {
         (ModelTier::Opus, ModelProvider::Anthropic) => "claude-opus-4-6",
         (ModelTier::Opus, ModelProvider::OpenAi) => "gpt-5.2",
-        (ModelTier::Opus, ModelProvider::OpenAiCodex) => "gpt-5.5",
+        (ModelTier::Opus, ModelProvider::OpenAiCodex) => "gpt-5.6",
         (ModelTier::Opus, ModelProvider::Google) => "gemini-2.0-flash-thinking-exp",
         (ModelTier::Sonnet, ModelProvider::Anthropic) => "claude-sonnet-4-5-20250929",
         (ModelTier::Sonnet, ModelProvider::OpenAi) => "gpt-4o",
-        (ModelTier::Sonnet, ModelProvider::OpenAiCodex) => "gpt-5.4",
+        (ModelTier::Sonnet, ModelProvider::OpenAiCodex) => "gpt-5.6",
         (ModelTier::Sonnet, ModelProvider::Google) => "gemini-2.0-flash-exp",
         (ModelTier::Haiku, ModelProvider::Anthropic) => "claude-haiku-4-5-20251001",
         (ModelTier::Haiku, ModelProvider::OpenAi) => "gpt-4o-mini",
-        (ModelTier::Haiku, ModelProvider::OpenAiCodex) => "gpt-5.4-mini",
+        (ModelTier::Haiku, ModelProvider::OpenAiCodex) => "gpt-5.6",
         (ModelTier::Haiku, ModelProvider::Google) => "gemini-2.0-flash-lite-exp",
     }
 }
@@ -515,7 +515,7 @@ fn subagent_dispatch_rule(
             }
             SubagentType::Coder => SubagentDispatchRule::explicit(
                 ModelProvider::OpenAiCodex,
-                "gpt-5.5",
+                "gpt-5.6",
                 ReasoningEffort::Medium,
             ),
             SubagentType::Reviewer | SubagentType::Researcher | SubagentType::BrowserQa => {
@@ -548,12 +548,12 @@ fn subagent_dispatch_rule(
             }
             SubagentType::Coder => SubagentDispatchRule::explicit(
                 ModelProvider::OpenAiCodex,
-                "gpt-5.5",
+                "gpt-5.6",
                 ReasoningEffort::High,
             ),
             SubagentType::Reviewer => SubagentDispatchRule::explicit(
                 ModelProvider::OpenAiCodex,
-                "gpt-5.5",
+                "gpt-5.6",
                 ReasoningEffort::Medium,
             ),
             SubagentType::BrowserQa => {

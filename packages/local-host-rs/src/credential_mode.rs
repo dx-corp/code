@@ -1,11 +1,15 @@
-//! Product credential mode: mandatory EvalOps Identity plus managed inference
-//! or local BYOK.
+//! Product credential mode: managed inference through EvalOps Identity, or
+//! local BYOK through a direct provider credential.
 //!
-//! Every process must have a live EvalOps Identity session before it can start
-//! a model turn. Once signed in, it can use managed inference when its session
-//! has workspace scope, or a local provider credential (BYOK). There is no
-//! anonymous provider path. Hosted residents instead use the established
-//! tenant-bound Runner Host service credential exclusively for managed inference.
+//! A managed / `evalops` / `maestro-managed` route requires a live EvalOps
+//! Identity session (workspace-scoped for llm-gateway, or the hosted Runner
+//! Host service credential). A direct provider explicitly selected with its
+//! own API key (OpenAI, Anthropic, Google, xAI, OpenRouter, and other local
+//! BYOK sources) constructs a native agent without Identity. Identity is
+//! still required when no direct credential exists, and a present Identity
+//! session is still verified rather than ignored. Hosted residents use the
+//! established tenant-bound Runner Host service credential exclusively for
+//! managed inference.
 
 use std::collections::HashMap;
 
@@ -249,24 +253,29 @@ pub fn detect() -> Result<DetectedMode> {
     Ok(detect_from(snapshot.as_ref(), &env).unwrap_or(DetectedMode::Byok))
 }
 
-/// Evaluate whether a supplied Identity session can serve `model`.
+/// Evaluate whether a supplied Identity session or local credential can serve
+/// `model`.
 ///
-/// An explicit `openrouter/...` route is always BYOK after Identity is
+/// A direct provider with a usable local key is BYOK without Identity. An
+/// explicit `openrouter/...` route stays BYOK even after Identity is
 /// established. Other local provider credentials also select BYOK after
 /// Identity, while a scoped session without a local credential uses
-/// llm-gateway. Production model construction calls [`require_ready`], which
-/// verifies the supplied session against Identity first; this deterministic
-/// helper is retained for diagnostics and unit tests.
+/// llm-gateway. Managed / `evalops` routes, Codex app-server transports, and
+/// any model with no local credential still require Identity. Production
+/// model construction calls [`require_ready`]; this deterministic helper is
+/// retained for diagnostics and unit tests.
 pub fn require_ready_from(
     snapshot: Option<&EvalOpsCredentialSnapshot>,
     env: &HashMap<String, String>,
     model: &str,
 ) -> Result<DetectedMode> {
-    let Some(session) = platform_session_from(snapshot, env) else {
-        bail!("{IDENTITY_REQUIRED_MESSAGE}");
-    };
-
-    ready_mode_from_session(session, env, model)
+    if let Some(session) = platform_session_from(snapshot, env) {
+        return ready_mode_from_session(session, env, model);
+    }
+    if admits_direct_provider_without_identity(model, env) {
+        return Ok(DetectedMode::Byok);
+    }
+    bail!("{IDENTITY_REQUIRED_MESSAGE}");
 }
 
 fn ready_mode_from_session(
@@ -299,16 +308,30 @@ pub fn require_ready(model: &str) -> Result<DetectedMode> {
     require_ready_with_identity(model).map(|(mode, _identity)| mode)
 }
 
-/// Resolve a ready provider mode together with the same live Identity session
-/// that authorized it.
+/// Resolve a ready provider mode together with the live Identity session that
+/// authorized it, when one exists.
 ///
-/// BYOK intentionally remains `DetectedMode::Byok`, but it is still admitted
-/// only after this session is verified. Native telemetry uses the returned
-/// session to bind a completed turn to its originating tenant rather than
-/// rediscovering whatever account happens to be active during a later retry.
-pub fn require_ready_with_identity(model: &str) -> Result<(DetectedMode, PlatformSession)> {
+/// Direct-provider BYOK remains `DetectedMode::Byok` and does not contact
+/// Identity when no session is present. A stored or env Identity session is
+/// still verified before it authorizes managed inference or binds telemetry.
+/// Native telemetry uses that session to pin a completed turn to its
+/// originating tenant rather than rediscovering whatever account happens to
+/// be active during a later retry.
+pub fn require_ready_with_identity(model: &str) -> Result<(DetectedMode, Option<PlatformSession>)> {
+    let env = std::env::vars().collect::<HashMap<String, String>>();
+    if !hosted_runner_mode(&env)
+        && platform_session_from(None, &env).is_none()
+        && crate::init_cli::load_evalops_snapshot()
+            .ok()
+            .flatten()
+            .is_none()
+        && admits_direct_provider_without_identity(model, &env)
+    {
+        return Ok((DetectedMode::Byok, None));
+    }
     let (identity, env) = current_verified_identity_session_with_env()?;
     ready_mode_from_verified_identity(identity, env, model)
+        .map(|(mode, session)| (mode, Some(session)))
 }
 
 fn ready_mode_from_verified_identity(
@@ -419,16 +442,20 @@ pub(crate) fn refreshed_identity_session_for_capture(
 const HOSTED_IDENTITY_ORIGIN: &str = "https://identity-service.evalops.svc.cluster.local:8080";
 const HOSTED_IDENTITY_EXCHANGE: &str = "https://identity-service.evalops.svc.cluster.local:8080/internal/v1/kubernetes-workload-certificates/exchange";
 
-fn identity_verification_endpoint(
-    snapshot: Option<&EvalOpsCredentialSnapshot>,
-    env: &HashMap<String, String>,
-) -> Result<(String, Option<std::path::PathBuf>)> {
-    let hosted = env.get("MAESTRO_HOSTED_RUNNER_MODE").is_some_and(|value| {
+fn hosted_runner_mode(env: &HashMap<String, String>) -> bool {
+    env.get("MAESTRO_HOSTED_RUNNER_MODE").is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         )
-    });
+    })
+}
+
+fn identity_verification_endpoint(
+    snapshot: Option<&EvalOpsCredentialSnapshot>,
+    env: &HashMap<String, String>,
+) -> Result<(String, Option<std::path::PathBuf>)> {
+    let hosted = hosted_runner_mode(env);
     if let Some(exchange) = env.get("MAESTRO_IDENTITY_EXCHANGE_URL").filter(|_| hosted) {
         if exchange.trim() != HOSTED_IDENTITY_EXCHANGE {
             bail!("untrusted hosted EvalOps Identity exchange endpoint");
@@ -617,6 +644,20 @@ fn prefers_local_byok(model: &str) -> bool {
         .is_ok_and(|descriptor| descriptor.id == "openrouter")
 }
 
+fn is_managed_route(model: &str) -> bool {
+    ProviderRegistry::resolve_descriptor(model)
+        .is_ok_and(|descriptor| matches!(descriptor.id, "evalops" | "maestro-managed"))
+}
+
+/// Direct provider keys construct a native agent without Identity.
+///
+/// Managed / evalops routes, Codex app-server transports, and hosted Runner
+/// Host admission still require a verified Identity session. A local key
+/// must not unlock those paths.
+fn admits_direct_provider_without_identity(model: &str, env: &HashMap<String, String>) -> bool {
+    !is_managed_route(model) && !is_delegated_byok_transport(model) && byok_ready(model, env)
+}
+
 pub fn platform_session_from(
     snapshot: Option<&EvalOpsCredentialSnapshot>,
     env: &HashMap<String, String>,
@@ -735,21 +776,21 @@ impl PlatformSession {
         }
         env.insert(ORG_ID_ENV.to_owned(), self.organization_id.clone());
         env.insert(WORKSPACE_ID_ENV.to_owned(), workspace_id.to_owned());
-        // Existing Identity snapshots may carry the previous OpenAI default.
-        // Selecting a shipped Fireworks route selects Fireworks explicitly, while
-        // preserving the authenticated tenant, environment, and team scope.
-        let select_fireworks = model
+        // Shipped models select a typed provider route. A provider switch uses
+        // that route's credential reference, retaining authenticated tenant scope.
+        let shipped = model
             .strip_prefix("evalops/")
             .or_else(|| model.strip_prefix("maestro-managed/"))
             .and_then(|model| {
-                crate::model_catalog::MANAGED_FIREWORKS_MODELS
+                crate::model_catalog::MANAGED_MODELS
                     .iter()
                     .find(|entry| entry.id == model)
-            })
-            .is_some()
-            && provider_ref_string(&self.provider_ref, "provider").as_deref() != Some("fireworks");
-        let provider = if select_fireworks {
-            "fireworks".to_owned()
+            });
+        let switched = shipped.filter(|entry| {
+            provider_ref_string(&self.provider_ref, "provider").as_deref() != Some(entry.provider)
+        });
+        let provider = if let Some(entry) = switched {
+            entry.provider.to_owned()
         } else {
             vendor_provider_id(model, &self.provider_ref)?
         };
@@ -761,8 +802,8 @@ impl PlatformSession {
         );
         env.insert(
             CREDENTIAL_NAME_ENV.to_owned(),
-            if select_fireworks {
-                DEFAULT_MANAGED_CREDENTIAL_NAME.to_owned()
+            if let Some(entry) = switched {
+                entry.credential_name.to_owned()
             } else {
                 provider_ref_string(&self.provider_ref, "credential_name")
                     .unwrap_or_else(|| canonical_managed_credential_name(None))
@@ -1250,7 +1291,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_glm_route_uses_fireworks_with_verified_tenant_scope() {
+    fn shipped_managed_routes_preserve_provider_and_verified_tenant_scope() {
         let session = PlatformSession {
             access_token: "access".to_owned(),
             organization_id: "org-1".to_owned(),
@@ -1263,14 +1304,14 @@ mod tests {
                 "credential_name": "default"
             }),
         };
-        for price in crate::model_catalog::MANAGED_FIREWORKS_MODELS {
+        for price in crate::model_catalog::MANAGED_MODELS {
             let model = format!("evalops/{}", price.id);
             let env = session.managed_env(&model, &HashMap::new()).unwrap();
-            assert_eq!(env[PROVIDER_ENV], "fireworks");
+            assert_eq!(env[PROVIDER_ENV], price.provider);
             assert_eq!(env[ORG_ID_ENV], "org-1");
             assert_eq!(env[WORKSPACE_ID_ENV], "workspace-2");
             assert_eq!(env[ENVIRONMENT_ENV], "production");
-            assert_eq!(env[CREDENTIAL_NAME_ENV], "deixic-llm-gateway-glm53");
+            assert_eq!(env[CREDENTIAL_NAME_ENV], price.credential_name);
             assert_eq!(session.managed_model_route(&model), model);
             assert!(!env.contains_key("FIREWORKS_API_KEY"));
         }
@@ -1675,11 +1716,41 @@ mod tests {
     }
 
     #[test]
-    fn require_ready_rejects_byok_without_an_identity_account() {
-        let env = HashMap::from([("OPENROUTER_API_KEY".to_owned(), "or-test".to_owned())]);
-        let error = require_ready_from(None, &env, "openrouter/openai/o4-mini")
-            .expect_err("BYOK must not bypass EvalOps Identity");
-        assert!(error.to_string().contains("deixic-code evalops login"));
+    fn require_ready_admits_direct_provider_keys_without_identity() {
+        for (model, key, value) in [
+            ("openai/gpt-5.4", "OPENAI_API_KEY", "sk-test"),
+            ("anthropic/claude-opus-4-6", "ANTHROPIC_API_KEY", "sk-test"),
+            ("google/gemini-2.5-pro", "GEMINI_API_KEY", "sk-test"),
+            ("xai/grok-4", "XAI_API_KEY", "sk-test"),
+            ("openrouter/openai/o4-mini", "OPENROUTER_API_KEY", "or-test"),
+        ] {
+            let env = HashMap::from([(key.to_owned(), value.to_owned())]);
+            let mode = require_ready_from(None, &env, model)
+                .unwrap_or_else(|error| panic!("{model} with {key} must admit BYOK: {error:#}"));
+            assert_eq!(
+                mode.kind(),
+                CredentialModeKind::Byok,
+                "{model} must stay on the local provider"
+            );
+        }
+    }
+
+    #[test]
+    fn require_ready_still_requires_identity_for_managed_evalops_without_a_session() {
+        let env = HashMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())]);
+        for model in [
+            DEFAULT_MANAGED_MODEL,
+            "evalops/gpt-5.5",
+            "maestro-managed/gpt-5.5",
+        ] {
+            let error = require_ready_from(None, &env, model).expect_err(&format!(
+                "{model} must not treat a local OpenAI key as managed admission"
+            ));
+            assert!(
+                error.to_string().contains("deixic-code evalops login"),
+                "{model}: {error}"
+            );
+        }
     }
 
     #[test]

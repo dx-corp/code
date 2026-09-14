@@ -9836,12 +9836,84 @@ async fn a2a_completion_attaches_subagent_work_graph_metadata() {
         task["metadata"]["workGraph"]["correlationPath"],
         "maestro-swarm/swarm-1/alpha-review/a2a/maestro-task-1"
     );
+    assert_eq!(
+        task["metadata"]["workGraph"]["codexSubagents"]["schemaVersion"],
+        CODEX_SUBAGENT_WORK_GRAPH_SCHEMA
+    );
 
     if let Some(previous_fake) = previous_fake {
         env::set_var("MAESTRO_A2A_FAKE_RESPONSE", previous_fake);
     } else {
         env::remove_var("MAESTRO_A2A_FAKE_RESPONSE");
     }
+}
+
+#[test]
+fn a2a_vfs_hydration_gap_matches_context_files_with_zero_hydrated() {
+    assert!(crate::a2a::a2a_vfs_hydration_gap(4, 0));
+    assert!(!crate::a2a::a2a_vfs_hydration_gap(4, 1));
+    assert!(!crate::a2a::a2a_vfs_hydration_gap(0, 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a2a_failed_turn_attaches_work_graph_with_run_ids() {
+    let _guard = ENV_LOCK.lock().await;
+    let previous_fake = env::var("MAESTRO_A2A_FAKE_RESPONSE").ok();
+    env::remove_var("MAESTRO_A2A_FAKE_RESPONSE");
+    let mut expired = valid_code_writer_capsule();
+    expired["capsule"]["deadlineAt"] = serde_json::json!("2000-01-01T00:00:00Z");
+    let state = test_app_state_with_sessions(HashMap::new());
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    let metadata = serde_json::json!({
+        A2A_SUBAGENT_REQUEST_METADATA_PATH: expired,
+        "platformRunId": "platform-run-9047",
+        "agentRunId": "agent-run-9047",
+        "vfs_context_file_count": 4,
+        "vfs_hydrated_file_count": 0
+    });
+    // Check the same decoder used by completion before executing: an absent
+    // capsule would select an ordinary native turn and could contact a provider.
+    let capsule = crate::a2a::completion_subagent_capsule_from_metadata(&metadata)
+        .expect("valid completion capsule")
+        .expect("canonical governed capsule is present");
+    assert!(crate::a2a::build_a2a_subagent_execution_policy_for_state(&state, &capsule).is_err());
+    let task = tokio::time::timeout(
+        Duration::from_secs(5),
+        complete_a2a_task(
+            &state,
+            "implement this".to_string(),
+            "failed-task-9047".to_string(),
+            "ctx-9047".to_string(),
+            Vec::new(),
+            metadata,
+            cancel_rx,
+        ),
+    )
+    .await
+    .expect("missing execution policy must fail before provider execution");
+    if let Some(previous_fake) = previous_fake {
+        env::set_var("MAESTRO_A2A_FAKE_RESPONSE", previous_fake);
+    }
+    assert!(
+        task.to_string()
+            .contains("governed task capsule is missing its pre-claim execution policy")
+    );
+
+    assert_eq!(task["status"]["state"], "TASK_STATE_FAILED");
+    assert_eq!(
+        task["metadata"]["workGraph"]["codexSubagents"]["schemaVersion"],
+        CODEX_SUBAGENT_WORK_GRAPH_SCHEMA
+    );
+    assert!(
+        task["metadata"]["workGraph"]["correlationPath"]
+            .as_str()
+            .expect("correlation path")
+            .contains("platform_agent_run_id=platform-run-9047"),
+        "work graph correlation path should join the platform run id: {}",
+        task["metadata"]["workGraph"]["correlationPath"]
+    );
+    assert_eq!(task["metadata"]["workGraph"]["state"], "failed");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -12161,7 +12233,7 @@ fn default_model_handles_empty_registry() {
     let model = default_model_from_registry(&registry);
 
     assert_eq!(model.provider, "openai-codex");
-    assert_eq!(model.id, "gpt-5.5");
+    assert_eq!(model.id, "gpt-5.6");
     assert_eq!(model.api, "openai-codex-app-server");
 }
 
@@ -13025,7 +13097,7 @@ fn emergency_default_model_is_available_without_registry_entries() {
     let model = emergency_default_model();
 
     assert_eq!(model.provider, "openai-codex");
-    assert_eq!(model.id, "gpt-5.5");
+    assert_eq!(model.id, "gpt-5.6");
     assert_eq!(model.api, "openai-codex-app-server");
 }
 

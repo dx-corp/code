@@ -1432,7 +1432,7 @@ fn validated_subagent_capsule_from_metadata(
     validate_subagent_capsule(request, skill_id).map(Some)
 }
 
-fn completion_subagent_capsule_from_metadata(
+pub(crate) fn completion_subagent_capsule_from_metadata(
     metadata: &Value,
 ) -> Result<Option<ValidatedSubagentTaskCapsule>, CapsuleValidationError> {
     let Some(request) = metadata.get(A2A_SUBAGENT_REQUEST_METADATA_PATH) else {
@@ -1901,6 +1901,7 @@ async fn complete_a2a_task_with_capsule(
             return task;
         }
         Err(error) => {
+            warn_a2a_native_turn_failure(&task_id, &context_id, &metadata, &error);
             let message = a2a_agent_message(&context_id, &error);
             history.push(message.clone());
             attach_server_owned_subagent_completion(
@@ -2022,6 +2023,7 @@ fn attach_server_owned_subagent_completion(
 ) {
     let Some(capsule) = capsule else {
         maybe_attach_a2a_subagent_work_graph(metadata, task_id, context_id);
+        stamp_a2a_work_graph_outcome(metadata, observed_outcome);
         return;
     };
     if let Some(metadata) = metadata.as_object_mut() {
@@ -2140,6 +2142,78 @@ fn a2a_native_session_id(context_id: &str, metadata: &Value) -> String {
     )
 }
 
+fn stamp_a2a_work_graph_outcome(metadata: &mut Value, observed_outcome: &str) {
+    let Some(work_graph) = metadata
+        .as_object_mut()
+        .and_then(|metadata| metadata.get_mut("workGraph"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    work_graph.insert(
+        "state".to_string(),
+        Value::String(observed_outcome.to_string()),
+    );
+    work_graph.insert(
+        "status".to_string(),
+        Value::String(observed_outcome.to_string()),
+    );
+}
+
+pub(crate) fn a2a_vfs_hydration_gap(context_file_count: i64, hydrated_file_count: i64) -> bool {
+    context_file_count > 0 && hydrated_file_count == 0
+}
+
+fn a2a_metadata_i64(metadata: &Value, keys: &[&str]) -> i64 {
+    let Some(object) = metadata.as_object() else {
+        return 0;
+    };
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_i64))
+        .unwrap_or(0)
+}
+
+fn warn_a2a_native_turn_failure(task_id: &str, context_id: &str, metadata: &Value, error: &str) {
+    let object = metadata.as_object();
+    let agent_run_id = object
+        .and_then(|object| {
+            json_string_from_object(object, &["agentRunId", "agent_run_id", "platformRunId"])
+        })
+        .unwrap_or_default();
+    let platform_run_id = object
+        .and_then(|object| json_string_from_object(object, &["platformRunId", "platform_run_id"]))
+        .unwrap_or_default();
+    let vfs_context_file_count =
+        a2a_metadata_i64(metadata, &["vfs_context_file_count", "vfsContextFileCount"]);
+    let vfs_hydrated_file_count = a2a_metadata_i64(
+        metadata,
+        &["vfs_hydrated_file_count", "vfsHydratedFileCount"],
+    );
+    tracing::warn!(
+        target: "maestro.a2a",
+        event = "a2a_turn_failed",
+        task_id = %task_id,
+        context_id = %context_id,
+        agent_run_id = %agent_run_id,
+        platform_run_id = %platform_run_id,
+        vfs_context_file_count,
+        vfs_hydrated_file_count,
+        vfs_hydration_gap = a2a_vfs_hydration_gap(vfs_context_file_count, vfs_hydrated_file_count),
+        error = %error,
+        "A2A native turn failed"
+    );
+}
+
+fn a2a_subagent_request_object(metadata: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    [
+        A2A_SUBAGENT_REQUEST_METADATA_PATH,
+        "subagent_request",
+        "subagentRequest",
+    ]
+    .into_iter()
+    .find_map(|key| metadata.get(key).and_then(Value::as_object))
+}
+
 fn maybe_attach_a2a_subagent_work_graph(metadata: &mut Value, task_id: &str, context_id: &str) {
     let Some(metadata_object) = metadata.as_object_mut() else {
         return;
@@ -2147,10 +2221,7 @@ fn maybe_attach_a2a_subagent_work_graph(metadata: &mut Value, task_id: &str, con
     if metadata_object.get("workGraph").is_some() {
         return;
     }
-    let Some(subagent_request) = metadata_object
-        .get(A2A_SUBAGENT_REQUEST_METADATA_PATH)
-        .and_then(Value::as_object)
-    else {
+    let Some(subagent_request) = a2a_subagent_request_object(metadata_object) else {
         return;
     };
     let capsule = subagent_request.get("capsule").and_then(Value::as_object);
@@ -2166,11 +2237,16 @@ fn maybe_attach_a2a_subagent_work_graph(metadata: &mut Value, task_id: &str, con
         .unwrap_or_else(|| task_id.to_string());
     let child_run_id = format!("a2a-task:{task_id}");
     let tool_call_id = format!("a2a-subagent-dispatch:{task_id}");
-    let correlation_path = if let Some(swarm_id) = swarm_id.as_deref() {
+    let platform_run_id =
+        json_string_from_object(metadata_object, &["platformRunId", "platform_run_id"]);
+    let mut correlation_path = if let Some(swarm_id) = swarm_id.as_deref() {
         format!("maestro-swarm/{swarm_id}/{work_item_id}/a2a/{task_id}")
     } else {
         format!("a2a/{context_id}/{task_id}")
     };
+    if let Some(platform_run_id) = platform_run_id.as_deref() {
+        correlation_path.push_str(&format!(";platform_agent_run_id={platform_run_id}"));
+    }
 
     metadata_object.insert(
         "workGraph".to_string(),
@@ -2192,6 +2268,7 @@ fn maybe_attach_a2a_subagent_work_graph(metadata: &mut Value, task_id: &str, con
             "correlationPath": correlation_path,
             "rawPayloadWithheld": true,
             "codexSubagents": {
+                "schemaVersion": CODEX_SUBAGENT_WORK_GRAPH_SCHEMA,
                 "edgeCount": 1,
                 "toolCallIds": [tool_call_id],
                 "childRunIds": [child_run_id],
