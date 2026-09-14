@@ -73,4 +73,9 @@ test("the managed hosted acceptance is a hard gate when explicitly configured", 
 		/if: \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) && \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\)/,
 	);
 	assert.match(workflow, /vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE \|\| ''/);
+	assert.match(
+		block,
+		/continue-on-error:\s*\$\{\{\s*!\(github\.event\.inputs\.hosted_orb_live_smoke == '1' \|\| vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE == '1'\)\s*\}\}/,
+	);
+	assert.doesNotMatch(block, /^    continue-on-error:\s*true\b/m);
 });

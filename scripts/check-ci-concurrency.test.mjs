@@ -173,6 +173,23 @@ test("maestro-ci covers every migrated validation family", () => {
 		workflow,
 		/vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE \|\| ''/,
 	);
+	const hostedOrb = workflow.split("  hosted-orb-delegation-live:")[1]?.split(/\n  [a-z]/)[0] ?? "";
+	assert.match(
+		hostedOrb,
+		/continue-on-error:\s*\$\{\{\s*!\(github\.event\.inputs\.hosted_orb_live_smoke == '1' \|\| vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE == '1'\)\s*\}\}/,
+	);
+	assert.doesNotMatch(hostedOrb, /^    continue-on-error:\s*true\b/m);
+});
+
+test("supply-chain can read the pull request and issue timeline for deny.toml checks", () => {
+	const workflowPermissions = workflow.split("\njobs:")[0] ?? "";
+	assert.match(workflowPermissions, /^permissions:\n  contents: read$/m);
+	assert.doesNotMatch(workflowPermissions, /pull-requests:/);
+	assert.doesNotMatch(workflowPermissions, /issues:/);
+	const block = workflow.split("  supply-chain:")[1]?.split(/\n  [a-z]/)[0] ?? "";
+	assert.match(block, /^    permissions:\n      contents: read\n      pull-requests: read\n      issues: read$/m);
+	assert.match(block, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+	assert.match(block, /bash scripts\/run-ci-supply-chain\.sh/);
 });
 
 test("terminal maestro-ci job fails unless needed jobs succeeded or skipped", () => {
@@ -182,6 +199,12 @@ test("terminal maestro-ci job fails unless needed jobs succeeded or skipped", ()
 	);
 	assert.match(workflow, /result == "skipped"/);
 	assert.match(workflow, /maestro-ci failed for/);
+	const terminal = workflow.split("  maestro-ci:")[1] ?? "";
+	assert.match(terminal, /for name, body in sorted\(needs\.items\(\)\):/);
+	assert.doesNotMatch(
+		terminal,
+		/if name in \(|hosted-orb-delegation-live.*continue-on-error|result == "failure"/,
+	);
 });
 
 test("nextest runs as a four-way hash partition matrix", () => {

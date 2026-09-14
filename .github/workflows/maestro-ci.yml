@@ -328,6 +328,12 @@ jobs:
   supply-chain:
     needs: protocol-contracts
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # deny.toml PRs call GET /pulls/{n} and GET /issues/{n}/timeline through GH_TOKEN.
+    # Job-level permissions replace the workflow default, so contents: read stays explicit.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 45
     steps:
@@ -464,7 +470,9 @@ jobs:
 
   hosted-orb-delegation-live:
     if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    continue-on-error: true
+    # Tolerate failure only when the live smoke is not requested. A gated failure
+    # must keep a failing `needs` result so the terminal maestro-ci job fails closed.
+    continue-on-error: ${{ !(github.event.inputs.hosted_orb_live_smoke == '1' || vars.MAESTRO_HOSTED_ORB_LIVE_SMOKE == '1') }}
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 30
     steps:
