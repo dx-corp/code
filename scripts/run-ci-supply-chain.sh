@@ -11,7 +11,8 @@ changed_inputs="$supply_chain_tmp/changed-dependency-inputs"
 deny_report="$supply_chain_tmp/deny-report.jsonl"
 base_deny_report="$supply_chain_tmp/base-deny-report.jsonl"
 
-tool_root="${BUILDKITE_BUILD_CHECKOUT_PATH:-$(pwd)}/.buildkite/cache/cargo-tools"
+cache_root="${MAESTRO_CI_CACHE_ROOT:-${RUNNER_TEMP:-$(pwd)/.cache}/maestro-ci}"
+tool_root="${cache_root}/cargo-tools"
 mkdir -p "$tool_root"
 export CARGO_INSTALL_ROOT="$tool_root"
 export PATH="$tool_root/bin:$PATH"
@@ -23,13 +24,14 @@ timeout --signal=TERM --kill-after=10s 2m cargo deny fetch db
 node --test scripts/check-new-deps-supply-chain.test.mjs scripts/check-advisory-expiry.test.mjs
 node scripts/check-advisory-expiry.mjs
 
-pull_request="${BUILDKITE_PULL_REQUEST:-false}"
+pull_request="${MAESTRO_CI_PULL_REQUEST:-false}"
 if [[ "$pull_request" == "false" || -z "$pull_request" ]]; then
   timeout --signal=TERM --kill-after=30s 20m cargo deny check --disable-fetch
   exit 0
 fi
 
-base_branch="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
+base_branch="${MAESTRO_CI_BASE_BRANCH:-${GITHUB_BASE_REF:-main}}"
+export MAESTRO_CI_COMMIT="${MAESTRO_CI_COMMIT:-${GITHUB_SHA:-}}"
 timeout --signal=TERM --kill-after=10s 2m git fetch --no-tags origin "+refs/heads/$base_branch:refs/remotes/origin/$base_branch"
 base_sha="$(git merge-base HEAD "origin/$base_branch")"
 git show "$base_sha:Cargo.lock" > "$base_lockfile"
@@ -40,9 +42,9 @@ test -s "$base_deny"
 policy_changed=false
 if ! git diff --quiet "$base_sha" HEAD -- deny.toml; then
   policy_changed=true
-  repo_slug="$(printf '%s' "${BUILDKITE_REPO:-}" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+  repo_slug="${GITHUB_REPOSITORY:-}"
   [[ "$repo_slug" == */* ]] || {
-    echo "could not derive GitHub repository from BUILDKITE_REPO" >&2
+    echo "could not derive GitHub repository from GITHUB_REPOSITORY" >&2
     exit 1
   }
   if [[ -n "${GH_TOKEN:-}" ]]; then
@@ -69,7 +71,7 @@ if ! git diff --quiet "$base_sha" HEAD -- deny.toml; then
       --location
       -H "Accept: application/vnd.github+json"
       -H "X-GitHub-Api-Version: 2022-11-28"
-      -H "User-Agent: evalops-maestro-buildkite"
+      -H "User-Agent: evalops-maestro-ci"
     )
     timeout --signal=TERM --kill-after=10s 60s curl "${curl_args[@]}" \
       "$github_api/pulls/$pull_request" > "$pr_json"
@@ -119,15 +121,15 @@ NODE
       readFileSync(process.env.SUPPLY_CHAIN_TIMELINE_JSON, "utf8"),
     ).flat();
     const label = "supply-chain-policy-approved";
-    if (pr.head?.sha !== process.env.BUILDKITE_COMMIT) {
-      throw new Error("Buildkite commit is not the current pull-request head");
+    if (pr.head?.sha !== process.env.MAESTRO_CI_COMMIT) {
+      throw new Error("CI commit is not the current pull-request head");
     }
     if (!pr.labels?.some((entry) => entry.name === label)) {
       throw new Error(`${label} is not currently applied`);
     }
     const headCommitIndex = timeline.findLastIndex(
       (event) =>
-        event.event === "committed" && event.sha === process.env.BUILDKITE_COMMIT,
+        event.event === "committed" && event.sha === process.env.MAESTRO_CI_COMMIT,
     );
     const approvalIndex = timeline.findLastIndex(
       (event) => event.event === "labeled" && event.label?.name === label,

@@ -12,11 +12,12 @@ set -euo pipefail
 # Keep this job on an isolated target dir. Sharing CARGO_TARGET_DIR with
 # lint/test mixes instrumented and plain incremental artifacts and forces a
 # full rebuild.
-repo_root="${BUILDKITE_BUILD_CHECKOUT_PATH:-$(pwd)}"
-tool_root="${repo_root}/.buildkite/cache/cargo-tools"
+repo_root="$(pwd)"
+cache_root="${MAESTRO_CI_CACHE_ROOT:-${RUNNER_TEMP:-${repo_root}/.cache}/maestro-ci}"
+tool_root="${cache_root}/cargo-tools"
 mkdir -p "$tool_root/bin"
 export PATH="$tool_root/bin:$PATH"
-export CARGO_TARGET_DIR="${repo_root}/.buildkite/cache/cargo-target-cov"
+export CARGO_TARGET_DIR="${cache_root}/cargo-target-cov"
 
 install_github_crate_bin() {
   local name="$1"
@@ -52,9 +53,9 @@ fi
 
 # --lib: one instrumented test harness per crate. No tests/*.rs, no bins,
 # no doctests. nextest for the same parallelism as rust-tests.
-# cargo-llvm-cov 0.9.0 rejects combining a deferred report with --no-clean
-# (Buildkite 353). Keep --no-clean so the isolated target dir stays
-# incremental; generate the lcov/summary reports in the commands below.
+# cargo-llvm-cov 0.9.0 rejects combining a deferred report with --no-clean.
+# Keep --no-clean so the isolated target dir stays incremental; generate the
+# lcov/summary reports in the commands below.
 timeout --signal=TERM --kill-after=30s 25m cargo llvm-cov nextest \
   --workspace \
   --lib \
@@ -62,10 +63,9 @@ timeout --signal=TERM --kill-after=30s 25m cargo llvm-cov nextest \
   --no-clean \
   --ignore-run-fail \
   -- \
-  --profile buildkite \
+  --profile ci \
   --no-fail-fast
 
 cargo llvm-cov report --summary-only
 mkdir -p coverage-report
 cargo llvm-cov report --lcov --output-path coverage-report/lcov.info
-buildkite-agent artifact upload 'coverage-report/**/*'

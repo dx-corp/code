@@ -8,7 +8,7 @@
  * fresh RUSTSEC advisory landing against a dependency this PR never touched
  * should not spuriously red an unrelated PR — that's the same "gate that
  * fails for the wrong reason" problem this repo is trying to get away from.
- * The Buildkite supply-chain lane (`scripts/run-buildkite-supply-chain.sh`)
+ * The CI supply-chain lane (`scripts/run-ci-supply-chain.sh`)
  * is where advisories against the existing tree get enforced unconditionally.
  *
  * This script narrows PR-time enforcement to findings whose *own* flagged
@@ -287,7 +287,7 @@ function main() {
 	if (preexisting > 0) {
 		console.log(
 			`${preexisting} finding(s) are against dependencies this PR did not add or change — not failing this PR lane. ` +
-				"They are enforced by the full Buildkite supply-chain check and visible in this job's output.",
+				"They are enforced by the full CI supply-chain check and visible in this job's output.",
 		);
 	}
 

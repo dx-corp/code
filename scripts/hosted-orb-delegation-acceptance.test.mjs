@@ -57,3 +57,25 @@ test("the public validator rejects live-gate metadata", async () => {
 	contract.live_gate = { enabled: true };
 	assert.throws(() => validateContract(contract), /live-gate inventory/);
 });
+
+test("the managed hosted acceptance is a hard gate when explicitly configured", async () => {
+	const workflow = await readFile(
+		new URL("../.github/workflows/maestro-ci.yml", import.meta.url),
+		"utf8",
+	);
+	const block =
+		workflow.split("  hosted-orb-delegation-live:")[1]?.split(/\n  [a-z]/)[0] ??
+		"";
+	assert.match(block, /Optional hosted Orb acceptance was not requested; skipping\./);
+	assert.match(block, /npm run smoke:hosted-orb-delegation/);
+	assert.match(
+		block,
+		/if: \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) && \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\)/,
+	);
+	assert.match(workflow, /vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE \|\| ''/);
+	assert.match(
+		block,
+		/continue-on-error:\s*\$\{\{\s*!\(github\.event\.inputs\.hosted_orb_live_smoke == '1' \|\| vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE == '1'\)\s*\}\}/,
+	);
+	assert.doesNotMatch(block, /^    continue-on-error:\s*true\b/m);
+});

@@ -13,7 +13,8 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 maestro_root="$(cd "${script_dir}/.." && pwd -P)"
-tool_root="${BUILDKITE_BUILD_CHECKOUT_PATH:-${maestro_root}}/.buildkite/cache/ci-tools"
+cache_root="${MAESTRO_CI_CACHE_ROOT:-${RUNNER_TEMP:-${maestro_root}/.cache}/maestro-ci}"
+tool_root="${cache_root}/ci-tools"
 mkdir -p "${tool_root}/bin"
 export PATH="${tool_root}/bin:${PATH}"
 
