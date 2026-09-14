@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789284488,
+  "generated_at": 1789371690,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1514,7 +1514,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 235929
+        "output_tokens": 943718
       },
       "verification": {
         "state": "catalog",
@@ -2540,7 +2540,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -4687,7 +4687,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 182520
       },
       "verification": {
         "state": "catalog",
@@ -6356,7 +6356,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 8192
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -8142,7 +8142,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 182476
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -8161,7 +8161,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 131072
+        "output_tokens": 943717
       },
       "verification": {
         "state": "catalog",
