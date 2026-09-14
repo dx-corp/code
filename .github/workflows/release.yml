@@ -1,413 +1,168 @@
 name: release
-
-# Not a GitHub Actions entrypoint. The live private tarball release is
-# evalops/mono .github/workflows/maestro-release.yml.
+run-name: Release ${{ startsWith(github.event.client_payload.version || inputs.version, 'v') && (github.event.client_payload.version || inputs.version) || format('v{0}', github.event.client_payload.version || inputs.version) }}
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  repository_dispatch:
+    types: [maestro-signed-release]
   workflow_dispatch:
     inputs:
       version:
         description: Semver (with or without leading v)
         required: true
-      channel:
-        description: Release channel; prerelease suffix must match
-        required: false
-        type: choice
-        options: [stable, beta, alpha]
-        default: stable
 
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Normalize manual and repository dispatch versions to one immutable tag.
+  # Serialize equivalent versions so those paths cannot publish twice.
+  group: ${{ github.workflow }}-${{ startsWith(github.event.client_payload.version || inputs.version, 'v') && (github.event.client_payload.version || inputs.version) || format('v{0}', github.event.client_payload.version || inputs.version) }}
   cancel-in-progress: false
 
-# Owned-capacity only. GitHub-hosted labels (ubuntu-*, macos-*) are billing-
-# blocked / credit-capped for this org's private repos. Defaults:
-#   linux-x64  → INTERNAL_CONFIRMATION_RUNNER (evalops-internal-arc)
-#   linux-arm64 → same ARC lane, cross-compiled + qemu-user smoke when the
-#                 runner arch is x86_64
-#   darwin-*   → only when RELEASE_MACOS_X64_RUNNER / RELEASE_MACOS_ARM64_RUNNER
-#                 (or RELEASE_MACOS_RUNNER) point at a real self-hosted macOS
-#                 runner. No hosted macos-* fallback.
-
 jobs:
-  plan:
-    runs-on: ${{ vars.INTERNAL_CONFIRMATION_RUNNER || 'evalops-internal-arc' }}
-    timeout-minutes: 5
+  prepare:
+    if: github.repository == 'evalops/maestro' && github.ref == 'refs/heads/main'
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      platforms: ${{ steps.matrix.outputs.platforms }}
+      package_name: ${{ steps.release.outputs.package_name }}
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      release_version: ${{ steps.release.outputs.release_version }}
+      release_channel: ${{ steps.release.outputs.release_channel }}
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
     steps:
-      - id: matrix
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - id: release
+        name: Resolve immutable release tag
         env:
-          INTERNAL: ${{ vars.INTERNAL_CONFIRMATION_RUNNER || 'evalops-internal-arc' }}
-          LINUX_ARM64: ${{ vars.RELEASE_LINUX_ARM64_RUNNER }}
-          MACOS_X64: ${{ vars.RELEASE_MACOS_X64_RUNNER || vars.RELEASE_MACOS_RUNNER }}
-          MACOS_ARM64: ${{ vars.RELEASE_MACOS_ARM64_RUNNER || vars.RELEASE_MACOS_RUNNER }}
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED: ${{ github.event.client_payload.version || github.event.inputs.version || github.ref_name }}
+          TRIGGER_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Fail closed on any hosted label — those burn Actions credits.
-          deny_hosted() {
-            local label="$1"
-            case "$label" in
-              ubuntu-*|macos-*|windows-*)
-                echo "::error::Release runner label '$label' is GitHub-hosted. Set an owned self-hosted label (evalops-internal-arc / self-hosted macOS)."
-                exit 1
-                ;;
-            esac
-          }
-          deny_hosted "$INTERNAL"
-          linux_arm64_runner="${LINUX_ARM64:-$INTERNAL}"
-          deny_hosted "$linux_arm64_runner"
-
-          entries=()
-          entries+=("$(jq -nc \
-            --arg platform linux-x64 \
-            --arg target x86_64-unknown-linux-gnu \
-            --arg os "$INTERNAL" \
-            --argjson cross false \
-            '{platform:$platform,target:$target,os:$os,cross:$cross}')")
-          entries+=("$(jq -nc \
-            --arg platform linux-arm64 \
-            --arg target aarch64-unknown-linux-gnu \
-            --arg os "$linux_arm64_runner" \
-            --argjson cross true \
-            '{platform:$platform,target:$target,os:$os,cross:$cross}')")
-
-          platforms="linux-x64 linux-arm64"
-
-          if [[ -n "${MACOS_X64:-}" ]]; then
-            deny_hosted "$MACOS_X64"
-            entries+=("$(jq -nc \
-              --arg platform darwin-x64 \
-              --arg target x86_64-apple-darwin \
-              --arg os "$MACOS_X64" \
-              --argjson cross false \
-              '{platform:$platform,target:$target,os:$os,cross:$cross}')")
-            platforms+=" darwin-x64"
-          else
-            echo "::warning::RELEASE_MACOS_X64_RUNNER / RELEASE_MACOS_RUNNER unset; skipping darwin-x64 (no hosted macos-* fallback under credit cap)."
-          fi
-
-          if [[ -n "${MACOS_ARM64:-}" ]]; then
-            deny_hosted "$MACOS_ARM64"
-            entries+=("$(jq -nc \
-              --arg platform darwin-arm64 \
-              --arg target aarch64-apple-darwin \
-              --arg os "$MACOS_ARM64" \
-              --argjson cross false \
-              '{platform:$platform,target:$target,os:$os,cross:$cross}')")
-            platforms+=" darwin-arm64"
-          else
-            echo "::warning::RELEASE_MACOS_ARM64_RUNNER / RELEASE_MACOS_RUNNER unset; skipping darwin-arm64 (no hosted macos-* fallback under credit cap)."
-          fi
-
-          matrix="$(printf '%s\n' "${entries[@]}" | jq -cs '{include:.}')"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
-          echo "Release binary matrix: $matrix"
-          echo "Platforms: $platforms"
-
-  binaries:
-    needs: plan
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: stable
-          cache-group: release-${{ matrix.platform }}
-          targets: ${{ matrix.target }}
-          workspaces: . -> target
-      - id: private-cargo
-        uses: ./.github/actions/configure-private-cargo-git
-        with:
-          token: ${{ secrets.EVALOPS_PR_LENS_TOKEN }}
-          dependency-url: https://github.com/evalops/test-world
-      - name: Require private Cargo credentials for release binary
-        env:
-          PRIVATE_CARGO_CONFIGURED: ${{ steps.private-cargo.outputs.configured }}
-        run: test "$PRIVATE_CARGO_CONFIGURED" = true
-
-      - name: Install linux-arm64 cross toolchain (owned x64 runners only)
-        if: ${{ matrix.platform == 'linux-arm64' && matrix.cross }}
-        run: |
-          set -euo pipefail
-          # When RELEASE_LINUX_ARM64_RUNNER is a real aarch64 host, cross is false
-          # and this step is skipped. Default is ARC x64 → cross-compile.
-          if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
-            echo "Runner is already aarch64; skipping cross toolchain."
-            exit 0
-          fi
-          # ARC runners currently expose Ubuntu sources over HTTP, while the
-          # delivery network only permits HTTPS. Build an isolated source-parts
-          # directory so this repair does not mutate the runner image or
-          # silently rewrite unrelated apt configuration. The package install
-          # remains required and fail-closed if the bounded HTTPS refresh does
-          # not succeed.
-          apt_sources_dir="$RUNNER_TEMP/maestro-apt-sources"
-          mkdir -p "$apt_sources_dir"
-          source_count=0
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
-            if [[ ! -f "$source" ]]; then
-              continue
-            fi
-            source_count=$((source_count + 1))
-            sed \
-              -e 's#http://archive.ubuntu.com#https://archive.ubuntu.com#g' \
-              -e 's#http://security.ubuntu.com#https://security.ubuntu.com#g' \
-              "$source" > "$apt_sources_dir/$(basename "$source")"
-          done
-          if [[ "$source_count" -eq 0 ]]; then
-            echo "::error::No apt source files were available for the linux-arm64 cross-toolchain install."
+          release_version="${REQUESTED#v}"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Requested release version '$REQUESTED' is not semver."
             exit 1
           fi
-          apt_options=(
-            -o "Dir::Etc::sourcelist=/dev/null"
-            -o "Dir::Etc::sourceparts=$apt_sources_dir"
-            -o "Acquire::Retries=2"
-            -o "Acquire::http::Timeout=10"
-            -o "Acquire::https::Timeout=10"
-          )
-          sudo -n apt-get "${apt_options[@]}" update -qq
-          sudo -n DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            qemu-user-static
-          rustup target add aarch64-unknown-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
-      - name: Build canonical native binary
-        env:
-          RELEASE_PLATFORM: ${{ matrix.platform }}
-        run: node scripts/build-release-binary.mjs --platform "$RELEASE_PLATFORM"
+          release_tag="v${release_version}"
+          release_channel="$(node scripts/resolve-release-channel.mjs --version "$release_version")"
+          npm_tag="${release_channel}"
+          if [[ "$release_channel" == "stable" ]]; then
+            npm_tag=latest
+          fi
+          release_sha="$TRIGGER_SHA"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "repository_dispatch" ]]; then
+            for attempt in 1 2 3; do
+              if timeout 60s git \
+                -c http.lowSpeedLimit=1000 \
+                -c http.lowSpeedTime=30 \
+                fetch --force --no-tags origin "refs/tags/${release_tag}:refs/tags/${release_tag}"; then
+                break
+              fi
+              if [[ "$attempt" -eq 3 ]]; then
+                echo "::error::Unable to fetch ${release_tag} after ${attempt} bounded attempts."
+                exit 1
+              fi
+              sleep 2
+            done
+            release_sha="$(git rev-list -n 1 "$release_tag")"
+          elif [[ "$EVENT_NAME" != "push" ]]; then
+            echo "::error::Unsupported release event ${EVENT_NAME}."
+            exit 1
+          fi
+          if [[ ! "$release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release source ${release_sha} is not an immutable commit SHA."
+            exit 1
+          fi
 
-      - name: Smoke binary (native or qemu for cross-linux)
-        env:
-          RELEASE_PLATFORM: ${{ matrix.platform }}
-          CROSS: ${{ matrix.cross }}
-        run: |
-          set -euo pipefail
-          binary="dist/release/maestro-${RELEASE_PLATFORM}"
-          host_arch="$(uname -m)"
-          # Native smoke on matching arch.
-          if [[ "$RELEASE_PLATFORM" == "linux-x64" && ( "$host_arch" == "x86_64" || "$host_arch" == "amd64" ) ]]; then
-            node scripts/smoke-release-native-only.mjs "$binary"
-            exit 0
+          # Secrets require source admitted to protected main or a fully protected release branch.
+          # A contents-write dispatch must not execute scripts from an arbitrary tag.
+          timeout 60s git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$release_sha" FETCH_HEAD; then
+            release_branch="releases/${release_tag}"
+            rules="$(timeout 60s gh api "repos/evalops/maestro/rules/branches/releases%2F${release_tag}")"
+            jq -e '
+              any(.[]; .type == "pull_request") and
+              any(.[]; .type == "non_fast_forward") and
+              any(.[]; .type == "deletion") and
+              any(.[]; .type == "required_linear_history") and
+              any(.[]; .type == "required_status_checks" and
+                .parameters.strict_required_status_checks_policy == true and
+                any(.parameters.required_status_checks[]; .context == "require-internal-pr" and .integration_id == 15368) and
+                any(.parameters.required_status_checks[]; .context == "unresolved-review-threads / unresolved-review-threads" and .integration_id == 15368) and
+                any(.parameters.required_status_checks[]; .context == "maestro-ci" and .integration_id == 15368))
+            ' <<<"$rules" >/dev/null
+            timeout 60s git fetch --no-tags origin "refs/heads/$release_branch"
           fi
-          if [[ "$RELEASE_PLATFORM" == "linux-arm64" && ( "$host_arch" == "aarch64" || "$host_arch" == "arm64" ) ]]; then
-            node scripts/smoke-release-native-only.mjs "$binary"
-            exit 0
+          git merge-base --is-ancestor "$release_sha" FETCH_HEAD
+          git checkout --detach "$release_sha"
+          package_version="$(node -p "require('./package.json').version")"
+          package_name="$(node -p "require('./package.json').name")"
+          if [[ "$package_version" != "$release_version" ]]; then
+            echo "::error::${release_tag} contains package version ${package_version}, not ${release_version}."
+            exit 1
           fi
-          if [[ "$RELEASE_PLATFORM" == darwin-* && "$(uname -s)" == "Darwin" ]]; then
-            node scripts/smoke-release-native-only.mjs "$binary"
-            exit 0
-          fi
-          # Cross-built linux-arm64 on x64 ARC: execute under qemu-user-static.
-          if [[ "$RELEASE_PLATFORM" == "linux-arm64" && "$CROSS" == "true" ]]; then
-            if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-              echo "::error::qemu-aarch64-static missing; cannot smoke cross-built linux-arm64"
-              exit 1
-            fi
-            # Headless version smoke under qemu (full native smoke needs matching arch).
-            out="$(qemu-aarch64-static "$binary" --version)"
-            echo "$out"
-            echo "$out" | grep -q maestro
-            qemu-aarch64-static "$binary" --help | grep -q Usage
-            echo "qemu-aarch64-static smoke ok for $RELEASE_PLATFORM"
-            exit 0
-          fi
-          echo "::error::No smoke path for platform=$RELEASE_PLATFORM host=$(uname -s)/$host_arch cross=$CROSS"
-          exit 1
 
-      - name: Record smoke marker
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          binary="dist/release/maestro-${PLATFORM}"
-          if command -v sha256sum >/dev/null 2>&1; then
-            digest="$(sha256sum "$binary" | awk '{print $1}')"
-          else
-            digest="$(shasum -a 256 "$binary" | awk '{print $1}')"
-          fi
-          printf '%s  maestro-%s\n' "$digest" "$PLATFORM" > "dist/release/smoked-${PLATFORM}.txt"
-          cat "dist/release/smoked-${PLATFORM}.txt"
-          rustc -Vv > "dist/release/rustc-${PLATFORM}.txt"
-      - name: Conformance against the exact release binary
-        env:
-          RELEASE_PLATFORM: ${{ matrix.platform }}
-          CROSS: ${{ matrix.cross }}
-        run: |
-          set -euo pipefail
-          binary="dist/release/maestro-${RELEASE_PLATFORM}"
-          host_arch="$(uname -m)"
-          if [[ "$RELEASE_PLATFORM" == "linux-arm64" && "$CROSS" == "true" && "$host_arch" != "aarch64" && "$host_arch" != "arm64" ]]; then
-            node scripts/run-runtime-conformance.mjs \
-              --binary "$binary" \
-              --binary-launcher qemu-aarch64-static
-          else
-            node scripts/run-runtime-conformance.mjs --binary "$binary"
-          fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: maestro-${{ matrix.platform }}
-          path: |
-            dist/release/maestro-${{ matrix.platform }}
-            dist/release/smoked-${{ matrix.platform }}.txt
-            dist/release/rustc-${{ matrix.platform }}.txt
+          {
+            echo "package_name=$package_name"
+            echo "release_sha=$release_sha"
+            echo "release_tag=$release_tag"
+            echo "release_version=$release_version"
+            echo "release_channel=$release_channel"
+            echo "npm_tag=$npm_tag"
+          } >> "$GITHUB_OUTPUT"
 
-  publish:
-    needs: [plan, binaries]
-    # Same lane as linux-x64 build (INTERNAL_CONFIRMATION_RUNNER). Build and
-    # publish must share glibc: ARC is Ubuntu Noble (2.39); static evalops-internal
-    # is Debian 12 bookworm (~2.36). Mismatch fails packed smoke with GLIBC_2.39.
-    runs-on: ${{ vars.INTERNAL_CONFIRMATION_RUNNER || 'evalops-internal-arc' }}
-    timeout-minutes: 60
+  identity-readiness:
+    needs: prepare
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 3
+    environment: npm-release
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # zizmor: ignore[cache-poisoning] no cache: input is set, so this step restores nothing
-        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          pattern: maestro-*
-          path: release-binaries
-          merge-multiple: true
-      - name: Verify every shipped binary was smoke-tested
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/workflows
+      - name: Authenticate to the release-test Secret Manager lane
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.MAESTRO_RELEASE_TEST_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.MAESTRO_RELEASE_TEST_GCP_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Rotate and verify release-test Identity session
         env:
-          MAESTRO_RELEASE_PLATFORMS: ${{ needs.plan.outputs.platforms }}
-        run: node scripts/verify-release-smoke-coverage.mjs release-binaries
-      - name: Conformance against the exact native release artifact
-        run: node scripts/run-runtime-conformance.mjs --binary release-binaries/maestro-linux-x64
-      - name: Generate signed-release passport inputs
+          MAESTRO_RELEASE_TEST_SESSION_SECRET: ${{ vars.MAESTRO_RELEASE_TEST_SESSION_SECRET }}
+          MAESTRO_RELEASE_TEST_ORG_ID: ${{ vars.MAESTRO_RELEASE_TEST_ORG_ID }}
+          MAESTRO_RELEASE_TEST_WORKSPACE_ID: ${{ vars.MAESTRO_RELEASE_TEST_WORKSPACE_ID }}
+          MAESTRO_RELEASE_TEST_SUBJECT: ${{ vars.MAESTRO_RELEASE_TEST_SUBJECT }}
+        run: node .github/workflows/refresh-release-identity.mjs
+      - name: Verify release-test Identity session
         env:
-          MAESTRO_RELEASE_PLATFORMS: ${{ needs.plan.outputs.platforms }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          compatibility_digest="$(jq -r '.compatibilityDigest' proto/maestro/v1/protocol-compatibility-manifest.json)"
-          for platform in $MAESTRO_RELEASE_PLATFORMS; do
-            case "$platform" in
-              linux-x64) target="x86_64-unknown-linux-gnu" ;;
-              linux-arm64) target="aarch64-unknown-linux-gnu" ;;
-              darwin-x64) target="x86_64-apple-darwin" ;;
-              darwin-arm64) target="aarch64-apple-darwin" ;;
-              *) echo "unsupported release platform: $platform" >&2; exit 1 ;;
-            esac
-            digest="sha256:$(sha256sum "release-binaries/maestro-${platform}" | awk '{print $1}')"
-            rustc_identity="$(cat "release-binaries/rustc-${platform}.txt")"
-            node scripts/generate-runtime-passport.mjs \
-              --artifact-kind native_binary \
-              --artifact-name "maestro-${platform}" \
-              --artifact-digest "$digest" \
-              --source-sha "$SOURCE_SHA" \
-              --compatibility-digest "$compatibility_digest" \
-              --launch-spec-version evalops.maestro.hosted-launch-spec.v1 \
-              --receipt-version evalops.maestro.runtime-receipt.v1 \
-              --rustc "$rustc_identity" \
-              --target "$target" \
-              --behavior-profile hosted-http-sse-v1 \
-              --out "runtime-passport-maestro-${platform}.json"
-          done
-      - name: Resolve release version
-        id: version
-        env:
-          REQUESTED: ${{ github.event.inputs.version || github.ref_name }}
-        run: echo "value=${REQUESTED#v}" >> "$GITHUB_OUTPUT"
-      - name: Resolve release channel
-        id: channel
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-          REQUESTED: ${{ github.event.inputs.channel || '' }}
-        run: echo "value=$(node scripts/resolve-release-channel.mjs --version "$RELEASE_VERSION" --requested "$REQUESTED")" >> "$GITHUB_OUTPUT"
-      - name: Generate signed release metadata
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          node scripts/create-release-metadata.mjs \
-            --version "$RELEASE_VERSION" \
-            --release-tag "v$RELEASE_VERSION" \
-            --source-sha "$SOURCE_SHA" \
-            --out release-metadata.json
-      - name: Generate signed release channel manifest
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-          RELEASE_CHANNEL: ${{ steps.channel.outputs.value }}
-          CHANNEL_KEY_ID: ${{ steps.channel.outputs.value == 'stable' && 'stable-2026-08-0c3df2ac' || 'preview-2026-08-912a0dab' }}
-          MAESTRO_CHANNEL_PRIVATE_KEY: ${{ steps.channel.outputs.value == 'stable' && secrets.MAESTRO_STABLE_CHANNEL_PRIVATE_KEY || secrets.MAESTRO_PREVIEW_CHANNEL_PRIVATE_KEY }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          node scripts/create-release-channel-manifest.mjs \
-            --version "$RELEASE_VERSION" \
-            --channel "$RELEASE_CHANNEL" \
-            --key-id "$CHANNEL_KEY_ID" \
-            --release-url "https://github.com/evalops/maestro/releases/download/v$RELEASE_VERSION" \
-            --metadata-url "https://github.com/evalops/maestro/releases/download/v$RELEASE_VERSION/release-metadata.json" \
-            --metadata-file release-metadata.json \
-            --source-sha "$SOURCE_SHA" \
-            --out channel-manifest.json
-      - name: Verify native package inputs
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
-          test -f packages/web/dist/index.html
-          npm run check:rust-only-runtime
-      - name: Materialize native npm package
-        run: node scripts/materialize-native-package.mjs --input-dir release-binaries
-      - name: Package browser assets for native installs
-        run: tar -czf maestro-web-dist.tar.gz -C packages/web/dist .
-      - id: pack
-        run: |
-          PACK_JSON=$(npm pack --json)
-          echo "$PACK_JSON"
-          echo "tarball=$(echo "$PACK_JSON" | jq -r '.[0].filename')" >> "$GITHUB_OUTPUT"
-      - name: Smoke packed package without JS runtime
-        run: node scripts/smoke-release-native-only.mjs bin/maestro
+          MAESTRO_EVALOPS_ORG_ID: ${{ vars.MAESTRO_RELEASE_TEST_ORG_ID }}
+        run: node .github/workflows/check-release-identity.mjs
 
-      - name: Install syft
-        run: |
-          set -euo pipefail
-          # Pinned by version and checksum: this is a supply-chain workflow and
-          # `curl | sh` against a mutable tag would undercut the point of it.
-          syft_version="1.33.0"
-          syft_sha256="adc1b944a827ed3432bcd9f1dbdbc8fa3c0dca7d3d449e7084c90248c2c6cb50"
-          tarball="$RUNNER_TEMP/syft.tar.gz"
-          curl -fsSL --max-time 180 --retry 2 --retry-delay 5 -o "$tarball" \
-            "https://github.com/anchore/syft/releases/download/v${syft_version}/syft_${syft_version}_linux_amd64.tar.gz"
-          echo "${syft_sha256}  ${tarball}" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/syftbin"
-          tar -xzf "$tarball" -C "$RUNNER_TEMP/syftbin" syft
-          echo "$RUNNER_TEMP/syftbin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/syftbin/syft" --version
-
-      - name: Generate CycloneDX SBOM
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          set -euo pipefail
-          sbom="maestro-${VERSION}.sbom.cdx.json"
-          syft scan file:Cargo.lock -o "cyclonedx-json=${sbom}" -q
-          components="$(node -p "require('./${sbom}').components.length")"
-          echo "SBOM components: ${components}"
-          # Fail closed: a truncated or empty SBOM is worse than none, because
-          # it looks like coverage. Cargo.lock carries 616 crates.
-          if [ "${components}" -lt 500 ]; then
-            echo "::error::SBOM lists ${components} components; expected the full Cargo.lock graph" >&2
-            exit 1
-          fi
-
+  binaries:
+    needs: prepare
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      # GitHub requires push access to read unpublished draft releases.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
       - name: Install cosign
         run: |
           set -euo pipefail
@@ -420,84 +175,474 @@ jobs:
           echo "${cosign_sha256}  $RUNNER_TEMP/cosignbin/cosign" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/cosignbin/cosign"
           echo "$RUNNER_TEMP/cosignbin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/cosignbin/cosign" version
-
-      - name: Checksum every release artifact
+      - name: Download signed Mono artifacts
         env:
-          VERSION: ${{ steps.version.outputs.value }}
-          TARBALL: ${{ steps.pack.outputs.tarball }}
-          PLATFORMS: ${{ needs.plan.outputs.platforms }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          files=()
-          for platform in $PLATFORMS; do
-            cp "release-binaries/maestro-${platform}" .
-            files+=("maestro-${platform}")
-            files+=("runtime-passport-maestro-${platform}.json")
-          done
-          files+=("maestro-web-dist.tar.gz" "maestro-${VERSION}.sbom.cdx.json" "${TARBALL}" "release-metadata.json" "channel-manifest.json")
-          sha256sum "${files[@]}" > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Sign release artifacts with cosign
+          mkdir release-binaries
+          timeout 300s gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-binaries \
+            --pattern MONO_SHA256SUMS --pattern MONO_SHA256SUMS.cosign.bundle --pattern release-metadata.json --pattern release-source-manifest.json \
+            --pattern maestro-linux-x64 --pattern maestro-linux-arm64 --pattern maestro-darwin-x64 --pattern maestro-darwin-arm64 --pattern 'runtime-passport-maestro-*.json' \
+            --pattern 'code-device-*.json' --pattern 'deixic-code-device-*.app.tar.gz' --pattern 'smoked-*.txt' --pattern 'rustc-*.txt' --pattern 'signed-*.json' --pattern 'notarized-*.json'
+      - name: Authenticate artifacts and release receipts
         env:
-          VERSION: ${{ steps.version.outputs.value }}
-          PLATFORMS: ${{ needs.plan.outputs.platforms }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
         run: |
           set -euo pipefail
-          # Keyless / OIDC. No private key exists to leak or rotate: the
-          # signing identity is this workflow's own OIDC token, and the
-          # certificate binds the signature to
-          # github.com/evalops/mono/.github/workflows/maestro-release.yml.
-          cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle SHA256SUMS
-          for platform in $PLATFORMS; do
-            cosign sign-blob --yes \
-              --bundle "maestro-${platform}.cosign.bundle" \
-              "maestro-${platform}"
-            cosign sign-blob --yes \
-              --bundle "runtime-passport-maestro-${platform}.cosign.bundle" \
-              "runtime-passport-maestro-${platform}.json"
+          node scripts/verify-staged-release.mjs release-binaries "$RELEASE_VERSION"
+          # Also enforce marker authentication here when dispatching an older tag
+          # whose source verifier predates the optional capability contract.
+          for platform in darwin-x64 darwin-arm64; do
+            (
+              cd release-binaries
+              grep -E "^[a-f0-9]{64}  code-device-${platform}\.json$" MONO_SHA256SUMS | sha256sum --check --strict
+              if [[ "$(jq -r '.enabled' "code-device-${platform}.json")" != true && -e "deixic-code-device-${platform}.app.tar.gz" ]]; then
+                echo "::error::Disabled Code device helper must not be present in release assets."
+                exit 1
+              fi
+            )
           done
-          ls -la ./*.cosign.bundle
-
-      - name: Verify the signatures we just produced
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-          PLATFORMS: ${{ needs.plan.outputs.platforms }}
-        run: |
-          set -euo pipefail
-          identity="^https://github.com/evalops/mono/\\.github/workflows/maestro-release.yml@"
-          verify() {
-            cosign verify-blob \
-              --bundle "$2" \
-              --certificate-identity-regexp "${identity}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "$1"
-          }
-          verify SHA256SUMS SHA256SUMS.cosign.bundle
-          for platform in $PLATFORMS; do
-            verify "maestro-${platform}" "maestro-${platform}.cosign.bundle"
-            verify "runtime-passport-maestro-${platform}.json" "runtime-passport-maestro-${platform}.cosign.bundle"
+          chmod +x release-binaries/maestro-linux-* release-binaries/maestro-darwin-*
+          for platform in darwin-x64 darwin-arm64; do
+            if [[ "$(jq -r '.enabled' "release-binaries/code-device-${platform}.json")" == true ]]; then
+              tar -xzf "release-binaries/deixic-code-device-${platform}.app.tar.gz" -C release-binaries
+            fi
           done
-          sha256sum -c SHA256SUMS
-          echo "All release signatures verified."
-
-      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          tag_name: v${{ steps.version.outputs.value }}
-          name: Maestro ${{ steps.version.outputs.value }}
-          generate_release_notes: true
-          # Globs cover whichever platforms the plan job selected (linux always;
-          # darwin only when self-hosted macOS runners are configured).
-          files: |
+          name: maestro-verified-native
+          path: release-binaries/*
+
+  publish:
+    needs:
+      - prepare
+      - binaries
+      - identity-readiness
+    # Public free hosted minutes by default. Do not point this at private
+    # self-hosted labels unless the runner group allows public repos.
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    environment: npm-release
+    permissions:
+      contents: read
+      # Required for npm trusted publishing (OIDC). Last successful
+      # @evalops/maestro publish used GitHub OIDC, not classic NPM_TOKEN.
+      id-token: write
+    outputs:
+      package_name: ${{ needs.prepare.outputs.package_name }}
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+      release_version: ${{ needs.prepare.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          pattern: maestro-*
+          path: release-binaries
+          merge-multiple: true
+      - name: Verify native package inputs
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
+          test -f packages/web/dist/index.html
+          npm run check:rust-only-runtime
+      - name: Materialize native npm package
+        run: node scripts/materialize-native-package.mjs --input-dir release-binaries
+      - name: Package browser assets for native installs
+        run: tar -czf maestro-web-dist.tar.gz -C packages/web/dist .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          retention-days: 14
+          name: release-web-dist-${{ needs.prepare.outputs.release_tag }}
+          overwrite: true
+          path: maestro-web-dist.tar.gz
+      - id: pack
+        run: |
+          PACK_JSON=$(npm pack --json)
+          echo "$PACK_JSON"
+          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("package.json","utf8")); p.name="@evalops/maestro"; fs.writeFileSync("package.json", JSON.stringify(p, null, "\t")+"\n")'
+          ALIAS_PACK_JSON=$(npm pack --json)
+          echo "$ALIAS_PACK_JSON"
+          git checkout -- package.json
+          {
+            echo "tarball=$(echo "$PACK_JSON" | jq -r '.[0].filename')"
+            echo "integrity=$(echo "$PACK_JSON" | jq -r '.[0].integrity')"
+            echo "alias_tarball=$(echo "$ALIAS_PACK_JSON" | jq -r '.[0].filename')"
+            echo "alias_integrity=$(echo "$ALIAS_PACK_JSON" | jq -r '.[0].integrity')"
+          } >> "$GITHUB_OUTPUT"
+      - name: Smoke packed package without JS runtime
+        env:
+          MAESTRO_REQUIRE_PACKAGED_TUI: "1"
+          NPM_CONFIG_FETCH_RETRIES: "1"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "2000"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "1000"
+          NPM_CONFIG_FETCH_TIMEOUT: "30000"
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: node scripts/smoke-packed-cli.js "$PACKED_TARBALL"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          retention-days: 14
+          name: npm-tarball-${{ needs.prepare.outputs.release_tag }}
+          overwrite: true
+          path: |
             ${{ steps.pack.outputs.tarball }}
-            release-binaries/maestro-*
+            ${{ steps.pack.outputs.alias_tarball }}
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
+          ALIAS_PACKAGE_NAME: "@evalops/maestro"
+          PACKED_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+          ALIAS_PACKED_INTEGRITY: ${{ steps.pack.outputs.alias_integrity }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          ALIAS_TARBALL: ${{ steps.pack.outputs.alias_tarball }}
+          NPM_CONFIG_FETCH_RETRIES: "1"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "2000"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "1000"
+          NPM_CONFIG_FETCH_TIMEOUT: "30000"
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+        run: |
+          set -euo pipefail
+
+          # Trusted publishing (OIDC) is the primary path for @evalops/maestro.
+          # Classic NPM_TOKEN is fallback only; a dead token returns E404 on PUT.
+          publish_with_oidc() {
+            local tarball="$1"
+            # npm ≥ 11.5.1 required for OIDC; pin via npx for stable behavior.
+            npx --yes npm@11.10.0 publish "$tarball" --access public --tag "$NPM_TAG" --registry "$NPM_CONFIG_REGISTRY"
+          }
+
+          publish_with_token() {
+            local tarball="$1"
+            if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+              echo "::error::OIDC publish failed and secrets.NPM_TOKEN is empty. Configure npm trusted publishing for evalops/maestro release.yml (npm-release env) and ensure this job has id-token: write, or set a granular NPM_TOKEN with write on @evalops/maestro."
+              return 1
+            fi
+
+            printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+            NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc" \
+              NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \
+              npx --yes npm@11.10.0 publish "$tarball" --access public --tag "$NPM_TAG" --registry "$NPM_CONFIG_REGISTRY"
+          }
+
+          verify_published_tarball() {
+            local package_name="$1"
+            local packed_integrity="$2"
+            local registry_integrity
+            registry_integrity="$(
+              command npm view "${package_name}@${RELEASE_VERSION}" --registry "$NPM_CONFIG_REGISTRY" dist.integrity 2>/dev/null
+            )" || registry_integrity=""
+            if [[ -z "$registry_integrity" ]]; then
+              # Immutable version metadata can arrive before the package index.
+              registry_integrity="$(node --input-type=module - "$package_name" "$RELEASE_VERSION" <<'NODE'
+          const [name, version] = process.argv.slice(2);
+          const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
+          const response = await fetch(url, { signal: AbortSignal.timeout(30000), redirect: "error" });
+          if (!response.ok) process.exit(1);
+          const metadata = await response.json();
+          if (metadata.name !== name || metadata.version !== version || typeof metadata.dist?.integrity !== "string") process.exit(1);
+          console.log(metadata.dist.integrity);
+          NODE
+              )" || return 1
+            fi
+
+            if [[ -z "$registry_integrity" ]]; then
+              return 1
+            fi
+            if [[ "$registry_integrity" != "$packed_integrity" ]]; then
+              echo "::error::npm already contains ${package_name}@${RELEASE_VERSION} with integrity ${registry_integrity}, not ${packed_integrity}."
+              return 2
+            fi
+            echo "Verified ${package_name}@${RELEASE_VERSION} already contains the packed tarball."
+          }
+
+          wait_for_registry() {
+            local package_name="$1"
+            local packed_integrity="$2"
+            local registry_integrity=""
+            local attempt remaining
+            local deadline=$((SECONDS + 300))
+            for attempt in {1..60}; do
+              remaining=$((deadline - SECONDS))
+              if [[ "$remaining" -le 0 ]]; then break; fi
+              registry_integrity="$(timeout "${remaining}s" npm view "${package_name}@${RELEASE_VERSION}" --registry "$NPM_CONFIG_REGISTRY" dist.integrity 2>/dev/null)" || registry_integrity=""
+              if [[ "$registry_integrity" == "$packed_integrity" ]]; then
+                return 0
+              fi
+              if [[ -n "$registry_integrity" ]]; then
+                echo "::error::Registry integrity mismatch for ${package_name}@${RELEASE_VERSION}."
+                return 2
+              fi
+              remaining=$((deadline - SECONDS))
+              if [[ "$remaining" -le 5 ]]; then break; fi
+              if [[ "$attempt" -lt 60 ]]; then sleep 5; fi
+            done
+            echo "::error::Registry metadata did not propagate for ${package_name}@${RELEASE_VERSION}; rerun after it is readable."
+            return 1
+          }
+
+          publish_or_verify() {
+            local publisher="$1"
+            local package_name="$2"
+            local tarball="$3"
+            local packed_integrity="$4"
+            local publish_status=0
+            local registry_status=0
+
+            "$publisher" "$tarball" || publish_status=$?
+            if [[ "$publish_status" -eq 0 ]]; then
+              return 0
+            fi
+
+            verify_published_tarball "$package_name" "$packed_integrity" || registry_status=$?
+            if [[ "$registry_status" -eq 0 ]]; then
+              return 0
+            fi
+            if [[ "$registry_status" -eq 2 ]]; then
+              return 2
+            fi
+            return "$publish_status"
+          }
+
+          publish_package() {
+            local package_name="$1"
+            local tarball="$2"
+            local packed_integrity="$3"
+            local registry_status=0
+            verify_published_tarball "$package_name" "$packed_integrity" || registry_status=$?
+            if [[ "$registry_status" -eq 0 ]]; then
+              return 0
+            fi
+            if [[ "$registry_status" -eq 2 ]]; then
+              return 2
+            fi
+            if publish_or_verify publish_with_oidc "$package_name" "$tarball" "$packed_integrity"; then
+              return 0
+            fi
+            echo "::warning::OIDC trusted publish failed for ${package_name}; trying secrets.NPM_TOKEN fallback."
+            publish_or_verify publish_with_token "$package_name" "$tarball" "$packed_integrity"
+          }
+
+          # shellcheck disable=SC2153 # Values are supplied by the step env block.
+          publish_package "$PACKAGE_NAME" "$TARBALL" "$PACKED_INTEGRITY"
+          wait_for_registry "$PACKAGE_NAME" "$PACKED_INTEGRITY"
+          publish_package "$ALIAS_PACKAGE_NAME" "$ALIAS_TARBALL" "$ALIAS_PACKED_INTEGRITY"
+          wait_for_registry "$ALIAS_PACKAGE_NAME" "$ALIAS_PACKED_INTEGRITY"
+  github-release:
+    needs:
+      - prepare
+      - binaries
+      - publish
+      - post-publish-canary
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: npm-tarball-${{ needs.prepare.outputs.release_tag }}
+          path: release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          pattern: maestro-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: release-web-dist-${{ needs.prepare.outputs.release_tag }}
+          path: release-assets
+      - name: Install cosign
+        run: |
+          set -euo pipefail
+          cosign_version="2.6.1"
+          cosign_sha256="064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a"
+          mkdir -p "$RUNNER_TEMP/cosignbin"
+          curl -fsSL --max-time 180 --retry 2 --retry-delay 5 \
+            -o "$RUNNER_TEMP/cosignbin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${cosign_version}/cosign-linux-amd64"
+          echo "${cosign_sha256}  $RUNNER_TEMP/cosignbin/cosign" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/cosignbin/cosign"
+          echo "$RUNNER_TEMP/cosignbin" >> "$GITHUB_PATH"
+      - name: Create signed channel metadata
+        env:
+          CHANNEL_KEY_ID: ${{ needs.prepare.outputs.release_channel == 'stable' && 'stable-2026-08-0c3df2ac' || 'preview-2026-08-912a0dab' }}
+          MAESTRO_CHANNEL_PRIVATE_KEY: ${{ needs.prepare.outputs.release_channel == 'stable' && secrets.MAESTRO_STABLE_CHANNEL_PRIVATE_KEY || secrets.MAESTRO_PREVIEW_CHANNEL_PRIVATE_KEY }}
+          RELEASE_CHANNEL: ${{ needs.prepare.outputs.release_channel }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          # Preserve the authenticated Mono source and native passports.
+          # Public packaging must not relabel a binary with the mirror commit SHA.
+          RELEASE_SHA="$(jq -r '.receipt.sourceSha' release-assets/release-metadata.json)"
+          cp release-assets/release-metadata.json release-assets/version.json
+          node scripts/create-release-channel-manifest.mjs \
+            --version "$RELEASE_VERSION" \
+            --channel "$RELEASE_CHANNEL" \
+            --key-id "$CHANNEL_KEY_ID" \
+            --release-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}" \
+            --metadata-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/release-metadata.json" \
+            --metadata-file release-assets/release-metadata.json \
+            --source-sha "$RELEASE_SHA" \
+            --out release-assets/channel-manifest.json
+          cp release-assets/channel-manifest.json release-assets/manifest.json
+      - name: Sign native release assets
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          files=(
+            maestro-darwin-arm64
+            maestro-darwin-x64
+            maestro-linux-arm64
+            maestro-linux-x64
             maestro-web-dist.tar.gz
-            maestro-${{ steps.version.outputs.value }}.sbom.cdx.json
-            SHA256SUMS
-            SHA256SUMS.cosign.bundle
-            release-metadata.json
-            channel-manifest.json
-            maestro-*.cosign.bundle
-            runtime-passport-maestro-*.json
-            runtime-passport-maestro-*.cosign.bundle
+          )
+          files+=(release-metadata.json version.json channel-manifest.json manifest.json)
+          files+=(runtime-passport-maestro-*.json code-device-*.json)
+          for platform in darwin-x64 darwin-arm64; do
+            if [[ "$(jq -r '.enabled' "code-device-${platform}.json")" == true ]]; then
+              files+=("deixic-code-device-${platform}.app.tar.gz")
+            fi
+          done
+          sha256sum "${files[@]}" > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle SHA256SUMS
+          for binary in maestro-darwin-arm64 maestro-darwin-x64 maestro-linux-arm64 maestro-linux-x64; do
+            cosign sign-blob --yes --bundle "${binary}.cosign.bundle" "$binary"
+          done
+          for passport in runtime-passport-maestro-*.json; do
+            cosign sign-blob --yes --bundle "${passport}.cosign.bundle" "$passport"
+          done
+      - name: Verify release tag has not moved
+        env:
+          EXPECTED_RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if timeout 60s git \
+              -c http.lowSpeedLimit=1000 \
+              -c http.lowSpeedTime=30 \
+              fetch --force --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::Unable to verify ${RELEASE_TAG} after ${attempt} bounded attempts."
+              exit 1
+            fi
+            sleep 2
+          done
+          current_release_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [[ "$current_release_sha" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "::error::${RELEASE_TAG} moved from ${EXPECTED_RELEASE_SHA} to ${current_release_sha}; refusing to create a mismatched release."
+            exit 1
+          fi
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: Maestro ${{ needs.prepare.outputs.release_version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.release_channel != 'stable' }}
+          make_latest: ${{ needs.prepare.outputs.release_channel == 'stable' }}
+          files: |
+            release-assets/*.json
+            release-assets/*.tgz
+            release-assets/*.tar.gz
+            release-assets/*.txt
+            release-assets/*SUMS
+            release-assets/*.bundle
+            release-assets/maestro-linux-arm64
+            release-assets/maestro-linux-x64
+            release-assets/maestro-darwin-arm64
+            release-assets/maestro-darwin-x64
+  post-publish-canary:
+    environment: npm-release
+    needs:
+      - prepare
+      - publish
+    runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Check out protected workflow helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: .release-workflow
+          sparse-checkout: .github/workflows
+      - name: Authenticate to the release-test Secret Manager lane
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.MAESTRO_RELEASE_TEST_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.MAESTRO_RELEASE_TEST_GCP_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Rotate release-test Identity session
+        env:
+          MAESTRO_RELEASE_TEST_SESSION_SECRET: ${{ vars.MAESTRO_RELEASE_TEST_SESSION_SECRET }}
+          MAESTRO_RELEASE_TEST_ORG_ID: ${{ vars.MAESTRO_RELEASE_TEST_ORG_ID }}
+          MAESTRO_RELEASE_TEST_WORKSPACE_ID: ${{ vars.MAESTRO_RELEASE_TEST_WORKSPACE_ID }}
+          MAESTRO_RELEASE_TEST_SUBJECT: ${{ vars.MAESTRO_RELEASE_TEST_SUBJECT }}
+        run: node .release-workflow/.github/workflows/refresh-release-identity.mjs
+      - name: Verify published package from npm
+        env:
+          CLI_COMMAND: maestro
+          MAESTRO_EVALOPS_ORG_ID: ${{ vars.MAESTRO_RELEASE_TEST_ORG_ID }}
+          MAESTRO_INSTALL_AUDIT_LEVEL: critical
+          MAESTRO_PUBLISHED_REPLAY_SANDBOX_MODE: local
+          MAESTRO_REGISTRY_SMOKE_EVIDENCE_DIR: published-replay-evidence
+          MAESTRO_REGISTRY_POLL_ATTEMPTS: "120"
+          MAESTRO_REGISTRY_POLL_DELAY_MS: "5000"
+          NPM_CONFIG_FETCH_RETRIES: "1"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "2000"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "1000"
+          NPM_CONFIG_FETCH_TIMEOUT: "30000"
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          PACKAGE_NAME: ${{ needs.prepare.outputs.package_name }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          node scripts/smoke-registry-install.js \
+            --package "$PACKAGE_NAME" \
+            --version "$RELEASE_VERSION" \
+            --cli-command "$CLI_COMMAND"
+      - name: Validate published replay evidence
+        run: node scripts/verify-published-replay-evidence.js --evidence-dir published-replay-evidence
+      - name: Upload published replay evidence
+        if: ${{ always() && hashFiles('published-replay-evidence/*.json') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          retention-days: 14
+          name: published-replay-evidence-${{ needs.prepare.outputs.release_tag }}
+          overwrite: true
+          path: published-replay-evidence/*.json
