@@ -2,6 +2,15 @@ name: maestro-ci
 
 # GitHub Actions maestro-ci pipeline on owned runners.
 # The terminal job named `maestro-ci` is the required check-run.
+#
+# Trusted-head gate: this file is the public evalops/maestro workflow as well
+# as the internal source of truth. An unrestricted `pull_request` trigger would
+# let a fork execute contributor-controlled scripts, Cargo build scripts, npm
+# commands, and Gradle on `evalops-internal-arc*` runners. Use the same
+# selector as mono `.github/workflows/sandboxwich-publish.yml`: skip the job
+# unless this is not a pull_request or the head repo is this repository.
+# Fork PRs never reach internal runners. `require-internal-pr` still blocks
+# merging mirrored-source forks.
 
 on:
   pull_request:
@@ -12,6 +21,11 @@ on:
     # Daily 05:17 UTC advisory coverage and perf jobs.
     - cron: "17 5 * * *"
   workflow_dispatch:
+    inputs:
+      hosted_orb_live_smoke:
+        description: "Set to 1 to run hosted Orb live acceptance"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -34,6 +48,7 @@ env:
 
 jobs:
   protocol-contracts:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 10
     steps:
@@ -62,6 +77,7 @@ jobs:
 
   lint:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     steps:
@@ -81,6 +97,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
           cache-group: lint
+          use-sccache: "true"
       - name: Contracts, format, and Clippy
         run: |
           set -euo pipefail
@@ -99,6 +116,7 @@ jobs:
 
   rust-tests:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     strategy:
@@ -124,6 +142,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: rust-tests
           install-cargo-nextest: "true"
+          use-sccache: "true"
       - name: Prove CI machine auth fails closed
         if: matrix.partition == 1
         run: |
@@ -152,6 +171,7 @@ jobs:
 
   native-release:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     steps:
@@ -170,6 +190,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: native-release
+          use-sccache: "true"
       - name: Native build and conformance
         run: |
           set -euo pipefail
@@ -180,6 +201,7 @@ jobs:
 
   integration:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 60
     steps:
@@ -190,10 +212,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: integration
+          use-sccache: "true"
       - name: Control-plane integration
         env:
           INTEGRATION_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -225,6 +252,7 @@ jobs:
 
   scenario-replay:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 45
     steps:
@@ -243,6 +271,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: scenario-replay
+          use-sccache: "true"
       - name: Deterministic scenario replay
         run: |
           set -euo pipefail
@@ -253,6 +282,7 @@ jobs:
 
   ci-contracts:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 30
     steps:
@@ -279,6 +309,7 @@ jobs:
 
   workflow-tooling:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 30
     steps:
@@ -292,10 +323,11 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - name: Workflow and shell tooling
-        run: scripts/run-ci-tooling.sh
+        run: bash scripts/run-ci-tooling.sh
 
   supply-chain:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 45
     steps:
@@ -307,6 +339,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Fetch pull-request base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
@@ -315,16 +354,18 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: supply-chain
+          use-sccache: "true"
       - name: Supply chain
         env:
           GH_TOKEN: ${{ github.token }}
           MAESTRO_CI_PULL_REQUEST: ${{ github.event.pull_request.number || 'false' }}
           MAESTRO_CI_BASE_BRANCH: ${{ github.base_ref || 'main' }}
           MAESTRO_CI_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: scripts/run-ci-supply-chain.sh
+        run: bash scripts/run-ci-supply-chain.sh
 
   jetbrains-plugin:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 45
     steps:
@@ -333,11 +374,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: JetBrains plugin
-        run: scripts/run-ci-jetbrains.sh
+        run: bash scripts/run-ci-jetbrains.sh
 
   linux-check:
     needs: protocol-contracts
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     steps:
@@ -357,14 +403,15 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
           cache-group: linux-check
+          use-sccache: "true"
       - name: Native Linux validation
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
-          scripts/ci-linux-check.sh
+          bash scripts/ci-linux-check.sh
 
   coverage:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     continue-on-error: true
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
@@ -382,8 +429,9 @@ jobs:
           cache-group: coverage
           install-cargo-llvm-cov: "true"
           install-cargo-nextest: "true"
+          use-sccache: "true"
       - name: Coverage (advisory)
-        run: scripts/run-ci-coverage.sh
+        run: bash scripts/run-ci-coverage.sh
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -394,7 +442,7 @@ jobs:
           retention-days: 14
 
   perf-baseline:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     continue-on-error: true
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 60
@@ -410,11 +458,12 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           cache-group: perf
+          use-sccache: "true"
       - name: Performance baseline (advisory)
-        run: scripts/run-ci-perf.sh
+        run: bash scripts/run-ci-perf.sh
 
   hosted-orb-delegation-live:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     continue-on-error: true
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 30
@@ -429,6 +478,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - name: Hosted Orb delegation acceptance
+        env:
+          MAESTRO_HOSTED_ORB_LIVE_SMOKE: ${{ github.event.inputs.hosted_orb_live_smoke || vars.MAESTRO_HOSTED_ORB_LIVE_SMOKE || '' }}
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
@@ -440,7 +491,7 @@ jobs:
 
   maestro-ci:
     name: maestro-ci
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     needs:
       - protocol-contracts
       - lint

@@ -96,17 +96,48 @@ test("light checks use the light owned runner", () => {
 	}
 });
 
+const trustedHead =
+	/github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/;
+
 test("advisory coverage and perf are scheduled, not required on push or PR", () => {
 	assert.match(
 		workflow,
-		/coverage:[\s\S]*?if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/,
+		/coverage:[\s\S]*?if: \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) && \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\)/,
 	);
 	assert.match(
 		workflow,
-		/perf-baseline:[\s\S]*?if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/,
+		/perf-baseline:[\s\S]*?if: \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\) && \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\)/,
 	);
 	assert.match(workflow, /coverage:[\s\S]*?continue-on-error: true/);
 	assert.match(workflow, /perf-baseline:[\s\S]*?continue-on-error: true/);
+});
+
+test("fork pull requests never start jobs on internal runners", () => {
+	for (const job of [
+		"protocol-contracts",
+		"lint",
+		"rust-tests",
+		"native-release",
+		"integration",
+		"scenario-replay",
+		"ci-contracts",
+		"workflow-tooling",
+		"supply-chain",
+		"jetbrains-plugin",
+		"linux-check",
+		"coverage",
+		"perf-baseline",
+		"hosted-orb-delegation-live",
+		"maestro-ci",
+	]) {
+		const block = workflow.split(`  ${job}:`)[1]?.split(/\n  [a-z]/)[0] ?? "";
+		assert.match(block, trustedHead, `${job} must skip fork pull requests`);
+	}
+	assert.doesNotMatch(
+		workflow,
+		/^    if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/m,
+		"advisory jobs must keep the trusted-head conjunct",
+	);
 });
 
 test("maestro-ci covers every migrated validation family", () => {
@@ -129,17 +160,26 @@ test("maestro-ci covers every migrated validation family", () => {
 	]) {
 		assert.match(workflow, new RegExp(`^  ${job}:`, "m"), `missing job ${job}`);
 	}
-	assert.match(workflow, /scripts\/run-ci-tooling\.sh/);
-	assert.match(workflow, /scripts\/run-ci-supply-chain\.sh/);
-	assert.match(workflow, /scripts\/run-ci-jetbrains\.sh/);
-	assert.match(workflow, /scripts\/run-ci-coverage\.sh/);
-	assert.match(workflow, /scripts\/run-ci-perf\.sh/);
-	assert.match(workflow, /scripts\/ci-linux-check\.sh/);
+	assert.match(workflow, /bash scripts\/run-ci-tooling\.sh/);
+	assert.match(workflow, /bash scripts\/run-ci-supply-chain\.sh/);
+	assert.match(workflow, /bash scripts\/run-ci-jetbrains\.sh/);
+	assert.match(workflow, /bash scripts\/run-ci-coverage\.sh/);
+	assert.match(workflow, /bash scripts\/run-ci-perf\.sh/);
+	assert.match(workflow, /bash scripts\/ci-linux-check\.sh/);
 	assert.match(workflow, /scripts\/run-nextest-partition\.sh/);
+	assert.match(workflow, /actions\/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6/);
+	assert.match(workflow, /use-sccache: "true"/);
+	assert.match(
+		workflow,
+		/vars\.MAESTRO_HOSTED_ORB_LIVE_SMOKE \|\| ''/,
+	);
 });
 
 test("terminal maestro-ci job fails unless needed jobs succeeded or skipped", () => {
-	assert.match(workflow, /^  maestro-ci:\n    name: maestro-ci\n    if: always\(\)/m);
+	assert.match(
+		workflow,
+		/^  maestro-ci:\n    name: maestro-ci\n    if: always\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\)/m,
+	);
 	assert.match(workflow, /result == "skipped"/);
 	assert.match(workflow, /maestro-ci failed for/);
 });
@@ -301,10 +341,13 @@ test("legacy GitHub validation workflows are absent", () => {
 });
 
 const runner = fileURLToPath(new URL("./run-ci-jetbrains.sh", import.meta.url));
+const hasScript = spawnSync("bash", ["-lc", "command -v script"], {
+	encoding: "utf8",
+}).status === 0;
 
 test(
 	"JetBrains CI detaches Gradle stdin from the controlling terminal",
-	{ skip: process.platform !== "linux" },
+	{ skip: process.platform !== "linux" || !hasScript },
 	() => {
 		const root = mkdtempSync(join(tmpdir(), "maestro-gradle-stdin-"));
 		try {
