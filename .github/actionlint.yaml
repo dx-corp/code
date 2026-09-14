@@ -1,4 +1,6 @@
 self-hosted-runner:
   labels:
+    - evalops-internal-arc
+    - evalops-internal-arc-light
     - evalops-maestro-internal-rbe
     - evalops-maestro-rbe

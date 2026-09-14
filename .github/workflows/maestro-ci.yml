@@ -1,0 +1,490 @@
+name: maestro-ci
+
+# GitHub Actions maestro-ci pipeline on owned runners.
+# The terminal job named `maestro-ci` is the required check-run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  schedule:
+    # Daily 05:17 UTC advisory coverage and perf jobs.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maestro-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: "true"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_BUILD_JOBS: "4"
+  CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_TEST_CODEGEN_UNITS: "16"
+  npm_config_fetch_retries: "1"
+  npm_config_fetch_timeout: "30000"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_TOOLCHAIN: "1.95.0"
+
+jobs:
+  protocol-contracts:
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 10
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Protocol compatibility lock
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          npm run check:workspace-contract
+          npm run check:protocol-manifest
+          npm run check:runtime-passport
+          npm run check:rust-only-runtime
+          npm run check:helm-probes
+          npm run check:hook-dispatch
+          npm run check:session-transfer
+          npm run check:hosted-orb-delegation
+          npm run check:macos-signature
+
+  lint:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 90
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt,clippy
+          cache-group: lint
+      - name: Contracts, format, and Clippy
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          timeout --signal=TERM --kill-after=30s 45m npm run check
+          node --test scripts/check-doc-paths.test.mjs scripts/version.test.mjs
+          if [[ -f scripts/measure-ci-build-latency.test.mjs ]]; then
+            node --test scripts/measure-ci-build-latency.test.mjs
+          fi
+          if [[ -d test/internal ]]; then
+            npm run test:internal
+          fi
+          timeout --signal=TERM --kill-after=30s 30m npm run lint
+          node --test scripts/check-advisory-expiry.test.mjs
+          node scripts/check-advisory-expiry.mjs
+
+  rust-tests:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: rust-tests
+          install-cargo-nextest: "true"
+      - name: Prove CI machine auth fails closed
+        if: matrix.partition == 1
+        run: |
+          set -euo pipefail
+          MAESTRO_TRUSTED_RUNNER_WORKSPACE_ROOTS="$(pwd -P)"
+          export MAESTRO_TRUSTED_RUNNER_WORKSPACE_ROOTS
+          maestro_test_home="$(mktemp -d "${RUNNER_TEMP}/maestro-home.XXXXXX")"
+          export MAESTRO_HOME="$maestro_test_home"
+          export MAESTRO_SUBAGENTS_DIR="$maestro_test_home/subagents"
+          trap 'rm -rf "$maestro_test_home"' EXIT
+          timeout --signal=TERM --kill-after=30s 10m cargo test --locked -p maestro-local-host ci_auth_conformance
+      - name: Run nextest partition
+        env:
+          NEXTEST_PARTITION: ${{ matrix.partition }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 45m scripts/run-nextest-partition.sh "${NEXTEST_PARTITION}/4"
+      - name: Doctests and TUI smoke
+        if: matrix.partition == 1
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m cargo test --workspace --locked --doc
+          export MAESTRO_TUI_BIN="${CARGO_TARGET_DIR}/debug/maestro-tui"
+          test -x "$MAESTRO_TUI_BIN" || timeout --signal=TERM --kill-after=30s 30m cargo build --locked -p maestro-tui
+          npm run smoke:tui
+
+  native-release:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 90
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: native-release
+      - name: Native build and conformance
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          timeout --signal=TERM --kill-after=30s 45m npm run build
+          npm run smoke:release-native-only
+          node scripts/run-runtime-conformance.mjs --binary "${CARGO_TARGET_DIR}/fast-validation/maestro"
+
+  integration:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 60
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: integration
+      - name: Control-plane integration
+        env:
+          INTEGRATION_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          suffix="${INTEGRATION_SUFFIX//-/}"
+          redis="maestro-redis-${suffix}"
+          postgres="maestro-postgres-${suffix}"
+          trap 'docker rm -f "$redis" "$postgres" >/dev/null 2>&1 || true' EXIT
+          redis_image="mirror.gcr.io/library/redis:7-alpine"
+          postgres_image="mirror.gcr.io/library/postgres:16-alpine"
+          timeout --signal=TERM --kill-after=10s 2m docker pull "$redis_image"
+          timeout --signal=TERM --kill-after=10s 2m docker pull "$postgres_image"
+          docker run -d --rm --name "$redis" -p 127.0.0.1::6379 "$redis_image"
+          docker run -d --rm --name "$postgres" -e POSTGRES_USER=maestro -e POSTGRES_PASSWORD=maestro -e POSTGRES_DB=maestro -p 127.0.0.1::5432 "$postgres_image"
+          redis_port="$(docker port "$redis" 6379/tcp | sed 's/.*://')"
+          postgres_port="$(docker port "$postgres" 5432/tcp | sed 's/.*://')"
+          for _ in $(seq 1 60); do docker exec "$postgres" pg_isready -U maestro >/dev/null 2>&1 && break; sleep 2; done
+          MAESTRO_REDIS_URL="redis://127.0.0.1:${redis_port}" \
+            MAESTRO_DATABASE_URL="postgresql://maestro:maestro@127.0.0.1:${postgres_port}/maestro" \
+            PGPASSWORD=maestro timeout --signal=TERM --kill-after=30s 30m cargo test --locked -p maestro-runtime-gateway
+          POSTGRES_DB=maestro \
+            POSTGRES_HOST=127.0.0.1 \
+            POSTGRES_PASSWORD=maestro \
+            POSTGRES_PORT="$postgres_port" \
+            POSTGRES_USER=maestro \
+            PGPASSWORD=maestro \
+            timeout --signal=TERM --kill-after=30s 30m cargo test --locked -p maestro-tui --test tools_integration
+
+  scenario-replay:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 45
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: scenario-replay
+      - name: Deterministic scenario replay
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          timeout --signal=TERM --kill-after=30s 30m cargo build --locked -p maestro-scenario
+          node --test scripts/scenario-replay-governance.test.mjs
+          MAESTRO_BIN="${CARGO_TARGET_DIR}/debug/maestro-scenario" npm run check:scenario-replay-gate -- --junit-dir tmp/scenario-replay
+
+  ci-contracts:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 30
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: CI configuration contracts
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          test ! -d src/hooks
+          node --test scripts/check-ci-concurrency.test.mjs
+          node scripts/check-rust-only-runtime.mjs
+          node scripts/check-hook-dispatch-coverage.mjs
+          if [[ -f scripts/workflow-contracts.test.mjs ]]; then
+            node --test scripts/workflow-contracts.test.mjs
+          fi
+
+  workflow-tooling:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 30
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Workflow and shell tooling
+        run: scripts/run-ci-tooling.sh
+
+  supply-chain:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 45
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: supply-chain
+      - name: Supply chain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAESTRO_CI_PULL_REQUEST: ${{ github.event.pull_request.number || 'false' }}
+          MAESTRO_CI_BASE_BRANCH: ${{ github.base_ref || 'main' }}
+          MAESTRO_CI_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: scripts/run-ci-supply-chain.sh
+
+  jetbrains-plugin:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 45
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: JetBrains plugin
+        run: scripts/run-ci-jetbrains.sh
+
+  linux-check:
+    needs: protocol-contracts
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 90
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt,clippy
+          cache-group: linux-check
+      - name: Native Linux validation
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          scripts/ci-linux-check.sh
+
+  coverage:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 90
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: coverage
+          install-cargo-llvm-cov: "true"
+          install-cargo-nextest: "true"
+      - name: Coverage (advisory)
+        run: scripts/run-ci-coverage.sh
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage-report/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  perf-baseline:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
+    timeout-minutes: 60
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - name: Set Cargo target directory
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache-group: perf
+      - name: Performance baseline (advisory)
+        run: scripts/run-ci-perf.sh
+
+  hosted-orb-delegation-live:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 30
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Hosted Orb delegation acceptance
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
+          if [[ "${MAESTRO_HOSTED_ORB_LIVE_SMOKE:-}" != "1" ]]; then
+            echo "Optional hosted Orb acceptance was not requested; skipping."
+            exit 0
+          fi
+          npm run smoke:hosted-orb-delegation
+
+  maestro-ci:
+    name: maestro-ci
+    if: always()
+    needs:
+      - protocol-contracts
+      - lint
+      - rust-tests
+      - native-release
+      - integration
+      - scenario-replay
+      - ci-contracts
+      - workflow-tooling
+      - supply-chain
+      - jetbrains-plugin
+      - linux-check
+      - coverage
+      - perf-baseline
+      - hosted-orb-delegation-live
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 5
+    steps:
+      - name: Require every needed maestro-ci job
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          sha = os.environ["HEAD_SHA"]
+          bad = []
+          skipped = []
+          for name, body in sorted(needs.items()):
+              result = (body or {}).get("result")
+              if result == "success":
+                  continue
+              if result == "skipped":
+                  skipped.append(name)
+                  continue
+              bad.append(f"{name}={result or '<missing>'}")
+          if bad:
+              print(f"maestro-ci failed for {sha}: {', '.join(bad)}")
+              sys.exit(1)
+          extra = f" skipped={','.join(skipped)}" if skipped else ""
+          print(f"maestro-ci passed for {sha}{extra}")
+          PY

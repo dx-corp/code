@@ -1,7 +1,7 @@
-[profile.buildkite]
+[profile.ci]
 slow-timeout = { period = "5m", terminate-after = 2 }
 
-[[profile.buildkite.overrides]]
+[[profile.ci.overrides]]
 filter = 'binary(pty_e2e)'
 test-group = 'pty-e2e'
 

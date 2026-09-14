@@ -9,8 +9,8 @@ originate in `evalops/maestro-internal` and arrive through the protected mirror
 workflow; do not edit mirrored source directly here.
 
 For contribution setup and checks, use `CONTRIBUTING.md` and
-`docs/CONTRIBUTOR_RUNBOOK.md`. Validation is defined in the mirrored
-`.buildkite/pipeline.yml` and `.buildkite/advisory.yml`; public GitHub workflows are limited to review policy,
+`docs/CONTRIBUTOR_RUNBOOK.md`. Validation is defined in `.github/workflows/maestro-ci.yml` on owned GitHub
+Actions runners; public GitHub workflows also cover review policy,
 source provenance, release publishing, and repository automation.
 
 Do not add private repository documentation, credentials, internal agent

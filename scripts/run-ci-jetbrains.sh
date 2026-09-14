@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_root="${BUILDKITE_BUILD_CHECKOUT_PATH:-$(pwd)}/.buildkite/cache/jetbrains-tools"
+cache_root="${MAESTRO_CI_CACHE_ROOT:-${RUNNER_TEMP:-$(pwd)/.cache}/maestro-ci}"
+tool_root="${cache_root}/jetbrains-tools"
 jdk_root="$tool_root/jdk-21"
 if ! java -version 2>&1 | head -1 | grep -Eq 'version "21([.]|\")'; then
   case "$(uname -s)-$(uname -m)" in
@@ -33,7 +34,7 @@ java -version
 cd packages/jetbrains-plugin
 # Bound the Gradle JVM. Empty jvmargs let HotSpot pick a huge ergonomic
 # heap on the heavy workers, and the host OOM-killer then SIGKILLs the
-# job (Buildkite 114/351, exit 137) mid-:test. Cold Kotlin/IntelliJ builds
+# job (CI 114/351, exit 137) mid-:test. Cold Kotlin/IntelliJ builds
 # exhausted the former 256 MiB metaspace cap (public build 332); allow
 # 512 MiB while retaining the 1 GiB heap and single worker. Keep the 10m timeout so a
 # stuck IntelliJ download still dies cleanly. Detach stdin: timeout puts Gradle

@@ -99,7 +99,7 @@ When connected to the Deixic Code server, the plugin provides IDE-aware tools:
 
 The JetBrains plugin is kept as an active package. Pull requests that touch
 `packages/jetbrains-plugin/`, the shared headless proto, or the JetBrains
-Buildkite `jetbrains-plugin` step, which executes
+GitHub Actions `jetbrains-plugin` job, which executes
 `./gradlew check buildPlugin --no-daemon`.
 
 ### Build

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_root="${BUILDKITE_BUILD_CHECKOUT_PATH:-$(pwd)}/.buildkite/cache/ci-tools"
+cache_root="${MAESTRO_CI_CACHE_ROOT:-${RUNNER_TEMP:-$(pwd)/.cache}/maestro-ci}"
+tool_root="${cache_root}/ci-tools"
 mkdir -p "$tool_root/bin"
 export PATH="$tool_root/bin:$PATH"
 

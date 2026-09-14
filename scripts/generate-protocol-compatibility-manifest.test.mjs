@@ -759,11 +759,14 @@ test("cosign DSSE verification selects the exact decoded predicate", () => {
 });
 
 test("required Rust validation rejects compatibility manifest drift", () => {
-	const pipeline = readFileSync(resolve(ROOT, ".buildkite/pipeline.yml"), "utf8");
-	assert.match(pipeline, /npm run check/);
-	assert.match(pipeline, /key: "protocol-contracts"/);
-	assert.match(pipeline, /npm run check:protocol-manifest/);
-	assert.match(pipeline, /depends_on: "protocol-contracts"/);
+	const workflow = readFileSync(
+		resolve(ROOT, ".github/workflows/maestro-ci.yml"),
+		"utf8",
+	);
+	assert.match(workflow, /npm run check/);
+	assert.match(workflow, /^  protocol-contracts:/m);
+	assert.match(workflow, /npm run check:protocol-manifest/);
+	assert.match(workflow, /needs: protocol-contracts/);
 	const packageJson = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
 	assert.match(packageJson.scripts.check, /check:protocol-manifest/);
 });

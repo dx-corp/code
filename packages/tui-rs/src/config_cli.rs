@@ -2328,7 +2328,7 @@ fn format_bytes(bytes: u64) -> String {
 
 fn stdin_is_tty() -> bool {
     // Unit tests must stay non-interactive even when the test runner allocates
-    // a pseudo-terminal (as Buildkite does for this workspace).
+    // a pseudo-terminal (as GitHub Actions does for this workspace).
     if cfg!(test) {
         return false;
     }

@@ -93,12 +93,15 @@ test("requires the integration suite to succeed for relevant paths", () => {
   );
 });
 
-test("Buildkite retains the complete integration suite", () => {
-  const pipeline = readFileSync(new URL("../.buildkite/pipeline.yml", import.meta.url), "utf8");
-  assert.match(pipeline, /key: "integration"/);
-  assert.match(pipeline, /cargo test --locked -p maestro-runtime-gateway/);
-  assert.match(pipeline, /cargo test --locked -p maestro-tui --test tools_integration/);
-  assert.match(pipeline, /trap 'docker rm -f "\$\$redis" "\$\$postgres"/);
+test("maestro-ci retains the complete integration suite", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/maestro-ci.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /^  integration:/m);
+  assert.match(workflow, /cargo test --locked -p maestro-runtime-gateway/);
+  assert.match(workflow, /cargo test --locked -p maestro-tui --test tools_integration/);
+  assert.match(workflow, /trap 'docker rm -f "\$redis" "\$postgres"/);
 });
 
 test("accepts only one structurally valid approved setup-node step", () => {

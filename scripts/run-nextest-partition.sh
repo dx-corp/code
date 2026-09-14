@@ -26,7 +26,7 @@ export MAESTRO_HOME="${maestro_test_home}"
 export MAESTRO_SUBAGENTS_DIR="${maestro_test_home}/subagents"
 
 cargo nextest run \
-  --profile buildkite \
+  --profile ci \
   --workspace \
   --locked \
   --no-fail-fast \

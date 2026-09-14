@@ -97,7 +97,7 @@ jobs:
                 .parameters.strict_required_status_checks_policy == true and
                 any(.parameters.required_status_checks[]; .context == "require-internal-pr" and .integration_id == 15368) and
                 any(.parameters.required_status_checks[]; .context == "unresolved-review-threads / unresolved-review-threads" and .integration_id == 15368) and
-                any(.parameters.required_status_checks[]; .context == "buildkite/maestro-ci" and .integration_id == 805657))
+                any(.parameters.required_status_checks[]; .context == "maestro-ci" and .integration_id == 15368))
             ' <<<"$rules" >/dev/null
             timeout 60s git fetch --no-tags origin "refs/heads/$release_branch"
           fi

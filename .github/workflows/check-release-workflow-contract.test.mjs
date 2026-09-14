@@ -1078,17 +1078,17 @@ test("current release workflow satisfies the parsed contract", async () => {
 	assert.deepEqual(await checkReleaseWorkflow(), []);
 });
 
-test("required Buildkite tooling lane runs the release workflow contracts", async () => {
-	const buildkiteTooling = await readFile(
-		new URL("../../scripts/run-buildkite-ci-tooling.sh", import.meta.url),
+test("required CI tooling lane runs the release workflow contracts", async () => {
+	const ciTooling = await readFile(
+		new URL("../../scripts/run-ci-tooling.sh", import.meta.url),
 		"utf8",
 	);
 	assert.match(
-		buildkiteTooling,
+		ciTooling,
 		/node --test \.github\/workflows\/check-release-workflow-contract\.test\.mjs/u,
 	);
 	assert.match(
-		buildkiteTooling,
+		ciTooling,
 		/node \.github\/workflows\/check-release-workflow-contract\.mjs/u,
 	);
 });

@@ -16,7 +16,7 @@ const rules = ["pull_request", "non_fast_forward", "deletion", "required_linear_
 rules.push({type:"required_status_checks", parameters:{strict_required_status_checks_policy:true, required_status_checks:[
   {context:"require-internal-pr", integration_id:15368},
   {context:"unresolved-review-threads / unresolved-review-threads", integration_id:15368},
-  {context:"buildkite/maestro-ci", integration_id:805657},
+  {context:"maestro-ci", integration_id:15368},
 ]}});
 
 test("release admission requires protected history and all pinned checks", () => {

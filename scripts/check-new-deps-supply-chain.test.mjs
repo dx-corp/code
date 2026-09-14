@@ -15,7 +15,7 @@ import {
 } from "./check-new-deps-supply-chain.mjs";
 
 const SUPPLY_CHAIN_SCRIPT_URL = new URL(
-	"./run-buildkite-supply-chain.sh",
+	"./run-ci-supply-chain.sh",
 	import.meta.url,
 );
 const SUPPLY_CHAIN_SCRIPT = existsSync(SUPPLY_CHAIN_SCRIPT_URL)
@@ -41,14 +41,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "deadbeef"
 `;
 
-test("Buildkite supply-chain validation is strict and shared with the public projection", () => {
-	assert.ok(SUPPLY_CHAIN_SCRIPT, "Buildkite supply-chain script must exist");
+test("CI supply-chain validation is strict and shared with the public projection", () => {
+	assert.ok(SUPPLY_CHAIN_SCRIPT, "CI supply-chain script must exist");
 	assert.match(SUPPLY_CHAIN_SCRIPT, /cargo deny fetch db/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /cargo deny check --disable-fetch/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /check-new-deps-supply-chain\.test\.mjs/);
-	assert.match(SUPPLY_CHAIN_SCRIPT, /BUILDKITE_PULL_REQUEST_BASE_BRANCH/);
+	assert.match(SUPPLY_CHAIN_SCRIPT, /MAESTRO_CI_BASE_BRANCH/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /supply-chain-policy-approved/);
-	assert.match(SUPPLY_CHAIN_SCRIPT, /pr\.head\?\.sha !== process\.env\.BUILDKITE_COMMIT/);
+	assert.match(SUPPLY_CHAIN_SCRIPT, /pr\.head\?\.sha !== process\.env\.MAESTRO_CI_COMMIT/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /event\.event === "committed"/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /approvalIndex <= headCommitIndex/);
 	assert.match(SUPPLY_CHAIN_SCRIPT, /gh api --paginate --slurp/);
