@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789198032,
+  "generated_at": 1789284488,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1238,9 +1238,9 @@
     },
     {
       "id": "~anthropic/claude-haiku-latest",
-      "name": "Anthropic Claude Haiku Latest",
+      "name": "Anthropic: Claude Haiku Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the Anthropic Claude Haiku family.",
+      "description": "This model always redirects to the latest model in the Claude Haiku family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1276,9 +1276,9 @@
     },
     {
       "id": "~anthropic/claude-sonnet-latest",
-      "name": "Anthropic Claude Sonnet Latest",
+      "name": "Anthropic: Claude Sonnet Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the Anthropic Claude Sonnet family.",
+      "description": "This model always redirects to the latest model in the Claude Sonnet family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1295,7 +1295,7 @@
     },
     {
       "id": "~deepseek/deepseek-v4-flash-latest",
-      "name": "DeepSeek V4 Flash Latest",
+      "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "provider": "openrouter",
       "description": "This model always redirects to the latest model in the DeepSeek V4 Flash family.",
       "capabilities": {
@@ -1305,7 +1305,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -1314,9 +1314,9 @@
     },
     {
       "id": "~google/gemini-flash-latest",
-      "name": "Google Gemini Flash Latest",
+      "name": "Google: Gemini Flash Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the Google Gemini Flash family.",
+      "description": "This model always redirects to the latest model in the Gemini Flash family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1333,9 +1333,9 @@
     },
     {
       "id": "~google/gemini-pro-latest",
-      "name": "Google Gemini Pro Latest",
+      "name": "Google: Gemini Pro Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the Google Gemini Pro family.",
+      "description": "This model always redirects to the latest model in the Gemini Pro family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1352,9 +1352,9 @@
     },
     {
       "id": "~moonshotai/kimi-latest",
-      "name": "MoonshotAI Kimi Latest",
+      "name": "MoonshotAI: Kimi Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the MoonshotAI Kimi family.",
+      "description": "This model always redirects to the latest model in the Kimi family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1371,9 +1371,9 @@
     },
     {
       "id": "~openai/gpt-astra-latest",
-      "name": "OpenAI GPT Astra Latest",
+      "name": "OpenAI: GPT Astra Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the OpenAI GPT Astra family.",
+      "description": "This model always redirects to the latest model in the GPT Astra family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1390,9 +1390,9 @@
     },
     {
       "id": "~openai/gpt-luna-latest",
-      "name": "OpenAI GPT Luna Latest",
+      "name": "OpenAI: GPT Luna Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the OpenAI GPT Luna family.",
+      "description": "This model always redirects to the latest model in the GPT Luna family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1409,9 +1409,9 @@
     },
     {
       "id": "~openai/gpt-mini-latest",
-      "name": "OpenAI GPT Mini Latest",
+      "name": "OpenAI: GPT Mini Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the OpenAI GPT Mini family.",
+      "description": "This model always redirects to the latest model in the GPT Mini family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1428,9 +1428,9 @@
     },
     {
       "id": "~openai/gpt-sol-latest",
-      "name": "OpenAI GPT Sol Latest",
+      "name": "OpenAI: GPT Sol Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the OpenAI GPT Sol family.",
+      "description": "This model always redirects to the latest model in the GPT Sol family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1447,9 +1447,9 @@
     },
     {
       "id": "~openai/gpt-terra-latest",
-      "name": "OpenAI GPT Terra Latest",
+      "name": "OpenAI: GPT Terra Latest",
       "provider": "openrouter",
-      "description": "This model always redirects to the latest model in the OpenAI GPT Terra family.",
+      "description": "This model always redirects to the latest model in the GPT Terra family.",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -1514,7 +1514,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -2521,7 +2521,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 393216
       },
       "verification": {
         "state": "catalog",
@@ -3072,7 +3072,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -3528,7 +3528,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 8192
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -3927,7 +3927,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072
+        "output_tokens": 128000
       },
       "verification": {
         "state": "catalog",
@@ -4345,7 +4345,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 100352
+        "output_tokens": 98304
       },
       "verification": {
         "state": "catalog",
@@ -4364,7 +4364,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 100352
+        "output_tokens": 98304
       },
       "verification": {
         "state": "catalog",
@@ -4383,7 +4383,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 100352
+        "output_tokens": 98304
       },
       "verification": {
         "state": "catalog",
@@ -6451,7 +6451,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 32000
       },
       "verification": {
         "state": "catalog",
@@ -6600,7 +6600,7 @@
         "protocol": "openai-chat",
         "tools": true,
         "vision": false,
-        "reasoning": true,
+        "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
         "output_tokens": 65536
@@ -7648,7 +7648,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 32768
+        "output_tokens": 471859
       },
       "verification": {
         "state": "catalog",
@@ -8161,7 +8161,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",

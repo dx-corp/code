@@ -437,7 +437,7 @@ fn credential_mode_check(readiness: &Result<crate::credential_mode::DetectedMode
         Ok(crate::credential_mode::DetectedMode::Byok) => check(
             "credential_mode",
             CheckStatus::Pass,
-            "byok: EvalOps Identity and a provider route are available",
+            "byok: a local provider credential is available",
             None,
             false,
         ),
@@ -1006,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_report_requires_identity_before_reporting_byok_ready() {
+    fn offline_report_reports_byok_ready_without_identity() {
         let _lock = crate::config::test_process_env_lock();
         let _restore = EnvRestore::capture(&[
             "MAESTRO_HOME",
@@ -1052,13 +1052,10 @@ mod tests {
             .iter()
             .find(|check| check.id == "credential_mode")
             .expect("credential mode check");
-        assert_eq!(check.status, CheckStatus::Fail);
-        assert_eq!(check.summary, "EvalOps Identity is required");
-        assert!(
-            check
-                .detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("deixic-code evalops login"))
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert_eq!(
+            check.summary,
+            "byok: a local provider credential is available"
         );
     }
 

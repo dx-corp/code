@@ -205,15 +205,16 @@ pub fn openai_request_capabilities(
             let name = stripped.rsplit('/').next().unwrap_or(stripped);
             if name.starts_with("gpt-5.6-") {
                 "max"
-            } else if ["gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5"]
-                .iter()
-                .any(|prefix| {
-                    name == *prefix
-                        || name
-                            .strip_prefix(prefix)
-                            .is_some_and(|rest| rest.starts_with("-"))
-                })
-            {
+            } else if [
+                "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-5.7",
+            ]
+            .iter()
+            .any(|prefix| {
+                name == *prefix
+                    || name
+                        .strip_prefix(prefix)
+                        .is_some_and(|rest| rest.starts_with("-"))
+            }) {
                 "xhigh"
             } else {
                 "high"
@@ -323,7 +324,10 @@ mod tests {
     #[test]
     fn maximum_effort_is_provider_and_model_specific() {
         for (model, expected) in [
+            ("gpt-5.4", "xhigh"),
             ("gpt-5.5", "xhigh"),
+            ("gpt-5.6", "xhigh"),
+            ("gpt-5.7", "xhigh"),
             ("gpt-5.6-luna", "max"),
             ("unknown", "high"),
         ] {

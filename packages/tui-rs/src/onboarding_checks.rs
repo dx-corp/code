@@ -250,7 +250,7 @@ async fn managed_policy_check(model: &str, cwd: &Path) -> OnboardingCheck {
         // BYOK is not an exemption from the workspace's managed setup policy.
         let (_mode, identity) = crate::credential_mode::require_ready_with_identity(&model)?;
         let policy = crate::managed_setup::ManagedSetupClient::resolve_with(
-            Some(&identity),
+            identity.as_ref(),
             None,
             0,
             Duration::ZERO,

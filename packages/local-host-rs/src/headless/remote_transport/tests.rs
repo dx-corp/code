@@ -401,7 +401,7 @@ fn remote_runtime_state_snapshot_maps_into_agent_state() {
             controller_lease_granted: true,
             lease_expires_at: Some("2026-04-02T00:00:15Z".to_string()),
         }],
-        model: Some("gpt-5.4".to_string()),
+        model: Some("gpt-5.6".to_string()),
         provider: Some("openai".to_string()),
         session_id: Some("session-1".to_string()),
         cwd: Some("/tmp/project".to_string()),
@@ -513,7 +513,7 @@ fn remote_runtime_state_snapshot_maps_into_agent_state() {
     };
 
     let state = snapshot.into_agent_state();
-    assert_eq!(state.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(state.model.as_deref(), Some("gpt-5.6"));
     assert_eq!(state.provider.as_deref(), Some("openai"));
     assert_eq!(state.client_protocol_version.as_deref(), Some("2026-03-30"));
     assert_eq!(
@@ -615,7 +615,7 @@ fn remote_connection_create_request_serializes_client_tool_flags() {
         connection_id: Some("conn_remote".to_string()),
         connection_capability: Some("cap_remote".to_string()),
         connection_capability_required: true,
-        model: Some("gpt-5.4".to_string()),
+        model: Some("gpt-5.6".to_string()),
         thinking_level: Some(ThinkingLevel::Low),
         approval_mode: Some(ApprovalMode::Prompt),
         enable_client_tools: true,
@@ -639,7 +639,7 @@ fn remote_connection_create_request_serializes_client_tool_flags() {
     assert_eq!(json["connectionId"], "conn_remote");
     assert_eq!(json["connectionCapability"], "cap_remote");
     assert_eq!(json["connectionCapabilityRequired"], true);
-    assert_eq!(json["model"], "gpt-5.4");
+    assert_eq!(json["model"], "gpt-5.6");
     assert_eq!(json["thinkingLevel"], "low");
     assert_eq!(json["approvalMode"], "prompt");
     assert_eq!(json["enableClientTools"], true);
@@ -2197,7 +2197,7 @@ async fn remote_transport_connects_sends_and_receives_events() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "cwd": "/tmp/project",
@@ -2260,7 +2260,7 @@ async fn remote_transport_connects_sends_and_receives_events() {
     let cancel_token = transport.cancel_token();
     assert_eq!(transport.session_id(), "sess_remote");
     assert_eq!(transport.subscription_id(), "sub_remote");
-    assert_eq!(transport.state().model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(transport.state().model.as_deref(), Some("gpt-5.6"));
     assert_eq!(transport.state().provider.as_deref(), Some("openai"));
     assert_eq!(transport.state().last_status.as_deref(), Some("Attached"));
     assert!(
@@ -2443,7 +2443,7 @@ async fn remote_viewer_transport_rejects_controller_messages() {
         "cursor": 1,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2524,7 +2524,7 @@ async fn remote_transport_updates_cached_state_on_snapshot_events() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2546,7 +2546,7 @@ async fn remote_transport_updates_cached_state_on_snapshot_events() {
             },
             "state": {
                 "protocol_version": "2026-03-30",
-                "model": "gpt-5.4",
+                "model": "gpt-5.6",
                 "provider": "openai",
                 "session_id": "sess_remote",
                 "pending_approvals": [],
@@ -2615,7 +2615,7 @@ async fn remote_transport_ignores_replayed_events_that_do_not_advance_cursor() {
         "cursor": 1,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2703,7 +2703,7 @@ async fn remote_transport_accepts_heartbeat_without_cursor_advance() {
         "cursor": 1,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2960,7 +2960,7 @@ async fn remote_transport_ignores_malformed_events_and_keeps_streaming() {
         "cursor": 1,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3099,7 +3099,7 @@ async fn remote_transport_surfaces_stream_closure_without_internal_reader_retry(
         "cursor": 1,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3579,7 +3579,7 @@ async fn remote_transport_applies_reset_events_as_snapshots() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3602,7 +3602,7 @@ async fn remote_transport_applies_reset_events_as_snapshots() {
             },
             "state": {
                 "protocol_version": "2026-03-30",
-                "model": "gpt-5.4",
+                "model": "gpt-5.6",
                 "provider": "openai",
                 "session_id": "sess_remote",
                 "pending_approvals": [],

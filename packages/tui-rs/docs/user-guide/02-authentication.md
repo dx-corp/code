@@ -59,7 +59,7 @@ Check whether the selected Codex profile can accept a prompt:
 
 ```bash
 maestro codex ready
-maestro codex ready --profile work --model openai-codex/gpt-5.5 --json
+maestro codex ready --profile work --model openai-codex/gpt-5.6 --json
 ```
 
 `ready` exits 0 when auth, required app-server methods, required notifications,
@@ -69,7 +69,7 @@ as optional degraded support and does not fail readiness.
 
 Use `--model MODEL` when checking a non-default Codex model. The binding check
 uses the same canonical model id that runtime sends to `thread/start`, so
-`maestro codex ready --model openai-codex/gpt-5.4` checks the `gpt-5.4` binding
+`maestro codex ready --model openai-codex/gpt-5.5-pro` checks the `gpt-5.5-pro` binding
 instead of the default model binding.
 
 Common Codex auth commands:

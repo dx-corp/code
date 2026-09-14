@@ -589,6 +589,16 @@ fn responses_item_id(id: &str) -> Option<&str> {
     id.split_once('|').map(|(_, item_id)| item_id)
 }
 
+// These are the Google-protocol provider IDs and aliases accepted by the
+// model-provider-core catalog. This classifies opaque replay metadata only;
+// signed route validation and provider selection remain owned by the gateway.
+fn supports_gemini_tool_history(provider: Option<&str>) -> bool {
+    matches!(
+        provider,
+        Some("google" | "googleai" | "google-ai" | "gemini" | "vertex-ai" | "vertex_ai")
+    )
+}
+
 /// Extract function call from a `ResponseItem`
 ///
 /// # Pattern: Option Chaining
@@ -1375,6 +1385,37 @@ impl OpenAiClient {
             .context("managed gateway request body must be an object")?;
         if let Some((authorization, _)) = authorization {
             project_managed_inference_route(object, &authorization)?;
+            // Provider history follows the signed route, not the legacy
+            // constructor's provider. Keep native Gemini context only when
+            // the admitted route can replay it; it is never tool authority.
+            let gemini_route = object
+                .get("provider_candidates")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|candidates| {
+                    candidates.iter().any(|candidate| {
+                        supports_gemini_tool_history(
+                            candidate
+                                .pointer("/provider_ref/provider")
+                                .and_then(serde_json::Value::as_str),
+                        )
+                    })
+                });
+            if !gemini_route {
+                if let Some(input) = object
+                    .get_mut("input")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for item in input {
+                        if item.get("type").and_then(serde_json::Value::as_str)
+                            == Some("function_call")
+                        {
+                            if let Some(item) = item.as_object_mut() {
+                                item.remove("extra_content");
+                            }
+                        }
+                    }
+                }
+            }
             object.insert("managed_inference_authorization".to_string(), authorization);
         }
         if let Some(context) = managed_context {
@@ -1891,13 +1932,13 @@ impl OpenAiClient {
                                         function_call["id"] = serde_json::json!(item_id);
                                     }
                                     if self.managed_gateway
-                                        && matches!(
-                                            self.request_extensions
-                                                .get("provider_ref")
-                                                .and_then(|provider| provider.get("provider"))
-                                                .and_then(serde_json::Value::as_str),
-                                            Some("gemini" | "vertex_ai")
-                                        )
+                                        && (self.managed_inference_authorization.is_some()
+                                            || supports_gemini_tool_history(
+                                                self.request_extensions
+                                                    .get("provider_ref")
+                                                    .and_then(|provider| provider.get("provider"))
+                                                    .and_then(serde_json::Value::as_str),
+                                            ))
                                     {
                                         if let Some(context) = gemini_context {
                                             function_call["extra_content"] =
@@ -4764,7 +4805,7 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             "openrouter/anthropic/claude-sonnet-4.5",
             "openrouter/google/gemini-2.5-pro",
             "openrouter/meta-llama/llama-4-maverick",
-            "openrouter/openai/gpt-5.4",
+            "openrouter/openai/gpt-5.5",
             "openrouter/openai/o3-mini",
             "openrouter/openrouter/auto",
             "evalops/openrouter/gpt-5.6",
@@ -5418,7 +5459,15 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
                 model: "gemini-3.6-flash".into(),
                 ..Default::default()
             };
-            for provider in ["gemini", "vertex_ai", "openai"] {
+            for provider in [
+                "vertex-ai",
+                "vertex_ai",
+                "gemini",
+                "google",
+                "google-ai",
+                "googleai",
+                "openai",
+            ] {
                 let client = OpenAiClient::new("test-key")
                     .unwrap()
                     .with_managed_gateway_context(
@@ -5435,6 +5484,45 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
                 }
                 assert_eq!(body["input"][0]["call_id"], body["input"][1]["call_id"]);
                 assert_eq!(body["input"][1]["output"], "wrote 6 bytes\n");
+            }
+            // Hosted turns select the provider from signed candidates. The
+            // legacy constructor route can name a different provider.
+            for provider in [
+                "vertex-ai",
+                "vertex_ai",
+                "gemini",
+                "google",
+                "google-ai",
+                "googleai",
+                "openai",
+            ] {
+                let mut client = OpenAiClient::new("test-key")
+                    .unwrap()
+                    .with_managed_gateway_context(
+                        "org_123",
+                        "workspace_456",
+                        serde_json::json!({"provider": if provider == "openai" { "vertex_ai" } else { "openrouter" }}),
+                    )
+                    .unwrap();
+                let mut authorization: serde_json::Value =
+                    serde_json::from_str(&managed_authorization_fixture("gemini-history")).unwrap();
+                authorization["claims"]["providerCandidates"][0]["provider"] =
+                    serde_json::json!(provider);
+                client.set_managed_inference_authorization(Some(authorization.to_string()));
+                let body = client
+                    .managed_request(client.build_responses_request_body(&restored, &config))
+                    .unwrap();
+                assert!(body.get("provider_ref").is_none());
+                assert_eq!(
+                    body["provider_candidates"][0]["provider_ref"]["provider"],
+                    provider
+                );
+                if provider == "openai" {
+                    assert!(body["input"][0].get("extra_content").is_none());
+                } else {
+                    assert_eq!(body["input"][0]["extra_content"], item["extra_content"]);
+                }
+                assert_eq!(body["input"][0]["call_id"], body["input"][1]["call_id"]);
             }
             let other = OpenAiClient::new("test-key")
                 .unwrap()

@@ -5088,7 +5088,7 @@ mod tests {
             )
             .env_remove("MAESTRO_MODEL")
             .env_remove("OPENAI_API_KEY")
-            .env("MAESTRO_DEFAULT_MODEL", "evalops/gpt-5.5")
+            .env("MAESTRO_DEFAULT_MODEL", "evalops/gpt-5.6")
             // Parallel tests can install a direct token in the parent process.
             // This fixture must exercise its explicit token-file credential.
             .env_remove(crate::credential_mode::ACCESS_TOKEN_ENV)
@@ -5123,9 +5123,158 @@ mod tests {
             .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
             .expect("first protocol message");
         assert_eq!(ready["type"], "ready");
-        assert_eq!(ready["model"], "evalops/gpt-5.5");
+        assert_eq!(ready["model"], "evalops/gpt-5.6");
         assert_eq!(ready["provider"], "openrouter");
         assert!(!String::from_utf8_lossy(&output.stderr).contains("OPENAI_API_KEY"));
+    }
+
+    fn spawn_headless_identity_fixture(
+        test_name: &str,
+        fixture_env: &str,
+        extra_env: &[(&str, &std::ffi::OsStr)],
+    ) -> std::process::Output {
+        let home = tempfile::tempdir().expect("fixture Maestro home");
+        let current = std::env::current_exe().expect("current test binary");
+        let mut command = std::process::Command::new(current);
+        command
+            .arg(test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .arg("--format")
+            .arg("terse")
+            .env(fixture_env, "1")
+            .env("MAESTRO_HOME", home.path())
+            .env("MAESTRO_OAUTH_STORAGE_MODE", "file")
+            .env("MAESTRO_DISABLE_KEYCHAIN", "1")
+            .env_remove("MAESTRO_MODEL")
+            .env_remove("MAESTRO_DEFAULT_MODEL")
+            .env_remove("MAESTRO_IDENTITY_URL")
+            .env_remove(crate::credential_mode::ACCESS_TOKEN_ENV)
+            .env_remove(crate::credential_mode::ACCESS_TOKEN_FILE_ENV)
+            .env_remove(crate::credential_mode::ORG_ID_ENV)
+            .env_remove(crate::credential_mode::WORKSPACE_ID_ENV)
+            .env_remove("MAESTRO_HOSTED_RUNNER_MODE")
+            .env_remove(crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV);
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("run headless identity fixture")
+    }
+
+    #[tokio::test]
+    async fn direct_openai_key_reaches_headless_ready_without_identity() {
+        if std::env::var_os("MAESTRO_HEADLESS_DIRECT_OPENAI_READY_FIXTURE").is_some() {
+            assert_eq!(
+                run_headless_server(Some("openai/gpt-5.4".to_string()))
+                    .await
+                    .expect("direct OpenAI headless fixture"),
+                0
+            );
+            return;
+        }
+
+        let home = tempfile::tempdir().expect("fixture Maestro home");
+        let current = std::env::current_exe().expect("current test binary");
+        let mut child = std::process::Command::new(current)
+            .arg(
+                "headless_server::tests::direct_openai_key_reaches_headless_ready_without_identity",
+            )
+            .arg("--exact")
+            .arg("--nocapture")
+            .arg("--format")
+            .arg("terse")
+            .env("MAESTRO_HEADLESS_DIRECT_OPENAI_READY_FIXTURE", "1")
+            .env("MAESTRO_HOME", home.path())
+            .env("MAESTRO_OAUTH_STORAGE_MODE", "file")
+            .env("MAESTRO_DISABLE_KEYCHAIN", "1")
+            .env("OPENAI_API_KEY", "synthetic-maestro-smoke-key")
+            .env("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+            .env_remove("MAESTRO_MODEL")
+            .env_remove("MAESTRO_DEFAULT_MODEL")
+            .env_remove("MAESTRO_IDENTITY_URL")
+            .env_remove(crate::credential_mode::ACCESS_TOKEN_ENV)
+            .env_remove(crate::credential_mode::ACCESS_TOKEN_FILE_ENV)
+            .env_remove(crate::credential_mode::ORG_ID_ENV)
+            .env_remove(crate::credential_mode::WORKSPACE_ID_ENV)
+            .env_remove("MAESTRO_HOSTED_RUNNER_MODE")
+            .env_remove(crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn direct OpenAI headless fixture");
+        writeln!(
+            child.stdin.take().expect("fixture stdin"),
+            "{}",
+            json!({"type":"shutdown"})
+        )
+        .expect("write shutdown");
+        let output = child.wait_with_output().expect("headless fixture output");
+        assert!(
+            output.status.success(),
+            "fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ready = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("first protocol message");
+        assert_eq!(ready["type"], "ready");
+        assert_eq!(ready["model"], "openai/gpt-5.4");
+        assert_eq!(ready["provider"], "OpenAI");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains(crate::credential_mode::IDENTITY_REQUIRED_MESSAGE),
+            "{stderr}"
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_evalops_headless_route_requires_identity() {
+        if std::env::var_os("MAESTRO_HEADLESS_MANAGED_IDENTITY_REQUIRED_FIXTURE").is_some() {
+            let error = run_headless_server(Some("evalops/gpt-5.5".to_string()))
+                .await
+                .expect_err("managed evalops headless must not become ready without Identity");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains(crate::credential_mode::IDENTITY_REQUIRED_MESSAGE),
+                "{rendered}"
+            );
+            eprintln!("{rendered}");
+            return;
+        }
+
+        let output = spawn_headless_identity_fixture(
+            "headless_server::tests::managed_evalops_headless_route_requires_identity",
+            "MAESTRO_HEADLESS_MANAGED_IDENTITY_REQUIRED_FIXTURE",
+            &[
+                (
+                    "OPENAI_API_KEY",
+                    std::ffi::OsStr::new("synthetic-maestro-smoke-key"),
+                ),
+                (
+                    "OPENAI_BASE_URL",
+                    std::ffi::OsStr::new("http://127.0.0.1:9/v1"),
+                ),
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(crate::credential_mode::IDENTITY_REQUIRED_MESSAGE),
+            "stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     struct HeadlessFixtureChild {

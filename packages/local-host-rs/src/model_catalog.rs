@@ -186,8 +186,8 @@ fn now_epoch_secs() -> u64 {
 pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "anthropic" | "claude" => Some("claude-sonnet-4-6"),
-        "openai" => Some("gpt-5.5"),
-        "openai-codex" | "codex" => Some("gpt-5.5"),
+        "openai" => Some("gpt-5.6"),
+        "openai-codex" | "codex" => Some("gpt-5.6"),
         "google" | "gemini" | "vertex-ai" | "vertex" => Some("gemini-2.5-pro"),
         "xai" | "grok" => Some("grok-4.5"),
         "openrouter" => Some("openai/gpt-4o-mini"),
@@ -223,7 +223,7 @@ pub fn available_models() -> Vec<ModelInfo> {
             }
         }
     }
-    append_managed_fireworks_models(&mut models);
+    append_managed_models(&mut models);
     append_builtin_local_models(&mut models);
     mirror_vertex_models(&mut models);
     models
@@ -240,40 +240,76 @@ pub fn model_route(model: &ModelInfo) -> String {
     }
 }
 
-pub struct ManagedFireworksModel {
+pub struct ManagedModel {
     pub id: &'static str,
     pub name: &'static str,
+    pub provider: &'static str,
+    pub credential_name: &'static str,
+    pub context_tokens: u32,
 }
 
 /// Shipped managed route metadata. Gateway admission and pricing remain server-owned.
-pub const MANAGED_FIREWORKS_MODELS: &[ManagedFireworksModel] = &[
-    ManagedFireworksModel {
+pub const MANAGED_MODELS: &[ManagedModel] = &[
+    ManagedModel {
         id: "accounts/fireworks/models/glm-5p3",
         name: "GLM-5.3",
+        provider: "fireworks",
+        credential_name: crate::credential_mode::DEFAULT_MANAGED_CREDENTIAL_NAME,
+        context_tokens: 1_048_576,
     },
-    ManagedFireworksModel {
+    ManagedModel {
         id: "accounts/fireworks/models/glm-5p3-flash",
         name: "GLM-5.3 Flash",
+        provider: "fireworks",
+        credential_name: crate::credential_mode::DEFAULT_MANAGED_CREDENTIAL_NAME,
+        context_tokens: 1_048_576,
     },
-    ManagedFireworksModel {
+    ManagedModel {
         id: "accounts/fireworks/models/deepseek-v4-flash-0731",
         name: "DeepSeek V4 Flash 0731",
+        provider: "fireworks",
+        credential_name: crate::credential_mode::DEFAULT_MANAGED_CREDENTIAL_NAME,
+        context_tokens: 1_048_576,
     },
-    ManagedFireworksModel {
+    ManagedModel {
         id: "accounts/fireworks/models/kimi-k3",
         name: "Kimi K3",
+        provider: "fireworks",
+        credential_name: crate::credential_mode::DEFAULT_MANAGED_CREDENTIAL_NAME,
+        context_tokens: 1_048_576,
+    },
+    ManagedModel {
+        id: "accounts/fireworks/models/deepseek-v4p1-flash",
+        name: "DeepSeek V4.1 Flash",
+        provider: "fireworks",
+        credential_name: "deixic-llm-gateway-glm53",
+        context_tokens: 1_048_576,
+    },
+    ManagedModel {
+        id: "accounts/fireworks/models/qwen3p8-max",
+        name: "Qwen 3.8 Max",
+        provider: "fireworks",
+        credential_name: "deixic-llm-gateway-glm53",
+        context_tokens: 131_072,
+    },
+    ManagedModel {
+        id: "gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
+        provider: "google",
+        credential_name: "deixic-llm-gateway-gemini38",
+        context_tokens: 1_048_576,
     },
 ];
 
 // Managed routes are product-owned typed contracts, independent of community cache refreshes.
-fn append_managed_fireworks_models(models: &mut Vec<ModelInfo>) {
-    for price in MANAGED_FIREWORKS_MODELS {
+fn append_managed_models(models: &mut Vec<ModelInfo>) {
+    for price in MANAGED_MODELS {
         models.retain(|model| !(model.provider == "evalops" && model.id == price.id));
         models.push(ModelInfo {
             id: price.id.to_owned(),
             name: price.name.to_owned(),
             provider: "evalops".to_owned(),
-            description: "Fireworks · Model credits · Text and tools".to_owned(),
+            description: format!("{} · Model credits · Text and tools", price.provider),
             capabilities: ModelCapabilities {
                 protocol: ModelProtocol::OpenAiChat,
                 tools: true,
@@ -282,13 +318,13 @@ fn append_managed_fireworks_models(models: &mut Vec<ModelInfo>) {
                 // Reasoning controls are not part of the prepaid request contract.
                 reasoning: false,
                 streaming: true,
-                context_tokens: 1_048_576,
+                context_tokens: price.context_tokens,
                 // Keep the existing 16k default; the gateway enforces its 32k ceiling.
                 output_tokens: None,
             },
             verification: ModelVerification {
                 state: VerificationState::Catalog,
-                source: "managed-fireworks-contract".to_owned(),
+                source: "managed-model-contract".to_owned(),
                 detail: Some(
                     "Availability requires a configured managed route and model credits."
                         .to_owned(),
@@ -1208,7 +1244,7 @@ pub fn has_provider_mismatch(id: &str) -> bool {
         return false;
     }
     let models = available_models();
-    // Prefer an exact provider+id hit (openai-codex/gpt-5.5 vs openai/gpt-5.5).
+    // Prefer an exact provider+id hit (openai-codex/gpt-5.6 vs openai/gpt-5.6).
     if models
         .iter()
         .any(|model| model.id == bare_id && model.provider == descriptor.id)
@@ -1302,12 +1338,12 @@ mod tests {
     }
 
     #[test]
-    fn managed_fireworks_routes_survive_cache_and_preserve_provider_and_limits() {
+    fn managed_model_routes_survive_cache_and_preserve_provider_and_limits() {
         let mut models = Vec::new();
-        append_managed_fireworks_models(&mut models);
-        append_managed_fireworks_models(&mut models);
-        assert_eq!(models.len(), 4);
-        for price in MANAGED_FIREWORKS_MODELS {
+        append_managed_models(&mut models);
+        append_managed_models(&mut models);
+        assert_eq!(models.len(), 7);
+        for price in MANAGED_MODELS {
             let route = format!("evalops/{}", price.id);
             let model = find_model(&route).unwrap();
             assert_eq!(model_route(&model), route);
@@ -1489,6 +1525,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{provider}/{default} must be in the bundled catalog"));
             assert_eq!(model.provider, provider);
         }
+        assert_eq!(default_model_for_provider("openai"), Some("gpt-5.6"));
+        assert_eq!(default_model_for_provider("openai-codex"), Some("gpt-5.6"));
+        assert_eq!(default_model_for_provider("codex"), Some("gpt-5.6"));
         assert_eq!(default_model_for_provider("nope"), None);
         assert_eq!(
             default_model_for_provider("vertex-ai"),
@@ -1818,7 +1857,7 @@ mod tests {
 
     #[test]
     fn catalog_exposes_capabilities_separately_from_verification() {
-        let model = find_model("openai/gpt-5.5").expect("catalog model");
+        let model = find_model("openai/gpt-5.6").expect("catalog model");
         assert!(model.capabilities.tools);
         assert!(model.capabilities.reasoning);
         assert_eq!(model.capabilities.protocol, ModelProtocol::OpenAiResponses);
@@ -1836,8 +1875,8 @@ mod tests {
         assert!(find_model("claude/claude-sonnet-4-6").is_some());
         assert!(!has_provider_mismatch("openai/custom-model"));
         // openai-codex is subscription transport over OpenAI catalog ids.
-        assert!(find_model("openai-codex/gpt-5.5").is_some());
-        assert!(!has_provider_mismatch("openai-codex/gpt-5.5"));
+        assert!(find_model("openai-codex/gpt-5.6").is_some());
+        assert!(!has_provider_mismatch("openai-codex/gpt-5.6"));
     }
 
     #[test]
@@ -1877,8 +1916,8 @@ mod tests {
                     "top_provider": {"max_completion_tokens": 64_000}
                 },
                 {
-                    "id": "openai/gpt-5.4",
-                    "name": "GPT-5.4",
+                    "id": "openai/gpt-5.6",
+                    "name": "GPT-5.6",
                     "context_length": 400_000,
                     "supported_parameters": ["tools"]
                 },
@@ -1902,7 +1941,7 @@ mod tests {
         assert!(models[0].capabilities.vision);
         assert!(models[0].capabilities.reasoning);
         assert_eq!(models[0].capabilities.output_tokens, Some(64_000));
-        assert_eq!(models[1].id, "openai/gpt-5.4");
+        assert_eq!(models[1].id, "openai/gpt-5.6");
         assert_eq!(models[1].capabilities.protocol, ModelProtocol::OpenAiChat);
         assert_eq!(models[1].capabilities.output_tokens, None);
         assert!(!models.iter().any(|model| model.id.ends_with(":batch")));

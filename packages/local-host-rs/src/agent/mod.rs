@@ -522,10 +522,12 @@ fn resolve_native_client(
     }
 
     let (credential_mode, identity) = crate::credential_mode::require_ready_with_identity(model)?;
-    let identity_scope = crate::telemetry::TelemetryIdentityScope::new(
-        &identity.organization_id,
-        identity.workspace_id.as_deref(),
-    );
+    let identity_scope = identity.as_ref().and_then(|identity| {
+        crate::telemetry::TelemetryIdentityScope::new(
+            &identity.organization_id,
+            identity.workspace_id.as_deref(),
+        )
+    });
     if let crate::codex_auth::CodexModelRoute::AppServer { model_id } = route {
         return Ok((
             NativeResolvedClient {
@@ -738,14 +740,15 @@ fn relay_runtime_events(
 }
 
 /// Bind a model transition before publishing its identity to turn telemetry.
-/// Automatic routing cannot replace the actor's active tenant or proceed
-/// without a complete verified tenant; explicit model changes refresh it.
+/// Automatic routing cannot replace the actor's active tenant. Direct-provider
+/// BYOK may have no tenant; staying unbound is not a tenant change. Explicit
+/// model changes refresh the scope.
 fn update_model_identity_scope(
     active: &mut Option<crate::telemetry::TelemetryIdentityScope>,
     resolved: Option<crate::telemetry::TelemetryIdentityScope>,
     preserve_scope: bool,
 ) -> Result<(), String> {
-    if preserve_scope && (resolved.is_none() || resolved != *active) {
+    if preserve_scope && resolved != *active {
         return Err(
             "Automatic routing cannot change the active organization or workspace".to_owned(),
         );
@@ -813,8 +816,15 @@ mod identity_transition_tests {
             assert_eq!(active, initial);
         }
         let mut unbound = None;
-        assert!(update_model_identity_scope(&mut unbound, None, true).is_err());
+        update_model_identity_scope(&mut unbound, None, true).unwrap();
         assert!(unbound.is_none());
+        let mut still_unbound = None;
+        assert_eq!(
+            update_model_identity_scope(&mut still_unbound, scope("org-a", "workspace-a"), true)
+                .unwrap_err(),
+            "Automatic routing cannot change the active organization or workspace"
+        );
+        assert!(still_unbound.is_none());
     }
 
     #[test]
