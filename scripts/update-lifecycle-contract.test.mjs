@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { buildReleaseMetadata } from "./create-release-metadata.mjs";
 
@@ -47,7 +47,7 @@ test("release metadata carries changelog notes and exact runtime passports", asy
 	]);
 });
 
-test("installer and signed release workflow publish receipt metadata", () => {
+test("installer and release workflow preserve receipt metadata", () => {
 	const installer = read("scripts/install.sh");
 	const release = readReleaseWorkflow();
 	const updater = read("packages/tui-rs/src/update_cli.rs");
@@ -83,12 +83,26 @@ test("installer and signed release workflow publish receipt metadata", () => {
 	assert.match(updater, /legacyExplicit/);
 	assert.doesNotMatch(updater, /MAESTRO_UPDATE_PREVIEW_FALLBACK/);
 	assert.doesNotMatch(read("docs/protocols/release-channels.json"), /MAESTRO_UPDATE_PREVIEW_FALLBACK/);
-	assert.match(release, /create-release-metadata\.mjs/);
+	// The nested Mono template creates the signed receipt. In the generated
+	// public mirror, the public-owned workflow authenticates that same receipt
+	// before packaging and publishing it. CI must enforce the actual owner in
+	// each checkout, rather than accepting a private build template as the
+	// public publishing entrypoint.
+	const publicMirror = existsSync(new URL("../.github/workflows/check-release-workflow-contract.mjs", import.meta.url));
+	if (publicMirror) {
+		assert.match(release, /repository_dispatch:/);
+		assert.match(release, /maestro-signed-release/);
+		assert.match(release, /MONO_SHA256SUMS\.cosign\.bundle/);
+		assert.match(release, /node scripts\/verify-staged-release\.mjs release-binaries "\$RELEASE_VERSION"/);
+		assert.match(release, /files\+=\(release-metadata\.json/);
+		assert.doesNotMatch(release, /evalops-internal-arc/);
+	} else {
+		assert.match(release, /create-release-metadata\.mjs/);
+		assert.match(release, /files\+=\([^\n]*release-metadata\.json/);
+	}
 	assert.match(release, /release-metadata\.json/);
-	assert.match(release, /files\+=\([^\n]*release-metadata\.json/);
 	assert.match(release, /create-release-channel-manifest\.mjs/);
 	assert.match(release, /channel-manifest\.json/);
 	assert.match(channelManifest, /createPrivateKey/);
 	assert.match(channelResolver, /alpha or beta/);
-	assert.match(release, /release-metadata\.json/);
 });
