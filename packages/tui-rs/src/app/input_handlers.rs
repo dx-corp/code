@@ -1610,7 +1610,7 @@ impl App {
         match crate::connections_cli::save_local_api_key(provider_id, secret) {
             Ok(connection_id) => {
                 let default_model = crate::model_catalog::default_model_for_provider(provider_id)
-                    .unwrap_or("gpt-5.5");
+                    .unwrap_or("gpt-5.6");
                 let route =
                     crate::config::compose_model_route(Some(provider_id), Some(default_model))
                         .unwrap_or_else(|| format!("{provider_id}/{default_model}"));

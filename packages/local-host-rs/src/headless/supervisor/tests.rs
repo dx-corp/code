@@ -1062,7 +1062,7 @@ fn resume_recorded_session_restores_replay_and_recorder() {
     recorder
         .record_received(&FromAgentMessage::Ready {
             protocol_version: Some("2026-03-30".to_string()),
-            model: "gpt-5.4".to_string(),
+            model: "gpt-5.6".to_string(),
             provider: "openai".to_string(),
             session_id: Some("sess_saved".to_string()),
         })
@@ -1075,7 +1075,7 @@ fn resume_recorded_session_restores_replay_and_recorder() {
         .expect("resume builder")
         .build();
 
-    assert_eq!(supervisor.state().model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(supervisor.state().model.as_deref(), Some("gpt-5.6"));
     assert_eq!(supervisor.state().provider.as_deref(), Some("openai"));
     assert_eq!(supervisor.state().session_id.as_deref(), Some("sess_saved"));
     assert!(supervisor.session_recorder.is_some());
@@ -1273,7 +1273,7 @@ fn apply_snapshot_keeps_session_recorder_state_in_sync() {
     let mut supervisor =
         AgentSupervisor::new(SupervisorConfig::default()).with_session_recorder(recorder);
     let snapshot_state = AgentState {
-        model: Some("gpt-5.4".to_string()),
+        model: Some("gpt-5.6".to_string()),
         provider: Some("openai".to_string()),
         session_id: Some("sess_remote".to_string()),
         is_ready: true,
@@ -2110,7 +2110,7 @@ async fn remote_connect_hydrates_state_without_replaying_init() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "cwd": "/tmp/project",
@@ -2142,7 +2142,7 @@ async fn remote_connect_hydrates_state_without_replaying_init() {
 
     supervisor.connect().await.expect("connect");
 
-    assert_eq!(supervisor.state().model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(supervisor.state().model.as_deref(), Some("gpt-5.6"));
     assert_eq!(supervisor.state().provider.as_deref(), Some("openai"));
     assert_eq!(
         supervisor.state().session_id.as_deref(),
@@ -2203,7 +2203,7 @@ async fn recv_prioritizes_supervisor_events_before_remote_agent_messages() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "cwd": "/tmp/project",
@@ -2393,7 +2393,7 @@ async fn non_retryable_remote_disconnect_shuts_down_transport() {
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2617,7 +2617,7 @@ async fn successful_remote_connect_resets_stale_reference_retry_budget() {
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -2651,7 +2651,7 @@ async fn remote_auto_reconnect_reuses_bootstrapped_session_id() {
         },
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "cwd": "/tmp/project",
@@ -2887,7 +2887,7 @@ async fn remote_auto_reconnect_reuses_previous_connection_id_without_take_contro
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3178,7 +3178,7 @@ async fn clean_remote_disconnect_does_not_force_take_control_on_manual_reconnect
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3242,7 +3242,7 @@ async fn explicit_disconnect_after_failed_reconnect_clears_private_resume_author
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3331,7 +3331,7 @@ async fn manual_remote_reconnect_shuts_down_existing_transport() {
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3378,7 +3378,7 @@ async fn manual_remote_reconnect_disconnects_before_next_bootstrap() {
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],
@@ -3432,7 +3432,7 @@ async fn auto_remote_reconnect_waits_for_disconnect_completion_before_next_boots
         "cursor": 0,
         "state": {
             "protocol_version": "2026-03-30",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6",
             "provider": "openai",
             "session_id": "sess_remote",
             "pending_approvals": [],

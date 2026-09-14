@@ -47,6 +47,29 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.88] - 2026-09-13
+
+### Added
+
+- Managed DeepSeek V4.1 Flash, Qwen 3.8 Max, and Gemini 3.8 Flash model choices.
+  Availability requires an enabled gateway route, provider enrollment, and model credits.
+  GLM-5.3 remains the default; managed requests support text and tools.
+
+### Improved
+
+- Show the upstream provider and “Model credits” in the model picker so managed
+  routes are distinct from routes that use your own provider keys. Selection
+  still uses the exact managed route; the picker does not claim live availability.
+
+### Fixed
+
+- Include Gemini thinking tokens in gateway output charges and require final
+  native usage before settling a streamed request.
+- Preserve each managed model's provider and credential through helper calls and continuation.
+- Stop retrying exhausted provider quotas reported as HTTP 429. Insufficient
+  managed credits also produce a terminal quota result; temporary rate limits
+  retain their existing retry behavior.
+
 ## [0.10.86] - 2026-09-11
 
 ### Added

@@ -377,7 +377,7 @@ fn test_smart_coder_subagent_dispatch_uses_openai_codex_model() {
     assert_eq!(dispatch.mode, AgentMode::Smart);
     assert_eq!(dispatch.subagent_type, SubagentType::Coder);
     assert_eq!(dispatch.provider, ModelProvider::OpenAiCodex);
-    assert_eq!(dispatch.model, "gpt-5.5");
+    assert_eq!(dispatch.model, "gpt-5.6");
     assert_eq!(dispatch.reasoning_effort, ReasoningEffort::Medium);
     assert_eq!(dispatch.source, DispatchSource::Mode);
 }

@@ -742,11 +742,11 @@ mod tests {
     #[test]
     fn builds_explicit_follow_up_approval_trailer_when_missing() {
         let metadata =
-            PrCreator::build_authorship_metadata(&event_with_extra(HashMap::new()), "gpt-5.4")
+            PrCreator::build_authorship_metadata(&event_with_extra(HashMap::new()), "gpt-5.6")
                 .unwrap();
 
         assert_eq!(metadata.prompt_id, "prompt_123");
-        assert_eq!(metadata.model_identifier, "gpt-5.4");
+        assert_eq!(metadata.model_identifier, "gpt-5.6");
         assert_eq!(
             metadata.approvals_id,
             "missing:approval-follow-up-required:prompt_123"
@@ -757,7 +757,7 @@ mod tests {
     fn fallback_approval_trailer_uses_trimmed_prompt_id() {
         let mut event = event_with_extra(HashMap::new());
         event.id = " prompt_123 ".to_string();
-        let metadata = PrCreator::build_authorship_metadata(&event, "gpt-5.4").unwrap();
+        let metadata = PrCreator::build_authorship_metadata(&event, "gpt-5.6").unwrap();
 
         assert_eq!(metadata.prompt_id, "prompt_123");
         assert_eq!(
@@ -775,7 +775,7 @@ mod tests {
         );
 
         let metadata =
-            PrCreator::build_authorship_metadata(&event_with_extra(extra), "gpt-5.4").unwrap();
+            PrCreator::build_authorship_metadata(&event_with_extra(extra), "gpt-5.6").unwrap();
 
         assert_eq!(metadata.approvals_id, "approval_789");
     }

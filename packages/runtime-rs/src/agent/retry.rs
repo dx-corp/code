@@ -160,6 +160,8 @@ impl ErrorKind {
             || lower.contains("usagelimitexceeded")
             || lower.contains("quota exceeded")
             || lower.contains("quota_exceeded")
+            || lower.contains("insufficient_quota")
+            || lower.contains("prepaid_credits_insufficient")
             || lower.contains("hit your usage limit")
         {
             return ErrorKind::QuotaExceeded;
@@ -693,6 +695,25 @@ mod tests {
         assert!(!ErrorKind::InvalidRequest.is_retryable());
         assert!(!ErrorKind::QuotaExceeded.is_retryable());
         assert!(!ErrorKind::Unknown.is_retryable());
+    }
+
+    #[test]
+    fn insufficient_quota_is_terminal_even_with_http_429_and_retry_copy() {
+        for message in [
+            "HTTP 429: insufficient_quota: Check your plan and billing details, then try again.",
+            "HTTP 402: prepaid_credits_insufficient: Add model credits to continue.",
+        ] {
+            let kind = ErrorKind::classify(message);
+            assert_eq!(kind, ErrorKind::QuotaExceeded, "{message}");
+            assert!(matches!(
+                RetryPolicy::default().should_retry(kind),
+                RetryDecision::GiveUp { .. }
+            ));
+        }
+        assert!(matches!(
+            ErrorKind::classify("HTTP 429: rate_limit_exceeded: retry after 2 seconds"),
+            ErrorKind::RateLimited { .. }
+        ));
     }
 
     #[test]

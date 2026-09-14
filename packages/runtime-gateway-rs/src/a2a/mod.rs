@@ -49,5 +49,6 @@ pub(crate) use tasks::{
 };
 #[cfg(test)]
 pub(crate) use tasks::{
-    a2a_acceptance_report_artifacts, a2a_task_visible_to_auth, cancel_a2a_task,
+    a2a_acceptance_report_artifacts, a2a_task_visible_to_auth, a2a_vfs_hydration_gap,
+    cancel_a2a_task, completion_subagent_capsule_from_metadata,
 };

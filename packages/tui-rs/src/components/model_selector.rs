@@ -781,7 +781,10 @@ impl ModelSelector {
 
                 let mut spans = vec![
                     Span::styled(&model.name, Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" ({}) ", model.provider), theme.muted_style()),
+                    Span::styled(
+                        format!(" ({}) ", model_route_summary(model)),
+                        theme.muted_style(),
+                    ),
                 ];
 
                 if is_current {
@@ -821,6 +824,24 @@ fn format_context_window(context_tokens: u32) -> String {
     }
 }
 
+fn model_route_summary(model: &ModelInfo) -> String {
+    if let Some(managed) = crate::model_catalog::MANAGED_MODELS
+        .iter()
+        .find(|entry| model.provider == "evalops" && entry.id == model.id)
+    {
+        let provider = match managed.provider {
+            "fireworks" => "Fireworks",
+            "google" => "Google",
+            other => other,
+        };
+        return format!(
+            "{provider} · {}",
+            maestro_ui::localization::tr("Model credits")
+        );
+    }
+    model.provider.clone()
+}
+
 fn model_status_summary(model: &ModelInfo) -> &'static str {
     use crate::model_catalog::VerificationState;
     match (model.verification.source.as_str(), model.verification.state) {
@@ -858,8 +879,39 @@ fn capability_summary(model: &ModelInfo) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn managed_fireworks_search_selects_exact_gateway_routes() {
-        for model in crate::model_catalog::MANAGED_FIREWORKS_MODELS {
+    fn managed_model_picker_shows_funding_and_upstream_without_changing_route() {
+        use ratatui::{Terminal, backend::TestBackend};
+        for (id, provider) in [
+            ("gemini-3.8-flash", "Google"),
+            ("accounts/fireworks/models/qwen3p8-max", "Fireworks"),
+        ] {
+            let mut selector = ModelSelector::new();
+            selector.show();
+            let route = format!("evalops/{id}");
+            selector.insert_str(&route);
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|frame| selector.render(frame, frame.area()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(
+                text.contains(&format!("{provider} · Model credits")),
+                "{text}"
+            );
+            assert!(text.contains("availability unchecked"), "{text}");
+            assert_eq!(selector.confirm(), Some(route));
+        }
+    }
+
+    #[test]
+    fn managed_model_search_selects_exact_gateway_routes() {
+        for model in crate::model_catalog::MANAGED_MODELS {
             let mut selector = ModelSelector::new();
             selector.set_current_model(Some(
                 crate::credential_mode::DEFAULT_MANAGED_MODEL.to_owned(),
@@ -1243,8 +1295,9 @@ mod tests {
         }
     }
 
-    /// The real provider defaults plus filler models, so the focused
-    /// slice exercises `default_model_for_provider` against known ids.
+    /// Provider defaults plus filler models. OpenAI's catalog default is also
+    /// a preferred discovery row; tests that pin slice order keep a non-default
+    /// OpenAI id here and add `gpt-5.6` only where that default is under test.
     fn slice_catalog() -> Vec<ModelInfo> {
         let mut models = vec![
             test_model("claude-sonnet-4-6", "anthropic"),
@@ -1261,7 +1314,9 @@ mod tests {
 
     #[test]
     fn focused_slice_shows_current_and_provider_defaults() {
-        let mut selector = ModelSelector::with_models(slice_catalog());
+        let mut models = slice_catalog();
+        models.push(test_model("gpt-5.6", "openai"));
+        let mut selector = ModelSelector::with_models(models);
         selector.set_current_model(Some("grok-4.5".to_owned()));
         selector.show();
 
@@ -1270,10 +1325,21 @@ mod tests {
             .iter()
             .map(|&idx| selector.models[idx].id.as_str())
             .collect();
-        assert_eq!(ids[0], "grok-4.5", "current model leads the slice");
-        for default in ["claude-sonnet-4-6", "gemini-2.5-pro", "gpt-5.5"] {
+        assert_eq!(
+            ids[0], "gpt-5.6",
+            "preferred openai default leads the slice"
+        );
+        assert!(
+            ids.contains(&"grok-4.5"),
+            "current model stays in the slice"
+        );
+        for default in ["claude-sonnet-4-6", "gemini-2.5-pro", "gpt-5.6"] {
             assert!(ids.contains(&default), "slice must include {default}");
         }
+        assert!(
+            !ids.contains(&"gpt-5.5"),
+            "retired openai default is not a focused-slice row"
+        );
         let default_providers: Vec<&str> = selector
             .filtered
             .iter()

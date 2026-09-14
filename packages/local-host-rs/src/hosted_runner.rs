@@ -5844,7 +5844,10 @@ where
         body.len()
     );
     socket.write_all(headers.as_bytes()).await?;
-    socket.write_all(body).await
+    socket.write_all(body).await?;
+    // TLS may accept plaintext while ciphertext is still buffered. Drain it
+    // before handle_socket drops this single-response connection.
+    socket.flush().await
 }
 
 async fn write_sse_headers<S>(socket: &mut S) -> io::Result<()>
@@ -5855,7 +5858,8 @@ where
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
         )
-        .await
+        .await?;
+    socket.flush().await
 }
 
 async fn write_sse_event<S>(socket: &mut S, envelope: &StreamEnvelope) -> io::Result<()>
@@ -5866,7 +5870,8 @@ where
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     socket.write_all(b"data: ").await?;
     socket.write_all(payload.as_bytes()).await?;
-    socket.write_all(b"\n\n").await
+    socket.write_all(b"\n\n").await?;
+    socket.flush().await
 }
 
 fn status_reason(status: u16) -> &'static str {

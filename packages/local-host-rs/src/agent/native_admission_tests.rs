@@ -133,6 +133,67 @@ fn codex_models_require_evalops_identity_before_using_the_app_server() {
 }
 
 #[test]
+fn openai_api_key_resolves_native_client_without_identity() {
+    let _guard = crate::config::test_process_env_lock();
+    let mut names = identity_env_names(false, true);
+    names.extend(["OPENAI_API_KEY", "OPENAI_BASE_URL"]);
+    let _restore = EnvRestore::capture(&names);
+    let maestro_home = tempfile::tempdir().expect("maestro home");
+    std::env::set_var("MAESTRO_HOME", maestro_home.path());
+    std::env::set_var("MAESTRO_OAUTH_STORAGE_MODE", "file");
+    std::env::set_var("MAESTRO_DISABLE_KEYCHAIN", "1");
+    std::env::set_var("OPENAI_API_KEY", "synthetic-maestro-smoke-key");
+    std::env::set_var("OPENAI_BASE_URL", "http://127.0.0.1:9/v1");
+    for name in [
+        crate::credential_mode::ACCESS_TOKEN_ENV,
+        crate::credential_mode::ACCESS_TOKEN_FILE_ENV,
+        crate::credential_mode::ORG_ID_ENV,
+        crate::credential_mode::WORKSPACE_ID_ENV,
+        "MAESTRO_IDENTITY_URL",
+        crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV,
+    ] {
+        std::env::remove_var(name);
+    }
+
+    let (resolved, telemetry_scope) =
+        super::resolve_native_client("openai/gpt-5.4", None).expect("direct OpenAI client");
+    assert_eq!(resolved.provider_name, "openai");
+    assert!(!resolved.model_route.uses_app_server());
+    assert!(resolved.client.is_some());
+    assert!(telemetry_scope.is_none());
+}
+
+#[test]
+fn evalops_route_requires_identity_even_with_openai_api_key() {
+    let _guard = crate::config::test_process_env_lock();
+    let mut names = identity_env_names(false, true);
+    names.extend(["OPENAI_API_KEY", "OPENAI_BASE_URL"]);
+    let _restore = EnvRestore::capture(&names);
+    let maestro_home = tempfile::tempdir().expect("maestro home");
+    std::env::set_var("MAESTRO_HOME", maestro_home.path());
+    std::env::set_var("MAESTRO_OAUTH_STORAGE_MODE", "file");
+    std::env::set_var("MAESTRO_DISABLE_KEYCHAIN", "1");
+    std::env::set_var("OPENAI_API_KEY", "synthetic-maestro-smoke-key");
+    std::env::set_var("OPENAI_BASE_URL", "http://127.0.0.1:9/v1");
+    for name in [
+        crate::credential_mode::ACCESS_TOKEN_ENV,
+        crate::credential_mode::ACCESS_TOKEN_FILE_ENV,
+        crate::credential_mode::ORG_ID_ENV,
+        crate::credential_mode::WORKSPACE_ID_ENV,
+        "MAESTRO_IDENTITY_URL",
+        crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV,
+    ] {
+        std::env::remove_var(name);
+    }
+
+    let error = match super::resolve_native_client("evalops/gpt-5.5", None) {
+        Ok(_) => panic!("managed evalops must not bypass EvalOps Identity"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("deixic-code evalops login"));
+}
+
+#[test]
 fn injected_network_client_requires_evalops_identity() {
     let _guard = crate::config::test_process_env_lock();
     let _restore = EnvRestore::capture(&identity_env_names(false, false));

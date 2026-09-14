@@ -1265,9 +1265,9 @@ pub(crate) fn composer_editor_width(area_width: u16) -> u16 {
 
 /// Short label for composer/status chrome.
 ///
-/// Uses the catalog `name` for the current model (`openai-codex/gpt-5.5` →
-/// `GPT-5.5`). Unknown ids fall back to the last path segment so the footer
-/// is never `openai-codex/gpt-5.5 via openai-codex`.
+/// Uses the catalog `name` for the current model (`openai-codex/gpt-5.6` →
+/// `GPT-5.6`). Unknown ids fall back to the last path segment so the footer
+/// is never `openai-codex/gpt-5.6 via openai-codex`.
 #[must_use]
 fn chrome_model_label(model: &str) -> String {
     if let Some(info) = crate::model_catalog::find_model(model) {
@@ -2701,7 +2701,7 @@ impl Widget for ChatView<'_> {
             });
 
             // Model + mode already sit on the composer border. Passing them
-            // here reprints `GPT-5.5 via openai-codex` on the next row.
+            // here reprints `GPT-5.6 via openai-codex` on the next row.
             let status_widget = StatusBarWidget::new(
                 None,
                 None,
@@ -3525,7 +3525,7 @@ mod tests {
             },
         )
         .with_runtime_footer(
-            Some("gpt-5.4"),
+            Some("gpt-5.6"),
             ThinkingLevel::High,
             InteractionMode::AlwaysApprove,
         );
@@ -3536,7 +3536,7 @@ mod tests {
         widget.render(Rect::new(0, 0, width, height), &mut buf);
 
         let rendered = buffer_lines(&buf, width, height).join("\n");
-        assert!(rendered.contains("Mode: Auto-approve · GPT-5.4 (high)"));
+        assert!(rendered.contains("Mode: Auto-approve · GPT-5.6 (high)"));
     }
 
     #[test]
@@ -3551,7 +3551,7 @@ mod tests {
             },
         )
         .with_runtime_footer(
-            Some("openai-codex/gpt-5.5"),
+            Some("openai-codex/gpt-5.6"),
             ThinkingLevel::Off,
             InteractionMode::Normal,
         );
@@ -3562,14 +3562,14 @@ mod tests {
         widget.render(Rect::new(0, 0, width, height), &mut buf);
 
         let rendered = buffer_lines(&buf, width, height).join("\n");
-        assert!(rendered.contains("Mode: Act · GPT-5.5"));
-        assert!(!rendered.contains("openai-codex/gpt-5.5"));
+        assert!(rendered.contains("Mode: Act · GPT-5.6"));
+        assert!(!rendered.contains("openai-codex/gpt-5.6"));
     }
 
     #[test]
     fn chat_view_shows_model_once_in_startup_summary() {
         let mut state = crate::state::AppState::default();
-        state.model = Some("openai-codex/gpt-5.5".to_string());
+        state.model = Some("openai-codex/gpt-5.6".to_string());
         state.provider = Some("openai-codex".to_string());
         let width = 100;
         let height = 16;
@@ -3578,12 +3578,12 @@ mod tests {
         ChatView::new(&state).render(Rect::new(0, 0, width, height), &mut buf);
 
         let rendered = buffer_lines(&buf, width, height).join("\n");
-        let catalog_hits = rendered.matches("GPT-5.5").count();
+        let catalog_hits = rendered.matches("GPT-5.6").count();
         assert_eq!(catalog_hits, 1, "model must appear once:\n{rendered}");
         assert!(rendered.contains("Mode: Act"));
         assert!(rendered.contains("/plan to plan"));
         assert!(!rendered.contains("via openai-codex"));
-        assert!(!rendered.contains("openai-codex/gpt-5.5"));
+        assert!(!rendered.contains("openai-codex/gpt-5.6"));
         assert!(!rendered.contains("Describe what you want to build..."));
     }
 
@@ -3623,8 +3623,8 @@ mod tests {
 
     #[test]
     fn chrome_model_label_inherits_catalog_name() {
-        assert_eq!(chrome_model_label("openai-codex/gpt-5.5"), "GPT-5.5");
-        assert_eq!(chrome_model_label("gpt-5.5"), "GPT-5.5");
+        assert_eq!(chrome_model_label("openai-codex/gpt-5.6"), "GPT-5.6");
+        assert_eq!(chrome_model_label("gpt-5.6"), "GPT-5.6");
         assert_eq!(
             chrome_model_label("openrouter/openai/gpt-4o-mini"),
             "OpenAI: GPT-4o-mini"
@@ -3972,7 +3972,7 @@ mod tests {
     fn empty_chat_view_uses_live_runtime_summary() {
         let mut state = crate::state::AppState::default();
         state.session_id = Some("restored-42".to_string());
-        state.model = Some("openai-codex/gpt-5.5".to_string());
+        state.model = Some("openai-codex/gpt-5.6".to_string());
         state.cwd = Some("/projects/release-checklist".to_string());
         let width = 100;
         let height = 20;
@@ -3981,7 +3981,7 @@ mod tests {
         ChatView::new(&state).render(Rect::new(0, 0, width, height), &mut buf);
 
         let rendered = buffer_lines(&buf, width, height).join("\n");
-        assert!(rendered.contains("GPT-5.5"));
+        assert!(rendered.contains("GPT-5.6"));
         assert!(rendered.contains("release-checklist"));
         assert!(!rendered.contains("session restored-42"));
     }
