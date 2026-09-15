@@ -2047,7 +2047,10 @@ impl OpenAiClient {
                 } else {
                     "5m"
                 };
-                crate::cache_topology::mark_stable_history(&mut body, ttl);
+                // Chat completions split tool results into their own messages,
+                // so canonical history indexes do not map onto the wire; only
+                // the newest boundary is marked here.
+                crate::cache_topology::mark_stable_history(&mut body, ttl, None);
             }
             prepared.append_volatile_tail(&mut body);
         }
