@@ -29,6 +29,7 @@ impl NativeAgentRunner {
                 &self.tools,
                 &self.external_tools,
                 Some(&self.explicitly_allowed_tools),
+                self.config.external_tool_schema_policy,
             );
             self.model_tool_cache = None;
             self.refresh_runtime_audit();
