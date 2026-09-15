@@ -21,9 +21,8 @@
 //! calls [`crate::token_counting::count_tokens`] with the configured
 //! model. When Maestro bundles a tokenizer for that model the count is
 //! measured; otherwise it falls back to the shared bytes/4 heuristic in
-//! [`crate::token_estimation`]. This is the same counter the `/context`
-//! breakdown uses the same shared counter, so the auto-compaction
-//! gate and the percentage shown to the user cannot disagree.
+//! [`crate::token_estimation`]. The `/context` breakdown uses this same counter,
+//! so its percentage and the auto-compaction gate cannot disagree.
 //!
 //! # Example
 //!
@@ -46,6 +45,7 @@ use maestro_ai::{ContentBlock, Message, MessageContent, Role};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+mod calibration;
 
 /// Durable state needed to continue a compacted conversation without guessing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

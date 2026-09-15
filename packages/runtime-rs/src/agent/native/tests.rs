@@ -106,6 +106,10 @@ impl RuntimeTestHost {
             ("todo", "Update the deterministic todo fixture"),
             ("update_goal", "Update the deterministic goal fixture"),
             ("tool_search", "Search the deterministic tool catalog"),
+            (
+                "recall_output",
+                "Recall an earlier deterministic tool result",
+            ),
             ("explore", "Explore the deterministic workspace"),
         ]
         .into_iter()
@@ -711,8 +715,7 @@ impl NativeExecutionHost for RuntimeTestHost {
         NativeModelRoute::DirectProvider
     }
 }
-
-fn new_runtime_test_agent(
+pub(super) fn new_runtime_test_agent(
     config: NativeAgentConfig,
     client: UnifiedClient,
 ) -> Result<(super::NativeAgent, mpsc::UnboundedReceiver<FromAgent>)> {

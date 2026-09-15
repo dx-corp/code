@@ -679,6 +679,11 @@ pub struct ToolExecutor {
     /// operations. Uses `RwLock` for thread-safe access across async tasks.
     cache: RwLock<ToolResultCache>,
 
+    /// Last full textual `read` projection for each resolved file path.
+    /// Cache entries retain full results; this session-local map only changes
+    /// what a repeat read returns to the model.
+    read_snapshots: RwLock<HashMap<String, String>>,
+
     /// MCP client for resource tools (lazy-initialized)
     mcp_client: tokio::sync::Mutex<Option<Arc<crate::mcp::McpClient>>>,
 
@@ -774,6 +779,7 @@ fn is_reserved_execute_dispatch_name(name: &str) -> bool {
             | "Search"
             | "parallel_ripgrep"
             | "tool_search"
+            | "recall_output"
             | "explore"
             | "Explore"
             | "ParallelRipgrep"
@@ -1001,6 +1007,7 @@ impl ToolExecutor {
             cwd,
             registry,
             cache: RwLock::new(ToolResultCache::default()),
+            read_snapshots: RwLock::new(HashMap::new()),
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -1051,6 +1058,7 @@ impl ToolExecutor {
             cwd,
             registry,
             cache: RwLock::new(ToolResultCache::default()),
+            read_snapshots: RwLock::new(HashMap::new()),
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -1105,6 +1113,7 @@ impl ToolExecutor {
             cwd,
             registry,
             cache: RwLock::new(ToolResultCache::new(cache_config)),
+            read_snapshots: RwLock::new(HashMap::new()),
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -1503,6 +1512,73 @@ impl ToolExecutor {
         if let Ok(mut cache) = self.cache.write() {
             cache.clear();
         }
+    }
+
+    /// Replace a repeated full textual read with the delta from the last
+    /// model-visible version. Partial, binary, image, PDF, and notebook reads
+    /// preserve their existing behavior because they are views rather than a
+    /// complete textual file snapshot.
+    fn project_repeated_read(&self, tool_name: &str, args: &Value, result: &mut ToolResult) {
+        if !tool_name.eq_ignore_ascii_case("read") || !result.success {
+            return;
+        }
+        if args.get("offset").is_some()
+            || args.get("limit").is_some()
+            || args
+                .get("mode")
+                .and_then(Value::as_str)
+                .is_some_and(|mode| mode != "normal")
+            || args
+                .get("asBase64")
+                .or_else(|| args.get("as_base64"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        let Some(raw_path) = args
+            .get("path")
+            .or_else(|| args.get("file_path"))
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+        else {
+            return;
+        };
+        let Ok(resolved_path) = resolve_tool_path(&self.cwd, raw_path) else {
+            return;
+        };
+        let extension = Path::new(&resolved_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase);
+        if extension.as_deref().is_some_and(|extension| {
+            matches!(
+                extension,
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "pdf" | "ipynb"
+            )
+        }) {
+            return;
+        }
+
+        let current = result.output.clone();
+        let previous = self
+            .read_snapshots
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(resolved_path, current.clone());
+        let Some(previous) = previous else {
+            return;
+        };
+        if previous == current {
+            result.output = format!("Unchanged since previous read: {raw_path}");
+            return;
+        }
+
+        let diff = similar::TextDiff::from_lines(&previous, &current)
+            .unified_diff()
+            .header("previous", "current")
+            .to_string();
+        result.output = format!("Diff since previous read: {raw_path}\n{diff}");
     }
 
     async fn ensure_mcp_client(&self) -> Result<Arc<McpClient>, String> {
@@ -2461,6 +2537,7 @@ impl ToolExecutor {
                         details: None,
                     };
 
+                    self.project_repeated_read(tool_name, args, &mut result);
                     self.append_directory_skill_catalog(tool_name, args, generation, &mut result);
 
                     // Send events for cached result
@@ -2469,10 +2546,10 @@ impl ToolExecutor {
                             let _ = tx.send(FromAgent::ToolStart {
                                 call_id: call_id.to_string(),
                             });
-                            if !cached.output.is_empty() {
+                            if !result.output.is_empty() {
                                 let _ = tx.send(FromAgent::ToolOutput {
                                     call_id: call_id.to_string(),
-                                    content: cached.output.clone(),
+                                    content: result.output.clone(),
                                 });
                             }
                             let _ = tx.send(FromAgent::ToolEnd {
@@ -2578,7 +2655,9 @@ impl ToolExecutor {
             }
         }
 
-        // Derive catalogs after caching so trust revocation is effective on cached reads.
+        // Project only the cached/raw file contents. Derived catalogs are added
+        // afterwards so trust changes cannot leak a prior catalog through a diff.
+        self.project_repeated_read(tool_name, args, &mut result);
         self.append_directory_skill_catalog(tool_name, args, generation, &mut result);
         result
     }
@@ -2858,3 +2937,5 @@ mod tool_registry;
 pub use tool_registry::ToolRegistry;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod token_efficiency_tests;

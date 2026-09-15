@@ -3,6 +3,123 @@
 use super::*;
 
 impl NativeAgentRunner {
+    pub(super) async fn execute_recall_output(
+        &mut self,
+        args: &Value,
+        call_id: &str,
+    ) -> ToolExecution {
+        let event_tx = self.event_tx.clone();
+        let emit = move |execution: &ToolExecution| {
+            let _ = event_tx.send(FromAgent::ToolStart {
+                call_id: call_id.to_string(),
+            });
+            let result = execution.to_legacy();
+            if !result.output.is_empty() {
+                let _ = event_tx.send(FromAgent::ToolOutput {
+                    call_id: call_id.to_string(),
+                    content: result.output.clone(),
+                });
+            }
+            let _ = event_tx.send(FromAgent::ToolEnd {
+                call_id: call_id.to_string(),
+                success: result.success,
+                result: Some(result),
+                receipt: Some(execution.receipt.clone()),
+            });
+        };
+
+        let requested_id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if requested_id.is_empty() {
+            let execution = ToolExecution::from_legacy(
+                call_id,
+                "recall_output",
+                ExecutionSource::Native,
+                ToolResult::failure("recall_output requires a tool-call id"),
+            )
+            .with_managed_policy(self.tool_executor.managed_policy_metadata());
+            emit(&execution);
+            return execution;
+        }
+
+        let durable_content = self.messages.iter().rev().find_map(|message| {
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return None;
+            };
+            blocks.iter().find_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } if tool_use_id == requested_id => Some(content.clone()),
+                _ => None,
+            })
+        });
+        let spill_path = self
+            .semantic_continuation
+            .as_ref()
+            .and_then(|continuation| {
+                continuation
+                    .tool_outputs
+                    .iter()
+                    .rev()
+                    .find(|reference| reference.tool_call_id == requested_id)
+                    .map(|reference| reference.path.clone())
+            });
+        let spilled_content = if let Some(path) = spill_path.as_deref() {
+            tokio::fs::read_to_string(path).await.ok()
+        } else {
+            None
+        };
+        let (source, Some(content)) = spilled_content
+            .map(|content| ("spill", Some(content)))
+            .unwrap_or_else(|| ("history", durable_content))
+        else {
+            let execution = ToolExecution::from_legacy(
+                call_id,
+                "recall_output",
+                ExecutionSource::Native,
+                ToolResult::failure(format!("No retained output exists for `{requested_id}`")),
+            )
+            .with_managed_policy(self.tool_executor.managed_policy_metadata());
+            emit(&execution);
+            return execution;
+        };
+
+        let offset = args
+            .get("offsetChars")
+            .or_else(|| args.get("offset_chars"))
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value as usize);
+        let max_chars = args
+            .get("maxChars")
+            .or_else(|| args.get("max_chars"))
+            .and_then(Value::as_u64)
+            .map_or(20_000, |value| value.clamp(1, 100_000) as usize);
+        let total_chars = content.chars().count();
+        let recalled = content
+            .chars()
+            .skip(offset)
+            .take(max_chars)
+            .collect::<String>();
+        let result = ToolResult::success(recalled).with_details(json!({
+            "recalledToolCallId": requested_id,
+            "source": source,
+            "offsetChars": offset,
+            "returnedChars": content.chars().skip(offset).take(max_chars).count(),
+            "totalChars": total_chars,
+            "truncated": offset.saturating_add(max_chars) < total_chars,
+        }));
+        let execution =
+            ToolExecution::from_legacy(call_id, "recall_output", ExecutionSource::Native, result)
+                .with_managed_policy(self.tool_executor.managed_policy_metadata());
+        emit(&execution);
+        execution
+    }
+
     pub(super) fn execute_tool_search(&mut self, args: &Value, call_id: &str) -> ToolExecution {
         let emit = |execution: &ToolExecution| {
             let _ = self.event_tx.send(FromAgent::ToolStart {
@@ -148,6 +265,20 @@ impl NativeAgentRunner {
         }
         let started = Instant::now();
         let span = tool_span_for_call(tool_name, Some(call_id));
+        if tool_name.eq_ignore_ascii_case("recall_output") {
+            let execution = self.execute_recall_output(args, call_id).await;
+            record_outcome(
+                &span,
+                if execution.is_error() {
+                    "error"
+                } else {
+                    "success"
+                },
+                started.elapsed(),
+                execution.is_error().then_some("tool_error"),
+            );
+            return execution;
+        }
         if tool_name.eq_ignore_ascii_case("tool_search") {
             let execution = span.in_scope(|| self.execute_tool_search(args, call_id));
             record_outcome(

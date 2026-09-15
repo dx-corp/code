@@ -901,7 +901,7 @@ async fn test_mcp_status_clears_removed_server_state() {
 fn test_registry_tool_count() {
     let registry = ToolRegistry::new();
     let count = registry.tools().count();
-    assert_eq!(count, 67); // includes draft-only feedback and durable subagent control
+    assert_eq!(count, 68); // includes recall_output and durable subagent control
 }
 
 #[test]
@@ -2224,31 +2224,6 @@ fn test_normalize_git_path_strips_cwd() {
 // ========== Cache Integration Tests ==========
 
 #[tokio::test]
-async fn test_executor_cache_hit() {
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("cache_test.txt");
-    std::fs::write(&file_path, "cached content").unwrap();
-
-    let executor = ToolExecutor::new(dir.path().to_str().unwrap());
-    let args = serde_json::json!({"file_path": file_path.to_str().unwrap()});
-
-    // First call - cache miss
-    let result1 = executor.execute("read", &args, None, "call-1").await;
-    assert!(result1.success);
-    let stats1 = executor.cache_stats();
-    assert_eq!(stats1.misses, 1);
-    assert_eq!(stats1.hits, 0);
-
-    // Second call - cache hit
-    let result2 = executor.execute("read", &args, None, "call-2").await;
-    assert!(result2.success);
-    assert_eq!(result1.output, result2.output);
-    let stats2 = executor.cache_stats();
-    assert_eq!(stats2.misses, 1);
-    assert_eq!(stats2.hits, 1);
-}
-
-#[tokio::test]
 async fn stale_generation_cacheable_read_cannot_repopulate_new_vault_cache() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("generation-secret.txt");
@@ -2279,11 +2254,16 @@ async fn stale_generation_cacheable_read_cannot_repopulate_new_vault_cache() {
     )
     .unwrap();
     let current = executor.execute("read", &args, None, "current-read").await;
-    assert_eq!(current.output, "new generation content");
+    assert!(
+        current.output.starts_with("Diff since previous read:"),
+        "{}",
+        current.output
+    );
+    assert!(current.output.contains("+new generation content"));
     assert_eq!(vault.stats().count, 0);
 
     let cached = executor.execute("read", &args, None, "cached-read").await;
-    assert_eq!(cached.output, current.output);
+    assert!(cached.output.starts_with("Unchanged since previous read:"));
     let stats = executor.cache_stats();
     assert_eq!((stats.hits, stats.misses), (1, 2));
 }
@@ -2650,7 +2630,7 @@ async fn explore_runs_nested_tool_hooks_for_each_operation() {
         results[1]["output"]
             .as_str()
             .unwrap()
-            .contains("allowed content")
+            .starts_with("Unchanged since previous read:")
     );
     assert!(!results[2]["success"].as_bool().unwrap());
     assert!(
@@ -3299,14 +3279,23 @@ async fn targeted_cache_invalidation_preserves_unrelated_reads() {
         .execute("read", &second_args, None, "targeted-second-hit")
         .await;
     assert!(second_cached.success);
-    assert!(second_cached.output.contains("second-v1"));
+    assert!(
+        second_cached
+            .output
+            .starts_with("Unchanged since previous read:")
+    );
     assert_eq!(executor.cache_stats().hits, 1);
 
     let first_fresh = executor
         .execute("read", &first_args, None, "targeted-first-fresh")
         .await;
     assert!(first_fresh.success);
-    assert!(first_fresh.output.contains("first-v2"));
+    assert!(
+        first_fresh.output.starts_with("Diff since previous read:")
+            && first_fresh.output.contains("first-v2"),
+        "{}",
+        first_fresh.output
+    );
 }
 
 #[tokio::test]

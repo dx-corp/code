@@ -72,6 +72,7 @@ impl ToolProfile {
                 "ack_mailbox",
                 "compact_mailbox",
                 "tool_search",
+                "recall_output",
                 "explore",
             ],
             Self::Review => &[
@@ -84,6 +85,7 @@ impl ToolProfile {
                 "diff",
                 "status",
                 "tool_search",
+                "recall_output",
                 "explore",
             ],
             Self::Explore => &[
@@ -97,6 +99,7 @@ impl ToolProfile {
                 "diff",
                 "status",
                 "tool_search",
+                "recall_output",
                 "explore",
             ],
             Self::All => &[],

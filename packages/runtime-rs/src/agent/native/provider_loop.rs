@@ -1,5 +1,6 @@
 //! Provider streaming and the native model/tool turn loop.
 
+use super::provider_history::{OBSERVATION_FULL_TURNS, project_observation_history};
 use super::*;
 
 impl NativeAgentRunner {
@@ -253,12 +254,44 @@ impl NativeAgentRunner {
             self.repair_orphaned_tool_calls();
 
             // Make the API call
-            let request_messages = Arc::clone(&self.messages);
+            let request_messages = project_observation_history(
+                &self.messages,
+                OBSERVATION_FULL_TURNS,
+                self.active_tool_names.contains("recall_output"),
+            );
             let provider_messages =
                 resolve_provider_history_shared(&request_messages, &self.credential_vault)?;
             let (config, request_usage) = self
                 .build_config_with_usage(&provider_messages, true)
                 .await?;
+            let estimated_input_tokens = request_usage.total();
+            let should_calibrate = estimated_input_tokens.is_some_and(|estimated| {
+                !self.token_calibrated_models.contains(&config.model)
+                    && self.compactor.should_calibrate_request(estimated)
+            });
+            if should_calibrate {
+                // One non-generating count per model/session, only near the
+                // compaction boundary. A failed or unsupported probe leaves
+                // the existing heuristic intact and is not retried every turn.
+                self.token_calibrated_models.insert(config.model.clone());
+                if let (Some(client), Some(estimated)) =
+                    (self.client.as_ref(), estimated_input_tokens)
+                {
+                    if let Ok(Some(observed)) = client
+                        .count_input_tokens(provider_messages.as_slice(), &config)
+                        .await
+                    {
+                        self.compactor.calibrate_counter(estimated, observed);
+                        tracing::info!(
+                            target: "maestro.llm",
+                            event = "context_token_counter_calibrated",
+                            model = %config.model,
+                            estimated_input_tokens = estimated,
+                            observed_input_tokens = observed,
+                        );
+                    }
+                }
+            }
             let _ = self.event_tx.send(FromAgent::RequestContextPrepared {
                 response_id: response_id.clone(),
             });
@@ -278,7 +311,6 @@ impl NativeAgentRunner {
                     .as_ref()
                     .and_then(|prepared| prepared.volatile_tail()),
             )?;
-            let estimated_input_tokens = request_usage.total();
             self.admit_provider_request("primary", &request_id, Some(&config.model))
                 .await?;
             let client = self
