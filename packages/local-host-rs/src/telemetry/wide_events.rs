@@ -200,6 +200,19 @@ impl std::fmt::Debug for TelemetryIdentityScope {
 }
 
 impl TelemetryIdentityScope {
+    pub(crate) fn experiment_assignment(
+        &self,
+        seed: &str,
+        revision: u32,
+    ) -> maestro_runtime_contracts::experiments::ExperimentAssignment {
+        maestro_runtime_contracts::experiments::ExperimentAssignment::derive(
+            seed,
+            &self.organization_id,
+            &self.workspace_id,
+            revision,
+        )
+    }
+
     /// Build a scope from the Identity session already verified at the native
     /// model-admission boundary. Platform's telemetry ingress requires both
     /// organization and workspace, so incomplete sessions keep local telemetry

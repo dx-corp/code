@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperationDiagnostics {
     pub kind: OperationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<maestro_runtime_contracts::experiments::ExperimentObservation>,
     pub parent_turn_id: Option<String>,
     pub completion_observed: bool,
     pub message_count: Option<u32>,
@@ -46,6 +48,10 @@ pub struct AttemptDiagnostics {
     pub gateway_request_id: Option<String>,
     pub gateway_record_id: Option<String>,
     pub gateway_lineage_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tools_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tool_count: Option<u32>,
 }
 
 impl OperationDiagnostics {
@@ -56,7 +62,8 @@ impl OperationDiagnostics {
         fn cost(value: f64) -> bool {
             value.is_finite() && (0.0..=1_000_000.0).contains(&value)
         }
-        self.parent_turn_id.as_deref().is_none_or(id)
+        self.experiment.as_ref().is_none_or(|e| e.is_valid())
+            && self.parent_turn_id.as_deref().is_none_or(id)
             && self.thinking_level.as_deref().is_none_or(|v| {
                 matches!(
                     v,
@@ -83,7 +90,15 @@ impl OperationDiagnostics {
             && self.omitted_attempts <= 1_000_000
             && self.attempts.len() <= 32
             && self.attempts.iter().all(|a| {
-                id(&a.response_id)
+                a.provider_tools_sha256.as_ref().is_none_or(|s| {
+                    s.len() == 71
+                        && s.starts_with("sha256:")
+                        && s[7..]
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                }) && a.provider_tool_count.is_none_or(|n| n <= 100_000)
+                    && a.provider_tools_sha256.is_some() == a.provider_tool_count.is_some()
+                    && id(&a.response_id)
                     && id(&a.model_id)
                     && id(&a.model_provider)
                     && a.duration_ms <= 86_400_000

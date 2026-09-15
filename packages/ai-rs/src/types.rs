@@ -166,6 +166,12 @@ pub struct ManagedGatewayReceipt {
     /// Exact request system prompt; absent on unsuccessful HTTP responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_prompt_sha256: Option<String>,
+    /// Gateway v1 digest of final tools and tool choice after adapter conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tools_sha256: Option<String>,
+    /// Present only alongside supported tool evidence; zero means explicit empty tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tool_count: Option<u32>,
 }
 
 /// Content-free observations from the existing stream policy owner.

@@ -118,6 +118,8 @@ pub struct ConfigSelector {
     changes: Vec<ConfigChangeEvent>,
     /// List state for scrolling
     list_state: ListState,
+    experiment_saved: Option<bool>,
+    experiment_error: Option<String>,
 }
 
 impl Default for ConfigSelector {
@@ -143,6 +145,8 @@ impl ConfigSelector {
             visible: false,
             changes: Vec::new(),
             list_state: ListState::default(),
+            experiment_saved: None,
+            experiment_error: None,
         }
     }
 
@@ -225,7 +229,89 @@ impl ConfigSelector {
                 1,
                 ConfigCategory::Tools,
             ),
+            ConfigOption::new(
+                "experiments",
+                "Experiments",
+                "Randomized standard or smaller initial tools; content-free numeric telemetry.",
+                vec!["Off", "On"],
+                0,
+                ConfigCategory::Model,
+            ),
         ]
+    }
+
+    /// The reachable preferences panel includes only settings with a durable owner.
+    pub fn experiments() -> Self {
+        let mut selector = Self::new();
+        selector
+            .options
+            .retain(|option| option.key == "experiments");
+        selector
+    }
+
+    pub fn show_experiments(&mut self) {
+        self.show();
+        self.load_experiment_result(
+            maestro_local_host::experiments::load().map(|value| value.enabled),
+        );
+    }
+
+    fn load_experiment_result(&mut self, result: anyhow::Result<bool>) {
+        match result {
+            Ok(enabled) => {
+                self.experiment_saved = Some(enabled);
+                self.experiment_error = None;
+                self.set_option("experiments", usize::from(enabled));
+            }
+            Err(error) => {
+                self.experiment_saved = None;
+                self.experiment_error = Some(format!(
+                    "Could not read Experiments: {error}. Close and reopen to retry."
+                ));
+                if let Some(option) = self
+                    .options
+                    .iter_mut()
+                    .find(|option| option.key == "experiments")
+                {
+                    option.value = "Unavailable".into();
+                }
+            }
+        }
+    }
+
+    pub fn save_experiments(&mut self) -> bool {
+        self.save_experiments_with(|enabled| {
+            maestro_local_host::experiments::set_enabled(enabled).map(|value| value.enabled)
+        })
+    }
+
+    fn save_experiments_with(&mut self, save: impl FnOnce(bool) -> anyhow::Result<bool>) -> bool {
+        let Some(previous) = self.experiment_saved else {
+            return false;
+        };
+        let enabled = self
+            .options
+            .iter()
+            .any(|option| option.key == "experiments" && option.current_option == 1);
+        // Opening, confirming an unchanged setting, and cancelling never enroll.
+        if enabled == previous {
+            return true;
+        }
+        match save(enabled) {
+            Ok(accepted) => {
+                self.experiment_saved = Some(accepted);
+                self.experiment_error = None;
+                self.set_option("experiments", usize::from(accepted));
+                true
+            }
+            Err(error) => {
+                self.set_option("experiments", usize::from(previous));
+                self.experiment_error = Some(format!(
+                    "Could not save Experiments: {error}. Change the setting to retry."
+                ));
+                false
+            }
+        }
     }
 
     /// Show the modal
@@ -269,6 +355,9 @@ impl ConfigSelector {
 
     /// Cycle selected option to next value
     pub fn next_value(&mut self) {
+        if self.options.len() == 1 && self.experiment_saved.is_none() {
+            return;
+        }
         if let Some(opt) = self.options.get_mut(self.selected) {
             opt.next_option();
             self.changes.push(ConfigChangeEvent {
@@ -281,6 +370,9 @@ impl ConfigSelector {
 
     /// Cycle selected option to previous value
     pub fn prev_value(&mut self) {
+        if self.options.len() == 1 && self.experiment_saved.is_none() {
+            return;
+        }
         if let Some(opt) = self.options.get_mut(self.selected) {
             opt.prev_option();
             self.changes.push(ConfigChangeEvent {
@@ -337,9 +429,36 @@ impl ConfigSelector {
         }
 
         let theme = crate::themes::current_ui_theme();
-        let inner = Modal::new(maestro_ui::localization::tr(" Preferences "), 70, 20)
+        let mut inner = Modal::new(maestro_ui::localization::tr(" Preferences "), 70, 20)
             .theme(theme)
             .render(frame, area);
+        if self.options.len() == 1
+            && self
+                .selected_option()
+                .is_some_and(|option| option.key == "experiments")
+        {
+            use ratatui::{
+                layout::{Constraint, Layout},
+                widgets::{Paragraph, Wrap},
+            };
+            let chunks =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(11)]).split(inner);
+            inner = chunks[0];
+            let disclosure = concat!(
+                "Native tool profile v1: randomized standard or smaller initial tools.\n",
+                "Content-free numeric telemetry: usage, timing, runtime outcomes,\n",
+                "assignment and tool fingerprints. No prompts, code or tool contents.\n",
+                "Changes apply at the next safe turn.\n",
+                "Off stops future collection and removes unsent records.\n",
+                "Off restores standard tools at the next safe turn.\n",
+                "Accepted records follow workspace retention.\n",
+                "Disabled telemetry excludes participation.",
+            );
+            frame.render_widget(
+                Paragraph::new(disclosure).wrap(Wrap { trim: true }),
+                chunks[1],
+            );
+        }
         let fields: Vec<_> = self
             .options
             .iter()
@@ -360,7 +479,9 @@ impl ConfigSelector {
                 } else {
                     &option.description
                 },
-                error: if option.options.get(option.current_option).is_none() {
+                error: if option.key == "experiments" && self.experiment_error.is_some() {
+                    self.experiment_error.as_deref()
+                } else if option.options.get(option.current_option).is_none() {
                     Some(maestro_ui::localization::tr(
                         "Choose a valid option with the left or right arrow",
                     ))
@@ -380,6 +501,80 @@ impl ConfigSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experiments_read_failure_is_unavailable_and_cannot_enroll() {
+        let mut selector = ConfigSelector::experiments();
+        selector.load_experiment_result(Err(anyhow::anyhow!("broken config")));
+        assert_eq!(selector.options[0].value, "Unavailable");
+        selector.next_value();
+        assert!(!selector.save_experiments_with(|_| panic!("must not save after failed read")));
+    }
+
+    #[test]
+    fn experiments_changes_save_only_on_confirm_and_restore_on_failure() {
+        let mut selector = ConfigSelector::experiments();
+        selector.load_experiment_result(Ok(false));
+        assert_eq!(selector.options[0].value, "Off");
+        assert!(selector.save_experiments_with(|_| panic!("unchanged must not enroll")));
+        selector.next_value();
+        assert_eq!(selector.experiment_saved, Some(false));
+        assert!(!selector.save_experiments_with(|enabled| {
+            assert!(enabled);
+            Err(anyhow::anyhow!("disk full"))
+        }));
+        assert_eq!(selector.options[0].value, "Off");
+        assert!(
+            selector
+                .experiment_error
+                .as_ref()
+                .unwrap()
+                .contains("disk full")
+        );
+        selector.next_value();
+        assert!(selector.save_experiments_with(Ok));
+        assert_eq!(selector.experiment_saved, Some(true));
+        assert_eq!(selector.options[0].value, "On");
+        selector.prev_value();
+        assert!(selector.save_experiments_with(|enabled| {
+            assert!(!enabled);
+            Ok(false)
+        }));
+        assert_eq!(selector.experiment_saved, Some(false));
+    }
+
+    #[test]
+    fn experiments_cancel_preserves_saved_state_and_renders_consent() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut selector = ConfigSelector::experiments();
+        selector.show();
+        selector.load_experiment_result(Ok(true));
+        selector.prev_value();
+        selector.cancel();
+        assert_eq!(selector.experiment_saved, Some(true));
+        selector.show();
+        selector.load_experiment_result(Ok(true));
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| selector.render(frame, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Experiments  On"));
+        assert!(text.contains("randomized standard or smaller"));
+        assert!(text.contains("numeric telemetry"));
+        assert!(text.contains("next safe turn"));
+        assert!(text.contains("unsent records"));
+        assert!(text.contains("Off restores standard tools"));
+        assert!(text.contains("Accepted records follow workspace retention"));
+        // The last disclosure line proves the explanation is not vertically clipped.
+        assert!(text.contains("Disabled telemetry excludes participation"));
+    }
 
     #[test]
     fn settings_navigation_scrolls_to_the_selected_option_after_group_headers() {

@@ -202,6 +202,14 @@ pub struct NativeToolExecutionOptions<'a> {
 /// crate.  In particular, `execute_tool` must call the current receipt-aware
 /// executor with its mutable hook state; it must not invoke a second dispatcher.
 pub trait NativeExecutionHost: Send + Sync {
+    /// Local consent owner supplies a durably enrolled assignment. Hosted/default hosts abstain.
+    fn experiment_assignment(
+        &self,
+        _model: &str,
+    ) -> Option<maestro_runtime_contracts::experiments::ExperimentAssignment> {
+        None
+    }
+
     // Immutable registry/metadata surface.
     fn tool_definitions(&self) -> Vec<ToolDefinition>;
     fn has_native_tool(&self, name: &str) -> bool;
@@ -447,6 +455,13 @@ impl std::fmt::Debug for NativeExecutionHostHandle {
 }
 
 impl NativeExecutionHostHandle {
+    pub fn experiment_assignment(
+        &self,
+        model: &str,
+    ) -> Option<maestro_runtime_contracts::experiments::ExperimentAssignment> {
+        self.0.experiment_assignment(model)
+    }
+
     #[must_use]
     pub fn new(host: Arc<dyn NativeExecutionHost>) -> Self {
         Self(host)

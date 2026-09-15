@@ -1991,3 +1991,19 @@ fn memory_commands_use_the_existing_reviewed_store_actions() {
     );
     assert!(registry.execute("/memory save", ".", None, None).is_err());
 }
+
+#[test]
+fn experiment_preferences_are_discoverable_and_invalid_consent_is_rejected() {
+    let registry = build_command_registry();
+    assert!(matches!(
+        registry
+            .execute("/preferences", "/tmp", None, None)
+            .unwrap(),
+        CommandOutput::Action(CommandAction::ShowPreferences)
+    ));
+    assert!(
+        registry
+            .execute("/experiments on off", "/tmp", None, None)
+            .is_err()
+    );
+}

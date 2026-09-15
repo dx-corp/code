@@ -1441,3 +1441,126 @@ fn onboarding_failed_model_requires_retry_and_never_claims_verified() {
     session.wait_for_text("Managed inference", TURN_TIMEOUT);
     session.shutdown();
 }
+
+#[test]
+fn pty_experiments_preferences_save_real_consent_and_show_write_failure() {
+    // Check current screens, not historical snapshots: Off must be visible
+    // again after withdrawal or a failed save, not merely earlier in the test.
+    fn screen(session: &PtySession) -> String {
+        session
+            .output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_text()
+    }
+    fn wait_screen(session: &PtySession, matches: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + TURN_TIMEOUT;
+        loop {
+            let current = screen(session);
+            if matches(&current) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected current screen was not shown:\n{current}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    fn press_until(session: &mut PtySession, keys: &[u8], expected: &str) {
+        let deadline = Instant::now() + TURN_TIMEOUT;
+        loop {
+            session.send_bytes(keys);
+            let retry_at = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < retry_at {
+                if screen(session).contains(expected) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected {expected:?}:\n{}",
+                screen(session)
+            );
+        }
+    }
+    fn open_from_settings(session: &mut PtySession, expected: &str) {
+        session.submit_prompt("/settings");
+        wait_screen(session, |current| {
+            current.contains("Experiments") && current.contains("Account and inference")
+        });
+        press_until(session, b"\r", "Preferences");
+        wait_screen(session, |current| {
+            current.contains(expected) && current.contains("next safe turn")
+        });
+    }
+    fn saved(config: &std::path::Path) -> bool {
+        let consent: toml::Value =
+            toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        consent["experiments"]["enabled"].as_bool().unwrap()
+    }
+    fn confirm(session: &mut PtySession) {
+        session.send_bytes(b"\r");
+        wait_screen(session, |current| !current.contains("Preferences"));
+    }
+
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mock = MockOpenAiServer::start(vec![text_turn("EXPERIMENTS_READY")]);
+    let workdir = tempfile::tempdir().unwrap();
+    let mut session =
+        PtySession::spawn(&mock, workdir.path(), "start experiment controls scenario");
+    session.wait_for_text("EXPERIMENTS_READY", READY_TIMEOUT);
+    let config = workdir.path().join("maestro-home/config.toml");
+
+    open_from_settings(&mut session, "Experiments  Off");
+    eprintln!(
+        "EXPERIMENTS_CAPTURE_OFF_BEGIN\n{}\nEXPERIMENTS_CAPTURE_OFF_END",
+        screen(&session)
+    );
+    assert!(!config.exists());
+    press_until(&mut session, b"\x1b[C", "Experiments  On");
+    assert!(!config.exists(), "draft selection must not persist consent");
+    session.send_bytes(b"\x1b");
+    wait_screen(&session, |current| !current.contains("Preferences"));
+    assert!(!config.exists(), "cancel must not enroll");
+
+    open_from_settings(&mut session, "Experiments  Off");
+    press_until(&mut session, b"\x1b[C", "Experiments  On");
+    confirm(&mut session);
+    assert!(saved(&config), "Enter must durably enable participation");
+
+    open_from_settings(&mut session, "Experiments  On");
+    eprintln!(
+        "EXPERIMENTS_CAPTURE_ON_BEGIN\n{}\nEXPERIMENTS_CAPTURE_ON_END",
+        screen(&session)
+    );
+    press_until(&mut session, b"\x1b[D", "Experiments  Off");
+    assert!(
+        saved(&config),
+        "withdrawal draft must not save before Enter"
+    );
+    confirm(&mut session);
+    assert!(!saved(&config), "Enter must durably withdraw participation");
+
+    open_from_settings(&mut session, "Experiments  Off");
+    // Make the owner's lock path unwritable without relying on OS permissions.
+    let lock = workdir.path().join("maestro-home/config.lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::create_dir(&lock).unwrap();
+    press_until(&mut session, b"\x1b[C", "Experiments  On");
+    session.send_bytes(b"\r");
+    wait_screen(&session, |current| {
+        current.contains("Could not save Experiments") && current.contains("Experiments  Off")
+    });
+    assert!(
+        !saved(&config),
+        "failed save must preserve withdrawn consent"
+    );
+    assert_eq!(
+        mock.request_count(),
+        1,
+        "settings must not trigger inference"
+    );
+    session.shutdown();
+}

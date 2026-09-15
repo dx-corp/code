@@ -50,7 +50,8 @@ pub use visibility::*;
 
 pub use onboarding::*;
 pub use staged_rollout::{
-    flush_first_party_telemetry, onboarding_identity_scope, record_canonical_turn_event,
+    experiments_telemetry_disabled, flush_first_party_telemetry, onboarding_identity_scope,
+    purge_revoked_experiment_events, queue_experiment_enrollment, record_canonical_turn_event,
     record_first_party_visibility_event, record_onboarding_event,
     record_staged_rollout_surface_usage,
 };

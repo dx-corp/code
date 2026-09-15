@@ -70,6 +70,7 @@ pub use steer_signal::SteerSignal;
 pub use text_loop::{LoopKind, TextLoopDetector, loop_reminder_message};
 pub use turn_budget::{DEFAULT_MAX_TURN_STEPS, TurnOutcome, TurnStepBudget};
 
+pub use maestro_runtime::agent::ExternalToolSchemaPolicy;
 pub use maestro_runtime::agent::{
     ApprovalMode as RuntimeApprovalMode, BoostStatus, MaxTokensSource, ModelChoice,
     ModelDynamicsConfig, NativeCodexAuth, NativeCodingCompletion, NativeExecutionHost,
@@ -129,6 +130,7 @@ pub struct NativeAgentConfig {
     pub max_turn_steps: usize,
     pub allow_unbounded_turn: bool,
     pub retry_config: RetryConfig,
+    pub external_tool_schema_policy: ExternalToolSchemaPolicy,
 }
 
 impl Default for NativeAgentConfig {
@@ -154,6 +156,7 @@ impl Default for NativeAgentConfig {
             max_turn_steps: DEFAULT_MAX_TURN_STEPS,
             allow_unbounded_turn: false,
             retry_config: RetryConfig::default(),
+            external_tool_schema_policy: ExternalToolSchemaPolicy::default(),
         }
     }
 }
@@ -185,6 +188,7 @@ impl NativeAgentConfig {
             allow_unbounded_turn: self.allow_unbounded_turn,
             retry_config: self.retry_config,
             safety_config: crate::agent::safety::SafetyConfig::default(),
+            external_tool_schema_policy: self.external_tool_schema_policy,
         }
     }
 }
@@ -617,6 +621,7 @@ fn build_local_host(
         }
     }
 
+    let experiment_scope = Arc::clone(&telemetry_identity_scope);
     let resolve_model = move |model: &str, preserve_scope: bool| {
         // An injected client selects only the initial model. Later model
         // changes resolve fresh authorization just as the original actor did.
@@ -631,7 +636,7 @@ fn build_local_host(
         )?;
         Ok(resolved)
     };
-    Ok(LocalNativeExecutionHost::compose(
+    Ok(LocalNativeExecutionHost::compose_with_experiments(
         Arc::new(executor),
         hooks,
         resolve_model,
@@ -639,6 +644,7 @@ fn build_local_host(
         config
             .model_capabilities
             .map(|caps| (config.model.clone(), caps)),
+        Some(experiment_scope),
     ))
 }
 

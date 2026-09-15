@@ -425,8 +425,7 @@ impl HeadlessState {
                 // per-tool heuristic here exactly so that decision is unchanged.
                 approval_mode: crate::state::ApprovalMode::Selective,
                 context_window: None,
-                // The headless server has no sandbox-policy resolution of
-                // its own today (unlike the interactive TUI's
+                // Headless has no sandbox-policy resolution today (unlike the interactive TUI's
                 // `config::resolve_interactive_sandbox_policy` or print
                 // mode's `PrintModeOptions::sandbox_policy`); preserve that
                 // status quo explicitly rather than silently expanding this
@@ -436,6 +435,7 @@ impl HeadlessState {
                 max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
                 allow_unbounded_turn: false,
                 retry_config: crate::agent::retry::RetryConfig::hosted_outage(),
+                external_tool_schema_policy: crate::agent::ExternalToolSchemaPolicy::Eager,
             };
             let (agent, mut event_rx) = if let Some(grant) = self.governed_grant.as_ref() {
                 let (allowed_tools, external_tools, bindings) = governed_agent_inputs(grant)?;
@@ -2735,6 +2735,8 @@ async fn handle_agent_event(
             lineage_id,
             record_status,
             provider_prompt_sha256,
+            provider_tools_sha256,
+            provider_tool_count,
         } => {
             let prompt_experiment = {
                 let mut meta = meta
@@ -2746,6 +2748,8 @@ async fn handle_agent_event(
                     lineage_id: lineage_id.clone(),
                     record_status: record_status.clone(),
                     provider_prompt_sha256: provider_prompt_sha256.clone(),
+                    provider_tools_sha256: provider_tools_sha256.clone(),
+                    provider_tool_count,
                 });
                 // Bind each exposure to this successful HTTP request, including
                 // dynamic prompt context. Error receipts never attest delivery.

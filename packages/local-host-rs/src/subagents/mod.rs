@@ -10098,6 +10098,8 @@ mod tests {
                 lineage_id: "lineage-child".to_string(),
                 record_status: "planned".to_string(),
                 provider_prompt_sha256: None,
+                provider_tools_sha256: None,
+                provider_tool_count: None,
             },
             "child-session",
         )

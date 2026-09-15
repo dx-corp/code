@@ -565,25 +565,45 @@ fn verify_live_runtime_identity(
     let hosted = ca_file.is_some();
     let token = unverified.access_token.clone();
     let introspection = std::thread::spawn(move || -> Result<IdentityIntrospection> {
-        let response = identity_verification_client(&identity_base_url, ca_file.as_deref())?
-            .post(format!("{identity_base_url}/v1/tokens/introspect"))
-            .bearer_auth(token)
-            .send()
-            .context("contact EvalOps Identity")?;
+        let client = identity_verification_client(&identity_base_url, ca_file.as_deref())?;
+        // Introspection is read-only. Retry one transient exchange against the
+        // same authority and credential; never cache admission or retry a
+        // rejection, redirect, inactive response, or malformed identity.
+        for attempt in 0..2 {
+            let response = client
+                .post(format!("{identity_base_url}/v1/tokens/introspect"))
+                .bearer_auth(&token)
+                .send();
+            let retry = match &response {
+                Err(error) => error.is_timeout() || error.is_connect(),
+                Ok(response) => matches!(response.status().as_u16(), 502..=504),
+            };
+            if retry && attempt == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                continue;
+            }
+            let response = response.context("contact EvalOps Identity")?;
 
-        if response.status().is_redirection() {
-            bail!("EvalOps Identity returned a redirect; admission does not follow redirects")
-        }
-        if !response.status().is_success() {
-            bail!("EvalOps Identity rejected this session")
-        }
+            if response.status().is_redirection() {
+                bail!("EvalOps Identity returned a redirect; admission does not follow redirects")
+            }
+            if response.status().is_server_error() {
+                bail!(
+                    "EvalOps Identity is temporarily unavailable (HTTP {})",
+                    response.status()
+                );
+            }
+            if !response.status().is_success() {
+                bail!("EvalOps Identity rejected this session")
+            }
 
-        // Parse and drop the blocking response on this worker thread. Moving
-        // it back into a Tokio task makes reqwest try to tear down its private
-        // runtime from an async context, which panics before the model turn.
-        response
-            .json()
-            .context("decode EvalOps Identity verification response")
+            // Parse/drop the blocking response on this worker thread; moving
+            // it into Tokio would tear down reqwest's runtime in async code.
+            return response
+                .json()
+                .context("decode EvalOps Identity verification response");
+        }
+        unreachable!("the final identity attempt always returns")
     })
     .join()
     .map_err(|_| anyhow::anyhow!("EvalOps Identity verification thread panicked"))?
@@ -1470,6 +1490,85 @@ mod tests {
 
         assert_eq!(verified.organization_id, "org_1");
         assert_eq!(verified.workspace_id.as_deref(), Some("workspace_1"));
+    }
+
+    #[test]
+    fn live_introspection_retries_transient_failure_but_not_rejection() {
+        use std::io::{Read as _, Write as _};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        for (first, second, active, expected_calls, accepted) in [
+            (503, 200, true, 2, true),
+            (503, 503, true, 2, false),
+            (401, 200, true, 1, false),
+            (403, 200, true, 1, false),
+            (200, 200, false, 1, false),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let server_stop = Arc::clone(&stop);
+            let server_calls = Arc::clone(&calls);
+            let server = std::thread::spawn(move || {
+                while !server_stop.load(Ordering::SeqCst) {
+                    let Ok((mut socket, _)) = listener.accept() else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    };
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = [0_u8; 4096];
+                    assert!(
+                        socket.read(&mut bytes).unwrap() > 0,
+                        "request must reach server"
+                    );
+                    let index = server_calls.fetch_add(1, Ordering::SeqCst);
+                    let status = if index == 0 { first } else { second };
+                    let body = serde_json::json!({
+                        "active": active, "subject":"user-test", "token_type":"access",
+                        "organization_id":"org-live", "workspace_id":"workspace-live",
+                        "scopes":["llm_gateway:invoke"]
+                    })
+                    .to_string();
+                    write!(socket, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let env = HashMap::from([
+                (
+                    ACCESS_TOKEN_ENV.to_owned(),
+                    "fixture-access-token".to_owned(),
+                ),
+                (ORG_ID_ENV.to_owned(), "untrusted-org".to_owned()),
+                (
+                    "MAESTRO_IDENTITY_URL".to_owned(),
+                    format!("http://{address}"),
+                ),
+                (
+                    crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV.to_owned(),
+                    "1".to_owned(),
+                ),
+            ]);
+            let result = verify_live_identity_session(None, &env);
+            stop.store(true, Ordering::SeqCst);
+            server.join().unwrap();
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "first={first}, second={second}, active={active}: {result:?}"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+            if let Ok(session) = result {
+                assert_eq!(session.organization_id, "org-live");
+                assert_eq!(session.workspace_id.as_deref(), Some("workspace-live"));
+            }
+        }
     }
 
     #[test]

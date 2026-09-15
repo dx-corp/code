@@ -401,6 +401,9 @@ mod attachments;
 mod codex;
 mod commands;
 mod context;
+mod deferred_tool_schemas;
+#[cfg(test)]
+mod deferred_tool_tests;
 mod model_dynamics;
 mod provider_loop;
 mod read_only_tools;
@@ -408,6 +411,11 @@ mod side_questions;
 mod tool_execution;
 mod tool_responses;
 mod tool_results;
+
+pub use self::deferred_tool_schemas::ExternalToolSchemaPolicy;
+use self::deferred_tool_schemas::{
+    ToolProfile, effective_tool_definitions, initial_active_tool_names, tool_search_profile_allows,
+};
 
 use self::tool_execution::{
     ApprovalDecision, DeferredToolCall, DeferredToolCallDisposition, PostExecutionHooks,
@@ -674,6 +682,13 @@ pub struct NativeAgentConfig {
     /// Doom-loop and per-tool rate-limit thresholds enforced by the loop's
     /// safety tenant.
     pub safety_config: super::safety::SafetyConfig,
+
+    /// Initial model visibility for caller-owned tool schemas.
+    ///
+    /// Deferred schemas remain registered and discoverable through
+    /// `tool_search`, then become visible on the following provider request.
+    /// The eager default preserves existing embedding contracts.
+    pub external_tool_schema_policy: ExternalToolSchemaPolicy,
 }
 
 impl NativeAgentConfig {
@@ -711,6 +726,7 @@ impl Default for NativeAgentConfig {
             allow_unbounded_turn: false,
             retry_config: super::retry::RetryConfig::default(),
             safety_config: super::safety::SafetyConfig::default(),
+            external_tool_schema_policy: ExternalToolSchemaPolicy::default(),
         }
     }
 }
@@ -721,158 +737,6 @@ struct ModelToolCache {
     include_ide_tools: bool,
     active_tool_names: HashSet<String>,
     tools: Arc<Vec<Tool>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ToolProfile {
-    Fast,
-    All,
-    Review,
-    Explore,
-}
-
-impl ToolProfile {
-    fn from_env() -> Self {
-        match std::env::var("MAESTRO_TOOL_PROFILE")
-            .ok()
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("all" | "full") => Self::All,
-            Some("review") => Self::Review,
-            Some("explore") => Self::Explore,
-            _ => Self::Fast,
-        }
-    }
-
-    fn includes(self, name: &str) -> bool {
-        if self == Self::All {
-            return true;
-        }
-
-        let name = name.to_ascii_lowercase();
-        let names: &[&str] = match self {
-            Self::Fast => &[
-                "bash",
-                "read",
-                "write",
-                "edit",
-                "glob",
-                "grep",
-                "find",
-                "list",
-                "search",
-                "parallel_ripgrep",
-                "diff",
-                "status",
-                "background_tasks",
-                "todo",
-                "ask_user",
-                "get_goal",
-                "update_goal",
-                "get_harness_context",
-                "propose_harness_refinement",
-                "apply_harness_refinement",
-                "reject_harness_refinement",
-                "get_mailbox",
-                "send_mailbox",
-                "read_mailbox",
-                "ack_mailbox",
-                "compact_mailbox",
-                "tool_search",
-                "explore",
-            ],
-            Self::Review => &[
-                "read",
-                "grep",
-                "find",
-                "list",
-                "search",
-                "parallel_ripgrep",
-                "diff",
-                "status",
-                "tool_search",
-                "explore",
-            ],
-            Self::Explore => &[
-                "read",
-                "glob",
-                "grep",
-                "find",
-                "list",
-                "search",
-                "parallel_ripgrep",
-                "diff",
-                "status",
-                "tool_search",
-                "explore",
-            ],
-            Self::All => &[],
-        };
-        names.contains(&name.as_str())
-    }
-}
-
-fn initial_active_tool_names(
-    profile: ToolProfile,
-    tools: &HashMap<String, ToolDefinition>,
-    external_tools: &HashSet<String>,
-    explicit_allowed_tools: Option<&HashSet<String>>,
-) -> HashSet<String> {
-    tools
-        .keys()
-        .filter_map(|name| {
-            let explicitly_allowed = explicit_allowed_tools
-                .is_some_and(|allowed| allowed.contains(&name.to_ascii_lowercase()));
-            (profile.includes(name) || explicitly_allowed).then_some(name.clone())
-        })
-        .chain(external_tools.iter().cloned())
-        .collect()
-}
-
-fn is_rlm_context_tool(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "get_rlm_context"
-            | "set_rlm_context"
-            | "append_rlm_context"
-            | "render_rlm_context"
-            | "clear_rlm_context"
-    )
-}
-
-fn tool_search_profile_allows(
-    profile: ToolProfile,
-    name: &str,
-    explicitly_allowed_tools: &HashSet<String>,
-) -> bool {
-    profile != ToolProfile::Fast
-        || !is_rlm_context_tool(name)
-        || explicitly_allowed_tools.contains(&name.to_ascii_lowercase())
-}
-
-fn effective_tool_definitions(
-    tools: &HashMap<String, ToolDefinition>,
-    active_tool_names: &HashSet<String>,
-    goal_tools_visible: bool,
-    include_ide_tools: bool,
-) -> Vec<ToolDefinition> {
-    let mut definitions = tools
-        .values()
-        .filter(|definition| {
-            let name = definition.tool.name.as_str();
-            active_tool_names.contains(&name.to_ascii_lowercase())
-                && tool_is_visible_to_model(name, goal_tools_visible, include_ide_tools)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    definitions.sort_unstable_by(|left, right| left.tool.name.cmp(&right.tool.name));
-    for definition in &mut definitions {
-        definition.tool = compact_tool_for_model(definition.tool.clone());
-    }
-    definitions
 }
 
 fn validate_tools_with_host(
@@ -1208,6 +1072,7 @@ enum AgentCommand {
 pub struct NativeAgent {
     managed_authorization: Arc<super::managed_authorization::ManagedAuthorizationCoordinator>,
     host: NativeExecutionHostHandle,
+    external_tool_schema_policy: ExternalToolSchemaPolicy,
     managed_run_id: String,
     /// Channel to send commands to the background runner
     ///
@@ -1476,12 +1341,25 @@ impl NativeAgent {
         for definition in external_tool_definitions {
             tools.insert(definition.tool.name.to_lowercase(), definition);
         }
+        if config.external_tool_schema_policy == ExternalToolSchemaPolicy::Deferred
+            && !external_tools.is_empty()
+            && !tools.contains_key("tool_search")
+        {
+            anyhow::bail!(
+                "Deferred external tool schemas require the `tool_search` discovery tool"
+            );
+        }
         let goal_tools_visible = host.goal_tools_visible();
         let include_ide_tools = host.include_ide_tools();
         let tool_profile = ToolProfile::from_env();
         let explicitly_allowed_tools = allowed_tools.cloned().unwrap_or_default();
-        let active_tool_names =
-            initial_active_tool_names(tool_profile, &tools, &external_tools, allowed_tools);
+        let active_tool_names = initial_active_tool_names(
+            tool_profile,
+            &tools,
+            &external_tools,
+            allowed_tools,
+            config.external_tool_schema_policy,
+        );
         let runtime_audit = Arc::new(RwLock::new(RuntimeAuditSnapshot {
             request_cache: None,
             cache_reuse: None,
@@ -1492,6 +1370,7 @@ impl NativeAgent {
             tools: effective_tool_definitions(
                 &tools,
                 &active_tool_names,
+                &external_tools,
                 goal_tools_visible,
                 include_ide_tools,
             ),
@@ -1566,6 +1445,8 @@ impl NativeAgent {
             goal_tools_visible,
             include_ide_tools,
             tool_profile,
+            experiment_assignment: None,
+            baseline_tool_profile: tool_profile,
             explicitly_allowed_tools,
             active_tool_names,
             external_tools,
@@ -1623,6 +1504,7 @@ impl NativeAgent {
         let agent = Self {
             managed_authorization,
             host,
+            external_tool_schema_policy: config.external_tool_schema_policy,
             managed_run_id,
             command_tx,
             tool_response_tx,
@@ -1651,6 +1533,16 @@ impl NativeAgent {
         external_tool_definitions: Vec<ToolDefinition>,
     ) -> Result<()> {
         validate_tools_with_host(&self.host, Some(&allowed_tools), &external_tool_definitions)?;
+        if self.external_tool_schema_policy == ExternalToolSchemaPolicy::Deferred
+            && !external_tool_definitions.is_empty()
+            && !allowed_tools
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("tool_search"))
+        {
+            anyhow::bail!(
+                "Deferred external tool schemas require the `tool_search` discovery tool"
+            );
+        }
         self.command_tx
             .send(AgentCommand::ReplaceGovernedTools {
                 allowed_tools,
@@ -2457,6 +2349,8 @@ struct NativeAgentRunner {
 
     /// The profile constrains dynamic discovery as well as initial schemas.
     tool_profile: ToolProfile,
+    experiment_assignment: Option<maestro_runtime_contracts::experiments::ExperimentAssignment>,
+    baseline_tool_profile: ToolProfile,
 
     /// Built-ins explicitly requested by a caller may bypass profile defaults.
     explicitly_allowed_tools: HashSet<String>,
@@ -3924,6 +3818,16 @@ impl NativeAgentRunner {
             record_id: receipt.record_id,
             lineage_id: receipt.lineage_id,
             record_status: receipt.record_status,
+            provider_tools_sha256: if experiment_eligible {
+                receipt.provider_tools_sha256
+            } else {
+                None
+            },
+            provider_tool_count: if experiment_eligible {
+                receipt.provider_tool_count
+            } else {
+                None
+            },
             // Auxiliary compaction uses its own instructions. Keep its cost
             // receipt, but never label it as exposure to the turn's treatment.
             provider_prompt_sha256: if experiment_eligible {
@@ -4054,6 +3958,7 @@ impl NativeAgentRunner {
             tools: effective_tool_definitions(
                 &self.tools,
                 &self.active_tool_names,
+                &self.external_tools,
                 self.goal_tools_visible,
                 self.include_ide_tools,
             )
@@ -4103,6 +4008,7 @@ impl NativeAgentRunner {
             &tools,
             &external_tools,
             Some(allowed_tools),
+            self.config.external_tool_schema_policy,
         );
         self.explicitly_allowed_tools = allowed_tools.clone();
         self.tools = tools;

@@ -72,6 +72,11 @@ impl App {
 
             ControlPanel::Settings => {
                 add(
+                    "preferences",
+                    "Experiments",
+                    "Review and change participation in randomized tool experiments".into(),
+                );
+                add(
                     "settings account",
                     self.state.locale.translate("Account and inference"),
                     self.state

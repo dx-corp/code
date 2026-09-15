@@ -7,16 +7,25 @@ fn prompt_experiment_excludes_auxiliary_compaction_receipts() {
             lineage_id: "lineage".into(),
             record_status: "planned".into(),
             provider_prompt_sha256: Some("sha256:verified".into()),
+            provider_tools_sha256: Some("sha256:tools".into()),
+            provider_tool_count: Some(3),
         };
         let FromAgent::ManagedGatewayReceipt {
             record_id,
             provider_prompt_sha256,
+            provider_tools_sha256,
+            provider_tool_count,
             ..
         } = NativeAgentRunner::managed_gateway_receipt_event(receipt, eligible)
         else {
             panic!("gateway receipt must be preserved")
         };
         assert_eq!(record_id, "record");
+        assert_eq!(
+            provider_tools_sha256.as_deref(),
+            eligible.then_some("sha256:tools")
+        );
+        assert_eq!(provider_tool_count, eligible.then_some(3));
         assert_eq!(
             provider_prompt_sha256.as_deref(),
             eligible.then_some("sha256:verified")
@@ -70,6 +79,7 @@ struct RuntimeTestHost {
     client: Arc<UnifiedClient>,
     session_id: Arc<Mutex<Option<String>>>,
     provider_admission_blocked: Arc<AtomicBool>,
+    experiment: Arc<Mutex<Option<maestro_runtime_contracts::experiments::ExperimentAssignment>>>,
     block_provider_after_tool: bool,
     post_tool_context: Option<String>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
@@ -112,6 +122,7 @@ impl RuntimeTestHost {
             client: Arc::new(client),
             session_id: Arc::new(Mutex::new(None)),
             provider_admission_blocked: Arc::new(AtomicBool::new(false)),
+            experiment: Arc::new(Mutex::new(None)),
             block_provider_after_tool: false,
             post_tool_context: None,
             checkpoint_barrier: None,
@@ -203,6 +214,13 @@ impl RuntimeTestHost {
 }
 
 impl NativeExecutionHost for RuntimeTestHost {
+    fn experiment_assignment(
+        &self,
+        _model: &str,
+    ) -> Option<maestro_runtime_contracts::experiments::ExperimentAssignment> {
+        self.experiment.lock().unwrap().clone()
+    }
+
     fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_definitions.as_ref().clone()
     }
@@ -919,7 +937,7 @@ fn runtime_catalog_host_handle(
 /// constructors that guessed a concrete TUI host intentionally fail closed;
 /// this wrapper supplies the deterministic host above while keeping the test
 /// call sites focused on the actor behavior they exercise.
-struct NativeAgent(super::NativeAgent);
+pub(super) struct NativeAgent(super::NativeAgent);
 
 impl std::ops::Deref for NativeAgent {
     type Target = super::NativeAgent;
@@ -966,7 +984,7 @@ impl NativeAgent {
         Self::with_client(config, client, Vec::new(), None)
     }
 
-    fn new_with_external_tools(
+    pub(super) fn new_with_external_tools(
         config: NativeAgentConfig,
         external_tool_definitions: Vec<ToolDefinition>,
         allowed_tools: Option<&HashSet<String>>,
@@ -975,12 +993,12 @@ impl NativeAgent {
         Self::with_client(config, client, external_tool_definitions, allowed_tools)
     }
 
-    async fn shutdown(self) {
+    pub(super) async fn shutdown(self) {
         self.0.shutdown().await;
     }
 }
 
-fn external_tool_definition(name: &str) -> ToolDefinition {
+pub(super) fn external_tool_definition(name: &str) -> ToolDefinition {
     ToolDefinition {
         tool: Tool::new(name, "Caller-owned test tool").with_schema(serde_json::json!({
             "type": "object",
@@ -1832,7 +1850,9 @@ fn codex_app_server_turn_includes_trailing_injected_notes() {
     );
 }
 
-async fn read_scripted_provider_request(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+pub(super) async fn read_scripted_provider_request(
+    stream: &mut tokio::net::TcpStream,
+) -> serde_json::Value {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -1864,7 +1884,7 @@ async fn read_scripted_provider_request(stream: &mut tokio::net::TcpStream) -> s
         .expect("provider request json")
 }
 
-fn chat_sse_response(id: &str, content: &str, tool_call: bool) -> String {
+pub(super) fn chat_sse_response(id: &str, content: &str, tool_call: bool) -> String {
     let mut events = vec![serde_json::json!({
         "id": id, "object": "chat.completion.chunk", "created": 0,
         "model": "gpt-4o", "choices": [{"index": 0,
@@ -4117,6 +4137,7 @@ async fn agent_cancel_interrupts_a_blocked_runner_before_queue_processing() {
             event_tx.clone(),
         )),
         host: runtime_test_host_handle(),
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         managed_run_id: "test-run".to_owned(),
         command_tx,
         tool_response_tx,
@@ -4195,6 +4216,7 @@ async fn shutdown_preempts_buffered_prompts_and_awaits_runner_exit() {
             event_tx.clone(),
         )),
         host: runtime_test_host_handle(),
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         managed_run_id: "test-run".to_owned(),
         command_tx,
         tool_response_tx,
@@ -4277,6 +4299,7 @@ fn agent_cancel_interrupts_an_approval_wait_without_dropping_the_request() {
             event_tx.clone(),
         )),
         host: runtime_test_host_handle(),
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         managed_run_id: "test-run".to_owned(),
         command_tx,
         tool_response_tx,
@@ -4326,6 +4349,7 @@ async fn agent_cancel_keeps_tool_batch_cleanup_alive_between_operations() {
             event_tx.clone(),
         )),
         host: runtime_test_host_handle(),
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         managed_run_id: "test-run".to_owned(),
         command_tx,
         tool_response_tx,
@@ -5987,6 +6011,7 @@ fn fast_tool_profile_is_small_but_has_an_escape_hatch() {
         &definitions,
         &HashSet::new(),
         None,
+        super::ExternalToolSchemaPolicy::Eager,
     );
 
     assert!(active.contains("read"));
@@ -6007,9 +6032,95 @@ fn all_tool_profile_preserves_every_registered_tool() {
         &definitions,
         &HashSet::new(),
         None,
+        super::ExternalToolSchemaPolicy::Eager,
     );
 
     assert_eq!(active.len(), definitions.len());
+}
+
+#[test]
+fn minimal_tool_profile_starts_with_native_file_search() {
+    let mut definitions = profile_fixture_definitions();
+    for name in ["grep", "glob"] {
+        let mut definition = definitions["read"].clone();
+        definition.tool = Tool::new(name, format!("fixture {name}"));
+        definitions.insert(name.to_owned(), definition);
+    }
+    let active = super::initial_active_tool_names(
+        super::ToolProfile::Minimal,
+        &definitions,
+        &HashSet::new(),
+        None,
+        super::ExternalToolSchemaPolicy::Eager,
+    );
+    assert!(active.contains("grep"));
+    assert!(active.contains("glob"));
+    assert!(!active.contains("get_goal"));
+    assert!(!active.contains("explore"));
+}
+
+#[test]
+fn minimal_tool_profile_keeps_discovery_and_explicit_capabilities() {
+    let definitions = profile_fixture_definitions();
+    let active = super::initial_active_tool_names(
+        super::ToolProfile::Minimal,
+        &definitions,
+        &HashSet::new(),
+        None,
+        super::ExternalToolSchemaPolicy::Eager,
+    );
+    assert_eq!(
+        active,
+        HashSet::from(["read", "write", "bash", "tool_search"].map(String::from))
+    );
+    let explicit = HashSet::from([String::from("vscode_get_definition")]);
+    let external = HashSet::from([String::from("external_fixture")]);
+    let active = super::initial_active_tool_names(
+        super::ToolProfile::Minimal,
+        &definitions,
+        &external,
+        Some(&explicit),
+        super::ExternalToolSchemaPolicy::Eager,
+    );
+    assert!(active.contains("vscode_get_definition"));
+    assert!(active.contains("external_fixture"));
+    assert!(!active.contains("explore"));
+    for name in ["read", "bash", "edit", "write", "tool_search", "ask_user"] {
+        assert!(super::ToolProfile::Minimal.includes(name));
+    }
+}
+
+#[test]
+fn minimal_tool_discovery_retains_fast_authority_restrictions() {
+    assert!(super::tool_search_profile_allows(
+        super::ToolProfile::Minimal,
+        "grep",
+        &HashSet::new()
+    ));
+    assert!(!super::tool_search_profile_allows(
+        super::ToolProfile::Minimal,
+        "set_rlm_context",
+        &HashSet::new()
+    ));
+    assert!(super::tool_search_profile_allows(
+        super::ToolProfile::Minimal,
+        "set_rlm_context",
+        &HashSet::from([String::from("set_rlm_context")])
+    ));
+    let governed = profile_fixture_definitions()
+        .into_iter()
+        .filter(|(name, _)| name == "read")
+        .collect();
+    assert_eq!(
+        super::initial_active_tool_names(
+            super::ToolProfile::Minimal,
+            &governed,
+            &HashSet::new(),
+            None,
+            super::ExternalToolSchemaPolicy::Eager,
+        ),
+        HashSet::from([String::from("read")])
+    );
 }
 
 #[test]
@@ -6043,6 +6154,7 @@ fn all_tool_profile_cannot_widen_a_governed_registry() {
         &definitions,
         &HashSet::new(),
         Some(&allowed),
+        super::ExternalToolSchemaPolicy::Eager,
     );
 
     assert_eq!(active, HashSet::from([String::from("read")]));
@@ -6057,6 +6169,7 @@ fn explicit_allowed_tools_override_fast_profile() {
         &definitions,
         &HashSet::new(),
         Some(&allowed),
+        super::ExternalToolSchemaPolicy::Eager,
     );
 
     assert!(active.contains("websearch"));
@@ -7935,3 +8048,89 @@ fn codex_turn_boundary_releases_patches_and_rejects_stale_item_approvals() {
 
 #[path = "session_scenarios.rs"]
 pub(super) mod session_scenarios;
+
+#[tokio::test]
+async fn experiments_change_actual_provider_tools_and_withdraw_at_turn_boundary() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let requests = Arc::clone(&captured);
+    let server = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_scripted_provider_request(&mut stream).await;
+            requests.lock().unwrap().push(request);
+            let body = chat_sse_response("experiment-fixture", "Done.", false);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    let workspace = tempfile::tempdir().unwrap();
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        ..Default::default()
+    };
+    let client = UnifiedClient::OpenAI(
+        crate::ai::OpenAiClient::with_base_url("test-key", format!("http://{address}/v1")).unwrap(),
+    );
+    let host = RuntimeTestHost::new(config.cwd.clone(), client);
+    let consent = Arc::clone(&host.experiment);
+    let mut assignment = maestro_runtime_contracts::experiments::ExperimentAssignment::derive(
+        "fixture",
+        "org",
+        "workspace",
+        1,
+    );
+    assignment.arm = maestro_runtime_contracts::experiments::ExperimentArm::Control;
+    *consent.lock().unwrap() = Some(assignment.clone());
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    for index in 0..3 {
+        if index == 1 {
+            assignment.arm = maestro_runtime_contracts::experiments::ExperimentArm::Minimal;
+            *consent.lock().unwrap() = Some(assignment.clone());
+        }
+        if index == 2 {
+            *consent.lock().unwrap() = None;
+        }
+        agent.prompt("Say done.".into(), vec![]).await.unwrap();
+        let mut observed = false;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop { match events.recv().await.unwrap() {
+                FromAgent::OperationObservation { observation: maestro_runtime_contracts::operation_observation::OperationObservation::Admitted { experiment, .. } } => {
+                    assert_eq!(experiment.is_some(), index < 2); observed = true;
+                }
+                FromAgent::TurnCompleted { .. } => break,
+                FromAgent::Error { message, .. } | FromAgent::ProviderError { message, .. } => panic!("{message}"),
+                _ => {}
+            } }
+        }).await.unwrap();
+        assert!(observed);
+    }
+    agent.shutdown().await;
+    server.await.unwrap();
+    let requests = captured.lock().unwrap();
+    let names = |request: &Value| {
+        request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .map(str::to_owned)
+            .collect::<HashSet<_>>()
+    };
+    let first = names(&requests[0]);
+    let second = names(&requests[1]);
+    let third = names(&requests[2]);
+    assert!(first.contains("explore"));
+    assert!(!second.contains("explore"));
+    assert!(second.contains("grep") && second.contains("glob"));
+    assert_eq!(
+        first, third,
+        "withdrawal restores the baseline tool surface"
+    );
+}

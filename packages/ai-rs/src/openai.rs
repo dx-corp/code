@@ -119,8 +119,12 @@ use super::types::{
     ProviderStreamErrorKind, RequestConfig, Role, StreamEvent, Tool,
 };
 
+// The managed gateway owns a 45-second default provider attempt, plus
+// admission and terminal persistence. Let it return its authoritative result
+// before the client retry owner starts another request. This bounds headers
+// only; streaming still has its separate idle/cancellation controls.
 pub(crate) const MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(30);
+    std::time::Duration::from_secs(60);
 const MANAGED_GATEWAY_RECEIPT_ID_MAX_LEN: usize = 256;
 const MANAGED_GATEWAY_RECEIPT_LINEAGE_MAX_LEN: usize = 256;
 const MANAGED_GATEWAY_RECEIPT_STATUS_MAX_LEN: usize = 64;
@@ -247,6 +251,29 @@ fn required_managed_receipt_header(
     Ok(value.to_string())
 }
 
+fn managed_provider_tools_evidence(headers: &reqwest::header::HeaderMap) -> Option<(String, u32)> {
+    let digest = headers
+        .get("x-evalops-provider-tools-sha256")?
+        .to_str()
+        .ok()?;
+    let hex = digest.strip_prefix("sha256:")?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let count = headers
+        .get("x-evalops-provider-tool-count")?
+        .to_str()
+        .ok()?;
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((digest.to_owned(), count.parse().ok()?))
+}
+
 fn managed_gateway_receipt(
     headers: &HeaderMap,
     expected_lineage: Option<&str>,
@@ -263,6 +290,8 @@ fn managed_gateway_receipt(
     }
     Ok(ManagedGatewayReceipt {
         provider_prompt_sha256: None,
+        provider_tools_sha256: None,
+        provider_tool_count: None,
         request_id: required_managed_receipt_header(
             headers,
             "x-request-id",
@@ -2277,6 +2306,14 @@ impl OpenAiClient {
                         .and_then(|value| value.to_str().ok())
                         .filter(|value| *value == prompt_digest)
                         .map(str::to_owned);
+                    // Accept only a complete, bounded evidence pair. The gateway
+                    // owns adapter conversion, so the client cannot recompute it.
+                    if let Some((digest, count)) =
+                        managed_provider_tools_evidence(response.headers())
+                    {
+                        receipt.provider_tools_sha256 = Some(digest);
+                        receipt.provider_tool_count = Some(count);
+                    }
                     let _ = tx.send(StreamEvent::ManagedGatewayReceipt(receipt));
                 }
                 Err(error) => {
@@ -4352,6 +4389,61 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         }
     }
 
+    #[test]
+    fn managed_tools_evidence_requires_valid_complete_pair() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        for (hash, count, valid) in [
+            (digest.as_str(), "3", true),
+            (digest.as_str(), "0", true),
+            ("sha256:bad", "3", false),
+            (digest.as_str(), "-1", false),
+            (digest.as_str(), "4294967296", false),
+            (digest.as_str(), "+3", false),
+        ] {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("x-evalops-provider-tools-sha256", hash.parse().unwrap());
+            headers.insert("x-evalops-provider-tool-count", count.parse().unwrap());
+            assert_eq!(managed_provider_tools_evidence(&headers).is_some(), valid);
+            headers.remove("x-evalops-provider-tool-count");
+            assert!(managed_provider_tools_evidence(&headers).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_tools_receipt_preserves_provider_attestation() {
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let mut headers = managed_receipt_headers().to_vec();
+        headers.push(("x-evalops-provider-tools-sha256", digest.as_str()));
+        headers.push(("x-evalops-provider-tool-count", "2"));
+        let (mut client, captured) = managed_gateway_test_client(MANAGED_COMPLETED_SSE, &headers);
+        client.set_managed_inference_authorization(Some(managed_authorization_fixture(
+            "lineage-receipt",
+        )));
+        let mut events = client
+            .stream(
+                &[],
+                &RequestConfig {
+                    model: "evalops/openai/gpt-5.6-terra".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("stream");
+        let Some(StreamEvent::ManagedGatewayReceipt(receipt)) = events.recv().await else {
+            panic!("receipt precedes content")
+        };
+        assert_eq!(
+            receipt.provider_tools_sha256.as_deref(),
+            Some(digest.as_str())
+        );
+        assert_eq!(receipt.provider_tool_count, Some(2));
+        assert!(
+            captured
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        );
+    }
+
     #[tokio::test]
     async fn managed_prompt_exposure_requires_gateway_attestation_of_exact_request() {
         for prompt in [
@@ -5778,6 +5870,40 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             }) if message.contains("504 Gateway Timeout")
         ));
         assert!(events.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn managed_gateway_open_waits_for_its_provider_attempt_to_finish() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (accepted, received) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0_u8; 4096];
+            assert!(
+                socket.read(&mut bytes).await.unwrap() > 0,
+                "request must reach server"
+            );
+            accepted.send(()).unwrap();
+            // The deployed gateway owns a 45-second provider attempt.
+            tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+            let _ = socket.write_all(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        });
+        let request = reqwest::Client::new().get(format!("http://{address}/responses"));
+        let client = tokio::spawn(send_with_response_open_timeout(
+            request,
+            Some(MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT),
+        ));
+        received.await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(46)).await;
+        tokio::time::resume();
+        let response = client.await.unwrap().expect(
+            "client must receive the gateway terminal instead of abandoning a still-owned provider attempt",
+        );
+        assert_eq!(response.status(), reqwest::StatusCode::GATEWAY_TIMEOUT);
+        server.await.unwrap();
     }
 
     #[tokio::test]

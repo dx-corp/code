@@ -92,6 +92,24 @@ impl App {
         }
         // Handle modal-specific input first
         match self.active_modal {
+            ActiveModal::Preferences => {
+                match code {
+                    KeyCode::Up => self.config_selector.move_up(),
+                    KeyCode::Down => self.config_selector.move_down(),
+                    KeyCode::Left => self.config_selector.prev_value(),
+                    KeyCode::Right => self.config_selector.next_value(),
+                    KeyCode::Enter if self.config_selector.save_experiments() => {
+                        self.config_selector.confirm();
+                        self.active_modal = ActiveModal::None;
+                    }
+                    KeyCode::Esc => {
+                        self.config_selector.cancel();
+                        self.active_modal = ActiveModal::None;
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
             ActiveModal::DexAppearance => return self.handle_dex_appearance_key(code),
             ActiveModal::FileSearch => return self.handle_file_search_key(code, ctrl).await,
             ActiveModal::SessionSwitcher => {

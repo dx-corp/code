@@ -72,3 +72,47 @@ fn specialists_are_discoverable_and_unknown_selection_fails_before_inference() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("authorized scope"));
 }
+
+#[test]
+fn experiments_cli_persists_consent_and_never_exports_the_installation_seed() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(maestro_tui_binary())
+            .args(args)
+            .env("MAESTRO_HOME", home.path())
+            .env("MAESTRO_TELEMETRY", "0")
+            .current_dir(home.path())
+            .output()
+            .unwrap()
+    };
+    let status = run(&["experiments", "status", "--json"]);
+    assert!(status.status.success(), "{status:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&status.stdout).unwrap()["enabled"],
+        false
+    );
+    assert!(!home.path().join("config.toml").exists());
+    for (action, enabled) in [("on", true), ("off", false)] {
+        let changed = run(&["experiments", action, "--json"]);
+        assert!(changed.status.success(), "{changed:?}");
+        let consent: toml::Value =
+            toml::from_str(&std::fs::read_to_string(home.path().join("config.toml")).unwrap())
+                .unwrap();
+        assert_eq!(consent["experiments"]["enabled"].as_bool(), Some(enabled));
+        let seed = consent["experiments"]["installation_seed"]
+            .as_str()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&changed.stdout);
+        assert!(!stdout.contains(seed));
+        assert!(!stdout.contains("installation_seed"));
+        let status = run(&["experiments", "status", "--json"]);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&status.stdout).unwrap()["enabled"],
+            enabled
+        );
+    }
+    std::fs::write(home.path().join("config.toml"), "invalid = [").unwrap();
+    let failed = run(&["experiments", "on"]);
+    assert!(!failed.status.success());
+    assert!(!String::from_utf8_lossy(&failed.stdout).contains("Experiments: On"));
+}

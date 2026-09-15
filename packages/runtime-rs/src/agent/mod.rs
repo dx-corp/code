@@ -55,8 +55,9 @@ pub use model_dynamics::{
     BoostStatus, ModelChoice, ModelDynamicsConfig, TaskDifficulty, ThinkingLevel,
 };
 pub use native::{
-    MaxTokensSource, NativeAgent, NativeAgentConfig, REQUEST_CONTEXT_SAFETY_TOKENS,
-    RuntimeAuditSnapshot, ToolResponseConsumption, ToolResponseMessage,
+    ExternalToolSchemaPolicy, MaxTokensSource, NativeAgent, NativeAgentConfig,
+    REQUEST_CONTEXT_SAFETY_TOKENS, RuntimeAuditSnapshot, ToolResponseConsumption,
+    ToolResponseMessage,
 };
 pub use native::{managed_turn_lineage_id, runtime_system_prompt};
 pub use native_host::{

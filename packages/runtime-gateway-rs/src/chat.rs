@@ -636,6 +636,7 @@ pub(crate) async fn handle_chat_endpoint(
         .unwrap_or(false);
     let config = NativeAgentConfig {
         model,
+        external_tool_schema_policy: maestro_local_host::agent::ExternalToolSchemaPolicy::Deferred,
         cwd: state.config.cwd.to_string_lossy().to_string(),
         system_prompt,
         thinking_enabled,
@@ -645,7 +646,6 @@ pub(crate) async fn handle_chat_endpoint(
             .unwrap_or(10_000),
         ..NativeAgentConfig::default()
     };
-
     let (agent, mut events) = match EmbeddedAgentBuilder::from_config(config)
         .external_tools(client_tools)
         .start()
@@ -1602,6 +1602,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         .unwrap_or(false);
     let config = NativeAgentConfig {
         model,
+        external_tool_schema_policy: maestro_local_host::agent::ExternalToolSchemaPolicy::Deferred,
         cwd: state.config.cwd.to_string_lossy().to_string(),
         system_prompt,
         thinking_enabled,
@@ -1611,7 +1612,6 @@ pub(crate) async fn handle_chat_websocket_endpoint(
             .unwrap_or(10_000),
         ..NativeAgentConfig::default()
     };
-
     let (agent, mut events) = match EmbeddedAgentBuilder::from_config(config)
         .external_tools(client_tools)
         .start()

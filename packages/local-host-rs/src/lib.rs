@@ -28,6 +28,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod embedding;
 pub mod evalops_cli;
+pub mod experiments;
 pub mod goal;
 pub mod harness;
 pub mod headless;

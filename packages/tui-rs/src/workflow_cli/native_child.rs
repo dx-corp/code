@@ -19,7 +19,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{
-    CredentialVault, ExecutionSource, FromAgent, MaxTokensSource, NativeAgentConfig, ToolResult,
+    CredentialVault, ExecutionSource, ExternalToolSchemaPolicy, FromAgent, MaxTokensSource,
+    NativeAgentConfig, ToolResult,
 };
 use crate::sandbox::SandboxPolicy;
 use crate::state::ApprovalMode;
@@ -118,6 +119,7 @@ pub(super) async fn run_native_workflow_child(
         context_window: None,
         sandbox_policy,
         managed_mcp_policy,
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
         allow_unbounded_turn: false,
         retry_config: crate::agent::retry::RetryConfig::default(),

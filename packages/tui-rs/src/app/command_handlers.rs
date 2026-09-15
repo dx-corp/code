@@ -586,6 +586,10 @@ impl App {
             CommandAction::Trust(trust_action) => {
                 self.handle_trust_action(trust_action);
             }
+            CommandAction::ShowPreferences => {
+                self.config_selector.show_experiments();
+                self.active_modal = ActiveModal::Preferences;
+            }
             CommandAction::ShowSandbox => {
                 self.show_sandbox_status();
             }

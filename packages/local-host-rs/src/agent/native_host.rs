@@ -32,6 +32,8 @@ type ModelResolver = dyn Fn(&str, bool) -> Result<NativeResolvedClient, String> 
 
 /// Concrete TUI owner of the native runtime execution boundary.
 pub struct LocalNativeExecutionHost {
+    experiment_scope:
+        Option<Arc<std::sync::RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>>,
     pinned_model_capabilities: Option<(String, NativeModelCapabilities)>,
     executor: Arc<ToolExecutor>,
     hooks: Arc<tokio::sync::Mutex<IntegratedHookSystem>>,
@@ -46,6 +48,7 @@ impl std::fmt::Debug for LocalNativeExecutionHost {
 }
 
 impl LocalNativeExecutionHost {
+    #[cfg(test)]
     pub fn compose(
         executor: Arc<ToolExecutor>,
         hooks: IntegratedHookSystem,
@@ -56,7 +59,31 @@ impl LocalNativeExecutionHost {
         model_route: impl Fn(&str) -> NativeModelRoute + Send + Sync + 'static,
         pinned_model_capabilities: Option<(String, NativeModelCapabilities)>,
     ) -> NativeExecutionHostHandle {
+        Self::compose_with_experiments(
+            executor,
+            hooks,
+            resolve_model,
+            model_route,
+            pinned_model_capabilities,
+            None,
+        )
+    }
+
+    pub fn compose_with_experiments(
+        executor: Arc<ToolExecutor>,
+        hooks: IntegratedHookSystem,
+        resolve_model: impl Fn(&str, bool) -> Result<NativeResolvedClient, String>
+        + Send
+        + Sync
+        + 'static,
+        model_route: impl Fn(&str) -> NativeModelRoute + Send + Sync + 'static,
+        pinned_model_capabilities: Option<(String, NativeModelCapabilities)>,
+        experiment_scope: Option<
+            Arc<std::sync::RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>,
+        >,
+    ) -> NativeExecutionHostHandle {
         NativeExecutionHostHandle::new(Arc::new(Self {
+            experiment_scope,
             pinned_model_capabilities,
             executor,
             hooks: Arc::new(tokio::sync::Mutex::new(hooks)),
@@ -129,6 +156,14 @@ impl LocalNativeExecutionHost {
 }
 
 impl NativeExecutionHost for LocalNativeExecutionHost {
+    fn experiment_assignment(
+        &self,
+        model: &str,
+    ) -> Option<maestro_runtime_contracts::experiments::ExperimentAssignment> {
+        let scope = self.experiment_scope.as_ref()?.read().ok()?.clone()?;
+        crate::experiments::enroll(&scope, model)
+    }
+
     fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.executor.tool_definitions().cloned().collect()
     }
@@ -845,6 +880,7 @@ mod tests {
 
         (
             Arc::new(LocalNativeExecutionHost {
+                experiment_scope: None,
                 pinned_model_capabilities: None,
                 executor: Arc::new(ToolExecutor::new("/tmp")),
                 hooks: Arc::new(tokio::sync::Mutex::new(hooks)),
