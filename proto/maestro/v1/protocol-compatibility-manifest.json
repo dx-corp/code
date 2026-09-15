@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:d0d5b77ac9165ebb4d2fb96529af3eed31854473b855fc4a4a5ad424e3168b2e",
+  "compatibilityDigest": "sha256:ee9afab8484ffd1551d962acfac2ee955e0db4621d93fff0d462be207c9e38f1",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -201,7 +201,7 @@
     },
     "runtime": {
       "schemaVersion": "evalops.maestro.headless-protocol.v1",
-      "contractDigest": "sha256:641d393c709db54d139f93af6a3bcb1f93f97291518a1ef0ecd45e5b11b17c21",
+      "contractDigest": "sha256:43703fc50891d32f11e169729feb0a9eed7b92546a53234c758ba451dc1f4e53",
       "receipt": {
         "schemaVersion": "evalops.maestro.runtime-receipt.v1",
         "sourceDigest": "sha256:8fbcb58770dccabaf0d87b2532121addafd35e04f5a09f9dffdd2dea8897b921",

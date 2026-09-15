@@ -484,6 +484,14 @@ async fn start_resolved_hosted_runner_cli_runtime(
 ) -> Result<HostedRunnerCliRuntime> {
     let runtime_boundary = config.runtime_boundary()?;
     let launch_spec = config.launch_spec(&resolved_env)?;
+    for alias in &config.runner.deprecated_env_aliases {
+        tracing::warn!(
+            deprecated_env_key = alias.alias,
+            canonical_env_key = alias.canonical,
+            "{}",
+            alias.warning()
+        );
+    }
     tracing::info!(
         runtime_product = maestro_runtime::RUNTIME_PRODUCT_ID,
         runtime_boundary = %runtime_boundary.schema_version,

@@ -96,7 +96,7 @@ pub(crate) fn google_messages_for_wire(messages: &[Message]) -> Vec<Message> {
 
 /// Complete interrupted tool sequences only in the outgoing request. A missing
 /// result is reported as an error, never as successful execution.
-fn repair_tool_sequence(messages: Vec<Message>) -> Vec<Message> {
+pub(crate) fn repair_tool_sequence(messages: Vec<Message>) -> Vec<Message> {
     let mut result = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     for mut message in messages {

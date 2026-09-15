@@ -574,6 +574,25 @@ mod tests {
                 resume: true,
                 steering: true,
             },
+            FromAgentMessage::ManagedGatewayReceipt {
+                request_id: "request-1".into(),
+                record_id: "record-1".into(),
+                lineage_id: "lineage-1".into(),
+                record_status: "planned".into(),
+                prompt_experiment: None,
+            },
+            FromAgentMessage::ProcessBudgetCheckpoint {
+                budget: crate::agent::process_budget::ProcessBudgetState::new(
+                    crate::agent::process_budget::ProcessBudgetLimits {
+                        event_id: "event-1".into(),
+                        max_requests: 1,
+                        max_total_tokens: 1,
+                        max_cost_micros: 1,
+                        cost_micros_per_token: 1,
+                    },
+                )
+                .expect("valid process budget limits"),
+            },
         ]
     }
 

@@ -41,7 +41,7 @@ impl KimiK3Client {
         })
     }
 
-    fn build_request_body(&self, messages: &[Message], config: &RequestConfig) -> Value {
+    pub(crate) fn build_request_body(&self, messages: &[Message], config: &RequestConfig) -> Value {
         let mut converted = convert_messages(messages);
         if let Some(system) = config
             .system
@@ -299,7 +299,7 @@ fn tool_definition(tool: &Tool) -> Value {
 fn convert_messages(messages: &[Message]) -> Vec<Value> {
     let mut converted = Vec::new();
 
-    for message in messages {
+    for message in &super::transform::repair_tool_sequence(messages.to_vec()) {
         if let MessageContent::Blocks(blocks) = &message.content {
             let tool_results = blocks.iter().filter_map(|block| match block {
                 ContentBlock::ToolResult {
@@ -309,17 +309,12 @@ fn convert_messages(messages: &[Message]) -> Vec<Value> {
                 } => Some((tool_use_id, content)),
                 _ => None,
             });
-            let mut emitted_tool_result = false;
             for (tool_use_id, content) in tool_results {
-                emitted_tool_result = true;
                 converted.push(json!({
                     "role": "tool",
                     "tool_call_id": tool_use_id,
                     "content": content,
                 }));
-            }
-            if emitted_tool_result {
-                continue;
             }
         }
 
@@ -634,6 +629,44 @@ mod tests {
         assert_eq!(request_messages[1]["role"], "tool");
         assert_eq!(request_messages[1]["tool_call_id"], "call_read");
         assert_eq!(body["model"], "kimi-k3");
+    }
+
+    #[test]
+    fn unmatched_results_in_a_mixed_batch_reach_the_model_as_text() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "call_a".to_string(),
+                    name: "read".to_string(),
+                    input: json!({}),
+                    gemini_context: None,
+                }]),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "call_a".to_string(),
+                        content: "matched".to_string(),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "call_stale".to_string(),
+                        content: "retained evidence".to_string(),
+                        is_error: None,
+                    },
+                ]),
+            },
+        ];
+
+        let converted = convert_messages(&messages);
+        assert_eq!(converted[1]["role"], "tool");
+        assert_eq!(converted[1]["tool_call_id"], "call_a");
+        assert_eq!(converted[2]["role"], "user");
+        let text = converted[2]["content"].as_str().unwrap();
+        assert!(text.contains("retained evidence"), "{text}");
+        assert_eq!(converted.len(), 3);
     }
 
     #[test]

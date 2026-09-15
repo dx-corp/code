@@ -96,6 +96,16 @@ impl GoogleClient {
     }
 
     /// Build the Gemini API request body
+    /// Serialized request body, used by the provider conformance matrix.
+    #[cfg(test)]
+    pub(crate) fn request_body_json(
+        &self,
+        messages: &[Message],
+        config: &RequestConfig,
+    ) -> Result<serde_json::Value> {
+        Ok(serde_json::to_value(self.build_request(messages, config)?)?)
+    }
+
     fn build_request(&self, messages: &[Message], config: &RequestConfig) -> Result<GoogleRequest> {
         let messages = crate::cache_topology::messages_with_volatile_tail(messages, config);
         let messages = super::transform::google_messages_for_wire(&messages);

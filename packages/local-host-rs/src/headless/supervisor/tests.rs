@@ -2031,7 +2031,7 @@ async fn reconnect_replays_last_init_and_matching_accepted_capability_set() {
         })
         .expect("send capability set");
     let receipt = WorkspaceCapabilitySetApplied {
-        schema_version: "evalops.maestro.workspace-capability-set.v1".to_string(),
+        schema_version: "evalops.maestro.workspace-prompt-capability-set.v1".to_string(),
         organization_id: capability.organization_id.clone(),
         workspace_id: capability.workspace_id.clone(),
         runner_session_id: capability.runner_session_id.clone(),
@@ -2047,6 +2047,17 @@ async fn reconnect_replays_last_init_and_matching_accepted_capability_set() {
         staged_for_next_turn: false,
         idempotent: false,
     };
+    let mut partial = receipt.clone();
+    partial.rejected_entries.push("skill.review".to_string());
+    assert!(
+        supervisor
+            .apply_agent_message(FromAgentMessage::WorkspaceCapabilitySetApplied {
+                receipt: partial,
+            })
+            .is_none(),
+        "a partial receipt must not become a live activation event"
+    );
+    assert!(supervisor.last_workspace_capability_set.is_none());
     let _ =
         supervisor.apply_agent_message(FromAgentMessage::WorkspaceCapabilitySetApplied { receipt });
 

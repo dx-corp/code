@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sha2::{Digest, Sha256};
 
 use super::controller_binding::{
@@ -6,8 +8,81 @@ use super::controller_binding::{
 };
 use super::workspace_capabilities::{
     ApplyWorkspaceCapabilitySet, WorkspaceCapabilityActivation, WorkspacePromptCapability,
-    recompute_request_digests,
+    accept_workspace_capability_receipt, recompute_request_digests,
 };
+
+#[test]
+fn runtime_receipts_cannot_promote_partial_sets_or_roll_back_replay() {
+    let mut activation = WorkspaceCapabilityActivation::new("base prompt".to_string());
+    let first = request(1, "first generation");
+    let second = request(2, "second generation");
+    let first_receipt = activation
+        .apply(
+            first.clone(),
+            &binding(),
+            &resident_context(),
+            "runner-1",
+            false,
+        )
+        .expect("first capability set");
+    let second_receipt = activation
+        .apply(
+            second.clone(),
+            &binding(),
+            &resident_context(),
+            "runner-1",
+            false,
+        )
+        .expect("second capability set");
+    let mut pending = HashMap::from([
+        (first_receipt.replay_cursor.clone(), first.clone()),
+        (second_receipt.replay_cursor.clone(), second.clone()),
+    ]);
+    let mut accepted = None;
+
+    for malformed in [
+        {
+            let mut receipt = second_receipt.clone();
+            receipt.schema_version = "unknown".to_string();
+            receipt
+        },
+        {
+            let mut receipt = second_receipt.clone();
+            receipt.accepted_entry_digests.clear();
+            receipt
+        },
+        {
+            let mut receipt = second_receipt.clone();
+            receipt.rejected_entries.push("skill.review".to_string());
+            receipt
+        },
+    ] {
+        assert!(!accept_workspace_capability_receipt(
+            &mut pending,
+            &mut accepted,
+            &malformed,
+        ));
+        assert!(accepted.is_none());
+    }
+
+    assert!(accept_workspace_capability_receipt(
+        &mut pending,
+        &mut accepted,
+        &second_receipt,
+    ));
+    assert_eq!(accepted, Some(second.clone()));
+    assert!(
+        pending.is_empty(),
+        "older pending sets lose replay authority"
+    );
+    pending.insert(first_receipt.replay_cursor.clone(), first);
+    assert!(!accept_workspace_capability_receipt(
+        &mut pending,
+        &mut accepted,
+        &first_receipt,
+    ));
+    assert_eq!(accepted, Some(second));
+}
 
 fn resident_context() -> ControllerContext {
     ControllerContext {

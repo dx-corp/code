@@ -33,6 +33,7 @@ ignore = [
 
     # --- Unsound (no known exploitable vulnerability reported here) ---
     { id = "RUSTSEC-2026-0002", reason = "lru 0.12.5: IterMut violates Stacked Borrows (Miri/unsafe-code soundness issue), pulled in by ratatui (production). Not a memory-safety issue under normal (non-Miri) execution; tracked for the next ratatui bump that picks up a fixed lru. expires: 2026-10-23" },
+    { id = "RUSTSEC-2026-0285", reason = "rustls <0.23.45 accepts TLS 1.3 handshake messages at the wrong encryption level after a key change in the same record (GHSA-2mjx-qc3c-rqvc, CVSS 5.3). Fixed in rustls 0.23.45, published 2026-09-14; that upgrade also resolves aws-lc-rs 1.18.1 and aws-lc-sys 0.45.0, all still inside the 14-day dependency-admission cool-off in security/rust-dependency-admission.toml. Bump the lockfile once they age past it. expires: 2026-09-30" },
 ]
 
 [licenses]

@@ -1,0 +1,415 @@
+{
+  "schema_version": "evalops.maestro.hosted-runner-startup-contract.v1",
+  "description": "Executable startup matrix for `deixic-code hosted-runner`. Each case resolves the documented flag/environment coordinates through the real CLI resolver and asserts accept or fail-closed reject. `${workspace}` is a fresh temporary directory, `${agent}` an executable stub headless runtime, and `${file:<name>}` a temporary file declared in `files`.",
+  "cases": [
+    {
+      "name": "canonical MAESTRO_* environment is accepted",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_canonical",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43123",
+        "MAESTRO_REMOTE_RUNNER_OWNER_INSTANCE_ID": "owner_canonical",
+        "MAESTRO_REMOTE_RUNNER_WORKSPACE_ID": "ws_canonical",
+        "MAESTRO_AGENT_RUN_ID": "run_canonical",
+        "MAESTRO_SESSION_ID": "maestro-session-canonical",
+        "MAESTRO_ATTACH_AUDIENCE": "platform",
+        "MAESTRO_HOSTED_RUNNER_AUTH_TOKEN": "token-canonical",
+        "MAESTRO_MODEL": "gpt-5.5",
+        "MAESTRO_SANDBOXWICH_PLACEMENT_GENERATION": "7"
+      },
+      "expect": {
+        "accept": {
+          "runner_session_id": "mrs_canonical",
+          "owner_instance_id": "owner_canonical",
+          "runtime_generation": 7,
+          "workspace_id": "ws_canonical",
+          "agent_run_id": "run_canonical",
+          "maestro_session_id": "maestro-session-canonical",
+          "attach_audience": "platform",
+          "bind_addr": "127.0.0.1:43123",
+          "auth_token_present": true,
+          "workload_identity_present": false
+        }
+      }
+    },
+    {
+      "name": "legacy REMOTE_RUNNER_* aliases resolve to the same contract",
+      "env": {
+        "REMOTE_RUNNER_SESSION_ID": "mrs_legacy",
+        "WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_HOST": "127.0.0.1",
+        "PORT": "43124",
+        "REMOTE_RUNNER_OWNER_INSTANCE_ID": "owner_legacy",
+        "MAESTRO_REMOTE_RUNNER_GENERATION": "3",
+        "MAESTRO_WORKSPACE_ID": "ws_legacy",
+        "MAESTRO_WEB_API_KEY": "token-legacy",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "accept": {
+          "runner_session_id": "mrs_legacy",
+          "owner_instance_id": "owner_legacy",
+          "runtime_generation": 3,
+          "workspace_id": "ws_legacy",
+          "bind_addr": "127.0.0.1:43124",
+          "auth_token_present": true
+        }
+      }
+    },
+    {
+      "name": "CLI flags override environment coordinates",
+      "args": [
+        "--runner-session-id",
+        "mrs_flag",
+        "--workspace-root",
+        "${workspace}",
+        "--listen",
+        "127.0.0.1:43125",
+        "--owner-instance-id",
+        "owner_flag",
+        "--workspace-id",
+        "ws_flag",
+        "--agent-cli-path",
+        "${agent}"
+      ],
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_env",
+        "MAESTRO_REMOTE_RUNNER_OWNER_INSTANCE_ID": "owner_env",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "accept": {
+          "runner_session_id": "mrs_flag",
+          "owner_instance_id": "owner_flag",
+          "workspace_id": "ws_flag",
+          "bind_addr": "127.0.0.1:43125",
+          "agent_cli_path": "${agent}"
+        }
+      }
+    },
+    {
+      "name": "sandboxwich placement generation takes precedence over the legacy generation alias",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_generation",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43126",
+        "MAESTRO_SANDBOXWICH_PLACEMENT_GENERATION": "8",
+        "MAESTRO_REMOTE_RUNNER_GENERATION": "1",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "accept": {
+          "runtime_generation": 8
+        }
+      }
+    },
+    {
+      "name": "missing runner session id fails closed",
+      "env": {
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43127",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "requires MAESTRO_RUNNER_SESSION_ID"
+      }
+    },
+    {
+      "name": "blank runner session id is treated as missing",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "   ",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43128",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "requires MAESTRO_RUNNER_SESSION_ID"
+      }
+    },
+    {
+      "name": "missing workspace root fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_no_workspace",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43129",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "MAESTRO_WORKSPACE_ROOT"
+      }
+    },
+    {
+      "name": "workspace root that is not a directory fails closed",
+      "files": {
+        "not-a-dir": "plain file"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_file_workspace",
+        "MAESTRO_WORKSPACE_ROOT": "${file:not-a-dir}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43130",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "workspace root"
+      }
+    },
+    {
+      "name": "non-loopback bind without attach authentication fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_open_bind",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "0.0.0.0:43131",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "non-loopback"
+      }
+    },
+    {
+      "name": "loopback bind without attach authentication fails closed unless local testing is explicit",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_no_token",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43132",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "requires MAESTRO_HOSTED_RUNNER_AUTH_TOKEN or MAESTRO_WEB_API_KEY"
+      }
+    },
+    {
+      "name": "inline token and token file together fail closed",
+      "files": {
+        "token": "token-from-file"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_two_tokens",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43133",
+        "MAESTRO_HOSTED_RUNNER_AUTH_TOKEN": "inline",
+        "MAESTRO_HOSTED_RUNNER_AUTH_TOKEN_FILE": "${file:token}",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "not both"
+      }
+    },
+    {
+      "name": "token file reference is accepted",
+      "files": {
+        "token": "token-from-file\n"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_token_file",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43134",
+        "MAESTRO_HOSTED_RUNNER_AUTH_TOKEN_FILE": "${file:token}",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "accept": {
+          "auth_token_present": true
+        }
+      }
+    },
+    {
+      "name": "non-integer runtime generation fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_bad_generation",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43135",
+        "MAESTRO_REMOTE_RUNNER_GENERATION": "seven",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "runtime generation"
+      }
+    },
+    {
+      "name": "managed model requires the resident contract revision",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_managed_no_revision",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43136",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "evalops/gpt-5.5"
+      },
+      "expect": {
+        "reject": "MAESTRO_RESIDENT_CONTRACT_REVISION"
+      }
+    },
+    {
+      "name": "managed model with the pinned resident contract revision and EvalOps credentials is accepted",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_managed",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43137",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "evalops/gpt-5.5",
+        "MAESTRO_RESIDENT_CONTRACT_REVISION": "maestro-resident-model-ready-v3",
+        "MAESTRO_EVALOPS_ACCESS_TOKEN": "evalops-access-token",
+        "MAESTRO_EVALOPS_BASE_URL": "https://api.evalops.test",
+        "MAESTRO_EVALOPS_ORG_ID": "org_managed",
+        "MAESTRO_EVALOPS_WORKSPACE_ID": "ws_managed",
+        "MAESTRO_EVALOPS_PROVIDER": "openai"
+      },
+      "expect": {
+        "accept": {
+          "runner_session_id": "mrs_managed"
+        }
+      }
+    },
+    {
+      "name": "managed model without EvalOps credentials fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_managed_no_creds",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43144",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "evalops/gpt-5.5",
+        "MAESTRO_RESIDENT_CONTRACT_REVISION": "maestro-resident-model-ready-v3"
+      },
+      "expect": {
+        "reject": "managed headless model requires MAESTRO_EVALOPS_ACCESS_TOKEN"
+      }
+    },
+    {
+      "name": "complete workload identity set is accepted without static bearer authentication and pins the placement generation",
+      "files": {
+        "token": "projected-token",
+        "ca": "-----BEGIN CERTIFICATE-----\n"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_wi",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "0.0.0.0:43142",
+        "MAESTRO_KUBERNETES_TOKEN_FILE": "${file:token}",
+        "MAESTRO_IDENTITY_TLS_CA_FILE": "${file:ca}",
+        "MAESTRO_IDENTITY_EXCHANGE_URL": "https://identity.evalops.test/exchange",
+        "MAESTRO_ORGANIZATION_ID": "org_wi",
+        "MAESTRO_WORKSPACE_ID": "ws_wi",
+        "MAESTRO_SANDBOX_ID": "6f1c2b6e-1e7c-4b6e-9c4e-2f0f4a7e8d21",
+        "MAESTRO_PLACEMENT_GENERATION": "4",
+        "MAESTRO_REMOTE_RUNNER_GENERATION": "1",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "accept": {
+          "runtime_generation": 4,
+          "workload_identity_present": true,
+          "auth_token_present": false,
+          "workspace_id": "ws_wi"
+        }
+      }
+    },
+    {
+      "name": "placement generation alone enters workload identity mode and fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_placement_only",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43143",
+        "MAESTRO_PLACEMENT_GENERATION": "4",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "projected workload identity requires MAESTRO_KUBERNETES_TOKEN_FILE"
+      }
+    },
+    {
+      "name": "partial workload identity set fails closed",
+      "files": {
+        "token": "projected-token"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_partial_wi",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43138",
+        "MAESTRO_KUBERNETES_TOKEN_FILE": "${file:token}",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "projected workload identity requires"
+      }
+    },
+    {
+      "name": "workload identity forbids static bearer authentication",
+      "files": {
+        "token": "projected-token",
+        "ca": "-----BEGIN CERTIFICATE-----\n"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_wi_static",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "0.0.0.0:43139",
+        "MAESTRO_KUBERNETES_TOKEN_FILE": "${file:token}",
+        "MAESTRO_IDENTITY_TLS_CA_FILE": "${file:ca}",
+        "MAESTRO_IDENTITY_EXCHANGE_URL": "https://identity.evalops.test/exchange",
+        "MAESTRO_ORGANIZATION_ID": "org_wi",
+        "MAESTRO_WORKSPACE_ID": "ws_wi",
+        "MAESTRO_SANDBOX_ID": "6f1c2b6e-1e7c-4b6e-9c4e-2f0f4a7e8d21",
+        "MAESTRO_PLACEMENT_GENERATION": "4",
+        "MAESTRO_HOSTED_RUNNER_AUTH_TOKEN": "static-token",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "forbids static bearer authentication"
+      }
+    },
+    {
+      "name": "runner host client CA input is not part of the contract",
+      "files": {
+        "ca": "-----BEGIN CERTIFICATE-----\n"
+      },
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_client_ca",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43140",
+        "MAESTRO_RUNNER_CLIENT_CA_FILE": "${file:ca}",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "MAESTRO_RUNNER_CLIENT_CA_FILE is not supported"
+      }
+    },
+    {
+      "name": "outbound rendezvous without workload identity fails closed",
+      "env": {
+        "MAESTRO_RUNNER_SESSION_ID": "mrs_rendezvous",
+        "MAESTRO_WORKSPACE_ROOT": "${workspace}",
+        "MAESTRO_HOSTED_RUNNER_LISTEN": "127.0.0.1:43141",
+        "MAESTRO_RENDEZVOUS_MODE": "outbound_shadow",
+        "MAESTRO_WEB_REQUIRE_KEY": "0",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "outbound rendezvous requires projected workload identity"
+      }
+    },
+    {
+      "name": "launch spec file and --config together fail closed",
+      "files": {
+        "spec": "{}"
+      },
+      "args": [
+        "--config",
+        "${file:spec}"
+      ],
+      "env": {
+        "MAESTRO_HOSTED_LAUNCH_SPEC_FILE": "${file:spec}",
+        "MAESTRO_MODEL": "gpt-5.5"
+      },
+      "expect": {
+        "reject": "not both"
+      }
+    }
+  ]
+}

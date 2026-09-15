@@ -4,6 +4,7 @@
 //! prompt. It deliberately does not create tools, credentials, approvals, or
 //! any other executable authority.
 
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,51 @@ pub struct WorkspaceCapabilitySetApplied {
     pub provider_prompt_sha256: String,
     pub staged_for_next_turn: bool,
     pub idempotent: bool,
+}
+
+/// A runtime receipt may become reconnect authority only for the complete
+/// admitted set, and only if it cannot roll back a newer accepted generation.
+pub(crate) fn accept_workspace_capability_receipt(
+    pending: &mut HashMap<String, ApplyWorkspaceCapabilitySet>,
+    last_accepted: &mut Option<ApplyWorkspaceCapabilitySet>,
+    receipt: &WorkspaceCapabilitySetApplied,
+) -> bool {
+    let Some(request) = pending.get(&receipt.replay_cursor) else {
+        return false;
+    };
+    let matches = receipt.schema_version == PROMPT_CAPABILITY_SCHEMA_VERSION
+        && receipt.replay_cursor
+            == format!(
+                "{}:{}",
+                request.activation_generation, request.capability_set_digest
+            )
+        && receipt.organization_id == request.organization_id
+        && receipt.workspace_id == request.workspace_id
+        && receipt.runner_session_id == request.runner_session_id
+        && receipt.runtime_generation == request.runtime_generation
+        && receipt.activation_generation == request.activation_generation
+        && receipt.effective_catalog_digest == request.capability_set_digest
+        && receipt.accepted_entry_digests
+            == request
+                .admitted_catalog
+                .iter()
+                .map(|entry| entry.entry_digest.as_str())
+                .collect::<Vec<_>>()
+        && receipt.rejected_entries.is_empty()
+        && last_accepted.as_ref().is_none_or(|accepted| {
+            request.activation_generation > accepted.activation_generation
+                || (request.activation_generation == accepted.activation_generation
+                    && request.capability_set_digest == accepted.capability_set_digest)
+        });
+    if !matches {
+        return false;
+    }
+    let accepted = pending
+        .remove(&receipt.replay_cursor)
+        .expect("matched pending capability set");
+    pending.retain(|_, request| request.activation_generation > accepted.activation_generation);
+    *last_accepted = Some(accepted);
+    true
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]

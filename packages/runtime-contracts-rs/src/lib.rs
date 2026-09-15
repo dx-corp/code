@@ -20,6 +20,7 @@ mod receipts;
 mod session_event;
 pub mod telemetry;
 pub mod tool_details;
+pub mod turn_outcome;
 
 pub use boundary::{
     HostedRuntimeAuthMode, HostedRuntimeBoundary, HostedRuntimeBoundaryInput, RuntimeBoundaryError,
@@ -85,6 +86,7 @@ pub use tool_details::{
     BashDetails, BatchDetails, DiffDetails, EditDetails, GlobDetails, GrepDetails, ImageDetails,
     InlineToolDetails, ListDetails, ReadDetails, ToolDetails, WebFetchDetails, WriteDetails,
 };
+pub use turn_outcome::{TurnFailureClass, TurnPhase};
 
 /// Stable product identifier for the native Maestro runtime boundary.
 pub const RUNTIME_PRODUCT_ID: &str = "evalops.maestro.runtime";

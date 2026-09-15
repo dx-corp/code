@@ -1,0 +1,65 @@
+{
+  "schema": "evalops.maestro.session-scenario.v1",
+  "name": "compaction-preserves-tool-identities",
+  "context_window": 4096,
+  "steps": [
+    {
+      "action": "tool_turns",
+      "count": 60,
+      "prompt_bytes": 128,
+      "tool_output_bytes": 512
+    },
+    {
+      "action": "assert",
+      "bounds": {
+        "tool_calls": {
+          "min": 1
+        },
+        "orphan_tool_ids": {
+          "max": 0
+        },
+        "message_tokens": {
+          "max": 4096
+        },
+        "commands": {
+          "min": 1
+        }
+      }
+    },
+    {
+      "action": "save"
+    },
+    {
+      "action": "clear"
+    },
+    {
+      "action": "restore"
+    },
+    {
+      "action": "tool_turns",
+      "count": 40,
+      "prompt_bytes": 128,
+      "tool_output_bytes": 768
+    },
+    {
+      "action": "turns",
+      "count": 20,
+      "prompt_bytes": 384,
+      "response_bytes": 8
+    },
+    {
+      "action": "assert",
+      "bounds": {
+        "orphan_tool_ids": {
+          "max": 0
+        },
+        "message_tokens": {
+          "max": 4096
+        },
+        "pending_prompts": {
+          "max": 0
+        }
+      }
+    }
+  ]
+}

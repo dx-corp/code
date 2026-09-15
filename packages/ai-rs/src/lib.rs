@@ -96,6 +96,8 @@ pub mod op_secret;
 mod openai;
 #[path = "openai.rs"]
 mod openai_base;
+#[cfg(test)]
+mod provider_matrix;
 mod providers;
 pub mod sanitize;
 mod scripted;
