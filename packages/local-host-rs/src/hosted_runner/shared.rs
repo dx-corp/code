@@ -1,5 +1,6 @@
 use super::manifests::*;
 use super::*;
+use maestro_runtime_contracts::tool_wire;
 
 const MAX_UNVERIFIED_PENDING_CONTROLLER_EVENTS: usize = 1024;
 const INVALID_RUNTIME_RECEIPT_IDENTITY: &str = "invalid_runtime_receipt_identity";
@@ -2267,11 +2268,11 @@ fn pending_controller_event_key(
             None,
             tool_execution_id.as_deref(),
         )),
-        FromAgentMessage::GovernedClientToolRequest {
+        FromAgentMessage::GovernedClientToolRequest(tool_wire::GovernedClientToolRequest {
             call_id,
             tool_execution_id,
             ..
-        } => Some((
+        }) => Some((
             server_request_type_key(ServerRequestType::ClientTool),
             call_id,
             None,
@@ -2309,11 +2310,11 @@ fn pending_controller_event_matches(
                 && pending.call_id == *call_id
                 && pending.tool_execution_id == *tool_execution_id
         }
-        FromAgentMessage::GovernedClientToolRequest {
+        FromAgentMessage::GovernedClientToolRequest(tool_wire::GovernedClientToolRequest {
             call_id,
             tool_execution_id,
             ..
-        } => {
+        }) => {
             request.request_type == ServerRequestType::ClientTool
                 && pending.request_id.is_none()
                 && pending.call_id == *call_id

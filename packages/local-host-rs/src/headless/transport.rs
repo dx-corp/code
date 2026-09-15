@@ -78,6 +78,7 @@
 //! The process is automatically cleaned up when `AgentTransport` is dropped,
 //! though child processes may continue running if not explicitly shut down.
 
+use maestro_runtime_contracts::tool_wire;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -526,10 +527,10 @@ impl AgentTransport {
     ) -> Option<Result<AgentEvent, TransportError>> {
         match result {
             Ok(message) => {
-                if let FromAgentMessage::ToolEnd {
+                if let FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
                     tool_execution_id: Some(execution_id),
                     ..
-                } = &message
+                }) = &message
                 {
                     self.decided_tool_executions
                         .lock()
@@ -717,14 +718,15 @@ mod tests {
             "a rejected duplicate decision must not be sent"
         );
 
-        let _ = transport.apply_transport_result(Ok(FromAgentMessage::ToolEnd {
-            call_id: "call-1".to_string(),
-            tool_execution_id: Some("execution-1".to_string()),
-            success: false,
-            tool: Some("bash".to_string()),
-            details: None,
-            receipt: None,
-        }));
+        let _ =
+            transport.apply_transport_result(Ok(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
+                call_id: "call-1".to_string(),
+                tool_execution_id: Some("execution-1".to_string()),
+                success: false,
+                tool: Some("bash".to_string()),
+                details: None,
+                receipt: None,
+            })));
         transport
             .state
             .pending_approvals

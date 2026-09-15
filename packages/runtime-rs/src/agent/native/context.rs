@@ -290,6 +290,9 @@ impl NativeAgentRunner {
             })?;
         }
 
+        let cache_system_prompt = self.client.as_ref().is_some_and(|client| {
+            maestro_ai::supports_explicit_prompt_caching(client.provider(), &model)
+        });
         let mut config = RequestConfig {
             model,
             max_tokens,
@@ -302,11 +305,7 @@ impl NativeAgentRunner {
             tools,
             thinking,
             cache_topology: None,
-            // Enable prompt caching for Anthropic models
-            cache_system_prompt: self
-                .client
-                .as_ref()
-                .is_some_and(|client| client.provider() == AiProvider::Anthropic),
+            cache_system_prompt,
         };
         let mut audit = self
             .runtime_audit

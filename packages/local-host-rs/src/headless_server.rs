@@ -19,6 +19,7 @@
 //! - `ApprovalMode::Fail` → deny immediately
 //! - `ApprovalMode::Prompt` / unset → wait for client `ToolResponse`
 
+use maestro_runtime_contracts::tool_wire;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -1723,7 +1724,9 @@ pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> 
                             .respond(&request_id, authorization)
                     });
                 match result {
-                    Ok(()) => emit(&FromAgentMessage::ResponseAccepted { request_id })?,
+                    Ok(()) => emit(&FromAgentMessage::ResponseAccepted(
+                        tool_wire::ResponseAccepted { request_id },
+                    ))?,
                     Err(error) => protocol_error(
                         Some(request_id),
                         format!("authorization result rejected: {error}"),
@@ -1932,7 +1935,9 @@ pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> 
                     )?,
                 }
             }
-            message @ ToAgentMessage::GovernedClientToolResult { .. } => {
+            message @ ToAgentMessage::GovernedClientToolResult(
+                tool_wire::GovernedClientToolResult { .. },
+            ) => {
                 handle_governed_client_tool_result(&state, message)?;
             }
             ToAgentMessage::ServerRequestResponse {
@@ -2648,15 +2653,17 @@ fn take_interrupted_tool_terminal_messages(
     pending.dedup();
     pending
         .into_iter()
-        .map(|(call_id, tool_execution_id)| FromAgentMessage::ToolEnd {
-            call_id,
-            tool_execution_id: Some(tool_execution_id),
-            success: false,
-            tool: None,
-            details: Some(serde_json::json!({
-                "reason": "interrupted_before_tool_completion"
-            })),
-            receipt: None,
+        .map(|(call_id, tool_execution_id)| {
+            FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
+                call_id,
+                tool_execution_id: Some(tool_execution_id),
+                success: false,
+                tool: None,
+                details: Some(serde_json::json!({
+                    "reason": "interrupted_before_tool_completion"
+                })),
+                receipt: None,
+            })
         })
         .collect()
 }
@@ -2928,24 +2935,26 @@ async fn handle_agent_event(
                         },
                     );
                 }
-                emit(&FromAgentMessage::GovernedClientToolRequest {
-                    call_id,
-                    tool_execution_id,
-                    tool: binding.logical_name,
-                    args,
-                    provider_tool_name: binding.provider_tool_name,
-                    tool_id: binding.tool_id,
-                    connection_binding_id: binding.connection_binding_id,
-                    client_instance_id: binding.owner.client_instance_id,
-                    grant_id: binding.grant_id,
-                    grant_version: binding.grant_version,
-                    grant_hash: binding.grant_hash,
-                    turn_digest: binding.turn_digest,
-                    definition_digest: binding.definition_digest,
-                    args_digest,
-                    owner_lease_epoch: binding.owner.lease_epoch,
-                    idempotency_key,
-                })?;
+                emit(&FromAgentMessage::GovernedClientToolRequest(
+                    tool_wire::GovernedClientToolRequest {
+                        call_id,
+                        tool_execution_id,
+                        tool: binding.logical_name,
+                        args,
+                        provider_tool_name: binding.provider_tool_name,
+                        tool_id: binding.tool_id,
+                        connection_binding_id: binding.connection_binding_id,
+                        client_instance_id: binding.owner.client_instance_id,
+                        grant_id: binding.grant_id,
+                        grant_version: binding.grant_version,
+                        grant_hash: binding.grant_hash,
+                        turn_digest: binding.turn_digest,
+                        definition_digest: binding.definition_digest,
+                        args_digest,
+                        owner_lease_epoch: binding.owner.lease_epoch,
+                        idempotency_key,
+                    },
+                ))?;
                 return Ok(());
             }
             // Register an unresolved client decision before exposing the call.
@@ -3137,14 +3146,14 @@ fn tool_end_message(
     receipt: Option<ExecutionReceipt>,
 ) -> FromAgentMessage {
     let tool = receipt.as_ref().map(|receipt| receipt.tool_name.clone());
-    FromAgentMessage::ToolEnd {
+    FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id,
         tool_execution_id,
         success,
         tool,
         details: None,
         receipt,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -3533,7 +3542,9 @@ fn response_consumption_message(
     outcome: ToolResponseConsumption,
 ) -> FromAgentMessage {
     match outcome {
-        ToolResponseConsumption::Accepted => FromAgentMessage::ResponseAccepted { request_id },
+        ToolResponseConsumption::Accepted => {
+            FromAgentMessage::ResponseAccepted(tool_wire::ResponseAccepted { request_id })
+        }
         ToolResponseConsumption::Rejected { reason } => FromAgentMessage::Error {
             request_id: Some(request_id),
             message: reason,
@@ -3718,7 +3729,7 @@ fn handle_governed_client_tool_result(
     state: &HeadlessState,
     message: ToAgentMessage,
 ) -> Result<()> {
-    let ToAgentMessage::GovernedClientToolResult {
+    let ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
         process_tool_cost_micros,
         call_id,
         content,
@@ -3733,7 +3744,7 @@ fn handle_governed_client_tool_result(
         args_digest,
         owner_lease_epoch,
         idempotency_key,
-    } = message
+    }) = message
     else {
         anyhow::bail!("expected governed client tool result");
     };
@@ -3958,14 +3969,14 @@ fn denied_tool_terminal_message(
     tool_execution_id: Option<&str>,
     result: Option<&ToolResult>,
 ) -> Option<FromAgentMessage> {
-    Some(FromAgentMessage::ToolEnd {
+    Some(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: call_id.to_string(),
         tool_execution_id: Some(tool_execution_id?.to_string()),
         success: false,
         tool: None,
         details: result.and_then(|result| result.details.clone()),
         receipt: None,
-    })
+    }))
 }
 
 /// Protocol messages for a completed tool run: start → output? → end.
@@ -3985,14 +3996,14 @@ fn tool_lifecycle_messages(
             content,
         });
     }
-    msgs.push(FromAgentMessage::ToolEnd {
+    msgs.push(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: call_id.to_string(),
         tool_execution_id: tool_execution_id.map(str::to_string),
         success: result.success,
         tool,
         details: result.details.clone(),
         receipt: None,
-    });
+    }));
     msgs
 }
 
@@ -4793,12 +4804,12 @@ mod tests {
         let resolution = resolution.expect("expiry includes terminal failure resolution");
         assert!(resolution.messages.iter().any(|message| matches!(
             message,
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: Some(tool_execution_id),
                 success: false,
                 ..
-            } if call_id == "expired-call" && tool_execution_id == "expired-execution"
+            }) if call_id == "expired-call" && tool_execution_id == "expired-execution"
         )));
         assert!(!resolution.rollback.restore_pending);
         rollback_accepted_tool_response(&meta, resolution.rollback.clone());
@@ -4873,7 +4884,10 @@ mod tests {
             accepted,
             "call-retry".to_string(),
             |message| {
-                if matches!(message, FromAgentMessage::ToolEnd { .. }) {
+                if matches!(
+                    message,
+                    FromAgentMessage::ToolEnd(tool_wire::ToolEnd { .. })
+                ) {
                     first_terminal_count += 1;
                 }
                 Ok(())
@@ -4908,7 +4922,10 @@ mod tests {
             accepted,
             "call-retry".to_string(),
             |message| {
-                if matches!(message, FromAgentMessage::ToolEnd { .. }) {
+                if matches!(
+                    message,
+                    FromAgentMessage::ToolEnd(tool_wire::ToolEnd { .. })
+                ) {
                     retry_terminal_count += 1;
                 }
                 Ok(())
@@ -6217,13 +6234,13 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         ));
         assert!(matches!(
             &msgs[2],
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: Some(tool_execution_id),
                 success: true,
                 tool: Some(t),
                 ..
-            } if call_id == "call-1"
+            }) if call_id == "call-1"
                 && tool_execution_id == "tool-execution-1"
                 && t == "read"
         ));
@@ -6246,14 +6263,14 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
                 true,
                 Some(receipt),
             ),
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: None,
                 success: true,
                 tool: Some(tool),
                 receipt: Some(receipt),
                 ..
-            } if call_id == "call-write-1"
+            }) if call_id == "call-write-1"
                 && tool == "codex_file_change"
                 && receipt.call_id == "call-write-1"
                 && receipt.tool_name == "codex_file_change"
@@ -6268,7 +6285,7 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         assert!(matches!(msgs[0], FromAgentMessage::ToolStart { .. }));
         assert!(matches!(
             msgs[1],
-            FromAgentMessage::ToolEnd { success: true, .. }
+            FromAgentMessage::ToolEnd(tool_wire::ToolEnd { success: true, .. })
         ));
     }
 
@@ -6286,13 +6303,13 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
 
         assert!(matches!(
             message,
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: Some(tool_execution_id),
                 success: false,
                 details: Some(details),
                 ..
-            } if call_id == "call-denied"
+            }) if call_id == "call-denied"
                 && tool_execution_id == "tool-execution-denied"
                 && details["decision"] == "deny"
         ));
@@ -6357,11 +6374,11 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         .expect("first denial accepted");
         assert!(matches!(
             accepted.messages.as_slice(),
-            [FromAgentMessage::ToolEnd {
+            [FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 tool_execution_id: Some(tool_execution_id),
                 success: false,
                 ..
-            }] if tool_execution_id == "execution-2"
+            })] if tool_execution_id == "execution-2"
         ));
         assert!(
             tool_rx.try_recv().is_err(),
@@ -6406,11 +6423,11 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         .expect("completed client result accepted");
         assert!(matches!(
             accepted.messages.last(),
-            Some(FromAgentMessage::ToolEnd {
+            Some(FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 tool_execution_id: Some(tool_execution_id),
                 success: true,
                 ..
-            }) if tool_execution_id == "execution-completed"
+            })) if tool_execution_id == "execution-completed"
         ));
         assert!(
             tool_rx.try_recv().is_err(),
@@ -6663,12 +6680,12 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         assert!(
             terminals.iter().any(|message| matches!(
                 message,
-                FromAgentMessage::ToolEnd {
+                FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                     call_id,
                     tool_execution_id: Some(tool_execution_id),
                     success: false,
                     ..
-                } if call_id == "dropped-call" && tool_execution_id == "dropped-execution"
+                }) if call_id == "dropped-call" && tool_execution_id == "dropped-execution"
             )),
             "shutdown cleanup must terminalize the dropped governed response: {terminals:?}"
         );
@@ -6738,7 +6755,7 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
                 let label = match message {
                     FromAgentMessage::ToolStart { .. } => "start",
                     FromAgentMessage::ToolOutput { .. } => "output",
-                    FromAgentMessage::ToolEnd { .. } => "end",
+                    FromAgentMessage::ToolEnd(tool_wire::ToolEnd { .. }) => "end",
                     _ => "other",
                 };
                 lifecycle_events
@@ -6824,11 +6841,11 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         .expect("a registered client result must be accepted");
         assert!(matches!(
             accepted.messages.last(),
-            Some(FromAgentMessage::ToolEnd {
+            Some(FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 success: true,
                 ..
-            }) if call_id == "client-call"
+            })) if call_id == "client-call"
         ));
         assert!(
             prepare_client_tool_result(
@@ -6862,21 +6879,21 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         assert_eq!(messages.len(), 2);
         assert!(matches!(
             &messages[0],
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: Some(tool_execution_id),
                 success: false,
                 ..
-            } if call_id == "call-a" && tool_execution_id == "execution-a"
+            }) if call_id == "call-a" && tool_execution_id == "execution-a"
         ));
         assert!(matches!(
             &messages[1],
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id: Some(tool_execution_id),
                 success: false,
                 ..
-            } if call_id == "call-b" && tool_execution_id == "execution-b"
+            }) if call_id == "call-b" && tool_execution_id == "execution-b"
         ));
         let meta = meta.lock().expect("runtime metadata");
         assert!(meta.tool_execution_ids.is_empty());

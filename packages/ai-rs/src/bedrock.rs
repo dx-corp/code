@@ -143,8 +143,9 @@ impl BedrockClient {
         messages: &[Message],
         config: &RequestConfig,
     ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
-        let messages = crate::cache_topology::messages_with_volatile_tail(messages, config);
-        let request_messages = build_messages(&messages)?;
+        let cache_enabled = config.cache_system_prompt
+            && crate::supports_explicit_prompt_caching(AiProvider::Bedrock, &config.model);
+        let request_messages = build_request_messages(messages, config)?;
         let model = provider_model_name(&config.model);
         let client = self.sdk_client().await?;
         let mut request = client
@@ -153,7 +154,7 @@ impl BedrockClient {
             .set_messages((!request_messages.is_empty()).then_some(request_messages));
 
         if let Some(system) = &config.system {
-            request = request.system(bedrock::types::SystemContentBlock::Text(system.clone()));
+            request = request.set_system(Some(build_system_content(system, cache_enabled)?));
         }
 
         let mut inference =
@@ -164,23 +165,7 @@ impl BedrockClient {
         request = request.inference_config(inference.build());
 
         if !config.tools.is_empty() {
-            let mut tool_config = bedrock::types::ToolConfiguration::builder();
-            for tool in config.tools.iter() {
-                let input_schema =
-                    bedrock::types::ToolInputSchema::Json(document_from_json(&tool.input_schema));
-                let specification = bedrock::types::ToolSpecification::builder()
-                    .name(tool.name.clone())
-                    .description(tool.description.clone())
-                    .input_schema(input_schema)
-                    .build()
-                    .context("invalid Bedrock tool specification")?;
-                tool_config = tool_config.tools(bedrock::types::Tool::ToolSpec(specification));
-            }
-            request = request.tool_config(
-                tool_config
-                    .build()
-                    .context("invalid Bedrock tool configuration")?,
-            );
+            request = request.tool_config(build_tool_configuration(&config.tools, cache_enabled)?);
         }
 
         let response = request
@@ -291,6 +276,97 @@ fn has_profile_file_source(env: &HashMap<String, String>) -> bool {
 
 fn aws_types_region(region: &str) -> aws_types::region::Region {
     aws_types::region::Region::new(region.to_string())
+}
+
+fn cache_point_block() -> Result<bedrock::types::CachePointBlock> {
+    bedrock::types::CachePointBlock::builder()
+        .r#type(bedrock::types::CachePointType::Default)
+        .build()
+        .context("invalid Bedrock cache point")
+}
+
+fn build_system_content(
+    system: &str,
+    cache_enabled: bool,
+) -> Result<Vec<bedrock::types::SystemContentBlock>> {
+    let mut blocks = vec![bedrock::types::SystemContentBlock::Text(system.to_owned())];
+    if cache_enabled {
+        blocks.push(bedrock::types::SystemContentBlock::CachePoint(
+            cache_point_block()?,
+        ));
+    }
+    Ok(blocks)
+}
+
+fn build_tool_configuration(
+    tools: &[crate::Tool],
+    cache_enabled: bool,
+) -> Result<bedrock::types::ToolConfiguration> {
+    let mut tool_config = bedrock::types::ToolConfiguration::builder();
+    for tool in tools {
+        let input_schema =
+            bedrock::types::ToolInputSchema::Json(document_from_json(&tool.input_schema));
+        let specification = bedrock::types::ToolSpecification::builder()
+            .name(tool.name.clone())
+            .description(tool.description.clone())
+            .input_schema(input_schema)
+            .build()
+            .context("invalid Bedrock tool specification")?;
+        tool_config = tool_config.tools(bedrock::types::Tool::ToolSpec(specification));
+    }
+    if cache_enabled {
+        tool_config = tool_config.tools(bedrock::types::Tool::CachePoint(cache_point_block()?));
+    }
+    tool_config
+        .build()
+        .context("invalid Bedrock tool configuration")
+}
+
+fn build_request_messages(
+    messages: &[Message],
+    config: &RequestConfig,
+) -> Result<Vec<bedrock::types::Message>> {
+    let mut built = build_messages(messages)?;
+    if config.cache_system_prompt
+        && crate::supports_explicit_prompt_caching(AiProvider::Bedrock, &config.model)
+        && config.cache_topology.is_some()
+    {
+        let newest = built.len().checked_sub(1);
+        let previous = config
+            .cache_topology
+            .as_ref()
+            .and_then(crate::cache_topology::PreparedPrompt::previous_checkpoint)
+            .filter(|index| *index < messages.len())
+            .and_then(|index| {
+                messages[..=index]
+                    .iter()
+                    .filter(|message| message.role != Role::System)
+                    .count()
+                    .checked_sub(1)
+            })
+            .filter(|index| Some(*index) < newest);
+        for index in previous.into_iter().chain(newest) {
+            built[index]
+                .content
+                .push(bedrock::types::ContentBlock::CachePoint(
+                    cache_point_block()?
+                ));
+        }
+    }
+    if let Some(tail) = config
+        .cache_topology
+        .as_ref()
+        .and_then(crate::cache_topology::PreparedPrompt::volatile_tail)
+    {
+        built.push(build_message(
+            &Message {
+                role: Role::User,
+                content: MessageContent::text(tail),
+            },
+            bedrock::types::ConversationRole::User,
+        )?);
+    }
+    Ok(built)
 }
 
 fn build_messages(messages: &[Message]) -> Result<Vec<bedrock::types::Message>> {
@@ -604,6 +680,141 @@ mod tests {
         )]);
         let client = BedrockClient::from_runtime_env(&env, None).unwrap();
         assert_eq!(client.region(), DEFAULT_REGION);
+    }
+
+    fn user(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: MessageContent::text(text),
+        }
+    }
+
+    fn assistant(text: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: MessageContent::text(text),
+        }
+    }
+
+    fn cache_point_positions(messages: &[bedrock::types::Message]) -> Vec<usize> {
+        messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message
+                    .content()
+                    .iter()
+                    .any(bedrock::types::ContentBlock::is_cache_point)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    #[test]
+    fn cached_request_walks_history_before_volatile_tail() {
+        let base = RequestConfig {
+            model: "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0".into(),
+            cache_system_prompt: true,
+            ..RequestConfig::default()
+        };
+        let first_history = vec![user("a"), assistant("b")];
+        let first = crate::cache_topology::PreparedPrompt::prepare(
+            &first_history,
+            &base,
+            "session".into(),
+            None,
+        )
+        .unwrap();
+        let history = vec![user("a"), assistant("b"), user("c"), assistant("d")];
+        let prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &base,
+            "session".into(),
+            Some(first.topology()),
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock: now".into()));
+        let config = RequestConfig {
+            cache_topology: Some(prepared),
+            ..base
+        };
+
+        let messages = build_request_messages(&history, &config).unwrap();
+
+        assert_eq!(cache_point_positions(&messages), vec![1, 3]);
+        assert_eq!(messages.len(), 5);
+        assert_eq!(
+            messages[4].content(),
+            &[bedrock::types::ContentBlock::Text("clock: now".into())]
+        );
+    }
+
+    #[test]
+    fn cached_request_marks_system_and_tool_prefixes() {
+        let system = build_system_content("stable instructions", true).unwrap();
+        assert!(matches!(
+            system.as_slice(),
+            [
+                bedrock::types::SystemContentBlock::Text(text),
+                bedrock::types::SystemContentBlock::CachePoint(_)
+            ] if text == "stable instructions"
+        ));
+
+        let tools = vec![
+            crate::Tool::new("read", "Read a file"),
+            crate::Tool::new("grep", "Search files"),
+        ];
+        let tool_config = build_tool_configuration(&tools, true).unwrap();
+        assert_eq!(tool_config.tools().len(), 3);
+        assert!(matches!(
+            tool_config.tools().last(),
+            Some(bedrock::types::Tool::CachePoint(_))
+        ));
+    }
+
+    #[test]
+    fn uncached_request_emits_no_cache_points() {
+        let config = RequestConfig::default();
+        let messages = build_request_messages(&[user("hello")], &config).unwrap();
+        assert!(cache_point_positions(&messages).is_empty());
+
+        let system = build_system_content("instructions", false).unwrap();
+        assert_eq!(system.len(), 1);
+        assert!(matches!(
+            system.as_slice(),
+            [bedrock::types::SystemContentBlock::Text(text)] if text == "instructions"
+        ));
+
+        let tool_config =
+            build_tool_configuration(&[crate::Tool::new("read", "Read a file")], false).unwrap();
+        assert_eq!(tool_config.tools().len(), 1);
+        assert!(matches!(
+            tool_config.tools().first(),
+            Some(bedrock::types::Tool::ToolSpec(_))
+        ));
+    }
+
+    #[test]
+    fn unsupported_model_ignores_explicit_cache_flag() {
+        let history = vec![user("hello")];
+        let mut config = RequestConfig {
+            model: "bedrock/amazon.nova-pro-v1:0".into(),
+            cache_system_prompt: true,
+            ..RequestConfig::default()
+        };
+        config.cache_topology = Some(
+            crate::cache_topology::PreparedPrompt::prepare(
+                &history,
+                &config,
+                "session".into(),
+                None,
+            )
+            .unwrap(),
+        );
+
+        let messages = build_request_messages(&history, &config).unwrap();
+
+        assert!(cache_point_positions(&messages).is_empty());
     }
 
     #[tokio::test]

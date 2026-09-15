@@ -1,5 +1,5 @@
 //! Provider-scoped request capabilities shared by transport and model inspection.
-use crate::provider_model_name;
+use crate::{AiProvider, provider_model_name};
 use serde::Serialize;
 
 pub const ASTRA_CONTEXT_TOKENS: u32 = 1_050_000;
@@ -47,6 +47,49 @@ pub enum AnthropicThinkingMode {
 pub struct AnthropicRequestCapabilities {
     pub thinking: AnthropicThinkingMode,
     pub temperature: bool,
+}
+
+/// Whether a provider route accepts explicit prompt-cache markers for this model.
+///
+/// Direct Anthropic requests own this wire contract. Bedrock exposes the same
+/// capability only for the documented Claude model families; other Bedrock
+/// models may use implicit caching and reject explicit `cachePoint` blocks.
+#[must_use]
+pub fn supports_explicit_prompt_caching(provider: AiProvider, model: &str) -> bool {
+    match provider {
+        AiProvider::Anthropic => true,
+        AiProvider::Bedrock => {
+            let normalized = provider_model_name(model).trim().to_ascii_lowercase();
+            let Some(start) = normalized.find("anthropic.") else {
+                return false;
+            };
+            let model_id = &normalized[start..];
+            [
+                "anthropic.claude-fable-5",
+                "anthropic.claude-mythos-5",
+                "anthropic.claude-mythos-preview",
+                "anthropic.claude-opus-5",
+                "anthropic.claude-opus-4-8",
+                "anthropic.claude-opus-4-7",
+                "anthropic.claude-opus-4-6-v1",
+                "anthropic.claude-opus-4-5-20251101-v1:0",
+                "anthropic.claude-sonnet-5",
+                "anthropic.claude-sonnet-4-6",
+                "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ]
+            .iter()
+            .any(|family| {
+                model_id == *family
+                    || model_id
+                        .strip_prefix(family)
+                        .is_some_and(|suffix| suffix.starts_with('-') || suffix.starts_with(':'))
+            })
+        }
+        _ => false,
+    }
 }
 
 impl AnthropicRequestCapabilities {
@@ -321,6 +364,41 @@ impl OpenAiRequestCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_prompt_cache_capability_is_provider_and_model_scoped() {
+        for (provider, model) in [
+            (AiProvider::Anthropic, "anthropic/claude-sonnet-4-6"),
+            (
+                AiProvider::Bedrock,
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            ),
+            (
+                AiProvider::Bedrock,
+                "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            ),
+        ] {
+            assert!(
+                supports_explicit_prompt_caching(provider, model),
+                "{provider:?}/{model}"
+            );
+        }
+
+        for (provider, model) in [
+            (AiProvider::Bedrock, "bedrock/amazon.nova-pro-v1:0"),
+            (
+                AiProvider::Bedrock,
+                "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            ),
+            (AiProvider::OpenAI, "openai/gpt-5.6"),
+        ] {
+            assert!(
+                !supports_explicit_prompt_caching(provider, model),
+                "{provider:?}/{model}"
+            );
+        }
+    }
+
     #[test]
     fn maximum_effort_is_provider_and_model_specific() {
         for (model, expected) in [

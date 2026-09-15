@@ -20,6 +20,7 @@ mod receipts;
 mod session_event;
 pub mod telemetry;
 pub mod tool_details;
+pub mod tool_wire;
 pub mod turn_outcome;
 
 pub use boundary::{

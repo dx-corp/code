@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::{ExecutionReceipt, ExecutionSource, ExecutionStatus, ToolReceiptDetails};
+use maestro_runtime_contracts::tool_wire;
 
 #[test]
 fn headless_receipt_event_contains_record_lineage_and_status_only() {
@@ -178,7 +179,7 @@ fn parse_ready_message() {
 
 #[test]
 fn tool_end_serializes_typed_receipt_additively() {
-    let message = FromAgentMessage::ToolEnd {
+    let message = FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: "call-1".to_string(),
         tool_execution_id: None,
         success: true,
@@ -194,7 +195,7 @@ fn tool_end_serializes_typed_receipt_additively() {
             policy: None,
             details: ToolReceiptDetails::None,
         }),
-    };
+    });
 
     let json = serde_json::to_value(message).unwrap();
     assert_eq!(json["receipt"]["call_id"], "call-1");
@@ -203,7 +204,7 @@ fn tool_end_serializes_typed_receipt_additively() {
 
 #[test]
 fn indeterminate_receipt_survives_headless_wire_and_state() {
-    let message = FromAgentMessage::ToolEnd {
+    let message = FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: "call-gh-write".to_string(),
         tool_execution_id: Some("execution-gh-write".to_string()),
         success: false,
@@ -219,7 +220,7 @@ fn indeterminate_receipt_survives_headless_wire_and_state() {
             policy: None,
             details: ToolReceiptDetails::None,
         }),
-    };
+    });
 
     let encoded = serde_json::to_string(&message).expect("serialize indeterminate receipt");
     let decoded: FromAgentMessage =
@@ -282,14 +283,14 @@ fn tool_response_omits_absent_execution_id() {
 fn state_preserves_tool_execution_id_on_tool_end_event() {
     let mut state = AgentState::default();
 
-    let event = state.handle_message(FromAgentMessage::ToolEnd {
+    let event = state.handle_message(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: "call-1".to_string(),
         tool_execution_id: Some("tool-execution-1".to_string()),
         success: true,
         tool: Some("read".to_string()),
         details: None,
         receipt: None,
-    });
+    }));
 
     assert!(matches!(
         event,
@@ -1805,7 +1806,7 @@ fn state_uses_codex_subagent_tool_end_details_for_child_targets() {
         args: serde_json::json!({ "receiverThreadIds": [] }),
         requires_approval: false,
     });
-    state.handle_message(FromAgentMessage::ToolEnd {
+    state.handle_message(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: "collab-spawn-complete".to_string(),
         tool_execution_id: None,
         success: true,
@@ -1824,7 +1825,7 @@ fn state_uses_codex_subagent_tool_end_details_for_child_targets() {
             "prompt": "Sensitive child task prompt"
         })),
         receipt: None,
-    });
+    }));
 
     assert_eq!(
         state.codex_subagent_edges,
@@ -1937,14 +1938,14 @@ fn state_persists_governed_codex_subagent_id_from_retry_request() {
         Some("texec-spawn-retry-governed")
     );
 
-    state.handle_message(FromAgentMessage::ToolEnd {
+    state.handle_message(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
         call_id: "collab-spawn-retry-governed".to_string(),
         tool_execution_id: None,
         success: true,
         tool: None,
         details: None,
         receipt: None,
-    });
+    }));
 
     assert_eq!(
         state.codex_subagent_edges,
@@ -2104,4 +2105,49 @@ fn process_budget_checkpoint_round_trips_without_becoming_a_turn_terminal() {
     assert!(message.terminal_event().is_none());
     assert_eq!(serde_json::to_value(&message).unwrap(), wire);
     assert!(AgentState::default().handle_message(message).is_none());
+}
+
+#[test]
+fn governed_payloads_round_trip_across_runtime_and_platform_envelopes() {
+    use tool_wire::{ToolClientMessage, ToolServerMessage};
+    let request = serde_json::json!({
+        "type":"governed_client_tool_request", "call_id":"call-shared",
+        "tool_execution_id":"execution-shared", "tool":"test.read", "args":{},
+        "provider_tool_name":"read", "tool_id":"read", "client_instance_id":"client",
+        "grant_id":"grant", "grant_version":1, "grant_hash":"hash", "turn_digest":"turn",
+        "definition_digest":"definition", "args_digest":"args", "owner_lease_epoch":2,
+        "idempotency_key":"result"
+    });
+    let runtime: FromAgentMessage = serde_json::from_value(request.clone()).unwrap();
+    let platform: ToolServerMessage =
+        serde_json::from_value(serde_json::to_value(runtime).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(platform).unwrap(), request);
+    let mut result = request;
+    for field in ["tool", "args", "provider_tool_name", "tool_id"] {
+        result.as_object_mut().unwrap().remove(field);
+    }
+    result["type"] = serde_json::json!("governed_client_tool_result");
+    result["is_error"] = serde_json::json!(false);
+    result["content"] = serde_json::json!([{"type":"text","text":"result"}]);
+    let platform: ToolClientMessage = serde_json::from_value(result.clone()).unwrap();
+    let runtime: ToAgentMessage =
+        serde_json::from_value(serde_json::to_value(platform).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(runtime).unwrap(), result);
+    let ack = serde_json::json!({"type":"tool_end","call_id":"call-shared", "success":true});
+    let runtime: FromAgentMessage = serde_json::from_value(ack.clone()).unwrap();
+    let platform: ToolServerMessage =
+        serde_json::from_value(serde_json::to_value(runtime).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(platform).unwrap(), ack);
+}
+
+#[test]
+fn acceptance_round_trips_from_native_producer_to_shared_contract() {
+    let wire = serde_json::json!({"type":"response_accepted", "request_id":"execution-1"});
+    let runtime: FromAgentMessage = serde_json::from_value(wire.clone()).unwrap();
+    let shared: tool_wire::ToolServerMessage =
+        serde_json::from_value(serde_json::to_value(runtime).unwrap()).unwrap();
+    assert!(
+        matches!(&shared, tool_wire::ToolServerMessage::ResponseAccepted(ack) if ack.request_id == "execution-1")
+    );
+    assert_eq!(serde_json::to_value(shared).unwrap(), wire);
 }

@@ -1,3 +1,4 @@
+use maestro_runtime_contracts::tool_wire;
 use reqwest::StatusCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{fs, sync::Condvar};
@@ -11819,12 +11820,14 @@ async fn assert_unique_protocol_request_owner_across_restart(
     )
     .await
     .expect("restarted hosted runner");
-    let second_connection_id =
-        if matches!(&message, ToAgentMessage::GovernedClientToolResult { .. }) {
-            "conn_identity_first"
-        } else {
-            "conn_identity_second"
-        };
+    let second_connection_id = if matches!(
+        &message,
+        ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult { .. })
+    ) {
+        "conn_identity_first"
+    } else {
+        "conn_identity_second"
+    };
     let (capability, subscription_id) =
         attach_thread_controller(&client, &second.base_url(), second_connection_id).await;
     let replay = handle_message(
@@ -11910,7 +11913,7 @@ async fn delayed_server_request_response_has_one_idempotency_owner_across_restar
 
 #[cfg(unix)]
 fn governed_response_for_ack_test() -> ToAgentMessage {
-    ToAgentMessage::GovernedClientToolResult {
+    ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
         process_tool_cost_micros: None,
         call_id: "unique-governed-call".to_string(),
         content: Vec::new(),
@@ -11925,7 +11928,7 @@ fn governed_response_for_ack_test() -> ToAgentMessage {
         args_digest: "args-digest".to_string(),
         owner_lease_epoch: 1,
         idempotency_key: "identity-owner-key".to_string(),
-    }
+    })
 }
 
 #[cfg(unix)]
@@ -15213,9 +15216,11 @@ fn managed_authorization_pending_request_survives_replay_eviction_until_ack() {
         .state
         .lock()
         .unwrap()
-        .handle_message(FromAgentMessage::ResponseAccepted {
-            request_id: "invocation-1".into(),
-        });
+        .handle_message(FromAgentMessage::ResponseAccepted(
+            tool_wire::ResponseAccepted {
+                request_id: "invocation-1".into(),
+            },
+        ));
     assert!(shared.controller_pending_events(&mut state).is_empty());
     assert!(state.pending_controller_events.is_empty());
 }

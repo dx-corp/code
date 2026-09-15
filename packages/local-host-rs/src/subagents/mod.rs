@@ -8,6 +8,7 @@
 
 use self::factory::{ChildAgentFactory, ChildLaunchRequest, LocalChildAgentFactory};
 use maestro_runtime::agent::NativeAgent;
+use maestro_runtime_contracts::tool_wire;
 
 pub mod factory;
 mod handoff;
@@ -5844,14 +5845,14 @@ fn child_event_to_headless(event: &FromAgent, session_id: &str) -> Option<FromAg
             success,
             result,
             receipt,
-        } => Some(FromAgentMessage::ToolEnd {
+        } => Some(FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
             call_id: call_id.clone(),
             tool_execution_id: None,
             success: *success,
             tool: None,
             details: result.as_ref().and_then(|result| result.details.clone()),
             receipt: receipt.clone(),
-        }),
+        })),
         FromAgent::Error {
             message,
             fatal,
