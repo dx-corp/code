@@ -12,6 +12,7 @@ pub mod maestro {
 
 #[cfg(test)]
 mod tests {
+    use maestro_runtime_contracts::tool_wire;
     use prost::Message;
     use std::collections::BTreeSet;
 
@@ -171,7 +172,7 @@ mod tests {
                 content: vec![ClientToolResultContent::Text { text: "ok".into() }],
                 is_error: false,
             },
-            ToAgentMessage::GovernedClientToolResult {
+            ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
                 process_tool_cost_micros: None,
                 call_id: "call-1".into(),
                 content: vec![],
@@ -186,7 +187,7 @@ mod tests {
                 args_digest: "args-digest".into(),
                 owner_lease_epoch: 1,
                 idempotency_key: "idempotency-1".into(),
-            },
+            }),
             ToAgentMessage::ServerRequestResponse {
                 request_id: "request-1".into(),
                 request_type: ServerRequestType::Approval,
@@ -274,7 +275,9 @@ mod tests {
             | ToAgentMessage::Interrupt
             | ToAgentMessage::ToolResponse { .. }
             | ToAgentMessage::ClientToolResult { .. }
-            | ToAgentMessage::GovernedClientToolResult { .. }
+            | ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+                ..
+            })
             | ToAgentMessage::ManagedAuthorizationResult { .. }
             | ToAgentMessage::ServerRequestResponse { .. }
             | ToAgentMessage::UtilityCommandStart { .. }
@@ -363,21 +366,21 @@ mod tests {
                 call_id: "call-1".into(),
                 content: "output".into(),
             },
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
                 call_id: "call-1".into(),
                 tool_execution_id: Some("execution-1".into()),
                 success: true,
                 tool: Some("read".into()),
                 details: None,
                 receipt: None,
-            },
+            }),
             FromAgentMessage::ClientToolRequest {
                 call_id: "call-1".into(),
                 tool_execution_id: Some("execution-1".into()),
                 tool: "browser".into(),
                 args: serde_json::json!({"url":"https://example.test"}),
             },
-            FromAgentMessage::GovernedClientToolRequest {
+            FromAgentMessage::GovernedClientToolRequest(tool_wire::GovernedClientToolRequest {
                 call_id: "call-1".into(),
                 tool_execution_id: "execution-1".into(),
                 tool: "browser".into(),
@@ -394,7 +397,7 @@ mod tests {
                 args_digest: "args-digest".into(),
                 owner_lease_epoch: 1,
                 idempotency_key: "idempotency-1".into(),
-            },
+            }),
             FromAgentMessage::ServerRequest {
                 request_id: "request-1".into(),
                 request_type: ServerRequestType::Approval,
@@ -524,9 +527,9 @@ mod tests {
                 lease_expires_at: None,
                 connections: None,
             },
-            FromAgentMessage::ResponseAccepted {
+            FromAgentMessage::ResponseAccepted(tool_wire::ResponseAccepted {
                 request_id: "request-1".into(),
-            },
+            }),
             FromAgentMessage::TurnCompleted {
                 response_id: "response-1".into(),
                 coding_completion: None,
@@ -600,7 +603,7 @@ mod tests {
         match message {
             FromAgentMessage::ConversationSnapshot { .. }
             | FromAgentMessage::HelloOk { .. }
-            | FromAgentMessage::ResponseAccepted { .. }
+            | FromAgentMessage::ResponseAccepted(tool_wire::ResponseAccepted { .. })
             | FromAgentMessage::ProcessBudgetCheckpoint { .. }
             | FromAgentMessage::ManagedGatewayReceipt { .. }
             | FromAgentMessage::WorkspaceCapabilitySetApplied { .. }
@@ -617,9 +620,11 @@ mod tests {
             | FromAgentMessage::ToolCall { .. }
             | FromAgentMessage::ToolStart { .. }
             | FromAgentMessage::ToolOutput { .. }
-            | FromAgentMessage::ToolEnd { .. }
+            | FromAgentMessage::ToolEnd(tool_wire::ToolEnd { .. })
             | FromAgentMessage::ClientToolRequest { .. }
-            | FromAgentMessage::GovernedClientToolRequest { .. }
+            | FromAgentMessage::GovernedClientToolRequest(tool_wire::GovernedClientToolRequest {
+                ..
+            })
             | FromAgentMessage::ManagedAuthorizationRequest { .. }
             | FromAgentMessage::ServerRequest { .. }
             | FromAgentMessage::ServerRequestResolved { .. }

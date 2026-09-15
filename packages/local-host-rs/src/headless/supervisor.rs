@@ -5,6 +5,7 @@
 //! - Health monitoring with heartbeats
 //! - Graceful degradation
 
+use maestro_runtime_contracts::tool_wire;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
@@ -1157,7 +1158,9 @@ impl AgentSupervisor {
     }
 
     fn apply_agent_message(&mut self, message: FromAgentMessage) -> Option<SupervisorEvent> {
-        if let FromAgentMessage::ResponseAccepted { request_id } = &message {
+        if let FromAgentMessage::ResponseAccepted(tool_wire::ResponseAccepted { request_id }) =
+            &message
+        {
             self.state.handle_message(message.clone());
             return Some(SupervisorEvent::ResponseAccepted {
                 request_id: request_id.clone(),
@@ -1196,7 +1199,9 @@ impl AgentSupervisor {
             &message,
             FromAgentMessage::ManagedAuthorizationRequest { .. }
                 | FromAgentMessage::ClientToolRequest { .. }
-                | FromAgentMessage::GovernedClientToolRequest { .. }
+                | FromAgentMessage::GovernedClientToolRequest(
+                    tool_wire::GovernedClientToolRequest { .. }
+                )
                 | FromAgentMessage::ServerRequest { .. }
                 | FromAgentMessage::ServerRequestResolved { .. }
         ) {
@@ -1615,7 +1620,10 @@ pub(crate) fn response_ack_request_id(message: &ToAgentMessage) -> Option<&str> 
     match message {
         ToAgentMessage::ToolResponse { call_id, .. }
         | ToAgentMessage::ClientToolResult { call_id, .. }
-        | ToAgentMessage::GovernedClientToolResult { call_id, .. } => Some(call_id),
+        | ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+            call_id,
+            ..
+        }) => Some(call_id),
         ToAgentMessage::ServerRequestResponse { request_id, .. }
         | ToAgentMessage::ManagedAuthorizationResult { request_id, .. } => Some(request_id),
         _ => None,
@@ -1967,14 +1975,14 @@ pub fn agent_event_to_message(event: &AgentEvent) -> FromAgentMessage {
             ..
         } => {
             let tool = receipt.as_ref().map(|receipt| receipt.tool_name.clone());
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
                 call_id: call_id.clone(),
                 tool_execution_id: tool_execution_id.clone(),
                 success: *success,
                 tool,
                 details: None,
                 receipt: receipt.clone(),
-            }
+            })
         }
         AgentEvent::Error {
             request_id,

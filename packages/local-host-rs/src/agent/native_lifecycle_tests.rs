@@ -6,6 +6,7 @@
 
 #![cfg(test)]
 
+use maestro_runtime_contracts::tool_wire;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -741,13 +742,13 @@ async fn approved_dynamic_write_emits_one_named_receipt_bearing_wire_terminal() 
         .collect::<Vec<_>>();
     assert!(matches!(
         terminals.as_slice(),
-        [crate::headless::FromAgentMessage::ToolEnd {
+        [crate::headless::FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
             call_id,
             success: true,
             tool: Some(tool),
             receipt: Some(receipt),
             ..
-        }] if call_id == "call-production-shaped-write"
+        })] if call_id == "call-production-shaped-write"
             && receipt.call_id == "call-production-shaped-write"
             && tool == "write"
             && receipt.tool_name == "write"

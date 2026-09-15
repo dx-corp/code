@@ -89,7 +89,7 @@ mod model_capabilities;
 pub use model_capabilities::{
     ASTRA_CONTEXT_TOKENS, ASTRA_OUTPUT_TOKENS, AnthropicRequestCapabilities, AnthropicThinkingMode,
     OpenAiRequestCapabilities, OpenAiWireProtocol, anthropic_request_capabilities,
-    openai_request_capabilities,
+    openai_request_capabilities, supports_explicit_prompt_caching,
 };
 pub mod op_secret;
 #[path = "openai_wrapper.rs"]

@@ -5,6 +5,7 @@
 //! contract so Platform and conformance tests can target a Rust runtime without
 //! routing through the Node web server.
 
+use maestro_runtime_contracts::tool_wire;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
@@ -1481,7 +1482,9 @@ fn hosted_message_kind(message: &ToAgentMessage) -> &'static str {
         ToAgentMessage::Interrupt => "interrupt",
         ToAgentMessage::ToolResponse { .. } => "tool_response",
         ToAgentMessage::ClientToolResult { .. } => "client_tool_result",
-        ToAgentMessage::GovernedClientToolResult { .. } => "governed_client_tool_result",
+        ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+            ..
+        }) => "governed_client_tool_result",
         ToAgentMessage::ManagedAuthorizationResult { .. } => "managed_authorization_result",
         ToAgentMessage::ApplyWorkspaceCapabilitySet { .. } => "apply_workspace_capability_set",
         ToAgentMessage::ConfigurePromptExperiment { .. } => "configure_prompt_experiment",
@@ -2881,7 +2884,7 @@ fn transcript_level(message: &FromAgentMessage) -> Option<crate::transcript::Tra
             ..
         }
         | FromAgentMessage::ToolStart { .. }
-        | FromAgentMessage::ToolEnd { .. }
+        | FromAgentMessage::ToolEnd(tool_wire::ToolEnd { .. })
         | FromAgentMessage::Compaction { .. } => Some(TranscriptLevel::Block),
         FromAgentMessage::ToolOutput { .. } | FromAgentMessage::Status { .. } => {
             Some(TranscriptLevel::Delta)
@@ -4066,9 +4069,10 @@ async fn handle_message_inner(
             connection_capability.as_deref(),
         )?;
         assert_controller(&state, Some(resolved_connection_id.as_str()))?;
-        if let ToAgentMessage::GovernedClientToolResult {
-            client_instance_id, ..
-        } = &message
+        if let ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+            client_instance_id,
+            ..
+        }) = &message
         {
             if client_instance_id != &resolved_connection_id {
                 return Err(HostedError::new(
@@ -4397,7 +4401,9 @@ async fn handle_message_inner(
             | ToAgentMessage::RestoreConversation { .. }
             | ToAgentMessage::ToolResponse { .. }
             | ToAgentMessage::ClientToolResult { .. }
-            | ToAgentMessage::GovernedClientToolResult { .. }
+            | ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+                ..
+            })
             | ToAgentMessage::ManagedAuthorizationResult { .. }
             | ToAgentMessage::ServerRequestResponse { .. }
             | ToAgentMessage::Interrupt
@@ -4756,7 +4762,7 @@ fn is_control_response_message(message: &ToAgentMessage) -> bool {
         message,
         ToAgentMessage::ToolResponse { .. }
             | ToAgentMessage::ClientToolResult { .. }
-            | ToAgentMessage::GovernedClientToolResult { .. }
+            | ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult { .. })
             | ToAgentMessage::ManagedAuthorizationResult { .. }
             | ToAgentMessage::ServerRequestResponse { .. }
     )

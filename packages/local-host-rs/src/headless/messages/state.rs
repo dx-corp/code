@@ -1,4 +1,5 @@
 use crate::agent::ExecutionReceipt;
+use maestro_runtime_contracts::tool_wire;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -739,7 +740,10 @@ impl AgentState {
                 }
             }
             ToAgentMessage::ClientToolResult { call_id, .. }
-            | ToAgentMessage::GovernedClientToolResult { call_id, .. } => {
+            | ToAgentMessage::GovernedClientToolResult(tool_wire::GovernedClientToolResult {
+                call_id,
+                ..
+            }) => {
                 self.pending_client_tools.retain(|p| p.call_id != *call_id);
                 self.pending_user_inputs.retain(|p| p.call_id != *call_id);
             }
@@ -816,7 +820,7 @@ impl AgentState {
                 }
                 None
             }
-            FromAgentMessage::ResponseAccepted { request_id } => {
+            FromAgentMessage::ResponseAccepted(tool_wire::ResponseAccepted { request_id }) => {
                 self.pending_managed_authorizations
                     .retain(|id| id != &request_id);
                 None
@@ -1188,7 +1192,7 @@ impl AgentState {
                 Some(AgentEvent::ToolOutput { call_id, content })
             }
 
-            FromAgentMessage::ToolEnd {
+            FromAgentMessage::ToolEnd(tool_wire::ToolEnd {
                 call_id,
                 tool_execution_id,
                 success,
@@ -1196,7 +1200,7 @@ impl AgentState {
                 details,
                 receipt,
                 ..
-            } => {
+            }) => {
                 let active_tool = self.active_tools.remove(&call_id);
                 let tracked_tool = self.tracked_tools.remove(&call_id);
                 let tool_execution_id = tool_execution_id.or_else(|| {
@@ -1287,7 +1291,7 @@ impl AgentState {
                 None
             }
 
-            FromAgentMessage::GovernedClientToolRequest {
+            FromAgentMessage::GovernedClientToolRequest(tool_wire::GovernedClientToolRequest {
                 call_id,
                 tool_execution_id,
                 tool,
@@ -1303,7 +1307,7 @@ impl AgentState {
                 owner_lease_epoch,
                 idempotency_key,
                 ..
-            } => {
+            }) => {
                 self.governed_client_tool_bindings.insert(
                     call_id.clone(),
                     GovernedClientToolBinding {

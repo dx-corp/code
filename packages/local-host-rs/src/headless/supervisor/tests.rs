@@ -6,6 +6,7 @@ use crate::headless::session::{SessionEntry, SessionReader};
 use crate::headless::{
     ActiveTool, HeadlessErrorType, StreamingResponse, TokenUsage, UtilityCommandShellMode,
 };
+use maestro_runtime_contracts::tool_wire;
 use std::collections::VecDeque;
 use std::fs;
 use std::sync::{
@@ -1438,13 +1439,13 @@ fn agent_event_to_message_preserves_headless_metadata() {
     });
     assert!(matches!(
         tool_end,
-        super::super::messages::FromAgentMessage::ToolEnd {
+        super::super::messages::FromAgentMessage::ToolEnd (tool_wire::ToolEnd {
             call_id,
             tool_execution_id: Some(ref tool_execution_id),
             tool: Some(ref tool),
             success: true,
             ..
-        } if call_id == "call_1"
+        }) if call_id == "call_1"
             && tool_execution_id == "tool-execution-1"
             && tool == "codex_file_change"
     ));
@@ -3774,15 +3775,19 @@ fn supervisor_managed_authorization_request_waits_for_native_acknowledgement() {
         supervisor.state.pending_managed_authorizations,
         ["invocation-1"]
     );
-    supervisor.apply_agent_message(FromAgentMessage::ResponseAccepted {
-        request_id: "other".into(),
-    });
+    supervisor.apply_agent_message(FromAgentMessage::ResponseAccepted(
+        tool_wire::ResponseAccepted {
+            request_id: "other".into(),
+        },
+    ));
     assert_eq!(
         supervisor.state.pending_managed_authorizations,
         ["invocation-1"]
     );
-    supervisor.apply_agent_message(FromAgentMessage::ResponseAccepted {
-        request_id: "invocation-1".into(),
-    });
+    supervisor.apply_agent_message(FromAgentMessage::ResponseAccepted(
+        tool_wire::ResponseAccepted {
+            request_id: "invocation-1".into(),
+        },
+    ));
     assert!(supervisor.state.pending_managed_authorizations.is_empty());
 }

@@ -92,7 +92,8 @@
 //! ```
 
 use super::workspace_capabilities::{ApplyWorkspaceCapabilitySet, WorkspaceCapabilitySetApplied};
-use crate::agent::{ExecutionReceipt, ManagedInferenceAuthorization};
+use crate::agent::ManagedInferenceAuthorization;
+use maestro_runtime_contracts::tool_wire;
 use serde::{Deserialize, Serialize, de::Deserializer};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -315,23 +316,7 @@ pub enum ToAgentMessage {
         content: Vec<ClientToolResultContent>,
         is_error: bool,
     },
-    GovernedClientToolResult {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        process_tool_cost_micros: Option<u64>,
-        call_id: String,
-        content: Vec<ClientToolResultContent>,
-        is_error: bool,
-        tool_execution_id: String,
-        client_instance_id: String,
-        grant_id: String,
-        grant_version: u64,
-        grant_hash: String,
-        turn_digest: String,
-        definition_digest: String,
-        args_digest: String,
-        owner_lease_epoch: u64,
-        idempotency_key: String,
-    },
+    GovernedClientToolResult(tool_wire::GovernedClientToolResult),
     /// Generic response to a pending server request
     ServerRequestResponse {
         request_id: String,
@@ -420,7 +405,9 @@ pub enum ToAgentMessage {
         debounce_ms: Option<u32>,
     },
     /// Stop a filesystem watch on the runtime
-    UtilityFileWatchStop { watch_id: String },
+    UtilityFileWatchStop {
+        watch_id: String,
+    },
     /// Cancel the current operation
     Cancel,
     /// Shut down the agent
@@ -860,19 +847,7 @@ pub struct ToolResult {
     pub details: Option<serde_json::Value>,
 }
 
-/// Content returned from a client-side tool execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ClientToolResultContent {
-    Text {
-        text: String,
-    },
-    Image {
-        data: String,
-        #[serde(rename = "mimeType")]
-        mime_type: String,
-    },
-}
+pub use tool_wire::ClientToolResultContent;
 
 /// Ranked file path match returned by a runtime file search.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -934,7 +909,9 @@ pub struct UtilityFileSearchMatch {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromAgentMessage {
     /// A new HTTP invocation needs a fresh controller-issued capability.
-    ManagedAuthorizationRequest { request_id: String },
+    ManagedAuthorizationRequest {
+        request_id: String,
+    },
     /// Private native-provider conversation checkpoint. This is recorded for
     /// process recovery but is intentionally never surfaced as an agent event.
     ConversationSnapshot {
@@ -973,7 +950,7 @@ pub enum FromAgentMessage {
     },
     /// Durable native-agent acknowledgement that a control response was
     /// accepted by the response consumer rather than merely queued.
-    ResponseAccepted { request_id: String },
+    ResponseAccepted(tool_wire::ResponseAccepted),
     /// Safe managed-Gateway evidence for one inference request.
     /// Private process usage checkpoint, persisted in the hosted replay stream.
     ProcessBudgetCheckpoint {
@@ -1001,7 +978,9 @@ pub enum FromAgentMessage {
         session_id: Option<String>,
     },
     /// Response streaming started
-    ResponseStart { response_id: String },
+    ResponseStart {
+        response_id: String,
+    },
     /// Response chunk (text or thinking)
     ResponseChunk {
         response_id: String,
@@ -1029,7 +1008,10 @@ pub enum FromAgentMessage {
         coding_child_records: Vec<maestro_runtime::coding_acceptance::CodingAcceptanceChildRecord>,
     },
     /// Durable terminal for a cancelled or interrupted turn.
-    TurnInterrupted { response_id: String, reason: String },
+    TurnInterrupted {
+        response_id: String,
+        reason: String,
+    },
     /// Privacy-safe Codex app-server session lifecycle metadata.
     CodexSessionState {
         state: String,
@@ -1065,22 +1047,16 @@ pub enum FromAgentMessage {
         requires_approval: bool,
     },
     /// Tool execution started
-    ToolStart { call_id: String },
-    /// Tool output chunk
-    ToolOutput { call_id: String, content: String },
-    /// Tool execution ended
-    ToolEnd {
+    ToolStart {
         call_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_execution_id: Option<String>,
-        success: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        details: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        receipt: Option<ExecutionReceipt>,
     },
+    /// Tool output chunk
+    ToolOutput {
+        call_id: String,
+        content: String,
+    },
+    /// Tool execution ended
+    ToolEnd(tool_wire::ToolEnd),
     /// Client-side tool execution requested
     ClientToolRequest {
         call_id: String,
@@ -1089,25 +1065,7 @@ pub enum FromAgentMessage {
         tool: String,
         args: serde_json::Value,
     },
-    GovernedClientToolRequest {
-        call_id: String,
-        tool_execution_id: String,
-        tool: String,
-        args: serde_json::Value,
-        provider_tool_name: String,
-        tool_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        connection_binding_id: Option<String>,
-        client_instance_id: String,
-        grant_id: String,
-        grant_version: u64,
-        grant_hash: String,
-        turn_digest: String,
-        definition_digest: String,
-        args_digest: String,
-        owner_lease_epoch: u64,
-        idempotency_key: String,
-    },
+    GovernedClientToolRequest(tool_wire::GovernedClientToolRequest),
     /// Structured server-to-client request (currently approvals)
     ServerRequest {
         request_id: String,
@@ -1156,7 +1114,9 @@ pub enum FromAgentMessage {
         event: maestro_runtime::DelegationEvent,
     },
     /// Status update
-    Status { message: String },
+    Status {
+        message: String,
+    },
     /// Conversation history was compacted into a summary
     Compaction {
         summary: String,
