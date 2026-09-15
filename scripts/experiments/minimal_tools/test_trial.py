@@ -193,3 +193,20 @@ class TrialTests(unittest.TestCase):
             rows = json.loads((root / "rows.json").read_text())
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["arm"], "fast")
+
+    def test_execution_uses_declared_order(self):
+        from trial import execute
+        from followup import cases as fresh_cases
+        cs = fresh_cases()
+        self.assertEqual(len(cs), 24)
+        self.assertEqual(len({c['id'] for c in cs}), 24)
+        self.assertFalse({c['id'] for c in cs} & {c['id'] for c in cases()})
+        order = [(c['id'], ['minimal', 'fast']) for c in cs]
+        calls = []
+        def runner(case, arm, output, binary, timeout):
+            if output.name != 'qualification':
+                calls.append((case['id'], arm))
+            return dict(case=case['id'], arm=arm, success=True, tokens_complete=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            execute(cs, Path(tmp), Path('/unused'), 1, runner=runner, order=order)
+        self.assertEqual(calls, [(c, a) for c, arms in order for a in arms])
