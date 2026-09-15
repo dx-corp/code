@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
-fn profile_fixture_definitions() -> HashMap<String, crate::agent::ToolDefinition> {
+pub(super) fn profile_fixture_definitions() -> HashMap<String, crate::agent::ToolDefinition> {
     [
         "bash",
         "read",

@@ -1242,7 +1242,11 @@ async fn serial_tool_boundary_invalidates_cached_reads() {
             },
         )
         .await;
-    assert!(stale.raw_content().contains("before"));
+    assert!(
+        stale
+            .raw_content()
+            .starts_with("Unchanged since previous read:")
+    );
     maestro_runtime::agent::invalidate_cache_after_serial_tool_for_test(&host, "bash", true);
     let refreshed = host
         .execute_tool(
@@ -1256,8 +1260,13 @@ async fn serial_tool_boundary_invalidates_cached_reads() {
             },
         )
         .await;
-    assert!(refreshed.raw_content().contains("after"));
-    assert!(!refreshed.raw_content().contains("before"));
+    assert!(
+        refreshed
+            .raw_content()
+            .starts_with("Diff since previous read:")
+    );
+    assert!(refreshed.raw_content().contains("-before"));
+    assert!(refreshed.raw_content().contains("+after"));
 }
 
 #[test]

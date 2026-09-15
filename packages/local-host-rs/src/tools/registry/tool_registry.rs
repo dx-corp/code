@@ -449,6 +449,28 @@ impl ToolRegistry {
             },
         );
 
+        // Observation aging keeps the provider transcript compact while the
+        // native runtime retains the original result under its call id.
+        tools.insert(
+            "recall_output".to_string(),
+            ToolDefinition {
+                tool: Tool::new(
+                    "recall_output",
+                    "Retrieve a previously returned tool result by its tool-call id.",
+                )
+                .with_schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "Tool-call id named by an omitted-result marker"},
+                        "offsetChars": {"type": "number", "description": "Zero-based character offset (default 0)"},
+                        "maxChars": {"type": "number", "description": "Maximum characters to return (default 20000, max 100000)"}
+                    },
+                    "required": ["id"]
+                })),
+                requires_approval: false,
+            },
+        );
+
         // Composite exploration collapses the common search/read fan-out into
         // one model turn while retaining the executor's normal cache and
         // cancellation paths for each sub-operation.
@@ -1502,7 +1524,7 @@ impl ToolRegistry {
     ///
     /// // Count tools
     /// let count = registry.tools().count();
-    /// assert_eq!(count, 67);  // includes draft-only feedback and durable subagent control
+    /// assert_eq!(count, 68);  // includes recall_output and durable subagent control
     ///
     /// // List tool names
     /// for tool_def in registry.tools() {

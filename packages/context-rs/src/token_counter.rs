@@ -32,6 +32,7 @@ pub struct TokenCounter {
     model: Option<String>,
     measured: bool,
     cache: Mutex<HashMap<(usize, u64), u64>>,
+    calibration_scale: Mutex<f64>,
 }
 
 impl TokenCounter {
@@ -49,6 +50,7 @@ impl TokenCounter {
             model,
             measured,
             cache: Mutex::new(HashMap::new()),
+            calibration_scale: Mutex::new(1.0),
         }
     }
 
@@ -67,23 +69,43 @@ impl TokenCounter {
     /// Count the tokens in `text` for the configured model.
     #[must_use]
     pub fn count(&self, text: &str) -> u64 {
-        if !self.measured {
-            return token_estimation::estimate_tokens(text);
-        }
-        let key = (text.len(), content_hash(text));
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(hit) = cache.get(&key) {
-                return *hit;
+        let base = if !self.measured {
+            token_estimation::estimate_tokens(text)
+        } else {
+            let key = (text.len(), content_hash(text));
+            if let Ok(cache) = self.cache.lock() {
+                if let Some(hit) = cache.get(&key) {
+                    return *hit;
+                }
             }
-        }
-        let counted = token_counting::count_tokens(text, self.model.as_deref());
-        if let Ok(mut cache) = self.cache.lock() {
-            if cache.len() >= TOKEN_COUNT_CACHE_MAX_ENTRIES {
-                cache.clear();
+            let counted = token_counting::count_tokens(text, self.model.as_deref());
+            if let Ok(mut cache) = self.cache.lock() {
+                if cache.len() >= TOKEN_COUNT_CACHE_MAX_ENTRIES {
+                    cache.clear();
+                }
+                cache.insert(key, counted);
             }
-            cache.insert(key, counted);
+            counted
+        };
+        if self.measured || base == 0 {
+            return base;
         }
-        counted
+        let scale = self.calibration_scale.lock().map_or(1.0, |scale| *scale);
+        ((base as f64) * scale).round().clamp(0.0, u64::MAX as f64) as u64
+    }
+
+    /// Recalibrate a heuristic counter from one exact provider observation.
+    /// Measured local tokenizers remain authoritative and ignore calibration.
+    pub fn calibrate(&self, estimated_tokens: u64, observed_tokens: u64) -> bool {
+        if self.measured || estimated_tokens == 0 || observed_tokens == 0 {
+            return false;
+        }
+        let Ok(mut scale) = self.calibration_scale.lock() else {
+            return false;
+        };
+        let correction = observed_tokens as f64 / estimated_tokens as f64;
+        *scale = (*scale * correction).clamp(0.5, 2.5);
+        true
     }
 }
 
@@ -92,6 +114,10 @@ impl std::fmt::Debug for TokenCounter {
         f.debug_struct("TokenCounter")
             .field("model", &self.model)
             .field("measured", &self.measured)
+            .field(
+                "calibration_scale",
+                &self.calibration_scale.lock().map(|scale| *scale).ok(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -100,4 +126,28 @@ fn content_hash(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heuristic_counter_recalibrates_from_an_observed_request() {
+        let counter = TokenCounter::heuristic();
+        let text = "fn main() { println!(\"dense code tokens\"); }".repeat(40);
+        let estimated = counter.count(&text);
+
+        assert!(counter.calibrate(estimated, estimated.saturating_mul(5) / 4));
+        assert_eq!(counter.count(&text), estimated.saturating_mul(5) / 4);
+    }
+
+    #[test]
+    fn measured_counter_ignores_remote_recalibration() {
+        let counter = TokenCounter::new(Some("gpt-4o".to_owned()));
+        assert!(counter.is_measured());
+        let before = counter.count("hello world");
+        assert!(!counter.calibrate(before, before.saturating_mul(2)));
+        assert_eq!(counter.count("hello world"), before);
+    }
 }

@@ -167,3 +167,29 @@ class TrialTests(unittest.TestCase):
             self.assertEqual({r["arm"] for r in rows[2:]}, {"fast", "minimal"})
             stopped = json.loads((root / "stopped.json").read_text())
             self.assertEqual(stopped["unrun_cases"], [c["id"] for c in cs[2:]])
+
+    def test_interruption_during_second_arm_preserves_first_arm(self):
+        import json
+        from trial import execute
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+
+            def runner(case, arm, output, binary, timeout):
+                calls.append((case["id"], arm))
+                if len(calls) == 6:
+                    raise KeyboardInterrupt()
+                return dict(
+                    case=case["id"],
+                    arm=arm,
+                    success=True,
+                    tokens_complete=True,
+                    failure=None,
+                )
+
+            with self.assertRaises(KeyboardInterrupt):
+                execute(cases()[:1], root, Path("/unused"), 1, runner=runner)
+            rows = json.loads((root / "rows.json").read_text())
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["arm"], "fast")

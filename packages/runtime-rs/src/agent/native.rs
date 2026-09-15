@@ -396,7 +396,6 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
         message: format!("tool approval response channel closed before `{call_id}` completed"),
     })
 }
-
 mod attachments;
 mod codex;
 mod commands;
@@ -405,9 +404,12 @@ mod deferred_tool_schemas;
 #[cfg(test)]
 mod deferred_tool_tests;
 mod model_dynamics;
+mod provider_history;
 mod provider_loop;
 mod read_only_tools;
 mod side_questions;
+#[cfg(test)]
+mod token_efficiency_tests;
 mod tool_execution;
 mod tool_responses;
 mod tool_results;
@@ -431,16 +433,15 @@ use self::tool_execution::{
     tool_args_for_execution, tool_is_visible_to_model, tool_requires_approval,
 };
 
-/// Compatibility exports for callers that historically imported these types
-/// from `maestro_runtime::agent`.
-pub use crate::{ToolResponseConsumption, ToolResponseMessage};
-use crate::{ToolResponseCoordinator, ToolResponseWait};
-
 use self::read_only_tools::{
     QueuedReadOnlyToolExecution, execute_native_read_only_tool_wave,
     is_explicit_inline_read_only_tool, is_native_parallel_read_only_tool_call,
 };
 use self::tool_responses::repair_orphaned_tool_calls;
+/// Compatibility exports for callers that historically imported these types
+/// from `maestro_runtime::agent`.
+pub use crate::{ToolResponseConsumption, ToolResponseMessage};
+use crate::{ToolResponseCoordinator, ToolResponseWait};
 
 fn provider_id(provider: AiProvider) -> &'static str {
     match provider {
@@ -1471,6 +1472,7 @@ impl NativeAgent {
             denial_memory: DenialMemory::new(),
             workflow_state: WorkflowStateTracker::default(),
             compactor,
+            token_calibrated_models: HashSet::new(),
             semantic_continuation: None,
             retry_policy,
             pending_messages,
@@ -2432,8 +2434,7 @@ struct NativeAgentRunner {
     dynamics: Arc<std::sync::Mutex<super::model_dynamics::DynamicsState>>,
     boost_original: Option<super::model_dynamics::ModelChoice>,
 
-    /// Identifier of the turn `run_loop` is executing, carried in every
-    /// extension hook context.
+    /// Turn identifier carried in every extension hook context.
     current_turn_id: String,
 
     /// How many turns `run_loop` has started, including the current one.
@@ -2441,7 +2442,6 @@ struct NativeAgentRunner {
 
     /// How many tool calls the current turn has planned.
     turn_tool_calls: u64,
-
     /// Tool calls the user refused during the current turn.
     ///
     /// A denied call with identical arguments is refused again without a
@@ -2451,11 +2451,10 @@ struct NativeAgentRunner {
     /// Workflow state tracker for PII redaction enforcement
     workflow_state: WorkflowStateTracker,
 
-    /// Context compactor for handling long conversations
-    ///
-    /// Summarizes older messages when the context grows too large to fit
-    /// within the model's token limit.
+    /// Context compactor for conversations approaching the model limit.
     compactor: super::compaction::ContextCompactor,
+    /// Models already probed for exact provider token counting.
+    token_calibrated_models: HashSet<String>,
     semantic_continuation: Option<super::compaction::ContinuationRecord>,
 
     /// Retry policy for handling transient API errors

@@ -17,6 +17,7 @@ class ReportTests(unittest.TestCase):
             usage = dict(
                 input_tokens=10,
                 cache_read_tokens=0,
+                cache_write_tokens=0,
                 output_tokens=1,
                 total_cost_usd=0.01,
             )
@@ -34,12 +35,22 @@ class ReportTests(unittest.TestCase):
                                 "response_id": "one",
                                 "usage": usage,
                             },
-                            {
-                                "type": "response_end",
-                                "response_id": "done",
-                                "usage": None,
-                            },
-                            {"type": "turn_completed", "response_id": "done"},
+                            *(
+                                [
+                                    {
+                                        "type": "response_end",
+                                        "response_id": "done",
+                                        "usage": None,
+                                    }
+                                ]
+                                if arm == "fast"
+                                else []
+                            ),
+                            *(
+                                [{"type": "turn_completed", "response_id": "done"}]
+                                if arm == "fast"
+                                else []
+                            ),
                         ]
                     )
                     + "\n"
@@ -74,6 +85,9 @@ class ReportTests(unittest.TestCase):
             (root / "rows.json").write_text(json.dumps(rows))
             with (root / "minimal/events.jsonl").open("a") as events:
                 events.write(
+                    json.dumps({"type": "turn_completed", "response_id": "done"}) + "\n"
+                )
+                events.write(
                     json.dumps({"type": "response_start", "response_id": "two"}) + "\n"
                 )
                 events.write(
@@ -94,7 +108,12 @@ class ReportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            usage = dict(input_tokens=10, cache_read_tokens=4, output_tokens=2)
+            usage = dict(
+                input_tokens=10,
+                cache_read_tokens=4,
+                cache_write_tokens=0,
+                output_tokens=2,
+            )
             events = [
                 dict(type="response_start", response_id="r"),
                 dict(type="response_end", response_id="r", usage=usage),

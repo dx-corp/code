@@ -361,6 +361,20 @@ pub enum UnifiedClient {
 }
 
 impl UnifiedClient {
+    /// Count an exact provider request when the routed provider exposes a
+    /// non-generating token-count endpoint. Unsupported transports return
+    /// `None` so runtime callers keep their local estimator.
+    pub async fn count_input_tokens(
+        &self,
+        messages: &[Message],
+        config: &RequestConfig,
+    ) -> Result<Option<u64>> {
+        match self {
+            Self::Anthropic(client) => client.count_input_tokens(messages, config).await.map(Some),
+            _ => Ok(None),
+        }
+    }
+
     /// Bind managed-gateway requests to the authenticated runtime turn.
     /// Direct provider clients ignore this correlation-only context.
     pub fn set_managed_request_lineage(&mut self, lineage_id: Option<String>) {

@@ -100,6 +100,7 @@ struct SseParserState {
 
 const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_MESSAGES_PATH: &str = "messages";
+const ANTHROPIC_COUNT_TOKENS_PATH: &str = "messages/count_tokens";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 fn anthropic_model_accepts_temperature(model: &str) -> bool {
@@ -166,6 +167,47 @@ impl AnthropicClient {
 
     fn messages_endpoint(&self) -> String {
         format!("{}/{ANTHROPIC_MESSAGES_PATH}", self.base_url)
+    }
+
+    fn count_tokens_endpoint(&self) -> String {
+        format!("{}/{ANTHROPIC_COUNT_TOKENS_PATH}", self.base_url)
+    }
+
+    /// Ask Anthropic to count the exact provider input without creating a
+    /// message. Callers use this sparingly near the compaction threshold.
+    pub(crate) async fn count_input_tokens(
+        &self,
+        messages: &[Message],
+        config: &RequestConfig,
+    ) -> Result<u64> {
+        crate::cache_topology::validate_prepared(messages, config)?;
+        let body = self.build_count_tokens_body(messages, config)?;
+        let response = self
+            .client
+            .post(self.count_tokens_endpoint())
+            .headers(self.headers())
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send Anthropic token-count request")?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .context("Failed to read Anthropic token-count response")?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "Anthropic token-count API error {status}: {}",
+                super::summarize_error_body(&String::from_utf8_lossy(&bytes))
+            );
+        }
+        #[derive(Deserialize)]
+        struct CountTokensResponse {
+            input_tokens: u64,
+        }
+        Ok(serde_json::from_slice::<CountTokensResponse>(&bytes)
+            .context("Invalid Anthropic token-count response")?
+            .input_tokens)
     }
 
     /// Build request headers
@@ -431,6 +473,21 @@ impl AnthropicClient {
             }
             prepared.append_volatile_tail(&mut body);
         }
+        Ok(body)
+    }
+
+    fn build_count_tokens_body(
+        &self,
+        messages: &[Message],
+        config: &RequestConfig,
+    ) -> Result<serde_json::Value> {
+        let mut body = self.build_request_body(messages, config)?;
+        let Some(object) = body.as_object_mut() else {
+            anyhow::bail!("Anthropic request body must be an object");
+        };
+        object.remove("stream");
+        object.remove("max_tokens");
+        object.remove("temperature");
         Ok(body)
     }
 }
@@ -807,6 +864,33 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         assert_eq!(body["stream"], true);
         // Without caching, system is a simple string
         assert_eq!(body["system"], "You are a helpful assistant.");
+    }
+
+    #[test]
+    fn count_tokens_body_reuses_the_exact_input_without_generation_fields() {
+        let client = AnthropicClient::new("test-key").unwrap();
+        let config = RequestConfig {
+            model: "anthropic/claude-sonnet-4-5".to_owned(),
+            max_tokens: 8_192,
+            temperature: Some(0.4),
+            system: Some("system contract".to_owned()),
+            tools: std::sync::Arc::new(vec![Tool::new("read", "Read a file")]),
+            ..Default::default()
+        };
+        let messages = vec![Message {
+            role: Role::User,
+            content: MessageContent::text("hello"),
+        }];
+
+        let body = client.build_count_tokens_body(&messages, &config).unwrap();
+
+        assert_eq!(body["model"], "claude-sonnet-4-5");
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["system"], "system contract");
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        assert!(body.get("stream").is_none());
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("temperature").is_none());
     }
 
     #[test]
