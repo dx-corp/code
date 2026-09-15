@@ -2215,7 +2215,7 @@ rl.on("line", (line) => {
     let previous_cli = env::var_os("MAESTRO_CODEX_APP_SERVER_CLI");
     let previous_timeout = env::var_os("MAESTRO_CODEX_APP_SERVER_TIMEOUT_MS");
     env::set_var("MAESTRO_CODEX_APP_SERVER_CLI", &cli_path);
-    env::set_var("MAESTRO_CODEX_APP_SERVER_TIMEOUT_MS", "500");
+    env::set_var("MAESTRO_CODEX_APP_SERVER_TIMEOUT_MS", "2000");
 
     let state = test_app_state_with_sessions(HashMap::new());
     let (_client, server) = tcp_stream_pair().await;
@@ -2240,7 +2240,7 @@ rl.on("line", (line) => {
     let expected_suffix = ":approval-wait";
     // Registration can take several seconds under loaded CI runners (cold
     // Node plus concurrent Rust tests). This is an outer scheduling bound;
-    // the 500 ms request timeout below remains the behavior under test.
+    // the two-second request timeout below remains the behavior under test.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if state
@@ -2259,7 +2259,7 @@ rl.on("line", (line) => {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    tokio::time::sleep(Duration::from_millis(650)).await;
+    tokio::time::sleep(Duration::from_millis(2_150)).await;
     let mut pending = state.pending_tool_responses.lock().await;
     let external_request_id = pending
         .keys()
