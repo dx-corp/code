@@ -36,6 +36,7 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
         "cost" => run_cost(&args[1..]),
         "stats" => run_stats(&args[1..]),
         "models" => run_models(&args[1..]),
+        "diagnostics" => maestro_local_host::diagnostics::run_cli(&args[1..]),
         "doctor" => crate::doctor::run_doctor(&args[1..]).await,
         "setup" => crate::setup_cli::run_setup(&args[1..]).await,
         "status" if args.get(1).is_some_and(|arg| is_help(arg)) => {
