@@ -24,6 +24,7 @@ pub mod codex_identity;
 pub mod color_utils;
 pub mod config;
 pub mod credential_mode;
+pub mod diagnostics;
 pub mod doctor;
 pub mod embedding;
 pub mod evalops_cli;

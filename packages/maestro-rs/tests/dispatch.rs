@@ -154,3 +154,13 @@ fn fork_invalid_flag_reaches_run_fork_with_forwarded_arguments() {
         "unknown fork flag: --definitely-invalid"
     );
 }
+
+#[test]
+fn diagnostics_help_reaches_native_utility_without_starting_agent() {
+    let output = ProcessCommand::new(maestro_binary())
+        .args(["diagnostics", "--help"])
+        .output()
+        .expect("run diagnostics help");
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("--previous-sha256"));
+}
