@@ -150,3 +150,121 @@ ending in rejected `governance_input` or `budget`. Both stages precede provider
 dispatch. Missing, truncated, conflicting, or post-dispatch evidence stays
 unavailable. Report these requests separately; never treat an executed stream
 without usage as zero cost.
+
+## Verification mode
+
+The verification entrypoint adds settled billing reconciliation and separate
+`billing_verified`, `cheaper_verified`, `faster_verified`, and
+`quality_preserved` verdicts. These describe the frozen study only.
+`production_verified` stays false. No experiment or default is auto-enabled.
+
+Provide an independently authored holdout as a JSON array of cases with `id`,
+`family: investigation`, `prompt`, `files` (relative paths to string contents),
+and `expected` (the exact JSON answer object). The current external adapter
+supports investigation cases; executable repairs remain in the built-in screen.
+Use independent tasks, not renamed copies or repeated measurements treated as
+independent samples. Independence and realistic workload coverage need review;
+the harness records the supplied provenance but cannot authenticate them.
+
+Before inference, create a plan:
+
+```json
+{
+  "schema": "maestro.verification-plan.v1",
+  "pairs": 100,
+  "minimum_cost_reduction": 0.05,
+  "minimum_speed_reduction": 0.05,
+  "maximum_quality_loss": 0.02,
+  "sample_size_rationale": "Replace with a prospective power analysis for the chosen margins and task mix.",
+  "holdout_provenance": "Identify the independent task author and frozen dataset revision.",
+  "cache_policy": "Qualification warms caches; use the same policy in both arms.",
+  "time_window": "Record the scheduled measurement window and host conditions.",
+  "stopping_rule": "fixed_sample_no_optional_stopping"
+}
+```
+
+The sample count is illustrative, not a claim that 100 pairs can establish a
+2% quality margin. Choose it prospectively using pilot variance and the quality
+margin; tight margins can require many more tasks. Do not keep adding tasks
+until the report passes. A stopped or subsequently amended cohort cannot pass
+verification. Each task still gets one answer attempt; all failures remain in
+the denominator. A separate study is required after changing the plan.
+
+```sh
+python3 products/maestro/scripts/experiments/minimal_tools/trial.py \
+  --holdout holdout.json --verification-plan plan.json \
+  --binary /absolute/path/to/maestro --output /absolute/path/to/new-study \
+  --model MODEL --live
+python3 products/maestro/scripts/experiments/minimal_tools/verification.py RUN_DIR \
+  --organization ORG --workspace WORKSPACE --output verification.json
+```
+
+The manifest freezes the plan, dataset, execution order, model, binary, and
+analysis sources before inference. Controller-owned `timing.json` records
+monotonic event arrivals, prompt submission and total elapsed time, bound to the
+raw event hash. Total time includes initialization and shutdown, excluding
+fixture creation and grading. It retains failed-attempt latency. Arrival times
+support diagnosis of provider versus tool delays; they are not server-side
+compute durations. Reanalysis regrades answers and validates timing evidence.
+
+### Settled billing input
+
+The authorized billing owner supplies a **trusted normalized export**, retaining
+its original provider export privately. This importer validates consistency; it
+does not contact the provider, authenticate a file, or prove that a manually
+written mapping matches an invoice. Never feed model-authored billing evidence
+into this boundary. `billing_verified` means reconciled against that supplied
+settled export, not independently authenticated provider billing.
+
+The normalized JSON has:
+
+- `schema: maestro.settled-billing.v1`, `basis: settled_provider_charges`,
+  `currency: USD`, `settled: true`, and `complete_scope: true`.
+- Exact `organization_id`, `workspace_id`, `provider_account`,
+  `source_reference`, timezone-qualified `period_start` and `period_end`, and
+  `export_sha256` for the original provider export.
+- `scoped_total_usd` as a nonnegative decimal string and `lines` containing one
+  settled net charge per attempt, including retries, failures and qualification.
+- Each line has `line_id`, `request_id`, `record_id`, `attempt_ordinal`,
+  `provider`, `provider_request_id`, and decimal-string `net_charge_usd`.
+  The owner must reconcile discounts, credits and rounding into each net charge;
+  negative adjustments or unattributable account fees are not supported.
+- Requests with no provider attempt require one line with
+  `attempt_ordinal: null`, `net_charge_usd: "0"`, and
+  `non_execution_confirmed: true`. An absent charge is never assumed free.
+
+Use `billing.py --write-query` above to export the gateway lineage records.
+The importer checks all native receipt identities and all gateway attempts,
+including extra calls absent from the final response. Duplicate, missing,
+unattributed, mismatched or nonsettled charges fail without leaving an old
+verification report. Qualification spend is reported separately.
+
+```sh
+python3 products/maestro/scripts/experiments/minimal_tools/verification.py RUN_DIR \
+  --organization ORG --workspace WORKSPACE --records gateway-records.json \
+  --billing settled-billing.json --provider-export original-provider-export.csv \
+  --output verification.json
+```
+
+Aggregate invoices without reliable per-attempt attribution cannot pass this
+adapter. Isolated account/window billing needs a separately reviewed adapter;
+do not spread an aggregate amount across requests. Current gateway exports do
+not supply provider request IDs, so the billing owner must supply and audit that
+mapping. This is an external evidence dependency, not a zero-cost fallback.
+
+### Interpretation
+
+The fixed analysis uses paired percentile bootstrap intervals for billed cost
+per successful task and median end-to-end latency. Each endpoint uses
+alpha=0.05/3; quality uses conservative Wilson bounds at the same error budget.
+This adjusts for the three reported endpoints, but bootstrap coverage remains
+approximate. It does not correct repeated peeking, dependent tasks or an
+unrepresentative holdout. A sample with zero successes or zero baseline spend
+makes the cost interval unavailable rather than discarding that resample.
+
+Both efficiency claims require the declared quality-loss bound to pass. Speed
+can pass without billing; billed savings cannot. False verdicts mean not
+established and do not necessarily mean regression. Source changes, protocol
+amendments, incomplete cohorts, missing timing or missing billing evidence are
+reported or rejected explicitly. Old development studies are not retroactively
+promoted by attaching a plan after execution.

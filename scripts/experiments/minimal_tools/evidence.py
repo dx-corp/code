@@ -32,6 +32,8 @@ def source_hashes():
             "adversarial.py",
             "followup.py",
             "statistics_report.py",
+            "verification.py",
+            "billing.py",
         )
     ]
     paths.append(here.parent / "tool_compression/repair.py")

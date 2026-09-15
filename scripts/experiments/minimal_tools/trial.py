@@ -226,7 +226,7 @@ def required_tool_succeeded(case, calls, ends, outputs):
     )
 
 
-def run_attempt(case, arm, root, binary, timeout):
+def run_attempt(case, arm, root, binary, timeout, manifest_sha256=None):
     root.mkdir(parents=True)
     cwd = root / "workspace"
     cwd.mkdir()
@@ -244,6 +244,7 @@ def run_attempt(case, arm, root, binary, timeout):
     terminal = False
     failure = None
     calls = []
+    timing_events = []
     ends, outputs = {}, {}
     usage = []
     initialized = False
@@ -290,6 +291,8 @@ def run_attempt(case, arm, root, binary, timeout):
                     log.write(json.dumps(e) + "\n")
                     log.flush()
                     kind = e.get("type")
+                    timing_events.append({"type": kind, "seconds": time.monotonic()-start,
+                                          "call_id": e.get("call_id"), "response_id": e.get("response_id")})
                     if kind == "ready":
                         if e.get("model") != MODEL:
                             failure = "model_mismatch"
@@ -346,6 +349,12 @@ def run_attempt(case, arm, root, binary, timeout):
                 pass
             p.stdout.close()
     elapsed = time.monotonic() - start
+    (root / "timing.json").write_text(json.dumps({
+        "manifest_sha256": manifest_sha256,
+        "elapsed_seconds": elapsed, "prompt_seconds": prompt_at-start if prompt_at else None,
+        "events_sha256": digest((root / "events.jsonl").read_bytes()),
+        "events": timing_events,
+    }, indent=2)+"\n")
     intact = all(
         (cwd / name).exists() and (cwd / name).read_text() == content
         for name, content in originals.items()
@@ -412,7 +421,11 @@ def run_attempt(case, arm, root, binary, timeout):
 def run(case, arm, root, binary, timeout):
     started = time.monotonic()
     path = root / case["id"] / arm / "0"
-    row = run_attempt(case, arm, path, binary, timeout)
+    manifest = root / "manifest.json"
+    if not manifest.exists():
+        manifest = root.parent / "manifest.json"
+    manifest_sha256 = digest(manifest.read_bytes()) if manifest.exists() else None
+    row = run_attempt(case, arm, path, binary, timeout, manifest_sha256=manifest_sha256)
     row.update(
         attempts=1,
         wall_seconds_including_retries=time.monotonic() - started,
@@ -471,6 +484,8 @@ def main():
     global MODEL
     ap = argparse.ArgumentParser()
     ap.add_argument("--binary", type=Path)
+    ap.add_argument("--holdout", type=Path, help="external exact-JSON investigation cases")
+    ap.add_argument("--verification-plan", type=Path)
     ap.add_argument("--suite", choices=("screen", "adversarial", "followup"), default="screen")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--order-seed", type=int, default=891)
@@ -486,7 +501,11 @@ def main():
     binary = args.binary.resolve() if args.binary else None
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    if args.suite == "followup":
+    if args.holdout:
+        from verification import holdout
+        from evidence import load_json
+        cs = holdout(load_json(args.holdout.read_text()))
+    elif args.suite == "followup":
         from followup import cases as followup_cases
 
         cs = followup_cases()
@@ -496,6 +515,13 @@ def main():
         cs = cases()[:4] + adversarial_cases()
     else:
         cs = cases()
+    verification_plan = None
+    if args.verification_plan:
+        from verification import protocol
+        from evidence import load_json
+        if not args.holdout:
+            ap.error("verification requires an external holdout")
+        verification_plan = protocol(load_json(args.verification_plan.read_text()), cs)
     rng = random.Random(args.order_seed)
     rng.shuffle(cs)
     order = []
@@ -507,7 +533,9 @@ def main():
         "schema": "maestro.minimal-tools-screen.v3",
         "model": MODEL,
         "binary_sha256": digest(binary.read_bytes()) if binary else None,
-        "suite": args.suite,
+        "suite": "external-holdout" if args.holdout else args.suite,
+        "verification_plan": verification_plan,
+        "holdout_sha256": digest(args.holdout.read_bytes()) if args.holdout else None,
         "source_hashes": source_hashes(),
         "rustc_version": subprocess.check_output(
             ["rustc", "--version"], text=True
@@ -531,7 +559,7 @@ def main():
             "decision": "development screen only; independent holdout and power analysis required",
             "missingness": "retain attempted failures; suppress incomplete usage metrics and interrupted-cohort intervals",
         },
-        "sample_kind": "author-visible development cases; exploratory, not held-out or powered noninferiority",
+        "sample_kind": "externally supplied holdout; independence requires provenance review" if args.holdout else "author-visible development cases; exploratory, not held-out or powered noninferiority",
         "qualification": "repair and native-search pair; success and complete tokens required; priced cost optional",
         "candidate_tools": [
             "read",
