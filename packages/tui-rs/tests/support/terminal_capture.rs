@@ -30,6 +30,11 @@ impl TerminalCapture {
         self.parser.callbacks_mut().record(snapshot);
     }
 
+    /// Current visible screen only, for controls that revisit an earlier value.
+    pub(super) fn current_text(&self) -> String {
+        screen_rows(self.parser.screen()).join("\n")
+    }
+
     pub(super) fn text(&self) -> String {
         let mut text = self
             .parser

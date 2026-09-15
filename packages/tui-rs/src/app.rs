@@ -67,11 +67,11 @@ use tokio::sync::mpsc;
 // - Sender can be cloned (multiple producers)
 // - Receiver cannot be cloned (single consumer)
 
-use crate::agent::MAX_PENDING_MESSAGES;
 use crate::agent::{
     CredentialVault, ExecutionSource, FromAgent, MaxTokensSource, NativeAgent, NativeAgentConfig,
     PromptKind, QueuePlacement, ToolExecution, ToolResponseMessage, ToolResult,
 };
+use crate::agent::{ExternalToolSchemaPolicy, MAX_PENDING_MESSAGES};
 use crate::ai::AiProvider;
 use crate::clipboard::ClipboardManager;
 use crate::commands::{
@@ -152,6 +152,8 @@ pub enum ActiveModal {
     ModelSelector,
     /// Color theme selector
     ThemeSelector,
+    /// Durable experiment preferences.
+    Preferences,
     /// Persistent Dex cosmetics.
     DexAppearance,
     /// First-run EvalOps Identity and optional local API key setup
@@ -752,6 +754,7 @@ pub struct App {
 
     /// Color theme selection modal.
     theme_selector: ThemeSelector,
+    config_selector: crate::components::ConfigSelector,
 
     /// `/setup` modal for mandatory EvalOps Identity and optional local API keys.
     setup_modal: SetupModal,
@@ -1682,6 +1685,7 @@ impl App {
             clipboard: ClipboardManager::new(),
             model_selector: ModelSelector::new(),
             theme_selector: ThemeSelector::new(),
+            config_selector: crate::components::ConfigSelector::experiments(),
             setup_modal: SetupModal::new(),
             setup_login_rx: None,
             onboarding: onboarding::OnboardingSession::default(),
@@ -2676,8 +2680,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             approval_mode: self.state.approval_mode,
             context_window: self.state.context_window,
             // See the `sandbox_policy` field doc on `App`: without this,
-            // only calls that reach the human approval modal (via
-            // `self.tool_executor`, a separate executor) were ever
+            // only calls reaching the human approval modal via `self.tool_executor` were ever
             // sandboxed. Yolo mode and Selective mode's allowlisted calls
             // run through the native agent runner's own executor instead.
             sandbox_policy: self.sandbox_policy.clone(),
@@ -2687,6 +2690,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                     policy: self.managed_setup.mcp_policy().clone(),
                 }
             }),
+            external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
             max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
             allow_unbounded_turn: false,
             retry_config: crate::agent::retry::RetryConfig::default(),
@@ -4855,6 +4859,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             .map(crate::sandbox::SandboxPolicy::mode_label);
         let model_selector = &mut self.model_selector;
         let theme_selector = &mut self.theme_selector;
+        let config_selector = &mut self.config_selector;
         let setup_modal = &mut self.setup_modal;
         let shortcuts_help = &self.shortcuts_help;
         let rewind_picker = &mut self.rewind_picker;
@@ -5002,6 +5007,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                         ActiveModal::DexAppearance => {
                             dex_presentation::render_appearance(frame, area, dex_picker, dex_look);
                         }
+                        ActiveModal::Preferences => config_selector.render(frame, area),
                         ActiveModal::ThemeSelector => {
                             theme_selector.render(frame, area);
                         }

@@ -157,14 +157,24 @@ impl TurnJournal {
         if bytes.len() > OUTBOX_MAX_EVENT_BYTES {
             return None;
         }
-        if crate::path_utils::atomic_private_write(path, &bytes).is_err() {
-            let _ = with_outbox_lock(&self.outbox, || {
-                delivery_accounting::update(&self.outbox, scope, |a| {
+        let written = with_outbox_lock(&self.outbox, || {
+            if record
+                .event
+                .experiment_assignment()
+                .is_some_and(|a| !crate::experiments::permits(scope, a))
+            {
+                let _ = fs::remove_file(&*path);
+                return None;
+            }
+            if crate::path_utils::atomic_private_write(path, &bytes).is_err() {
+                let _ = delivery_accounting::update(&self.outbox, scope, |a| {
                     a.write_failures = a.write_failures.saturating_add(1);
-                })
-            });
-            return None;
-        }
+                });
+                return None;
+            }
+            Some(())
+        });
+        written?;
         Some(path.clone())
     }
 
@@ -192,7 +202,16 @@ impl TurnJournal {
 fn promote(outbox: &Path, path: &Path) -> Option<()> {
     with_outbox_lock(outbox, || {
         let destination = outbox.join(path.file_name()?);
-        let scope = read_bounded_outbox_record(path)?.identity_scope;
+        let record = read_bounded_outbox_record(path)?;
+        if record
+            .event
+            .experiment_assignment()
+            .is_some_and(|a| !crate::experiments::permits(&record.identity_scope, a))
+        {
+            let _ = fs::remove_file(path);
+            return None;
+        }
+        let scope = record.identity_scope;
         fs::rename(path, &destination).ok()?;
         let _ =
             delivery_accounting::update(outbox, &scope, |a| a.queued = a.queued.saturating_add(1));
@@ -203,6 +222,71 @@ fn promote(outbox: &Path, path: &Path) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experiments_withdrawal_prevents_pending_turn_records_from_reappearing() {
+        let _guard = crate::config::test_process_env_lock();
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in self.0.drain(..) {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let keys = [
+            "MAESTRO_HOME",
+            "MAESTRO_TELEMETRY",
+            "PLAYWRIGHT_TELEMETRY",
+            "MAESTRO_INTERNAL_TELEMETRY_DISABLED",
+            "EVALOPS_INTERNAL_TELEMETRY_DISABLED",
+        ];
+        let _restore = Restore(
+            keys.iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect(),
+        );
+        let temp = tempfile::tempdir().unwrap();
+        for key in keys {
+            std::env::remove_var(key);
+        }
+        std::env::set_var("MAESTRO_HOME", temp.path());
+        let consent = crate::experiments::set_enabled(true).unwrap();
+        let mut event = super::super::tests::canonical_event(TurnStatus::Success);
+        let scope = event.identity_scope.as_ref().unwrap().clone();
+        let assignment = scope.experiment_assignment(&consent.installation_seed, consent.revision);
+        event.diagnostics = Some(super::super::super::operation::OperationDiagnostics {
+            completion_observed: true,
+            experiment: Some(
+                maestro_runtime_contracts::experiments::ExperimentObservation {
+                    assignment: assignment.clone(),
+                    locally_applied: true,
+                    runtime_version: "test-1".into(),
+                },
+            ),
+            ..Default::default()
+        });
+        let outbox = first_party_outbox_dir();
+        let mut producer = TurnJournal::open_at(outbox.clone()).unwrap();
+        let pending = producer.write(&event).expect("enrolled pending record");
+        assert!(pending.exists());
+        crate::experiments::set_enabled(false).unwrap();
+        assert!(!pending.exists());
+        assert!(producer.write(&event).is_none());
+        producer.observe(&[event.clone()]);
+        producer.finish(&event);
+        assert!(!pending.exists());
+        assert!(outbox_paths(&outbox).is_empty());
+        crate::experiments::set_enabled(true).unwrap();
+        assert!(
+            !crate::experiments::permits(&scope, &assignment),
+            "re-opt-in must not revive revoked records"
+        );
+        assert!(producer.write(&event).is_none());
+    }
 
     #[test]
     fn recovery_reclaims_a_lease_a_forked_child_transiently_inherited() {

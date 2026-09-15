@@ -2146,6 +2146,30 @@ fn build_builtin_registry() -> CommandRegistry {
         ]),
     );
 
+    registry.register(
+        Command::new(
+            "experiments",
+            "Show or change participation in tool experiments",
+            CommandCategory::Config,
+            Box::new(|ctx| {
+                maestro_local_host::experiments::command(ctx.raw_args.trim())
+                    .map(CommandOutput::Message)
+                    .map_err(|error| CommandError::new(error.to_string()))
+            }),
+        )
+        .usage("/experiments [status|on|off]")
+        .group(vec!["status", "on", "off"]),
+    );
+    registry.register(
+        Command::new(
+            "preferences",
+            "Open Experiments preferences",
+            CommandCategory::Config,
+            Box::new(|_| Ok(CommandOutput::Action(CommandAction::ShowPreferences))),
+        )
+        .usage("/preferences"),
+    );
+
     // Workspace trust (global config only)
     registry.register(
         Command::new(

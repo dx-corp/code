@@ -314,6 +314,8 @@ pub enum CommandAction {
     Trust(TrustAction),
     /// Show the active interactive sandbox policy
     ShowSandbox,
+    /// Open durable experiment preferences.
+    ShowPreferences,
     /// Invoke a skill as a slash command (Grok-style `/skillname args`)
     InvokeSkill {
         name: String,

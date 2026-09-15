@@ -134,6 +134,15 @@ impl TurnTracker {
                     .as_ref()
                     .filter(|_| self.current_identity_scope == side.current_identity_scope)
                     .map(|t| t.turn_id().to_owned());
+                // Attribute auxiliary usage to the same enrolled parent without
+                // claiming that the experimental tool profile ran on this request.
+                if side.diagnostics.parent_turn_id.is_some() {
+                    side.diagnostics.experiment =
+                        self.diagnostics.experiment.clone().map(|mut e| {
+                            e.locally_applied = false;
+                            e
+                        });
+                }
                 side.handle_event(&FromAgent::ResponseStart {
                     response_id: side_id.clone(),
                 });
@@ -188,6 +197,7 @@ impl TurnTracker {
                     O::Admitted {
                         turn_id,
                         thinking_level,
+                        experiment,
                     } => {
                         if self.current_turn.is_none() {
                             self.start_turn();
@@ -196,6 +206,7 @@ impl TurnTracker {
                             turn.set_turn_id(turn_id.clone());
                         }
                         self.diagnostics.thinking_level = Some(thinking_level.clone());
+                        self.diagnostics.experiment = experiment.clone().filter(|e| e.is_valid());
                     }
                     O::Prepared {
                         response_id,
@@ -228,11 +239,15 @@ impl TurnTracker {
                         request_id,
                         record_id,
                         lineage_id,
+                        provider_tools_sha256,
+                        provider_tool_count,
                     } if self.current_response_id.as_ref() == Some(response_id) => {
                         if let Some(attempt) = &mut self.current_attempt {
                             attempt.gateway_request_id = Some(request_id.clone());
                             attempt.gateway_record_id = Some(record_id.clone());
                             attempt.gateway_lineage_id = Some(lineage_id.clone());
+                            attempt.provider_tools_sha256 = provider_tools_sha256.clone();
+                            attempt.provider_tool_count = *provider_tool_count;
                         }
                     }
                     _ => {}
@@ -284,6 +299,8 @@ impl TurnTracker {
                     gateway_request_id: None,
                     gateway_record_id: None,
                     gateway_lineage_id: None,
+                    provider_tools_sha256: None,
+                    provider_tool_count: None,
                 });
                 // Record LLM start time
                 if let Some(ref mut turn) = self.current_turn {
@@ -657,6 +674,10 @@ impl TurnTracker {
         self.diagnostics.boost_suggested = event.features.boost_suggested;
         self.diagnostics.boost_requested = event.features.boost_requested;
         self.diagnostics.boost_applied = event.features.boost_applied;
+        if self.diagnostics.experiment.is_some() {
+            event.sampled = true;
+            event.sample_reason = crate::telemetry::SampleReason::Always;
+        }
         event.diagnostics = Some(std::mem::take(&mut self.diagnostics));
         Some(event)
     }
@@ -675,6 +696,18 @@ mod tests {
         let scope = TelemetryIdentityScope::new("org-a", Some("workspace-a"));
         tracker.set_identity_scope(scope.clone());
         tracker.handle_event(&FromAgent::TurnStarted);
+        tracker.diagnostics.experiment = Some(
+            maestro_runtime_contracts::experiments::ExperimentObservation {
+                assignment: maestro_runtime_contracts::experiments::ExperimentAssignment::derive(
+                    "seed",
+                    "org-a",
+                    "workspace-a",
+                    1,
+                ),
+                locally_applied: true,
+                runtime_version: "0.1.0".into(),
+            },
+        );
         let parent = tracker.current_turn.as_ref().unwrap().turn_id().to_owned();
         tracker.handle_event(&FromAgent::SideQuestionStart {
             side_id: "side-a".into(),
@@ -709,6 +742,11 @@ mod tests {
             super::super::operation::OperationKind::SideQuestion
         );
         assert_eq!(diagnostics.parent_turn_id.as_deref(), Some(parent.as_str()));
+        assert!(!diagnostics.experiment.as_ref().unwrap().locally_applied);
+        assert_eq!(
+            diagnostics.experiment.as_ref().unwrap().assignment,
+            tracker.diagnostics.experiment.as_ref().unwrap().assignment
+        );
         let json = serde_json::to_string(&diagnostics).unwrap();
         assert!(!json.contains("private"));
         assert!(tracker.handle_event(&end).is_none());
@@ -740,6 +778,7 @@ mod tests {
         assert_eq!(side.current_identity_scope, next_scope);
         assert_eq!(side.config.session_id, "session-b");
         assert!(side.diagnostics.parent_turn_id.is_none());
+        assert!(side.diagnostics.experiment.is_none());
     }
 
     #[test]
@@ -753,6 +792,7 @@ mod tests {
             observation: O::Admitted {
                 turn_id: "native-turn".into(),
                 thinking_level: "high".into(),
+                experiment: None,
             },
         });
         tracker.set_session_id("next-session".into());
@@ -781,6 +821,8 @@ mod tests {
                 request_id: "request-a".into(),
                 record_id: "record-a".into(),
                 lineage_id: "lineage-a".into(),
+                provider_tools_sha256: None,
+                provider_tool_count: None,
             },
         });
         tracker.handle_event(&FromAgent::RequestRetryScheduled {

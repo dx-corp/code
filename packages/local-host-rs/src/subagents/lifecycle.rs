@@ -172,6 +172,7 @@ impl SubagentManager {
             max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
             allow_unbounded_turn: false,
             retry_config: crate::agent::retry::RetryConfig::default(),
+            external_tool_schema_policy: crate::agent::ExternalToolSchemaPolicy::Eager,
         };
         let allowed_tools =
             child_allowed_tools_for_role(record.role, record.profile_tools.as_deref());

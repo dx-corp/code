@@ -59,6 +59,7 @@ impl NativeAgentRunner {
                             observation: maestro_runtime_contracts::operation_observation::OperationObservation::GatewayReceipt {
                                 response_id: side_id.clone(), request_id: receipt.request_id.clone(),
                                 record_id: receipt.record_id.clone(), lineage_id: receipt.lineage_id.clone(),
+                                provider_tools_sha256: None, provider_tool_count: None,
                             },
                         });
                         let _ = self

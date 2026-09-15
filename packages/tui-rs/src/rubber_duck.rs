@@ -19,7 +19,10 @@ use std::os::unix::process::CommandExt;
 
 use anyhow::{Context, Result};
 
-use crate::agent::{CredentialVault, ExecutionSource, FromAgent, NativeAgent, NativeAgentConfig};
+use crate::agent::{
+    CredentialVault, ExecutionSource, ExternalToolSchemaPolicy, FromAgent, NativeAgent,
+    NativeAgentConfig,
+};
 use crate::ai::{AiProvider, provider_model_name};
 use crate::model_catalog::{
     VerificationState, available_models, model_route, verify_model_offline,
@@ -411,6 +414,7 @@ async fn drive_review(model: &str, cwd: &str, prompt: &str) -> Result<String> {
         // a caller chooses an explicit policy.
         sandbox_policy: None,
         managed_mcp_policy: None,
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
         allow_unbounded_turn: false,
         retry_config: crate::agent::retry::RetryConfig::default(),

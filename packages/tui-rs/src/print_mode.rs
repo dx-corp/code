@@ -11,7 +11,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::agent::{
-    CredentialVault, ExecutionSource, FromAgent, MaxTokensSource, NativeAgent, NativeAgentConfig,
+    CredentialVault, ExecutionSource, ExternalToolSchemaPolicy, FromAgent, MaxTokensSource,
+    NativeAgent, NativeAgentConfig,
 };
 use crate::safety::FirewallVerdict;
 use crate::sandbox::SandboxPolicy;
@@ -419,6 +420,7 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         // (review finding on #3144).
         sandbox_policy: options.sandbox_policy.clone(),
         managed_mcp_policy: None,
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
         // The print run's own `MAESTRO_PRINT_MAX_TURNS` bound is the same
         // bound the turn loop enforces; feeding it here makes the loop stop
         // and report at the budget instead of running past it until this

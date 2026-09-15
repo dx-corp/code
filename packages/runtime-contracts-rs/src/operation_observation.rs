@@ -7,6 +7,8 @@ pub enum OperationObservation {
     Admitted {
         turn_id: String,
         thinking_level: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        experiment: Option<crate::experiments::ExperimentObservation>,
     },
     Prepared {
         response_id: String,
@@ -24,5 +26,9 @@ pub enum OperationObservation {
         request_id: String,
         record_id: String,
         lineage_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_tools_sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_tool_count: Option<u32>,
     },
 }

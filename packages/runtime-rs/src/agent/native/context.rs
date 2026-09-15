@@ -178,6 +178,7 @@ impl NativeAgentRunner {
             let definitions = effective_tool_definitions(
                 &self.tools,
                 &self.active_tool_names,
+                &self.external_tools,
                 goal_tools_visible,
                 include_ide_tools,
             );

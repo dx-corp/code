@@ -733,6 +733,10 @@ pub enum FromAgent {
         record_status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_prompt_sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_tools_sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_tool_count: Option<u32>,
     },
     /// Agent is ready to receive prompts
     ///

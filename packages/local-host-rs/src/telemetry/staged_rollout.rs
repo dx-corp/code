@@ -1,3 +1,4 @@
+use maestro_runtime_contracts::experiments::{ExperimentAssignment, ExperimentEnrollment};
 #[path = "delivery_accounting.rs"]
 mod delivery_accounting;
 #[path = "journal.rs"]
@@ -440,6 +441,7 @@ enum FirstPartyTelemetryEvent {
     Turn(Box<FirstPartyTurnTelemetryEvent>),
     Onboarding(OnboardingEvent),
     Visibility(VisibilityEvent),
+    ExperimentEnrollment(ExperimentEnrollment),
 }
 impl FirstPartyTelemetryEvent {
     fn is_server_valid(&self) -> bool {
@@ -447,6 +449,9 @@ impl FirstPartyTelemetryEvent {
             Self::Turn(event) => event.is_server_valid(),
             Self::Onboarding(event) => event.is_server_valid(),
             Self::Visibility(event) => event.is_server_valid(),
+            Self::ExperimentEnrollment(event) => {
+                event.is_valid() && chrono::DateTime::parse_from_rfc3339(&event.timestamp).is_ok()
+            }
         }
     }
     fn event_id(&self) -> Uuid {
@@ -454,9 +459,80 @@ impl FirstPartyTelemetryEvent {
             Self::Turn(event) => event.event_id,
             Self::Onboarding(event) => event.event_id,
             Self::Visibility(event) => event.event_id,
+            Self::ExperimentEnrollment(event) => event.event_id,
         }
     }
 }
+impl FirstPartyTelemetryEvent {
+    fn experiment_assignment(&self) -> Option<&ExperimentAssignment> {
+        match self {
+            Self::ExperimentEnrollment(event) => Some(&event.assignment),
+            Self::Turn(event) => event
+                .diagnostics
+                .as_ref()?
+                .experiment
+                .as_ref()
+                .map(|e| &e.assignment),
+            _ => None,
+        }
+    }
+}
+impl From<ExperimentEnrollment> for FirstPartyTelemetryEvent {
+    fn from(event: ExperimentEnrollment) -> Self {
+        Self::ExperimentEnrollment(event)
+    }
+}
+
+pub fn queue_experiment_enrollment(
+    scope: &TelemetryIdentityScope,
+    event: &ExperimentEnrollment,
+) -> bool {
+    if !crate::experiments::permits(scope, &event.assignment) {
+        return false;
+    }
+    let queued = persist_first_party_event(&first_party_outbox_dir(), scope, event).is_some();
+    if queued {
+        schedule_first_party_outbox_drain();
+    }
+    queued
+}
+
+pub fn experiments_telemetry_disabled() -> bool {
+    first_party_telemetry_disabled()
+}
+
+/// Revoked observations are deleted locally, including unfinished journal records.
+/// The sender rechecks consent immediately before each HTTP request as well.
+pub fn purge_revoked_experiment_events() {
+    fn purge(directory: &Path) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                purge(&path);
+                continue;
+            }
+            let Some(record) = read_bounded_outbox_record(&path) else {
+                continue;
+            };
+            if record
+                .event
+                .experiment_assignment()
+                .is_some_and(|a| !crate::experiments::permits(&record.identity_scope, a))
+            {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+    let outbox = first_party_outbox_dir();
+    let _ = with_outbox_lock(&outbox, || {
+        purge(&outbox);
+        Some(())
+    });
+}
+
 impl From<FirstPartyTurnTelemetryEvent> for FirstPartyTelemetryEvent {
     fn from(event: FirstPartyTurnTelemetryEvent) -> Self {
         Self::Turn(Box::new(event))
@@ -802,7 +878,8 @@ fn ensure_private_directory(path: &Path) -> Option<()> {
 }
 
 /// Serialize the short list/write/trim transaction across Maestro processes.
-/// The network drain intentionally happens outside this lease.
+/// Ordinary network sends happen outside this lock. Experiment sends hold it
+/// for their bounded request so withdrawal can finish after any in-flight send.
 fn with_outbox_lock<T>(outbox_dir: &Path, operation: impl FnOnce() -> Option<T>) -> Option<T> {
     ensure_private_directory(outbox_dir)?;
     let lock_path = outbox_dir.join(".lock");
@@ -902,6 +979,12 @@ where
     }
 
     with_outbox_lock(outbox_dir, || {
+        if event
+            .experiment_assignment()
+            .is_some_and(|a| !crate::experiments::permits(identity_scope, a))
+        {
+            return None;
+        }
         let path = outbox_dir.join(format!(
             "{:020}_{}.json",
             chrono::Utc::now().timestamp_micros(),
@@ -998,16 +1081,39 @@ fn drain_first_party_outbox_to_endpoint(
         if record.identity_scope != identity.identity_scope {
             continue;
         }
+        if record
+            .event
+            .experiment_assignment()
+            .is_some_and(|a| !crate::experiments::permits(&record.identity_scope, a))
+        {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
         attempted += 1;
         let Ok(encoded) = serde_json::to_vec(&record.event) else {
             continue;
         };
-        let response = client
+        let request = client
             .post(endpoint)
             .bearer_auth(&identity.access_token)
             .header("content-type", "application/json")
-            .body(encoded)
-            .send();
+            .body(encoded);
+        let response = if let Some(assignment) = record.event.experiment_assignment() {
+            // Withdrawal waits for at most the bounded in-flight send, then
+            // purges. No prechecked experiment request can start after it returns.
+            let Some(response) = with_outbox_lock(outbox_dir, || {
+                if !crate::experiments::permits(&record.identity_scope, assignment) {
+                    let _ = fs::remove_file(&path);
+                    return None;
+                }
+                Some(request.send())
+            }) else {
+                continue;
+            };
+            response
+        } else {
+            request.send()
+        };
         match response {
             Ok(response) if response.status().is_success() => {
                 // A failed delete is harmless: the server idempotency key is
