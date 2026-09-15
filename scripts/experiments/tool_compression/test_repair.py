@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repair import fixture, grade
+from repair import fixture, grade, shutdown
+from unittest.mock import Mock
 
 
 class RepairGradeTests(unittest.TestCase):
@@ -23,3 +24,23 @@ class RepairGradeTests(unittest.TestCase):
                 "n / d + u64::from(n % d != 0)", "std::process::exit(0)"
             )
             self.assertFalse(grade(early_exit, case["tests"], root / "early-exit"))
+
+
+class ShutdownTests(unittest.TestCase):
+    def test_closed_stdin_is_reaped_before_signaling(self):
+        child = Mock()
+        child.poll.return_value = None
+        child.wait.return_value = 1
+        send = Mock(side_effect=BrokenPipeError())
+        self.assertIsNone(shutdown(child, send))
+        child.wait.assert_called_once_with(timeout=3)
+        child.kill.assert_not_called()
+
+    def test_cleanup_failure_is_not_a_success(self):
+        child = Mock()
+        child.poll.return_value = None
+        child.pid = 123
+        child.wait.side_effect = PermissionError()
+        self.assertEqual(
+            shutdown(child, Mock()), "cleanup_failed:PermissionError:pid=123"
+        )

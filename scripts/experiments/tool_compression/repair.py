@@ -183,6 +183,31 @@ def grade(source, tests, directory):
     )
 
 
+def shutdown(p, send):
+    """Reap the child even when it closes stdin before shutdown is sent."""
+    try:
+        if p.poll() is None:
+            try:
+                send({"type": "shutdown"})
+            except BrokenPipeError:
+                # A closed input pipe is normal while a failed startup exits.
+                # Wait for that exit before attempting any signal.
+                pass
+            try:
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # The process group exited between wait and signal.
+                except PermissionError:
+                    p.kill()  # Signal only our direct child if group signaling is denied.
+                p.wait(timeout=3)
+        return None
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"cleanup_failed:{type(error).__name__}:pid={p.pid}"
+
+
 def run_attempt(case, arm, root, binary, model, timeout):
     out = root / f"{case['id']}-{arm}"
     cwd = out / "workspace"
@@ -295,16 +320,18 @@ def run_attempt(case, arm, root, binary, model, timeout):
                         terminal = True
             if not terminal and failure is None:
                 failure = "timeout"
+        except (OSError, ValueError) as error:
+            failure = f"transport_error:{type(error).__name__}"
         finally:
-            if p.poll() is None:
-                try:
-                    send({"type": "shutdown"})
-                    p.wait(timeout=3)
-                except (BrokenPipeError, subprocess.TimeoutExpired):
-                    os.killpg(p.pid, signal.SIGKILL)
-                    p.wait(timeout=3)
+            cleanup_failure = shutdown(p, send)
+            if cleanup_failure:
+                failure = cleanup_failure
             selector.close()
-            p.stdin.close()
+            try:
+                p.stdin.close()
+            except BrokenPipeError:
+                if p.poll() is None:
+                    failure = "cleanup_failed:stdin_close"
             p.stdout.close()
     elapsed = time.monotonic() - start
     active_seconds = time.monotonic() - prompt_started if prompt_started else None

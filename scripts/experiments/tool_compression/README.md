@@ -132,5 +132,7 @@ before any model usage or tool call, up to three startup attempts. Every attempt
 is retained; inference failures and failed repairs are never retried. Reports
 include startup attempts and wall time including retries. The prompt spells out
 the exact allowed check command to avoid treating denied shell pipelines as a
-compression effect. Successful view delivery and initial-before-edit source
-hashes are checked automatically.
+compression effect. Streamed output bytes and initial-before-edit source hashes are checked
+automatically. Streaming events alone do not prove that the full result remained
+in model context: inspect native tool-end truncation receipts and any original
+output retrievals. Truncation is a treatment outcome and must not be discarded.
