@@ -424,7 +424,7 @@ def run(case, arm, root, binary, timeout):
     return row
 
 
-def execute(cs, root, binary, timeout, runner=run):
+def execute(cs, root, binary, timeout, runner=run, order=None):
     # Qualify repair and native-search tool history before spending on a cohort.
     qualification = []
     for family in ("repair", "native-search"):
@@ -442,7 +442,7 @@ def execute(cs, root, binary, timeout, runner=run):
             return
     rows = []
     for i, case in enumerate(cs):
-        arms = ["minimal", "fast"] if i % 2 else ["fast", "minimal"]
+        arms = order[i][1] if order is not None else (["minimal", "fast"] if i % 2 else ["fast", "minimal"])
         pair = []
         for arm in arms:
             row = runner(case, arm, root, binary, timeout)
@@ -471,8 +471,9 @@ def main():
     global MODEL
     ap = argparse.ArgumentParser()
     ap.add_argument("--binary", type=Path)
-    ap.add_argument("--suite", choices=("screen", "adversarial"), default="screen")
+    ap.add_argument("--suite", choices=("screen", "adversarial", "followup"), default="screen")
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--order-seed", type=int, default=891)
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--model", default=MODEL)
@@ -485,13 +486,23 @@ def main():
     binary = args.binary.resolve() if args.binary else None
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    if args.suite == "adversarial":
+    if args.suite == "followup":
+        from followup import cases as followup_cases
+
+        cs = followup_cases()
+    elif args.suite == "adversarial":
         from adversarial import cases as adversarial_cases
 
         cs = cases()[:4] + adversarial_cases()
     else:
         cs = cases()
-    random.Random(891).shuffle(cs)
+    rng = random.Random(args.order_seed)
+    rng.shuffle(cs)
+    order = []
+    for c in cs:
+        arms = ["fast", "minimal"]
+        rng.shuffle(arms)
+        order.append((c["id"], arms))
     manifest = {
         "schema": "maestro.minimal-tools-screen.v3",
         "model": MODEL,
@@ -505,10 +516,9 @@ def main():
         "timeout": args.timeout,
         "cases": cs,
         "arms": ["fast", "minimal"],
-        "order": [
-            (c["id"], (["minimal", "fast"] if i % 2 else ["fast", "minimal"]))
-            for i, c in enumerate(cs)
-        ],
+        "order": order,
+        "order_seed": args.order_seed,
+        "order_method": "seeded task shuffle and independent within-pair arm shuffle",
         "promotion_allowed": False,
         "analysis_plan": {
             "primary": "total spend across all attempts / verified successful tasks",
@@ -562,7 +572,7 @@ def main():
     )
     if not args.live:
         return
-    execute(cs, root, binary, args.timeout)
+    execute(cs, root, binary, args.timeout, order=order)
     if digest(binary.read_bytes()) != manifest["binary_sha256"]:
         raise ValueError("binary changed during cohort")
     from report import report

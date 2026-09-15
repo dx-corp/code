@@ -133,6 +133,12 @@ def report(root):
     observed = [(r["case"], r["arm"]) for r in rows]
     if len(set(observed)) != len(observed) or not set(observed) <= expected:
         raise ValueError("duplicate or unexpected result row")
+    if manifest.get("order_method"):
+        planned = [(case, arm) for case, arms in manifest["order"] for arm in arms]
+        if len(planned) != len(expected) or set(planned) != expected:
+            raise ValueError("invalid declared execution order")
+        if observed != planned[:len(observed)]:
+            raise ValueError("observed execution differs from declared order")
     if manifest.get("schema") not in (
         None,
         "maestro.minimal-tools-screen.v2",

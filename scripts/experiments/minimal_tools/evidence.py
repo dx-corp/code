@@ -30,6 +30,7 @@ def source_hashes():
             "report.py",
             "evidence.py",
             "adversarial.py",
+            "followup.py",
             "statistics_report.py",
         )
     ]

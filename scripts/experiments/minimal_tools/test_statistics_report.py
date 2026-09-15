@@ -56,3 +56,14 @@ class StatisticsTests(unittest.TestCase):
         result = paired_intervals(pairs, draws=1000)
         self.assertEqual(result["tokens_per_success_ratio_95"], [0.5, 0.5])
         self.assertEqual(result["cost_per_success_ratio_95"], [1, 1])
+
+    def test_latency_pairing_and_perfect_quality_uncertainty(self):
+        pairs = {str(i): dict(fast=arm(1), minimal=arm(1)) for i in range(24)}
+        for i, pair in enumerate(pairs.values()):
+            pair['fast']['elapsed_seconds'] = i + 1
+            pair['minimal']['elapsed_seconds'] = (i + 1) / 2
+        result = paired_intervals(pairs, draws=1000)
+        self.assertEqual(result['median_latency_ratio_95'], [0.5, 0.5])
+        low, high = result['success_difference_conservative_95']
+        self.assertLess(low, 0)
+        self.assertGreater(high, 0)
