@@ -184,6 +184,7 @@ impl NativeAgentConfig {
             max_turn_steps: self.max_turn_steps,
             allow_unbounded_turn: self.allow_unbounded_turn,
             retry_config: self.retry_config,
+            safety_config: crate::agent::safety::SafetyConfig::default(),
         }
     }
 }

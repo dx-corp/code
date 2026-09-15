@@ -99,7 +99,11 @@ use super::messages::{
     GovernedClientToolBinding, InitConfig, PendingApproval, ServerRequestType, StreamingResponse,
     ToAgentMessage, TokenUsage,
 };
-use super::workspace_capabilities::{ApplyWorkspaceCapabilitySet, WorkspaceCapabilitySetApplied};
+#[cfg(test)]
+use super::workspace_capabilities::WorkspaceCapabilitySetApplied;
+use super::workspace_capabilities::{
+    ApplyWorkspaceCapabilitySet, accept_workspace_capability_receipt,
+};
 
 fn workspace_capability_replay_cursor(request: &ApplyWorkspaceCapabilitySet) -> String {
     format!(
@@ -115,27 +119,6 @@ fn record_sent_workspace_capability(
     if let ToAgentMessage::ApplyWorkspaceCapabilitySet { request } = message {
         pending.insert(workspace_capability_replay_cursor(request), request.clone());
     }
-}
-
-fn accept_workspace_capability_receipt(
-    pending: &mut HashMap<String, ApplyWorkspaceCapabilitySet>,
-    last_accepted: &mut Option<ApplyWorkspaceCapabilitySet>,
-    receipt: &WorkspaceCapabilitySetApplied,
-) -> bool {
-    let Some(request) = pending.get(&receipt.replay_cursor) else {
-        return false;
-    };
-    let matches = receipt.organization_id == request.organization_id
-        && receipt.workspace_id == request.workspace_id
-        && receipt.runner_session_id == request.runner_session_id
-        && receipt.runtime_generation == request.runtime_generation
-        && receipt.activation_generation == request.activation_generation
-        && receipt.effective_catalog_digest == request.capability_set_digest;
-    if matches {
-        *last_accepted = pending.remove(&receipt.replay_cursor);
-        return true;
-    }
-    false
 }
 
 fn init_config_from_message(message: &ToAgentMessage) -> Option<InitConfig> {
@@ -1165,7 +1148,13 @@ impl SessionRecorder {
             // this never installs it into the live agent or grants authority.
             self.last_process_budget = Some(budget.clone());
         }
-        let _ = self.replay_state.handle_message(message.clone());
+        if !matches!(
+            message,
+            FromAgentMessage::WorkspaceCapabilitySetApplied { .. }
+        ) || workspace_capability_accepted
+        {
+            let _ = self.replay_state.handle_message(message.clone());
+        }
         self.entries_since_checkpoint += 1;
         self.maybe_write_checkpoint(
             matches!(
@@ -1694,13 +1683,16 @@ fn apply_replay_entry(
             }
         }
         SessionEntry::Received { message, .. } => {
-            if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = message {
-                let _ = accept_workspace_capability_receipt(
-                    pending_workspace_capability_sets,
-                    last_workspace_capability_set,
-                    receipt,
-                );
-            }
+            let accepted_capability_receipt =
+                if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = message {
+                    accept_workspace_capability_receipt(
+                        pending_workspace_capability_sets,
+                        last_workspace_capability_set,
+                        receipt,
+                    )
+                } else {
+                    true
+                };
             if let FromAgentMessage::ConversationSnapshot {
                 protocol_version,
                 messages,
@@ -1711,7 +1703,9 @@ fn apply_replay_entry(
                     == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL)
                     .then_some(messages.clone());
             }
-            let _ = state.handle_message(message.clone());
+            if accepted_capability_receipt {
+                let _ = state.handle_message(message.clone());
+            }
         }
         SessionEntry::Checkpoint {
             state: checkpoint,
@@ -1914,13 +1908,17 @@ impl SessionReader {
                     }
                 }
                 SessionEntry::Received { message, .. } => {
-                    if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = message {
-                        let _ = accept_workspace_capability_receipt(
-                            &mut pending_workspace_capability_sets,
-                            &mut last_workspace_capability_set,
-                            receipt,
-                        );
-                    }
+                    let accepted_capability_receipt =
+                        if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = message
+                        {
+                            accept_workspace_capability_receipt(
+                                &mut pending_workspace_capability_sets,
+                                &mut last_workspace_capability_set,
+                                receipt,
+                            )
+                        } else {
+                            true
+                        };
                     if let FromAgentMessage::ConversationSnapshot {
                         protocol_version,
                         messages,
@@ -1935,7 +1933,9 @@ impl SessionReader {
                             semantic_conversation = None;
                         }
                     }
-                    let _ = state.handle_message(message.clone());
+                    if accepted_capability_receipt {
+                        let _ = state.handle_message(message.clone());
+                    }
                 }
                 SessionEntry::Checkpoint { .. } => {}
             }
@@ -2114,14 +2114,18 @@ mod tests {
         request: &ApplyWorkspaceCapabilitySet,
     ) -> WorkspaceCapabilitySetApplied {
         WorkspaceCapabilitySetApplied {
-            schema_version: "evalops.maestro.workspace-capability-set.v1".to_string(),
+            schema_version: "evalops.maestro.workspace-prompt-capability-set.v1".to_string(),
             organization_id: request.organization_id.clone(),
             workspace_id: request.workspace_id.clone(),
             runner_session_id: request.runner_session_id.clone(),
             runtime_generation: request.runtime_generation,
             activation_generation: request.activation_generation,
             effective_catalog_digest: request.capability_set_digest.clone(),
-            accepted_entry_digests: Vec::new(),
+            accepted_entry_digests: request
+                .admitted_catalog
+                .iter()
+                .map(|entry| entry.entry_digest.clone())
+                .collect(),
             rejected_entries: Vec::new(),
             replay_cursor: workspace_capability_replay_cursor(request),
             applied_at: 123,
@@ -2397,6 +2401,46 @@ mod tests {
             .expect("resume recorder")
             .replay();
         assert_eq!(replay.last_workspace_capability_set, Some(accepted));
+    }
+
+    #[test]
+    fn session_restart_ignores_partial_and_late_older_capability_receipts() {
+        let temp = TempDir::new().expect("session root");
+        let mut recorder = SessionRecorder::new(temp.path()).expect("session recorder");
+        let session_id = recorder.id().to_string();
+        let first = workspace_capability_request(1);
+        let second = workspace_capability_request(2);
+        for request in [&first, &second] {
+            recorder
+                .record_sent(&ToAgentMessage::ApplyWorkspaceCapabilitySet {
+                    request: request.clone(),
+                })
+                .expect("record candidate");
+        }
+        let mut partial = workspace_capability_receipt(&second);
+        partial.rejected_entries.push("skill.review".to_string());
+        recorder
+            .record_received(&FromAgentMessage::WorkspaceCapabilitySetApplied { receipt: partial })
+            .expect("record partial receipt");
+        assert!(recorder.replay().last_workspace_capability_set.is_none());
+
+        recorder
+            .record_received(&FromAgentMessage::WorkspaceCapabilitySetApplied {
+                receipt: workspace_capability_receipt(&second),
+            })
+            .expect("record accepted receipt");
+        recorder
+            .record_received(&FromAgentMessage::WorkspaceCapabilitySetApplied {
+                receipt: workspace_capability_receipt(&first),
+            })
+            .expect("record late older receipt");
+        recorder.flush().expect("flush journal");
+        drop(recorder);
+
+        let replay = SessionRecorder::resume(temp.path(), &session_id)
+            .expect("resume recorder")
+            .replay();
+        assert_eq!(replay.last_workspace_capability_set, Some(second));
     }
 
     #[test]

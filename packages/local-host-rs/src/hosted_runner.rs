@@ -51,6 +51,7 @@ use crate::headless::{
 use crate::headless_server::{GovernedGrantVerificationContext, verify_governed_tool_grant};
 
 mod config;
+mod env_aliases;
 mod handle;
 mod initial_actions;
 mod manifests;
@@ -62,11 +63,10 @@ mod snapshots;
 mod thread_protocol;
 mod workload_identity;
 
+use self::{manifests::*, snapshots::*, thread_protocol::*};
 pub use config::{HostedRunnerConfig, HostedRunnerConfigError};
+pub use env_aliases::{DEPRECATED_ENV_ALIASES, DeprecatedEnvAlias};
 pub use handle::{HostedRunnerHandle, HostedRunnerIdentity};
-use manifests::*;
-use snapshots::*;
-use thread_protocol::*;
 
 pub const HOSTED_RUNNER_IDENTITY_PATH: &str = "/.well-known/evalops/remote-runner/identity";
 pub const HOSTED_RUNNER_DRAIN_PATH: &str = "/.well-known/evalops/remote-runner/drain";

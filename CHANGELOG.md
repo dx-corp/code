@@ -47,6 +47,40 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.89] - 2026-09-14
+
+### Changed
+
+- Use GPT-5.6 as the default for OpenAI and Codex provider routes; preserve explicitly configured models.
+- Refresh bundled model context and output limits from the catalog source (#9120).
+- Require a signed handoff before a public release can be published (#9101). <!-- maestro-release-note:f558cf8e65ea -->
+- Keep build caches complete so builds stay fast (#9093). <!-- maestro-release-note:2d2587bdcd26 -->
+- Verify changes that land through the merge queue with the same required checks as direct merges (#9098). <!-- maestro-release-note:725395442e85 -->
+- Start runtime verification faster so pre-release checks finish reliably (#9097). <!-- maestro-release-note:6f739e90af6d -->
+- Verify every change on the main branch individually so release gates never wait on a skipped run (#9091). <!-- maestro-release-note:03d9a9925c7d -->
+- Treat the hosted-orb smoke test as a hard release gate and unblock supply-chain policy reviews (#9086). <!-- maestro-release-note:f43ad5722476 -->
+- Promote runtime images only after the Maestro image is published so deployments never reference a missing image (#9087). <!-- maestro-release-note:24c7ddd1d927 -->
+- Restore reliable verification of every change on the main branch (#9085). <!-- maestro-release-note:f3e81b3857b6 -->
+- Publish releases from GitHub, including native artifact validation and a stable Linux release ABI (#9079). <!-- maestro-release-note:847da3e0e2d6 -->
+- Move Maestro's continuous integration to GitHub Actions (#9080). <!-- maestro-release-note:47d7b7c390a1 -->
+- Remove files left over from the retired CI system (#9081). <!-- maestro-release-note:48e69219206f -->
+- Remove tooling tied to the retired CI system from the public port (#9078). <!-- maestro-release-note:812cb7ab578e -->
+
+### Fixed
+
+- Keep pre-merge checks within build-machine capacity so they no longer time out (#9116). <!-- maestro-release-note:94aee070052e -->
+- Keep Rust builds within build-machine memory and CPU limits so they no longer fail mid-build (#9113). <!-- maestro-release-note:e0bfe7ce765a -->
+- Verify cerebro row-level security under non-superuser database roles so tenant isolation is tested for real (#9110). <!-- maestro-release-note:e0da8e11e8f9 -->
+- Keep the public mirror syncing when review bots leave open threads on generated sync PRs (#9107). <!-- maestro-release-note:17b0068a392b -->
+- Fix mobile acceptance tests failing on a missing protobuf runtime (#9105). <!-- maestro-release-note:e772e4f07b84 -->
+- Fix the APEX readiness check timing out before it could report (#9103). <!-- maestro-release-note:dded86283045 -->
+- Recover publication retries and refresh app progress (#9090). <!-- maestro-release-note:df4ae346f1ca -->
+- Speed up affected-component checks by avoiding repeated file lookups (#9096). <!-- maestro-release-note:a0191e6cda16 -->
+- Complete the Sandboxwich CI migration (#9095). <!-- maestro-release-note:bc759b64456c -->
+- Fix mobile conversation submissions that the platform rejected with HTTP 415 (#9099). <!-- maestro-release-note:13bd3be6a765 -->
+- Retain organization scope in attention events (#9094). <!-- maestro-release-note:4de9281c7728 -->
+- Include the active workflow inputs in queue reports so stale reports are distinguishable (#9088). <!-- maestro-release-note:2aa0a8cb4368 -->
+
 ## [0.10.88] - 2026-09-13
 
 ### Added

@@ -297,7 +297,7 @@ function firstNonblankLine(body) {
 export function informationalReviewFeedback(body, author) {
 	const firstLine = firstNonblankLine(body);
 	const trustedReviewBot =
-		/^(?:cursor|coderabbitai|chatgpt-codex-connector|devin-ai-integration)\b/iu.test(
+		/^(?:cursor|coderabbitai|chatgpt-codex-connector|devin-ai-integration)(?:\[bot\])?$/iu.test(
 			String(author ?? ""),
 		);
 	return (

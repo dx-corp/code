@@ -50,6 +50,7 @@ pub(crate) mod model_dynamics;
 
 use std::time::Instant;
 
+use crate::agent::safety::SafetyConfig;
 pub use doom_loop::DoomLoopExtension;
 
 /// State handed to [`AgentExtension::on_user_turn_start`].
@@ -310,8 +311,14 @@ impl ExtensionRegistry {
     /// Registration order here is the order tenants observe every hook.
     #[must_use]
     pub fn with_default_tenants() -> Self {
+        Self::with_default_tenants_and_safety(SafetyConfig::default())
+    }
+
+    /// [`Self::with_default_tenants`] with explicit doom-loop thresholds.
+    #[must_use]
+    pub fn with_default_tenants_and_safety(safety: SafetyConfig) -> Self {
         let mut registry = Self::new();
-        registry.register(Box::new(DoomLoopExtension::new()));
+        registry.register(Box::new(DoomLoopExtension::with_config(safety)));
         registry
     }
 

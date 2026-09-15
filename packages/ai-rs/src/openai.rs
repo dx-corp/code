@@ -2022,7 +2022,7 @@ impl OpenAiClient {
         )
     }
 
-    fn build_request_body_for_api(
+    pub(crate) fn build_request_body_for_api(
         &self,
         messages: &[Message],
         config: &RequestConfig,

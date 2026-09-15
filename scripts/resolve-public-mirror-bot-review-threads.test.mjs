@@ -3,11 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { informationalReviewFeedback } from "./pr-feedback-audit.mjs";
+
 import {
 	flagValue,
 	formatSummaryComment,
 	isResolveReviewThreadRequest,
 	isReviewBotAuthor,
+	LIST_REVIEW_THREADS_QUERY,
 	resolvePublicMirrorBotReviewThreads,
 	shouldResolveReviewThread,
 } from "./resolve-public-mirror-bot-review-threads.mjs";
@@ -91,20 +94,36 @@ function makeGhJson(pages) {
 	};
 }
 
-test("review-bot authors include [bot] suffix, known apps, and GraphQL Bot actors", () => {
+test("only exact known review-bot logins qualify for automatic resolution", () => {
 	assert.equal(isReviewBotAuthor({ login: "chatgpt-codex-connector" }), true);
 	assert.equal(isReviewBotAuthor({ login: "devin-ai-integration" }), true);
 	assert.equal(isReviewBotAuthor({ login: "cursor[bot]" }), true);
 	assert.equal(isReviewBotAuthor({ login: "coderabbitai" }), true);
-	assert.equal(isReviewBotAuthor({ login: "github-actions[bot]" }), true);
+	assert.equal(isReviewBotAuthor({ login: "cursor-reviewer" }), false);
+	assert.equal(isReviewBotAuthor({ login: "coderabbitai-dev" }), false);
+	assert.equal(isReviewBotAuthor({ login: "github-actions[bot]" }), false);
 	assert.equal(
 		isReviewBotAuthor({ __typename: "Bot", login: "some-review-app" }),
-		true,
+		false,
 	);
 	assert.equal(isReviewBotAuthor({ login: "alice" }), false);
 	assert.equal(isReviewBotAuthor({ __typename: "User", login: "alice" }), false);
 	assert.equal(isReviewBotAuthor(null), false);
 	assert.equal(isReviewBotAuthor({ login: "" }), false);
+});
+
+test("feedback audit does not discard informational-looking human comments", () => {
+	assert.equal(informationalReviewFeedback("## Summary", "cursor[bot]"), true);
+	assert.equal(informationalReviewFeedback("## Summary", "cursor-reviewer"), false);
+	assert.equal(informationalReviewFeedback("**Info:** Please review", "coderabbitai-dev"), false);
+});
+
+test("thread query transfers only the first author needed for classification", () => {
+	assert.match(
+		LIST_REVIEW_THREADS_QUERY,
+		/comments\(first:1\)\{nodes\{author\{__typename login\}\}\}/,
+	);
+	assert.doesNotMatch(LIST_REVIEW_THREADS_QUERY, /\b(?:body|url)\b/);
 });
 
 test("resolved threads are never selected even when the author is a bot", () => {
@@ -124,7 +143,7 @@ test("resolved threads are never selected even when the author is a bot", () => 
 		shouldResolveReviewThread(
 			thread({
 				id: "PRRT_outdated_bot",
-				login: "github-actions[bot]",
+				login: "cursor[bot]",
 				isOutdated: true,
 			}),
 		),
@@ -143,7 +162,7 @@ test("resolveReviewThread is called only for unresolved bot-started threads", ()
 		}),
 		thread({
 			id: "PRRT_outdated_bot",
-			login: "github-actions[bot]",
+			login: "cursor[bot]",
 			isOutdated: true,
 		}),
 		thread({
@@ -151,6 +170,7 @@ test("resolveReviewThread is called only for unresolved bot-started threads", ()
 			login: "bob",
 			isOutdated: true,
 		}),
+		thread({ id: "PRRT_prefixed_human", login: "cursor-reviewer" }),
 		thread({ id: "PRRT_devin", login: "devin-ai-integration" }),
 		thread({
 			id: "PRRT_typename_bot",
@@ -192,13 +212,12 @@ test("resolveReviewThread is called only for unresolved bot-started threads", ()
 		"PRRT_bot",
 		"PRRT_outdated_bot",
 		"PRRT_devin",
-		"PRRT_typename_bot",
 	]);
 	assert.deepEqual(fake.resolvedIds, result.resolvedIds);
-	assert.equal(result.humanCount, 4);
+	assert.equal(result.humanCount, 6);
 	assert.equal(fake.comments.length, 1);
-	assert.match(fake.comments[0], /Resolved 4 review-bot thread\(s\)/);
-	assert.match(fake.comments[0], /Left 4 human-started thread\(s\) unresolved/);
+	assert.match(fake.comments[0], /Resolved 3 review-bot thread\(s\)/);
+	assert.match(fake.comments[0], /Left 6 human-started thread\(s\) unresolved/);
 	assert.match(fake.comments[0], /Review of mirrored code belongs on the mono source PR/);
 	assert.match(fake.comments[0], /https:\/\/example\.test\/triage\/9100/);
 	assert.doesNotMatch(fake.comments[0], /PRRT_human/);

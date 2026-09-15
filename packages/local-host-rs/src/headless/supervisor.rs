@@ -30,7 +30,9 @@ use super::remote_transport::{
     RemoteAgentTransport, RemoteConnectionResumeAuthority, RemoteIncoming, RemoteTransportConfig,
 };
 use super::session::{SessionRecorder, SessionReplay};
-use super::workspace_capabilities::{ApplyWorkspaceCapabilitySet, WorkspaceCapabilitySetApplied};
+use super::workspace_capabilities::{
+    ApplyWorkspaceCapabilitySet, WorkspaceCapabilitySetApplied, accept_workspace_capability_receipt,
+};
 
 const MAX_STALE_REMOTE_REFERENCE_RETRIES: u32 = 3;
 const MIN_RECONNECT_SLEEP: Duration = Duration::from_millis(1);
@@ -44,19 +46,6 @@ fn workspace_capability_replay_cursor(request: &ApplyWorkspaceCapabilitySet) -> 
         "{}:{}",
         request.activation_generation, request.capability_set_digest
     )
-}
-
-fn workspace_capability_receipt_matches(
-    request: &ApplyWorkspaceCapabilitySet,
-    receipt: &WorkspaceCapabilitySetApplied,
-) -> bool {
-    receipt.replay_cursor == workspace_capability_replay_cursor(request)
-        && receipt.organization_id == request.organization_id
-        && receipt.workspace_id == request.workspace_id
-        && receipt.runner_session_id == request.runner_session_id
-        && receipt.runtime_generation == request.runtime_generation
-        && receipt.activation_generation == request.activation_generation
-        && receipt.effective_catalog_digest == request.capability_set_digest
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1187,10 +1176,15 @@ impl AgentSupervisor {
                 == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL)
                 .then(|| messages.clone());
         }
-        if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = &message {
-            self.accept_workspace_capability_receipt(receipt);
-        }
-        let event = self.state.handle_message(message.clone());
+        let accepted_capability_receipt =
+            if let FromAgentMessage::WorkspaceCapabilitySetApplied { receipt } = &message {
+                self.accept_workspace_capability_receipt(receipt)
+            } else {
+                true
+            };
+        let event = accepted_capability_receipt
+            .then(|| self.state.handle_message(message.clone()))
+            .flatten();
         if let Some(ref mut recorder) = self.session_recorder {
             let result = recorder.record_received(&message);
             self.report_session_recorder_result(result, "record received message");
@@ -1211,18 +1205,15 @@ impl AgentSupervisor {
         event.map(|event| SupervisorEvent::Agent(Box::new(event)))
     }
 
-    fn accept_workspace_capability_receipt(&mut self, receipt: &WorkspaceCapabilitySetApplied) {
-        let Some(request) = self
-            .pending_workspace_capability_sets
-            .get(&receipt.replay_cursor)
-        else {
-            return;
-        };
-        if workspace_capability_receipt_matches(request, receipt) {
-            self.last_workspace_capability_set = self
-                .pending_workspace_capability_sets
-                .remove(&receipt.replay_cursor);
-        }
+    fn accept_workspace_capability_receipt(
+        &mut self,
+        receipt: &WorkspaceCapabilitySetApplied,
+    ) -> bool {
+        accept_workspace_capability_receipt(
+            &mut self.pending_workspace_capability_sets,
+            &mut self.last_workspace_capability_set,
+            receipt,
+        )
     }
 
     fn clear_transient_progress_state(&mut self) {

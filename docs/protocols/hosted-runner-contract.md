@@ -1,6 +1,6 @@
 # Hosted Runner Contract
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Hosted runner code now lives in `packages/local-host-rs/src/hosted_runner.rs`, `hosted_runner_cli.rs`, and `packages/tui-rs/src/hosted_runner/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Hosted runner code now lives in `packages/local-host-rs/src/hosted_runner/` (config, handle, manifests, snapshots, rendezvous, workload identity) and `packages/local-host-rs/src/hosted_runner_cli.rs` (launch resolution and the `hosted-runner` entrypoint). The startup coordinates in [Configuration](#configuration) are executable: `packages/local-host-rs/tests/hosted_runner_startup_contract.rs` runs every case in `packages/local-host-rs/tests/fixtures/hosted-runner-startup-contract.json` through the real CLI resolver, so a documented coordinate that stops being honored fails `cargo test -p maestro-local-host`. Other file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 Maestro hosted runners are substrate-neutral runtime pods or sandboxes that
@@ -38,17 +38,34 @@ flags or environment variables, but the resolved values are the contract.
 
 | Contract field | Flags and environment | Required |
 | --- | --- | --- |
-| Runner session id | `--runner-session-id`, `MAESTRO_RUNNER_SESSION_ID`, `REMOTE_RUNNER_SESSION_ID` | yes |
-| Workspace root | `--workspace-root`, `MAESTRO_WORKSPACE_ROOT`, `WORKSPACE_ROOT` | yes |
-| Listen address | `--listen`, `--host`, `--port`, `MAESTRO_HOSTED_RUNNER_LISTEN`, `MAESTRO_HOSTED_RUNNER_HOST`, `MAESTRO_HOSTED_RUNNER_PORT`, `PORT` | yes |
-| Owner generation | `--owner-instance-id`, `MAESTRO_REMOTE_RUNNER_OWNER_INSTANCE_ID`, `REMOTE_RUNNER_OWNER_INSTANCE_ID` | required when Platform fences owners |
-| Runtime generation | `MAESTRO_PLACEMENT_GENERATION`, `MAESTRO_SANDBOXWICH_PLACEMENT_GENERATION`, `MAESTRO_REMOTE_RUNNER_GENERATION` | required for managed durable threads; the canonical placement variable takes precedence |
-| Snapshot root | `--snapshot-root`, `MAESTRO_REMOTE_RUNNER_SNAPSHOT_ROOT`, `REMOTE_RUNNER_SNAPSHOT_ROOT` | optional |
-| Restore manifest | `MAESTRO_REMOTE_RUNNER_RESTORE_MANIFEST`, `REMOTE_RUNNER_RESTORE_MANIFEST` | optional |
+| Runner session id | `--runner-session-id`, `MAESTRO_RUNNER_SESSION_ID` (deprecated `REMOTE_RUNNER_SESSION_ID`) | yes |
+| Workspace root | `--workspace-root`, `MAESTRO_WORKSPACE_ROOT` (deprecated `WORKSPACE_ROOT`) | yes |
+| Listen address | `--listen`, `--host`, `--port`, `MAESTRO_HOSTED_RUNNER_LISTEN`, `MAESTRO_HOSTED_RUNNER_HOST`, `MAESTRO_HOSTED_RUNNER_PORT` (deprecated `PORT`) | yes |
+| Owner generation | `--owner-instance-id`, `MAESTRO_REMOTE_RUNNER_OWNER_INSTANCE_ID` (deprecated `REMOTE_RUNNER_OWNER_INSTANCE_ID`) | required when Platform fences owners |
+| Runtime generation | `MAESTRO_PLACEMENT_GENERATION`, `MAESTRO_SANDBOXWICH_PLACEMENT_GENERATION`, `MAESTRO_REMOTE_RUNNER_GENERATION` | required for managed durable threads; the canonical placement variable takes precedence and also enters workload-identity mode, so it must arrive with the full identity set below |
+| Snapshot root | `--snapshot-root`, `MAESTRO_REMOTE_RUNNER_SNAPSHOT_ROOT` (deprecated `REMOTE_RUNNER_SNAPSHOT_ROOT`) | optional |
+| Restore manifest | `MAESTRO_REMOTE_RUNNER_RESTORE_MANIFEST` (deprecated `REMOTE_RUNNER_RESTORE_MANIFEST`) | optional |
 | Workspace id | `--workspace-id`, `MAESTRO_REMOTE_RUNNER_WORKSPACE_ID`, `MAESTRO_WORKSPACE_ID` | optional |
 | Agent run id | `--agent-run-id`, `MAESTRO_AGENT_RUN_ID` | optional |
 | Existing Maestro session | `--maestro-session-id`, `MAESTRO_SESSION_ID` | optional |
 | Attach audience | `--attach-audience`, `MAESTRO_ATTACH_AUDIENCE` | optional |
+| Attach bearer token | `MAESTRO_HOSTED_RUNNER_AUTH_TOKEN` or `MAESTRO_HOSTED_RUNNER_AUTH_TOKEN_FILE` (deprecated `MAESTRO_WEB_API_KEY`, `MAESTRO_WEB_API_KEY_FILE`) | required unless workload identity is present or `MAESTRO_WEB_REQUIRE_KEY=0` on a loopback bind; inline and file forms are mutually exclusive |
+| Headless model binding | `MAESTRO_MODEL`; managed `evalops/` and `maestro-managed/` models also require `MAESTRO_RESIDENT_CONTRACT_REVISION` pinned to the current resident revision plus non-empty `MAESTRO_EVALOPS_ACCESS_TOKEN`, `MAESTRO_EVALOPS_BASE_URL`, `MAESTRO_EVALOPS_ORG_ID`, `MAESTRO_EVALOPS_WORKSPACE_ID`, and `MAESTRO_EVALOPS_PROVIDER` | yes |
+| Headless child | `--agent-cli-path`, `MAESTRO_HEADLESS_CLI_PATH` | optional |
+| Launch spec | `--config` or `MAESTRO_HOSTED_LAUNCH_SPEC_FILE` (not both); when present it replaces the flag/environment coordinates above | optional |
+| Rendezvous | `MAESTRO_RENDEZVOUS_MODE` (`inbound`, `outbound_shadow`, `outbound`); outbound modes require workload identity | optional |
+
+Deprecated environment keys are the entries of `DEPRECATED_ENV_ALIASES` in
+`packages/local-host-rs/src/hosted_runner/config.rs`. The canonical key always
+wins when both are set; every deprecated key that carries a value produces one
+`hosted-runner environment key ... is deprecated` startup warning, and the
+deprecated keys stop being read after the next Maestro minor release. Platform
+(`runner-host` and `sandboxwich`) already launches with the canonical keys.
+
+Startup fails closed on a missing or blank runner session id, a missing or
+non-directory workspace root, a non-integer runtime generation, a non-loopback
+bind without attach authentication, and any partially supplied workload
+identity set.
 
 Managed Kubernetes workload-identity mode additionally requires all of the
 following values. Supplying only part of the set fails startup; static hosted
@@ -66,7 +83,8 @@ runner bearer authentication is forbidden when the set is present.
 | Runner session binding | `MAESTRO_RUNNER_SESSION_ID` |
 
 There is intentionally no file or environment input for a Runner Host client
-CA, Maestro server certificate, or private key. The authenticated exchange
+CA, Maestro server certificate, or private key; setting
+`MAESTRO_RUNNER_CLIENT_CA_FILE` rejects startup. The authenticated exchange
 response carries the workload CA in memory. Maestro uses that CA only for the
 current server chain and Runner Host client verification, pinned to the exact
 client URI `spiffe://identity.evalops.dev/service/runner-host`.
@@ -464,29 +482,33 @@ the operational model.
 
 ## Conformance
 
-Every hosted runner implementation should satisfy the shared conformance suite:
+Two executable suites back this contract; both run in the Maestro CI Rust lane.
 
-```bash
-npm run test -- test/headless/runtime-conformance.test.ts
-```
+Startup and lifecycle (`cargo test -p maestro-local-host --test hosted_runner_startup_contract`):
 
-Rust hosted-runner wire parity is enforced by the dedicated
-`rust-hosted-conformance` CI job. Run the same gate locally with:
+- `packages/local-host-rs/tests/fixtures/hosted-runner-startup-contract.json`
+  is the accept/reject matrix for the [Configuration](#configuration)
+  coordinates. Each case is resolved through
+  `hosted_runner_cli::resolve_hosted_runner_launch_config`, the same code path
+  as `maestro hosted-runner`, and asserts either the resolved contract fields or
+  the fail-closed error. Adding a coordinate means adding a fixture case; the
+  suite rejects any exercised coordinate that this document does not name.
+  The guard is one-directional: coordinates named here but absent from the
+  fixture (for example `MAESTRO_REMOTE_RUNNER_SNAPSHOT_ROOT`,
+  `MAESTRO_REMOTE_RUNNER_RESTORE_MANIFEST`, and the split `--host`/`--port`
+  flags) are documented, not mechanically enforced.
+- The runtime scenario starts the full CLI runtime behind a stub headless child
+  and checks the identity endpoint (`ready`, `draining`, sparse fields), a
+  drain that writes the snapshot manifest under the workspace root, and the
+  post-drain identity transition.
 
-```bash
-MAESTRO_RUST_HOSTED_CONFORMANCE=1 npm run test -- test/headless/runtime-conformance.test.ts
-```
-
-Current coverage includes schema-valid snapshots/envelopes, controller/viewer
-roles, explicit controller takeover, cursor replay/reset, approval request and
-response resolution, workspace-root file-read enforcement, utility
-command/search/watch lifecycle, and disconnect cleanup.
-
-The TypeScript adapter targets the in-process host. The Rust-hosted adapter
-drives the same scenarios through
-`maestro_tui::hosted_runner::start_hosted_runner_with_message_executor` and the
-external HTTP/SSE surface. The scenario body must remain shared; only adapter
-startup and transport details should vary.
+Wire surface (`maestro conformance` and the `rust-hosted-conformance` CI job):
+schema-valid snapshots/envelopes, controller/viewer roles, explicit controller
+takeover, cursor replay/reset, approval request and response resolution,
+workspace-root file-read enforcement, utility command/search/watch lifecycle,
+and disconnect cleanup, driven through
+`maestro_local_host::hosted_runner_conformance` against the external HTTP/SSE
+surface. See [Headless runtime conformance](./headless-conformance.md).
 
 ## References
 

@@ -7,8 +7,9 @@ const DEFAULT_REPO = "evalops/maestro";
 
 // GitHub Apps usually have login suffix "[bot]". Some review apps post
 // without that suffix; keep this list aligned with pr-feedback-audit.mjs.
+// Unknown actors remain unresolved so their feedback is not mistaken for advisory review.
 const KNOWN_REVIEW_BOT_LOGINS =
-	/^(?:cursor|coderabbitai|chatgpt-codex-connector|devin-ai-integration)\b/iu;
+	/^(?:cursor|coderabbitai|chatgpt-codex-connector|devin-ai-integration)(?:\[bot\])?$/iu;
 
 const LIST_REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
 	repository(owner:$owner,name:$repo){
@@ -17,10 +18,7 @@ const LIST_REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:In
 				nodes{
 					id
 					isResolved
-					isOutdated
-					path
-					line
-					comments(first:20){nodes{url body author{__typename login}}}
+					comments(first:1){nodes{author{__typename login}}}
 				}
 				pageInfo{
 					hasNextPage
@@ -100,16 +98,9 @@ export function isReviewBotAuthor(author) {
 	if (!author || typeof author !== "object") {
 		return false;
 	}
-	const typename = String(author.__typename ?? "").trim();
-	if (typename === "Bot") {
-		return true;
-	}
 	const login = String(author.login ?? "").trim();
 	if (!login) {
 		return false;
-	}
-	if (login.toLowerCase().endsWith("[bot]")) {
-		return true;
 	}
 	return KNOWN_REVIEW_BOT_LOGINS.test(login);
 }

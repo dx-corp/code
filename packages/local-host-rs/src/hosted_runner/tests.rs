@@ -1,7 +1,6 @@
 use reqwest::StatusCode;
-use std::fs;
-use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{fs, sync::Condvar};
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
@@ -10,11 +9,11 @@ use std::os::unix::fs::PermissionsExt;
 
 use super::config::HostedRunnerWorkloadIdentityConfig;
 use super::*;
-use crate::headless::RemoteTransportConfig;
 use crate::headless::messages::{CodexSubagentContinuityEdge, ToolRetryDecisionAction};
-use crate::headless::{NativeToolCapability, PendingApproval};
+use crate::headless::{NativeToolCapability, PendingApproval, RemoteTransportConfig};
 use crate::hosted_runner::rendezvous_protocol::RendezvousMode;
 
+mod env_aliases;
 mod transport_flush;
 
 #[test]
@@ -2690,6 +2689,7 @@ fn test_config(workspace_root: PathBuf) -> HostedRunnerConfig {
         auth_token: None,
         workload_identity: None,
         rendezvous: None,
+        deprecated_env_aliases: Vec::new(),
     }
 }
 

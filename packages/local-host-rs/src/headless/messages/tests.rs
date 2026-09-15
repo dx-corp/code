@@ -25,6 +25,20 @@ fn headless_receipt_event_contains_record_lineage_and_status_only() {
 }
 
 #[test]
+fn managed_gateway_receipt_decodes_as_known_and_rejects_malformed_payloads() {
+    let raw = r#"{"type":"managed_gateway_receipt","request_id":"request-1","record_id":"record-1","lineage_id":"lineage-1","record_status":"planned"}"#;
+    assert!(matches!(
+        decode_from_agent_message(raw).expect("valid producer receipt"),
+        maestro_runtime::TaggedMessageDecode::Known(FromAgentMessage::ManagedGatewayReceipt { record_id, .. })
+            if record_id == "record-1"
+    ));
+    assert!(matches!(
+        decode_from_agent_message(r#"{"type":"managed_gateway_receipt","request_id":"request-1"}"#),
+        Err(maestro_runtime::TaggedMessageDecodeError::InvalidKnownMessage { .. })
+    ));
+}
+
+#[test]
 fn prompt_experiment_assignment_and_exposure_round_trip() {
     let assignment = PromptExperimentAssignment {
         experiment_id: "causal-debugging-v1".to_string(),

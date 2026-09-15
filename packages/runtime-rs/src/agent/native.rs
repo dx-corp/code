@@ -670,6 +670,10 @@ pub struct NativeAgentConfig {
     /// Callers may extend this bounded window, but retries remain inside the
     /// owning runtime so completed tool effects are never replayed.
     pub retry_config: super::retry::RetryConfig,
+
+    /// Doom-loop and per-tool rate-limit thresholds enforced by the loop's
+    /// safety tenant.
+    pub safety_config: super::safety::SafetyConfig,
 }
 
 impl NativeAgentConfig {
@@ -706,6 +710,7 @@ impl Default for NativeAgentConfig {
             max_turn_steps: DEFAULT_MAX_TURN_STEPS,
             allow_unbounded_turn: false,
             retry_config: super::retry::RetryConfig::default(),
+            safety_config: super::safety::SafetyConfig::default(),
         }
     }
 }
@@ -1509,7 +1514,8 @@ impl NativeAgent {
         let dynamics = Arc::new(std::sync::Mutex::new(
             super::model_dynamics::DynamicsState::default(),
         ));
-        let mut extensions = ExtensionRegistry::with_default_tenants();
+        let mut extensions =
+            ExtensionRegistry::with_default_tenants_and_safety(config.safety_config.clone());
         extensions.register(Box::new(
             super::extensions::model_dynamics::ModelDynamicsExtension::new(
                 Arc::clone(&dynamics),

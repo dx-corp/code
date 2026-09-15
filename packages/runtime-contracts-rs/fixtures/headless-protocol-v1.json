@@ -83,7 +83,9 @@
     "codex_session_state",
     "codex_turn_state",
     "codex_usage_state",
-    "codex_compatibility"
+    "codex_compatibility",
+    "managed_gateway_receipt",
+    "process_budget_checkpoint"
   ],
   "runtimeOnlyToRuntimeMessages": [
     "restore_conversation",
@@ -94,7 +96,9 @@
     "codex_session_state",
     "codex_turn_state",
     "codex_usage_state",
-    "codex_compatibility"
+    "codex_compatibility",
+    "managed_gateway_receipt",
+    "process_budget_checkpoint"
   ],
   "capabilities": {
     "schemaOnlyServerRequests": [

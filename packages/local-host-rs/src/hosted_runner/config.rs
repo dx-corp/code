@@ -8,6 +8,7 @@ use maestro_runtime::{
     HostedRuntimeBoundaryInput, MAX_RUNTIME_RECEIPT_STRING_BYTES,
 };
 
+use super::env_aliases::{DeprecatedEnvAlias, deprecated_env_aliases};
 use super::manifests::SnapshotManifest;
 use super::rendezvous_protocol::{RendezvousMode, RendezvousNonce};
 
@@ -35,6 +36,8 @@ pub struct HostedRunnerConfig {
     pub auth_token: Option<String>,
     pub workload_identity: Option<HostedRunnerWorkloadIdentityConfig>,
     pub rendezvous: Option<HostedRunnerRendezvousConfig>,
+    /// Legacy environment keys that supplied a value for this config.
+    pub deprecated_env_aliases: Vec<DeprecatedEnvAlias>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +122,7 @@ impl HostedRunnerConfig {
     }
 
     pub fn from_env_map(env: &HashMap<String, String>) -> Result<Self, HostedRunnerConfigError> {
+        let deprecated_env_aliases = deprecated_env_aliases(env);
         let runner_session_id = first_env(
             env,
             &["MAESTRO_RUNNER_SESSION_ID", "REMOTE_RUNNER_SESSION_ID"],
@@ -245,6 +249,7 @@ impl HostedRunnerConfig {
             auth_token,
             workload_identity,
             rendezvous,
+            deprecated_env_aliases,
         };
         config.validate_runtime_receipt_identity(None)?;
         Ok(config)
@@ -423,6 +428,7 @@ impl HostedRunnerConfig {
             auth_token,
             workload_identity,
             rendezvous,
+            deprecated_env_aliases: Vec::new(),
         };
         config.validate_runtime_receipt_identity(None)?;
         Ok(config)
@@ -452,6 +458,7 @@ impl HostedRunnerConfig {
             auth_token: None,
             workload_identity: None,
             rendezvous: None,
+            deprecated_env_aliases: Vec::new(),
         };
         config.validate_runtime_receipt_identity(None)?;
         Ok(config)
@@ -816,7 +823,7 @@ fn first_env(env: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| env_value(env, key))
 }
 
-fn env_value(env: &HashMap<String, String>, key: &str) -> Option<String> {
+pub(super) fn env_value(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key).map(|value| value.trim()).and_then(|value| {
         if value.is_empty() {
             None

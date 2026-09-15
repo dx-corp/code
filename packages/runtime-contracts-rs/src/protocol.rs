@@ -255,6 +255,25 @@ pub enum FromRuntimeMessageType {
     /// Private Codex compatibility projection retained outside the generated
     /// public envelope.
     CodexCompatibility,
+    /// Private managed-Gateway inference receipt retained outside the
+    /// generated public envelope.
+    ManagedGatewayReceipt,
+    /// Private process usage checkpoint retained outside the generated public
+    /// envelope.
+    ProcessBudgetCheckpoint,
+}
+
+impl FromRuntimeMessageType {
+    /// Reads the `type` tag of one runtime-to-client message.
+    ///
+    /// Returns `None` for a missing tag or a tag outside the current contract
+    /// so adapters classify unknown additive events explicitly instead of
+    /// matching visible strings.
+    #[must_use]
+    pub fn from_message(message: &Value) -> Option<Self> {
+        let type_name = message.get("type").and_then(Value::as_str)?;
+        serde_json::from_value(Value::String(type_name.to_string())).ok()
+    }
 }
 
 /// Server-request capability names advertised by the runtime.
@@ -375,6 +394,8 @@ pub const HEADLESS_FROM_RUNTIME_MESSAGE_NAMES: &[&str] = &[
     "codex_turn_state",
     "codex_usage_state",
     "codex_compatibility",
+    "managed_gateway_receipt",
+    "process_budget_checkpoint",
 ];
 
 /// Serialized names retained by the JSON compatibility edge but absent from
@@ -389,6 +410,8 @@ pub const HEADLESS_RUNTIME_ONLY_FROM_RUNTIME_MESSAGE_NAMES: &[&str] = &[
     "codex_turn_state",
     "codex_usage_state",
     "codex_compatibility",
+    "managed_gateway_receipt",
+    "process_budget_checkpoint",
 ];
 
 /// Typed capability projection used by the producer-owned protocol contract.
@@ -538,6 +561,8 @@ const FROM_RUNTIME_MESSAGES: &[FromRuntimeMessageType] = &[
     FromRuntimeMessageType::CodexTurnState,
     FromRuntimeMessageType::CodexUsageState,
     FromRuntimeMessageType::CodexCompatibility,
+    FromRuntimeMessageType::ManagedGatewayReceipt,
+    FromRuntimeMessageType::ProcessBudgetCheckpoint,
 ];
 
 const SERVER_REQUEST_CAPABILITIES: &[ServerRequestCapability] = &[
@@ -595,6 +620,8 @@ pub const fn headless_protocol_contract() -> HeadlessProtocolContract {
             FromRuntimeMessageType::CodexTurnState,
             FromRuntimeMessageType::CodexUsageState,
             FromRuntimeMessageType::CodexCompatibility,
+            FromRuntimeMessageType::ManagedGatewayReceipt,
+            FromRuntimeMessageType::ProcessBudgetCheckpoint,
         ],
         capabilities: HeadlessCapabilityProjection {
             server_requests: SERVER_REQUEST_CAPABILITIES,
@@ -1171,6 +1198,54 @@ mod tests {
     }
 
     #[test]
+    fn from_message_reads_known_tags_and_rejects_unknown_or_missing_tags() {
+        for (index, name) in HEADLESS_FROM_RUNTIME_MESSAGE_NAMES.iter().enumerate() {
+            let typed = FromRuntimeMessageType::from_message(&serde_json::json!({
+                "type": name,
+                "payload": index,
+            }))
+            .unwrap_or_else(|| panic!("{name} must decode as a known runtime message"));
+            assert_eq!(
+                serde_json::to_value(typed).expect("message type serializes"),
+                serde_json::Value::String((*name).to_string())
+            );
+        }
+        assert_eq!(
+            FromRuntimeMessageType::from_message(&serde_json::json!({"type": "future_event"})),
+            None
+        );
+        assert_eq!(
+            FromRuntimeMessageType::from_message(&serde_json::json!({"type": ""})),
+            None
+        );
+        assert_eq!(
+            FromRuntimeMessageType::from_message(&serde_json::json!({"type": 7})),
+            None
+        );
+        assert_eq!(
+            FromRuntimeMessageType::from_message(&serde_json::json!({"payload": {}})),
+            None
+        );
+        assert_eq!(
+            FROM_RUNTIME_MESSAGES.len(),
+            HEADLESS_FROM_RUNTIME_MESSAGE_NAMES.len()
+        );
+    }
+
+    #[test]
+    fn decoder_tags_match_the_advertised_typed_contract() {
+        let contract = serde_json::to_value(headless_protocol_contract()).unwrap();
+        assert_eq!(
+            contract["fromRuntimeMessages"],
+            serde_json::json!(HEADLESS_FROM_RUNTIME_MESSAGE_NAMES)
+        );
+        assert_eq!(
+            contract["runtimeOnlyFromRuntimeMessages"],
+            serde_json::json!(HEADLESS_RUNTIME_ONLY_FROM_RUNTIME_MESSAGE_NAMES)
+        );
+    }
+
+    #[test]
     fn checked_in_fixture_matches_typed_contract() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/headless-protocol-v1.json"))
@@ -1192,7 +1267,7 @@ mod tests {
         assert_eq!(headless_protocol_capability_digest(), expected);
         assert_eq!(
             headless_protocol_capability_digest(),
-            "sha256:641d393c709db54d139f93af6a3bcb1f93f97291518a1ef0ecd45e5b11b17c21"
+            "sha256:43703fc50891d32f11e169729feb0a9eed7b92546a53234c758ba451dc1f4e53"
         );
     }
 }

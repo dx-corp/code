@@ -320,7 +320,7 @@ impl AnthropicClient {
     ///   }
     /// ]
     /// ```
-    fn build_request_body(
+    pub(crate) fn build_request_body(
         &self,
         messages: &[Message],
         config: &RequestConfig,
