@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2381,7 +2381,7 @@ fn validate_identity_authority(candidate: &str, allow_test_loopback: bool) -> Re
     bail!("{}", crate::localization::cli_locale().format("untrusted EvalOps Identity authority; model admission requires a first-party HTTPS Identity endpoint", &[]))
 }
 
-fn test_identity_authority_enabled(env: &std::collections::HashMap<String, String>) -> bool {
+pub(crate) fn test_identity_authority_enabled(env: &HashMap<String, String>) -> bool {
     if cfg!(test) {
         return env
             .get(TEST_IDENTITY_AUTHORITY_ENV)
