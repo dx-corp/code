@@ -457,20 +457,43 @@ fn identity_verification_endpoint(
 ) -> Result<(String, Option<std::path::PathBuf>)> {
     let hosted = hosted_runner_mode(env);
     if let Some(exchange) = env.get("MAESTRO_IDENTITY_EXCHANGE_URL").filter(|_| hosted) {
-        if exchange.trim() != HOSTED_IDENTITY_EXCHANGE {
-            bail!("untrusted hosted EvalOps Identity exchange endpoint");
-        }
+        let origin = if exchange.trim() == HOSTED_IDENTITY_EXCHANGE {
+            HOSTED_IDENTITY_ORIGIN.to_owned()
+        } else {
+            hosted_test_identity_origin(exchange.trim(), env)
+                .context("untrusted hosted EvalOps Identity exchange endpoint")?
+        };
         let ca = env
             .get("MAESTRO_IDENTITY_TLS_CA_FILE")
             .map(|value| std::path::PathBuf::from(value.trim()))
             .filter(|path| path.is_absolute())
             .context("hosted EvalOps Identity requires an absolute projected CA file")?;
-        return Ok((HOSTED_IDENTITY_ORIGIN.to_owned(), Some(ca)));
+        return Ok((origin, Some(ca)));
     }
     Ok((
         crate::init_cli::evalops_identity_base_url(snapshot, env)?,
         None,
     ))
+}
+
+/// Loopback HTTPS exchange origins are admitted only for debug/test binaries
+/// that opt in through the same test-authority switch as the public Identity
+/// URL; release builds keep the single pinned in-cluster origin.
+fn hosted_test_identity_origin(exchange: &str, env: &HashMap<String, String>) -> Result<String> {
+    if !crate::init_cli::test_identity_authority_enabled(env) {
+        bail!("hosted Identity exchange must be the in-cluster Identity service");
+    }
+    let url = url::Url::parse(exchange).context("parse hosted Identity exchange URL")?;
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        None => false,
+    };
+    if url.scheme() != "https" || !loopback || url.query().is_some() || url.fragment().is_some() {
+        bail!("hosted Identity exchange must be the in-cluster Identity service");
+    }
+    Ok(url.origin().ascii_serialization())
 }
 
 fn identity_verification_client(
@@ -1128,6 +1151,34 @@ mod tests {
                 env.insert("MAESTRO_IDENTITY_TLS_CA_FILE".into(), ca.into());
             }
             assert!(identity_verification_endpoint(None, &env).is_err());
+        }
+    }
+
+    #[test]
+    fn hosted_identity_admits_loopback_exchange_only_under_test_authority() {
+        let mut env = hosted_identity_env();
+        env.insert(
+            "MAESTRO_IDENTITY_EXCHANGE_URL".into(),
+            "https://127.0.0.1:45123/internal/v1/kubernetes-workload-certificates/exchange".into(),
+        );
+        let (origin, ca) = identity_verification_endpoint(None, &env).unwrap();
+        assert_eq!(origin, "https://127.0.0.1:45123");
+        assert!(ca.is_some());
+
+        env.insert("MAESTRO_TEST_IDENTITY_AUTHORITY".into(), "0".into());
+        assert!(identity_verification_endpoint(None, &env).is_err());
+
+        env.remove("MAESTRO_TEST_IDENTITY_AUTHORITY");
+        for exchange in [
+            "http://127.0.0.1:45123/exchange",
+            "https://127.0.0.1:45123/exchange?redirect=1",
+            "https://10.0.0.7:45123/exchange",
+        ] {
+            env.insert("MAESTRO_IDENTITY_EXCHANGE_URL".into(), exchange.into());
+            assert!(
+                identity_verification_endpoint(None, &env).is_err(),
+                "{exchange}"
+            );
         }
     }
 
