@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789371690,
+  "generated_at": 1789457621,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1294,6 +1294,44 @@
       }
     },
     {
+      "id": "~deepseek/deepseek-flash-latest",
+      "name": "DeepSeek: DeepSeek Flash Latest",
+      "provider": "openrouter",
+      "description": "This model always redirects to the latest model in the DeepSeek Flash family.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 943718
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "~deepseek/deepseek-pro-latest",
+      "name": "DeepSeek: DeepSeek Pro Latest",
+      "provider": "openrouter",
+      "description": "This model always redirects to the latest model in the DeepSeek Pro family.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 943718
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "~deepseek/deepseek-v4-flash-latest",
       "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "provider": "openrouter",
@@ -1305,7 +1343,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 131072
+        "output_tokens": 393216
       },
       "verification": {
         "state": "catalog",
@@ -1514,7 +1552,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -2681,25 +2719,6 @@
       }
     },
     {
-      "id": "google/gemini-2.5-pro-preview-05-06",
-      "name": "Google: Gemini 2.5 Pro Preview 05-06",
-      "provider": "openrouter",
-      "description": "Gemini 2.5 Pro is Google’s state-of-the-art AI model designed for advanced reasoning, coding, mathematics, and…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 65535
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "google/gemini-3-flash-preview",
       "name": "Google: Gemini 3 Flash Preview",
       "provider": "openrouter",
@@ -3623,7 +3642,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 115200
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -4649,7 +4668,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -4893,25 +4912,6 @@
         "protocol": "openai-chat",
         "tools": true,
         "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 4096
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/gpt-4-turbo-preview",
-      "name": "OpenAI: GPT-4 Turbo Preview",
-      "provider": "openrouter",
-      "description": "The preview GPT-4 model with improved instruction following, JSON mode, reproducible outputs, parallel function…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
@@ -6679,7 +6679,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
@@ -6869,7 +6869,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 65536
       },
       "verification": {
         "state": "catalog",
@@ -8142,7 +8142,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 128000
       },
       "verification": {
         "state": "catalog",
