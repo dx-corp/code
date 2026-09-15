@@ -327,6 +327,16 @@ impl AnthropicClient {
     ) -> Result<serde_json::Value> {
         let model = provider_model_name(&config.model);
         let capabilities = anthropic_request_capabilities(Some("anthropic"), &model);
+        let previous_checkpoint = config
+            .cache_topology
+            .as_ref()
+            .and_then(|prepared| prepared.previous_checkpoint())
+            .filter(|index| *index < messages.len())
+            .and_then(|index| {
+                transform_messages_for_target(&messages[..=index], OutboundTarget::Anthropic)
+                    .len()
+                    .checked_sub(1)
+            });
         let messages = transform_messages_for_target(messages, OutboundTarget::Anthropic);
         let mut body = serde_json::json!({
             "model": model,
@@ -417,7 +427,7 @@ impl AnthropicClient {
 
         if let Some(prepared) = &config.cache_topology {
             if config.cache_system_prompt {
-                crate::cache_topology::mark_stable_history(&mut body, "5m");
+                crate::cache_topology::mark_stable_history(&mut body, "5m", previous_checkpoint);
             }
             prepared.append_volatile_tail(&mut body);
         }
