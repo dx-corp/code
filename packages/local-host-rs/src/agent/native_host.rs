@@ -15,7 +15,8 @@ use maestro_runtime::agent::{
     NativeContextEffect, NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict,
     NativeHookEvent, NativeHookResult, NativeHostFuture, NativeModelCapabilities, NativeModelRoute,
     NativeReadOnlyToolCall, NativeResolvedClient, NativeToolAnnotations,
-    NativeToolExecutionOptions, SteerSignal, ToolDefinition, ToolExecution, WorkflowStateSnapshot,
+    NativeToolExecutionOptions, NativeToolOperationAdmission, SteerSignal, ToolDefinition,
+    ToolExecution, WorkflowStateSnapshot,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -29,6 +30,20 @@ use crate::safety::{ActionFirewall, FirewallContext, FirewallVerdict};
 use crate::tools::{BatchConfig, BatchExecutor, BatchToolCall, ToolExecutor};
 
 type ModelResolver = dyn Fn(&str, bool) -> Result<NativeResolvedClient, String> + Send + Sync;
+
+fn tool_replay_policy(
+    annotations: Option<&NativeToolAnnotations>,
+) -> maestro_runtime_contracts::ToolReplayPolicy {
+    annotations
+        .filter(|annotations| {
+            annotations.read_only_hint == Some(true)
+                && annotations.destructive_hint != Some(true)
+                && annotations.idempotent_hint == Some(true)
+        })
+        .map_or(maestro_runtime_contracts::ToolReplayPolicy::Never, |_| {
+            maestro_runtime_contracts::ToolReplayPolicy::Safe
+        })
+}
 
 fn lexical_resource_path(cwd: &Path, input: &str) -> Option<String> {
     let input = input.trim();
@@ -277,6 +292,13 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
                 idempotent_hint: annotations.idempotent_hint,
                 open_world_hint: annotations.open_world_hint,
             })
+    }
+
+    fn tool_operation_admission(&self, name: &str, _args: &Value) -> NativeToolOperationAdmission {
+        NativeToolOperationAdmission {
+            replay_policy: tool_replay_policy(self.tool_annotations(name).as_ref()),
+            idempotency_key: None,
+        }
     }
 
     fn ensure_mcp_annotations(&self) -> NativeHostFuture<'_, Result<(), String>> {
@@ -617,6 +639,20 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         self.with_hooks(|hooks| hooks.checkpoint_transcript_before_response())
     }
 
+    fn hook_record_tool_operation<'a>(
+        &'a self,
+        record: &'a maestro_runtime_contracts::ToolOperationRecord,
+    ) -> NativeHostFuture<'a, Result<(), String>> {
+        self.with_hooks(move |hooks| hooks.record_tool_operation(record))
+    }
+
+    fn hook_load_tool_operations(
+        &self,
+    ) -> NativeHostFuture<'_, Result<Vec<maestro_runtime_contracts::ToolOperationRecord>, String>>
+    {
+        self.with_hooks(|hooks| hooks.load_tool_operations())
+    }
+
     fn hook_session_id(&self) -> NativeHostFuture<'_, Option<String>> {
         self.with_hooks(|hooks| hooks.session_id().map(str::to_owned))
     }
@@ -858,6 +894,41 @@ mod tests {
         SessionEndInput, SessionStartHook, SessionStartInput,
     };
     use std::sync::Mutex;
+
+    #[test]
+    fn replay_requires_explicit_read_only_and_idempotent_annotations() {
+        let safe = NativeToolAnnotations {
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: None,
+        };
+        assert_eq!(
+            tool_replay_policy(Some(&safe)),
+            maestro_runtime_contracts::ToolReplayPolicy::Safe
+        );
+
+        for annotations in [
+            None,
+            Some(NativeToolAnnotations {
+                read_only_hint: None,
+                ..safe.clone()
+            }),
+            Some(NativeToolAnnotations {
+                idempotent_hint: None,
+                ..safe.clone()
+            }),
+            Some(NativeToolAnnotations {
+                destructive_hint: Some(true),
+                ..safe.clone()
+            }),
+        ] {
+            assert_eq!(
+                tool_replay_policy(annotations.as_ref()),
+                maestro_runtime_contracts::ToolReplayPolicy::Never
+            );
+        }
+    }
 
     #[derive(Default)]
     struct RecordingHook {

@@ -3,6 +3,125 @@
 use super::*;
 
 impl NativeAgentRunner {
+    async fn recover_durable_tool_operations(&mut self) {
+        let mut records = match self.hooks.hook_load_tool_operations().await {
+            Ok(records) => records,
+            Err(error) => {
+                let message = format!("Durable tool-operation recovery failed closed: {error}");
+                self.tool_executor.report_diagnostic(message.clone());
+                let _ = self.event_tx.send(FromAgent::Error {
+                    message,
+                    fatal: true,
+                    terminal: false,
+                    retryable: false,
+                });
+                return;
+            }
+        };
+        records.sort_by(|left, right| left.call_id.cmp(&right.call_id));
+        let mut recovered = Vec::new();
+        let mut complete_after_projection = Vec::new();
+        for record in records {
+            match (record.phase, record.replay_policy) {
+                (maestro_runtime_contracts::ToolOperationPhase::OutcomeReady, _) => {
+                    let Some(outcome) = record.outcome.as_ref() else {
+                        continue;
+                    };
+                    recovered.push(ContentBlock::ToolResult {
+                        tool_use_id: record.call_id.clone(),
+                        content: outcome.content.clone(),
+                        is_error: Some(outcome.is_error),
+                    });
+                    complete_after_projection.push(record.call_id);
+                }
+                (
+                    maestro_runtime_contracts::ToolOperationPhase::EffectPending,
+                    maestro_runtime_contracts::ToolReplayPolicy::Never,
+                ) => {
+                    let call_id = record.call_id.clone();
+                    let message = format!(
+                        "Unknown outcome for `{}` after runtime interruption; the operation was not replayed because its admitted replay policy is `never`. Reconcile the external effect before retrying.",
+                        record.tool_name
+                    );
+                    let ready = match record.outcome_ready(
+                        maestro_runtime_contracts::ToolOperationOutcome::new(
+                            message.clone(),
+                            true,
+                            None,
+                        ),
+                        super::tool_results::tool_operation_now_ms(),
+                    ) {
+                        Ok(ready) => ready,
+                        Err(error) => {
+                            self.tool_executor.report_diagnostic(format!(
+                                "unknown tool outcome staging failed for {call_id}: {error}"
+                            ));
+                            continue;
+                        }
+                    };
+                    if let Err(error) = self.hooks.hook_record_tool_operation(&ready).await {
+                        self.tool_executor.report_diagnostic(format!(
+                            "unknown tool outcome persistence failed for {call_id}: {error}"
+                        ));
+                        continue;
+                    }
+                    recovered.push(ContentBlock::ToolResult {
+                        tool_use_id: call_id.clone(),
+                        content: message,
+                        is_error: Some(true),
+                    });
+                    complete_after_projection.push(call_id);
+                }
+                (
+                    maestro_runtime_contracts::ToolOperationPhase::EffectPending,
+                    maestro_runtime_contracts::ToolReplayPolicy::Safe,
+                ) => {
+                    let _ = self.event_tx.send(FromAgent::ToolCall {
+                        call_id: record.call_id.clone(),
+                        tool: record.tool_name.clone(),
+                        args: record.admitted_arguments.clone(),
+                        requires_approval: false,
+                        approval_inline_env: None,
+                    });
+                    let execution = self.replay_tool_operation(record.clone()).await;
+                    let block = self
+                        .finalize_tool_call_result(
+                            ToolCallContext {
+                                call_id: record.call_id,
+                                tool_name: record.tool_name,
+                                args: record.admitted_arguments.clone(),
+                                safe_args: record.admitted_arguments.clone(),
+                                extra_context: None,
+                                pre_hook_args: record.admitted_arguments,
+                                initial_firewall_verdict: NativeFirewallVerdict::Allow,
+                                approval_inline_env: None,
+                            },
+                            true,
+                            Some(execution),
+                        )
+                        .await;
+                    recovered.push(block);
+                }
+                (
+                    maestro_runtime_contracts::ToolOperationPhase::Planned
+                    | maestro_runtime_contracts::ToolOperationPhase::Completed,
+                    _,
+                ) => {}
+            }
+        }
+        if recovered.is_empty() {
+            return;
+        }
+        self.messages_mut().push(Message {
+            role: Role::User,
+            content: MessageContent::Blocks(recovered),
+        });
+        self.emit_conversation_snapshot();
+        for call_id in complete_after_projection {
+            self.complete_tool_operation(&call_id).await;
+        }
+    }
+
     /// Interrupted streams do not reach post-response compaction. Bound their
     /// accumulated history at the interruption boundary, preserving the
     /// exact original requests in the same atomic checkpoint as the summary.
@@ -63,8 +182,11 @@ impl NativeAgentRunner {
         let previous_session = self.hooks.hook_session_id().await;
         if previous_session == session_id {
             self.hooks
-                .hook_set_session_context(session_id, transcript_path)
+                .hook_set_session_context(session_id.clone(), transcript_path)
                 .await;
+            if session_id.is_some() {
+                self.recover_durable_tool_operations().await;
+            }
             return;
         }
         if previous_session.is_some() {
@@ -109,6 +231,7 @@ impl NativeAgentRunner {
             .await;
         if session_id.is_some() {
             let _ = self.hooks.hook_on_session_start(reason).await;
+            self.recover_durable_tool_operations().await;
         }
     }
     /// Output allowance for the request this runner is about to build.

@@ -1483,6 +1483,33 @@ impl IntegratedHookSystem {
             .or(self.transcript_checkpoint_size);
     }
 
+    pub fn record_tool_operation(
+        &mut self,
+        record: &maestro_runtime_contracts::ToolOperationRecord,
+    ) -> Result<(), String> {
+        let Some(path) = self.transcript_path.as_deref() else {
+            return Ok(());
+        };
+        maestro_session::session::tool_operations::append_tool_operation(
+            std::path::Path::new(path),
+            record,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    pub fn load_tool_operations(
+        &self,
+    ) -> Result<Vec<maestro_runtime_contracts::ToolOperationRecord>, String> {
+        let Some(path) = self.transcript_path.as_deref() else {
+            return Ok(Vec::new());
+        };
+        maestro_session::session::tool_operations::load_tool_operation_ledger(std::path::Path::new(
+            path,
+        ))
+        .map(|ledger| ledger.latest_records().cloned().collect())
+        .map_err(|error| error.to_string())
+    }
+
     /// Attach the tenant scope resolved from the authenticated Identity session.
     /// External hooks receive identifiers only; bearer credentials remain out of
     /// the hook payload.

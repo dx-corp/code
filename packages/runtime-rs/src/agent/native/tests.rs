@@ -36,7 +36,8 @@ fn prompt_experiment_excludes_auxiliary_compaction_receipts() {
 use super::super::native_host::{
     NativeCodexAuth, NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict,
     NativeHookEvent, NativeHookResult, NativeHostFuture, NativeModelRoute, NativeReadOnlyToolCall,
-    NativeResolvedClient, NativeToolAnnotations, NativeToolExecutionOptions, ToolDefinition,
+    NativeResolvedClient, NativeToolAnnotations, NativeToolExecutionOptions,
+    NativeToolOperationAdmission, ToolDefinition,
 };
 use super::super::protocol::InlineToolApprovalContext;
 use super::super::{
@@ -84,6 +85,8 @@ pub(super) struct RuntimeTestHost {
     post_tool_context: Option<String>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     completed_tool_executions: Arc<AtomicUsize>,
+    tool_operation_records: Option<Arc<Mutex<Vec<maestro_runtime_contracts::ToolOperationRecord>>>>,
+    replay_safe_tools: HashSet<String>,
     tool_definitions: Arc<Vec<ToolDefinition>>,
     reserved_tools: HashSet<String>,
     mcp_permission_tools: HashSet<String>,
@@ -131,6 +134,8 @@ impl RuntimeTestHost {
             post_tool_context: None,
             checkpoint_barrier: None,
             completed_tool_executions: Arc::new(AtomicUsize::new(0)),
+            tool_operation_records: None,
+            replay_safe_tools: HashSet::new(),
             tool_definitions: Arc::new(tool_definitions),
             reserved_tools: HashSet::new(),
             mcp_permission_tools: HashSet::new(),
@@ -167,6 +172,36 @@ impl RuntimeTestHost {
     fn with_provider_admission_blocked_after_tool(mut self) -> Self {
         self.block_provider_after_tool = true;
         self
+    }
+
+    fn with_tool_operation_journal(
+        mut self,
+        records: Arc<Mutex<Vec<maestro_runtime_contracts::ToolOperationRecord>>>,
+    ) -> Self {
+        self.tool_operation_records = Some(records);
+        self
+    }
+
+    fn with_replay_safe_tool(mut self, tool_name: &str) -> Self {
+        self.replay_safe_tools
+            .insert(tool_name.to_ascii_lowercase());
+        self
+    }
+
+    fn assert_effect_pending(&self, call_id: &str) {
+        let Some(records) = &self.tool_operation_records else {
+            return;
+        };
+        let records = records
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            records.iter().rev().any(|record| {
+                record.call_id == call_id
+                    && record.phase == maestro_runtime_contracts::ToolOperationPhase::EffectPending
+            }),
+            "effect_pending must be durable before executing {call_id}"
+        );
     }
 
     fn execution(&self, call_id: &str, name: &str, args: &Value) -> ToolExecution {
@@ -359,6 +394,7 @@ impl NativeExecutionHost for RuntimeTestHost {
         _options: NativeToolExecutionOptions<'a>,
     ) -> NativeHostFuture<'a, ToolExecution> {
         Box::pin(async move {
+            self.assert_effect_pending(call_id);
             let execution = self.execution(call_id, name, args);
             if self.block_provider_after_tool {
                 self.provider_admission_blocked
@@ -378,6 +414,7 @@ impl NativeExecutionHost for RuntimeTestHost {
             let executions = calls
                 .iter()
                 .map(|call| {
+                    self.assert_effect_pending(&call.call_id);
                     (
                         call.call_id.clone(),
                         self.execution(&call.call_id, &call.tool_name, &call.args),
@@ -564,6 +601,52 @@ impl NativeExecutionHost for RuntimeTestHost {
         })
     }
 
+    fn tool_operation_admission(&self, name: &str, _args: &Value) -> NativeToolOperationAdmission {
+        if self.replay_safe_tools.contains(&name.to_ascii_lowercase()) {
+            NativeToolOperationAdmission {
+                replay_policy: maestro_runtime_contracts::ToolReplayPolicy::Safe,
+                idempotency_key: Some(format!("runtime-test:{name}")),
+            }
+        } else {
+            NativeToolOperationAdmission::default()
+        }
+    }
+
+    fn hook_record_tool_operation<'a>(
+        &'a self,
+        record: &'a maestro_runtime_contracts::ToolOperationRecord,
+    ) -> NativeHostFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if let Some(records) = &self.tool_operation_records {
+                records
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(record.clone());
+            }
+            Ok(())
+        })
+    }
+
+    fn hook_load_tool_operations<'a>(
+        &'a self,
+    ) -> NativeHostFuture<'a, Result<Vec<maestro_runtime_contracts::ToolOperationRecord>, String>>
+    {
+        Box::pin(async move {
+            let Some(records) = &self.tool_operation_records else {
+                return Ok(Vec::new());
+            };
+            let records = records
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let mut ledger = maestro_runtime_contracts::ToolOperationLedger::default();
+            for record in records {
+                ledger.apply(record).map_err(|error| error.to_string())?;
+            }
+            Ok(ledger.latest_records().cloned().collect())
+        })
+    }
+
     fn hook_on_session_start<'a>(
         &'a self,
         _reason: &'a str,
@@ -744,6 +827,338 @@ fn new_runtime_test_agent_with_host(
         None,
         resolved,
     )
+}
+
+fn scripted_tool_turn(call_id: &str, tool_name: &str, input: Value) -> crate::ai::ScriptedResponse {
+    crate::ai::ScriptedResponse {
+        blocks: vec![crate::ai::ScriptedBlock::ToolUse {
+            id: call_id.to_owned(),
+            name: tool_name.to_owned(),
+            input,
+        }],
+        stop_reason: crate::ai::StopReason::ToolUse,
+        error: None,
+    }
+}
+
+fn staged_tool_operation(
+    call_id: &str,
+    replay_policy: maestro_runtime_contracts::ToolReplayPolicy,
+    outcome: Option<maestro_runtime_contracts::ToolOperationOutcome>,
+) -> Vec<maestro_runtime_contracts::ToolOperationRecord> {
+    let planned = maestro_runtime_contracts::ToolOperationRecord::planned(
+        call_id,
+        "read",
+        serde_json::json!({"path": "recovery-fixture.txt"}),
+        (replay_policy == maestro_runtime_contracts::ToolReplayPolicy::Safe)
+            .then(|| format!("runtime-test:{call_id}")),
+        replay_policy,
+        1,
+    )
+    .expect("planned operation");
+    let pending = planned
+        .clone()
+        .effect_pending(2)
+        .expect("pending operation");
+    let mut records = vec![planned, pending.clone()];
+    if let Some(outcome) = outcome {
+        records.push(pending.outcome_ready(outcome, 3).expect("ready operation"));
+    }
+    records
+}
+
+async fn wait_for_recovered_tool_result(
+    events: &mut mpsc::UnboundedReceiver<FromAgent>,
+    call_id: &str,
+) -> (String, bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::ConversationSnapshot { messages, .. }) => {
+                    for message in messages {
+                        let MessageContent::Blocks(blocks) = message.content else {
+                            continue;
+                        };
+                        for block in blocks {
+                            let ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                            } = block
+                            else {
+                                continue;
+                            };
+                            if tool_use_id == call_id {
+                                return (content, is_error.unwrap_or(false));
+                            }
+                        }
+                    }
+                }
+                Some(FromAgent::Error {
+                    message,
+                    fatal: true,
+                    ..
+                }) => panic!("recovery failed: {message}"),
+                Some(_) => {}
+                None => panic!("agent event channel closed before recovery snapshot"),
+            }
+        }
+    })
+    .await
+    .expect("recovery snapshot timeout")
+}
+
+async fn wait_for_turn_completed(events: &mut mpsc::UnboundedReceiver<FromAgent>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::TurnCompleted { .. }) => return,
+                Some(FromAgent::Error {
+                    message,
+                    terminal: true,
+                    ..
+                })
+                | Some(FromAgent::ProviderError { message, .. }) => {
+                    panic!("runtime turn failed: {message}")
+                }
+                Some(_) => {}
+                None => panic!("agent event channel closed before turn completion"),
+            }
+        }
+    })
+    .await
+    .expect("runtime turn timeout");
+}
+
+#[tokio::test]
+async fn native_tool_effect_is_staged_before_execution_and_completed_after_projection() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let scripted = crate::ai::ScriptedClient::new(
+        "runtime-test/durable-operation",
+        vec![
+            scripted_tool_turn(
+                "call-durable-read",
+                "read",
+                serde_json::json!({"path": "fixture.txt"}),
+            ),
+            crate::ai::ScriptedResponse::text("done"),
+        ],
+    );
+    let config = NativeAgentConfig {
+        model: "runtime-test/durable-operation".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..NativeAgentConfig::default()
+    };
+    let host = RuntimeTestHost::new(config.cwd.clone(), UnifiedClient::Scripted(scripted))
+        .with_tool_operation_journal(Arc::clone(&journal));
+    let executions = Arc::clone(&host.completed_tool_executions);
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).expect("agent");
+
+    agent
+        .prompt("read the fixture".to_owned(), Vec::new())
+        .await
+        .expect("prompt");
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+    let records = journal.lock().unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.call_id == "call-durable-read")
+            .map(|record| record.phase)
+            .collect::<Vec<_>>(),
+        vec![
+            maestro_runtime_contracts::ToolOperationPhase::Planned,
+            maestro_runtime_contracts::ToolOperationPhase::EffectPending,
+            maestro_runtime_contracts::ToolOperationPhase::OutcomeReady,
+            maestro_runtime_contracts::ToolOperationPhase::Completed,
+        ]
+    );
+    assert!(
+        records
+            .iter()
+            .find(|record| {
+                record.call_id == "call-durable-read"
+                    && record.phase == maestro_runtime_contracts::ToolOperationPhase::OutcomeReady
+            })
+            .and_then(|record| record.outcome.as_ref())
+            .and_then(|outcome| outcome.receipt.as_ref())
+            .is_some(),
+        "the staged outcome must retain its governed execution receipt"
+    );
+}
+
+#[tokio::test]
+async fn outcome_ready_recovery_materializes_without_reexecution() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let journal = Arc::new(Mutex::new(staged_tool_operation(
+        "call-ready",
+        maestro_runtime_contracts::ToolReplayPolicy::Never,
+        Some(maestro_runtime_contracts::ToolOperationOutcome::new(
+            "persisted result",
+            false,
+            None,
+        )),
+    )));
+    let scripted = crate::ai::ScriptedClient::new(
+        "runtime-test/outcome-ready",
+        vec![crate::ai::ScriptedResponse::text("barrier")],
+    );
+    let config = NativeAgentConfig {
+        model: "runtime-test/outcome-ready".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        ..NativeAgentConfig::default()
+    };
+    let host = RuntimeTestHost::new(config.cwd.clone(), UnifiedClient::Scripted(scripted))
+        .with_tool_operation_journal(Arc::clone(&journal));
+    let executions = Arc::clone(&host.completed_tool_executions);
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).expect("agent");
+
+    agent
+        .set_session_context(Some("ready-session".into()), "restore", false)
+        .expect("session context");
+    let (content, is_error) = wait_for_recovered_tool_result(&mut events, "call-ready").await;
+    assert_eq!(content, "[tool result omitted from checkpoint]");
+    assert!(!is_error);
+    agent
+        .prompt("barrier".to_owned(), Vec::new())
+        .await
+        .expect("barrier prompt");
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    let records = journal.lock().unwrap();
+    assert_eq!(
+        records.last().map(|record| record.phase),
+        Some(maestro_runtime_contracts::ToolOperationPhase::Completed)
+    );
+    assert_eq!(
+        records
+            .last()
+            .and_then(|record| record.outcome.as_ref())
+            .map(|outcome| outcome.content.as_str()),
+        Some("persisted result")
+    );
+}
+
+#[tokio::test]
+async fn safe_pending_recovery_replays_once_from_admitted_arguments() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::write(
+        workspace.path().join("recovery-fixture.txt"),
+        "replayed fixture",
+    )
+    .expect("fixture");
+    let journal = Arc::new(Mutex::new(staged_tool_operation(
+        "call-safe-pending",
+        maestro_runtime_contracts::ToolReplayPolicy::Safe,
+        None,
+    )));
+    let scripted = crate::ai::ScriptedClient::new(
+        "runtime-test/safe-recovery",
+        vec![crate::ai::ScriptedResponse::text("barrier")],
+    );
+    let config = NativeAgentConfig {
+        model: "runtime-test/safe-recovery".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        ..NativeAgentConfig::default()
+    };
+    let host = RuntimeTestHost::new(config.cwd.clone(), UnifiedClient::Scripted(scripted))
+        .with_tool_operation_journal(Arc::clone(&journal))
+        .with_replay_safe_tool("read");
+    let executions = Arc::clone(&host.completed_tool_executions);
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).expect("agent");
+
+    agent
+        .set_session_context(Some("safe-session".into()), "restore", false)
+        .expect("session context");
+    let (content, is_error) =
+        wait_for_recovered_tool_result(&mut events, "call-safe-pending").await;
+    assert_eq!(content, "[tool result omitted from checkpoint]");
+    assert!(!is_error);
+    agent
+        .set_session_context(Some("safe-session".into()), "restore-again", false)
+        .expect("repeat session context");
+    agent
+        .prompt("barrier".to_owned(), Vec::new())
+        .await
+        .expect("barrier prompt");
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        1,
+        "a completed replay must be idempotent across repeated restores"
+    );
+    let records = journal.lock().unwrap();
+    assert_eq!(
+        records.last().map(|record| record.phase),
+        Some(maestro_runtime_contracts::ToolOperationPhase::Completed)
+    );
+    assert_eq!(
+        records
+            .last()
+            .and_then(|record| record.outcome.as_ref())
+            .map(|outcome| outcome.content.as_str()),
+        Some("replayed fixture")
+    );
+}
+
+#[tokio::test]
+async fn never_pending_recovery_records_unknown_outcome_without_execution() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let journal = Arc::new(Mutex::new(staged_tool_operation(
+        "call-never-pending",
+        maestro_runtime_contracts::ToolReplayPolicy::Never,
+        None,
+    )));
+    let config = NativeAgentConfig {
+        model: "runtime-test/never-recovery".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        ..NativeAgentConfig::default()
+    };
+    let host = RuntimeTestHost::new(
+        config.cwd.clone(),
+        UnifiedClient::Scripted(crate::ai::ScriptedClient::new(
+            "runtime-test/never-recovery",
+            Vec::new(),
+        )),
+    )
+    .with_tool_operation_journal(Arc::clone(&journal));
+    let executions = Arc::clone(&host.completed_tool_executions);
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).expect("agent");
+
+    agent
+        .set_session_context(Some("never-session".into()), "restore", false)
+        .expect("session context");
+    let (content, is_error) =
+        wait_for_recovered_tool_result(&mut events, "call-never-pending").await;
+    agent.shutdown().await;
+
+    assert!(is_error);
+    assert_eq!(content, "[tool result omitted from checkpoint]");
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    let records = journal.lock().unwrap();
+    assert_eq!(
+        records.last().map(|record| record.phase),
+        Some(maestro_runtime_contracts::ToolOperationPhase::Completed)
+    );
+    assert!(
+        records
+            .last()
+            .and_then(|record| record.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome.is_error
+                    && outcome.receipt.is_none()
+                    && outcome.content.contains("Unknown outcome")
+            })
+    );
 }
 
 #[tokio::test]
