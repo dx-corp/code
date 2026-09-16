@@ -138,6 +138,26 @@ fn discover_in_dirs(dirs: &[(PathBuf, ExecCommandSource)]) -> Vec<ExecCommand> {
 
 fn scan_dir(dir: &Path, source: ExecCommandSource) -> Vec<ExecCommand> {
     let mut out = Vec::new();
+    if dir.is_file() {
+        let Some(name) = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+        else {
+            return out;
+        };
+        if !name.starts_with('.')
+            && dir.extension().is_none_or(|extension| extension != "md")
+            && is_executable_script(dir)
+        {
+            out.push(ExecCommand {
+                name,
+                path: dir.to_path_buf(),
+                source,
+            });
+        }
+        return out;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return out;
     };
@@ -433,6 +453,24 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].source, ExecCommandSource::Plugin);
         assert!(commands[0].path.starts_with(plugin_commands));
+    }
+
+    #[test]
+    fn discovers_an_exact_filtered_plugin_command_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let path = write_script(
+            &tmp.path().join("plugin/commands"),
+            "plugin-task",
+            "#!/bin/sh\necho plugin\n",
+            true,
+        );
+
+        let commands = discover_with_plugin_dirs(&workspace, std::slice::from_ref(&path));
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].path, path);
+        assert_eq!(commands[0].source, ExecCommandSource::Plugin);
     }
 
     #[test]

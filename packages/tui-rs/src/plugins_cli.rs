@@ -121,6 +121,35 @@ pub fn run_plugins(args: &[String]) -> Result<i32> {
             println!("{}", serde_json::to_string_pretty(&preview)?);
             Ok(0)
         }
+        "remove" | "uninstall" => {
+            let name = parsed
+                .positionals
+                .first()
+                .context("Usage: maestro plugins remove <name>")?;
+            let home = maestro_home_dir().context("could not resolve ~/.maestro")?;
+            crate::plugins::remove(name, &home.join("plugins"), &home.join("plugin-state.json"))?;
+            println!("Removed {name}");
+            Ok(0)
+        }
+        "update" => {
+            let home = maestro_home_dir().context("could not resolve ~/.maestro")?;
+            let updates = crate::plugins::update(
+                parsed.positionals.first().map(String::as_str),
+                &home.join("plugins"),
+                &home.join("plugin-state.json"),
+                parsed.trust,
+            )?;
+            if parsed.json {
+                println!("{}", serde_json::to_string_pretty(&updates)?);
+            } else if updates.is_empty() {
+                println!("No managed plugins to update");
+            } else {
+                for update in updates {
+                    println!("Updated {} from {}", update.name, update.source);
+                }
+            }
+            Ok(0)
+        }
         "marketplace" | "market" | "catalog" => {
             run_marketplace(&parsed.positionals, parsed.trust, parsed.json)
         }
@@ -233,7 +262,7 @@ fn parse_args(args: &[String]) -> Result<PluginArgs> {
 }
 
 fn print_help() {
-    println!("{}", crate::localization::cli_locale().format("maestro plugins [list|info|marketplace] [name] [options]\n\nCommands:\nlist                   List discovered plugins (default)\ninfo <name>            Show one plugin's path, origin, and components\ninstall <path|git-url> Install a plugin; git URLs require --trust\nmarketplace [list]     List curated catalog (id, tier, source)\nmarketplace install <id>  Install catalog entry; non-official needs --trust\nenable|disable <name>  Toggle the whole plugin\ncapability <name> <skills|agents|commands|hooks|mcp|connections> <on|off>\n<name>                 Alias for info <name>\n\nOptions:\n--json                 Emit machine-readable JSON\n--trust                Explicitly trust and execute remote plugin code\n--workspace <path>     Discover relative to this workspace (default: cwd)\n--help, -h             Show this help\n\nDiscovery roots (high wins on name collision):\n.maestro/plugins/<name>/   project\n~/.maestro/plugins/<name>/ user\n.composer/plugins/<name>/  legacy project\n~/.composer/plugins/<name>/ legacy user\n\nInstalled plugin code and each capability remain independently disableable.", &[]));
+    println!("{}", crate::localization::cli_locale().format("maestro plugins [list|info|marketplace] [name] [options]\n\nCommands:\nlist                   List discovered plugins (default)\ninfo <name>            Show one plugin's path, origin, and components\ninstall <path|git-url> Install a plugin; git URLs require --trust\nremove <name>          Atomically remove a managed plugin\nupdate [name]          Refresh one or all managed plugins; explicit pins stay pinned\nmarketplace [list]     List curated catalog (id, tier, source)\nmarketplace install <id>  Install catalog entry; non-official needs --trust\nenable|disable <name>  Toggle the whole plugin\ncapability <name> <skills|agents|commands|hooks|mcp|connections> <on|off>\n<name>                 Alias for info <name>\n\nOptions:\n--json                 Emit machine-readable JSON\n--trust                Explicitly trust and execute remote plugin code\n--workspace <path>     Discover relative to this workspace (default: cwd)\n--help, -h             Show this help\n\nDiscovery roots (high wins on name collision):\n.maestro/plugins/<name>/   project\n~/.maestro/plugins/<name>/ user\n.composer/plugins/<name>/  legacy project\n~/.composer/plugins/<name>/ legacy user\n\nUse top-level `--plugin <path>` to load a local plugin for one process without persisting state. Installed plugin code and each capability remain independently disableable.", &[]));
 }
 
 fn run_marketplace(positionals: &[String], trust: bool, json: bool) -> Result<i32> {
@@ -652,6 +681,8 @@ mod tests {
                 mcp_path: Some(PathBuf::from("/p/x/mcp.json")),
                 connections_path: None,
             },
+            trust_state: None,
+            resource_filters: crate::plugins::PluginResourceFilters::default(),
         };
         let entry = list_entry(&plugin);
         assert_eq!(entry.components, vec!["skills", "agents", "mcp"]);

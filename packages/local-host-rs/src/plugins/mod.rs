@@ -31,6 +31,7 @@ mod loader;
 mod manager;
 mod manifest;
 pub mod marketplace;
+mod project_manifest;
 
 pub use connection_types::{
     ConnectionMcpBindingDefinition, ConnectionTypeDefinition, ConnectionTypeManifest,
@@ -42,12 +43,16 @@ pub use loader::{
 };
 pub use manager::{
     InstallPreview, InstallProvenance, PluginCapability, PluginState, PluginTrustState, install,
-    install_with_provenance, set_capability, set_enabled,
+    install_with_provenance, package_integrity, remove, set_capability, set_enabled, update,
 };
 pub use manifest::PluginManifest;
 pub use marketplace::{
     MarketplaceEntry, MarketplaceTier, builtin_catalog, find_entry, format_catalog, is_installed,
     resolve_install_source,
+};
+pub use project_manifest::{
+    PROJECT_PLUGIN_MANIFEST_PATH, PluginResourceFilters, ProjectPluginDeclaration,
+    ProjectPluginManifest, ProjectPluginScope, ProjectPluginSource, ResourceFilter,
 };
 
 use std::collections::HashMap;
@@ -69,6 +74,10 @@ pub struct DiscoveredPlugin {
     pub manifest_path: Option<PathBuf>,
     /// Resolved component paths (skills, agents, commands, hooks, MCP).
     pub components: PluginComponents,
+    /// Managed installation metadata, when present.
+    pub trust_state: Option<PluginTrustState>,
+    /// Project-declared resource filters, applied beneath capability gates.
+    pub resource_filters: PluginResourceFilters,
 }
 
 impl DiscoveredPlugin {
@@ -202,6 +211,7 @@ pub struct PluginRegistry {
     /// Project-scoped roots that existed but were skipped because the
     /// workspace isn't trusted (see [`Self::discover`]).
     skipped_untrusted_roots: Vec<PathBuf>,
+    admission_errors: Vec<String>,
 }
 
 impl PluginRegistry {
@@ -230,7 +240,29 @@ impl PluginRegistry {
             crate::path_utils::maestro_home_dir().as_deref(),
             crate::path_utils::legacy_composer_home_dir().as_deref(),
         );
-        Self::discover_gated(&roots, workspace_trusted)
+        Self::discover_for_workspace_with_roots(workspace_dir, &roots, workspace_trusted)
+    }
+
+    fn discover_for_workspace_with_roots(
+        workspace_dir: &Path,
+        roots: &[(PathBuf, PluginOrigin)],
+        workspace_trusted: bool,
+    ) -> Self {
+        let mut registry = Self::discover_gated(roots, workspace_trusted);
+        if workspace_trusted {
+            if let Err(error) =
+                project_manifest::apply_project_manifest(workspace_dir, &mut registry.plugins)
+            {
+                registry
+                    .plugins
+                    .retain(|plugin| !plugin.origin.is_project_scoped());
+                registry
+                    .admission_errors
+                    .push(format!("project plugin manifest rejected: {error:#}"));
+            }
+        }
+        registry.load_ephemeral_plugins();
+        registry
     }
 
     /// Discover from explicit roots (low → high priority order), applying
@@ -302,6 +334,7 @@ impl PluginRegistry {
                 }
                 if let Some(mut plugin) = load_plugin_dir(&path, *origin) {
                     let key = plugin.name.to_lowercase();
+                    plugin.trust_state = state.plugins.get(&key).cloned();
                     if state
                         .plugins
                         .get(&key)
@@ -345,7 +378,40 @@ impl PluginRegistry {
         Self {
             plugins,
             skipped_untrusted_roots: Vec::new(),
+            admission_errors: Vec::new(),
         }
+    }
+
+    fn load_ephemeral_plugins(&mut self) {
+        let Some(raw) = std::env::var_os("MAESTRO_EPHEMERAL_PLUGINS") else {
+            return;
+        };
+        for path in std::env::split_paths(&raw) {
+            match self.load_ephemeral_plugin(&path) {
+                Ok(()) => {}
+                Err(error) => self.admission_errors.push(format!(
+                    "ephemeral plugin {} rejected: {error:#}",
+                    path.display()
+                )),
+            }
+        }
+        self.plugins.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.root.cmp(&b.root))
+        });
+    }
+
+    fn load_ephemeral_plugin(&mut self, path: &Path) -> anyhow::Result<()> {
+        manager::validate_tree(path)?;
+        let plugin = load_plugin_dir(path, PluginOrigin::Ephemeral)
+            .ok_or_else(|| anyhow::anyhow!("plugin has no valid manifest or components"))?;
+        let key = plugin.name.to_lowercase();
+        self.plugins
+            .retain(|candidate| candidate.name.to_lowercase() != key);
+        self.plugins.push(plugin);
+        Ok(())
     }
 
     /// Human-readable notice describing any project-scoped plugin roots
@@ -370,6 +436,12 @@ impl PluginRegistry {
         ))
     }
 
+    /// Admission failures that left a project or one-run plugin disabled.
+    #[must_use]
+    pub fn admission_errors(&self) -> &[String] {
+        &self.admission_errors
+    }
+
     /// All discovered plugins (sorted by name).
     #[must_use]
     pub fn plugins(&self) -> &[DiscoveredPlugin] {
@@ -388,10 +460,7 @@ impl PluginRegistry {
     /// Skill directories from all plugins (for SkillLoader integration).
     #[must_use]
     pub fn skill_dirs(&self) -> Vec<PathBuf> {
-        self.plugins
-            .iter()
-            .filter_map(|p| p.components.skills_dir.clone())
-            .collect()
+        self.plugins.iter().flat_map(filtered_skill_dirs).collect()
     }
 
     /// Agent/profile definition directories from all plugins.
@@ -403,12 +472,46 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Exact agent resources from plugins. Unfiltered plugins contribute their
+    /// directory; filtered plugins contribute only admitted Markdown files.
+    #[must_use]
+    pub fn agent_paths(&self) -> Vec<PathBuf> {
+        self.plugins
+            .iter()
+            .flat_map(|plugin| {
+                filtered_component_paths(
+                    plugin,
+                    plugin.components.agents_dir.as_deref(),
+                    &plugin.resource_filters.agents,
+                    |path| path.extension().is_some_and(|extension| extension == "md"),
+                )
+            })
+            .collect()
+    }
+
     /// Command template directories from all plugins.
     #[must_use]
     pub fn command_dirs(&self) -> Vec<PathBuf> {
         self.plugins
             .iter()
             .filter_map(|p| p.components.commands_dir.clone())
+            .collect()
+    }
+
+    /// Exact command resources from plugins. Unfiltered plugins contribute
+    /// their directory; filtered plugins contribute only admitted files.
+    #[must_use]
+    pub fn command_paths(&self) -> Vec<PathBuf> {
+        self.plugins
+            .iter()
+            .flat_map(|plugin| {
+                filtered_component_paths(
+                    plugin,
+                    plugin.components.commands_dir.as_deref(),
+                    &plugin.resource_filters.commands,
+                    |path| path.is_file(),
+                )
+            })
             .collect()
     }
 
@@ -519,7 +622,71 @@ fn load_plugin_dir(path: &Path, origin: PluginOrigin) -> Option<DiscoveredPlugin
         manifest,
         manifest_path,
         components,
+        trust_state: None,
+        resource_filters: PluginResourceFilters::default(),
     })
+}
+
+fn filtered_component_paths(
+    plugin: &DiscoveredPlugin,
+    root: Option<&Path>,
+    filter: &ResourceFilter,
+    accepts: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    if !filter.is_active() {
+        return vec![root.to_path_buf()];
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| accepts(path))
+        .filter(|path| {
+            path.strip_prefix(&plugin.root)
+                .is_ok_and(|relative| filter.allows(relative))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn filtered_skill_dirs(plugin: &DiscoveredPlugin) -> Vec<PathBuf> {
+    let Some(root) = plugin.components.skills_dir.as_deref() else {
+        return Vec::new();
+    };
+    let filter = &plugin.resource_filters.skills;
+    if !filter.is_active() {
+        return vec![root.to_path_buf()];
+    }
+    let mut paths = Vec::new();
+    for candidate in std::iter::once(root.to_path_buf()).chain(
+        fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir()),
+    ) {
+        let skill_file = [candidate.join("SKILL.md"), candidate.join("skill.md")]
+            .into_iter()
+            .find(|path| path.is_file());
+        let Some(_skill_file) = skill_file else {
+            continue;
+        };
+        let allowed = candidate
+            .strip_prefix(&plugin.root)
+            .is_ok_and(|relative| filter.allows(relative));
+        if allowed {
+            paths.push(candidate);
+        }
+    }
+    paths.sort();
+    paths
 }
 
 #[cfg(test)]
@@ -593,6 +760,29 @@ mod tests {
     }
 
     #[test]
+    fn project_manifest_is_not_read_for_an_untrusted_workspace() {
+        let workspace = TempDir::new().unwrap();
+        let plugins_root = workspace.path().join(".maestro/plugins");
+        make_plugin(&plugins_root, "project-plugin", true, true);
+        write_file(
+            &workspace.path().join(PROJECT_PLUGIN_MANIFEST_PATH),
+            "not valid json",
+        );
+        let roots = vec![(plugins_root, PluginOrigin::Project)];
+
+        let untrusted =
+            PluginRegistry::discover_for_workspace_with_roots(workspace.path(), &roots, false);
+        assert!(untrusted.is_empty());
+        assert!(untrusted.admission_errors().is_empty());
+
+        let trusted =
+            PluginRegistry::discover_for_workspace_with_roots(workspace.path(), &roots, true);
+        assert!(trusted.is_empty());
+        assert_eq!(trusted.admission_errors().len(), 1);
+        assert!(trusted.admission_errors()[0].contains("invalid project plugin manifest"));
+    }
+
+    #[test]
     fn test_untrusted_workspace_still_discovers_user_plugin_roots() {
         // User-scoped plugin roots (~/.maestro/plugins) aren't
         // repository-controlled, so they must not be gated on workspace trust.
@@ -605,6 +795,26 @@ mod tests {
 
         assert_eq!(registry.len(), 1);
         assert!(registry.untrusted_skip_notice().is_none());
+    }
+
+    #[test]
+    fn one_run_plugin_is_ephemeral_and_overrides_installed_name() {
+        let tmp = TempDir::new().unwrap();
+        let installed_root = tmp.path().join("installed");
+        let one_run = tmp.path().join("one-run");
+        make_plugin(&installed_root, "demo", true, true);
+        fs::create_dir_all(one_run.join("commands")).unwrap();
+        write_file(&one_run.join("plugin.json"), r#"{"name":"demo"}"#);
+        let mut registry = PluginRegistry::discover_from(&[(installed_root, PluginOrigin::User)]);
+
+        registry.load_ephemeral_plugin(&one_run).unwrap();
+
+        let plugin = registry.get("demo").unwrap();
+        assert_eq!(plugin.origin, PluginOrigin::Ephemeral);
+        assert_eq!(plugin.root, one_run);
+        assert!(plugin.components.commands_dir.is_some());
+        assert!(plugin.components.skills_dir.is_none());
+        assert!(!tmp.path().join("plugin-state.json").exists());
     }
 
     #[test]

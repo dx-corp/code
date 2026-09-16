@@ -13,6 +13,7 @@ struct ObservationCall {
     context_effect: Option<NativeContextEffect>,
     turn: usize,
     sequence: usize,
+    successful: bool,
 }
 
 #[derive(Clone)]
@@ -35,7 +36,6 @@ pub(super) fn project_observation_history(
     }
     let mut turn = 0usize;
     let mut calls = HashMap::<String, ObservationCall>::new();
-    let mut successful_results = HashSet::<String>::new();
     let mut sequence = 0usize;
     for message in messages.iter() {
         if message.role == Role::User && !is_tool_result_only_user_message(message) {
@@ -65,6 +65,7 @@ pub(super) fn project_observation_history(
                             context_effect,
                             turn,
                             sequence,
+                            successful: false,
                         },
                     );
                 }
@@ -73,7 +74,9 @@ pub(super) fn project_observation_history(
                     is_error,
                     ..
                 } if !is_error.unwrap_or(false) => {
-                    successful_results.insert(tool_use_id.clone());
+                    if let Some(call) = calls.get_mut(tool_use_id) {
+                        call.successful = true;
+                    }
                 }
                 _ => {}
             }
@@ -83,7 +86,7 @@ pub(super) fn project_observation_history(
     let mut latest_observation = HashMap::<String, FrontierPoint>::new();
     let mut latest_mutation = HashMap::<String, FrontierPoint>::new();
     for (call_id, call) in &calls {
-        if call.turn >= turn || !successful_results.contains(call_id) {
+        if call.turn >= turn || !call.successful {
             continue;
         }
         let Some(effect) = &call.context_effect else {

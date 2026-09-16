@@ -417,6 +417,53 @@ fn causal_context_frontier_ignores_failed_mutations() {
 }
 
 #[test]
+fn causal_context_frontier_ignores_an_orphan_result_before_a_mutation() {
+    let mut messages = observation_turn(
+        "inspect",
+        "read-before",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "current source",
+    );
+    messages.extend([
+        Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "edit-reused".into(),
+                content: "orphaned success".into(),
+                is_error: Some(false),
+            }]),
+        },
+        Message {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "edit-reused".into(),
+                name: "edit".into(),
+                input: json!({"path":"src/lib.rs"}),
+                gemini_context: None,
+            }]),
+        },
+        Message {
+            role: Role::User,
+            content: MessageContent::text("continue"),
+        },
+    ]);
+
+    let projected = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert_eq!(
+        tool_result_content(&projected, "read-before"),
+        Some("current source"),
+        "a result that precedes its tool call cannot prove the later mutation succeeded"
+    );
+}
+
+#[test]
 fn causal_context_frontier_keeps_a_fresh_observation_after_mutation() {
     let mut messages = observation_turn(
         "inspect",

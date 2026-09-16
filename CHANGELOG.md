@@ -47,6 +47,53 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.90] - 2026-09-16
+
+### Added
+
+- Complete local plugin lifecycle (#9287). <!-- maestro-release-note:63af95398e93 -->
+- Add managed provider token exchange (#9280). <!-- maestro-release-note:0b59a425a4d2 -->
+- Add directory profile details (#9282). <!-- maestro-release-note:cfaebef75fbe -->
+- Persist durable native tool operations (#9269). <!-- maestro-release-note:9c0b4e715e73 -->
+- Show account interaction history from crm_activity and crm_meeting (#9251). <!-- maestro-release-note:00822ad9a7e6 -->
+- Invalidate stale context after mutations (#9267). <!-- maestro-release-note:039c5c4c2ddd -->
+- Inline edit + custom fields + workflow builder (Twenty parity) (#9256). <!-- maestro-release-note:95ebcdc46426 -->
+- Clay-native enrichment (webhook to candidate, waterfall evidence) (#9254). <!-- maestro-release-note:d1fac427177c -->
+- Twenty-style record table (virtualized, resize, reorder, multi-select) (#9252). <!-- maestro-release-note:7ee6c3adfa2d -->
+- Kanban board view (lifecycle) with html5 dnd (#9253). <!-- maestro-release-note:ca92e65b66e9 -->
+- Add bounded Hootsuite media transfer (#9260). <!-- maestro-release-note:2133464a1f63 -->
+- Expose Deixic-authenticated Cerebro MCP (#9250). <!-- maestro-release-note:513429e94e72 -->
+
+### Changed
+
+- Measure in-cluster transport security and propose a mesh (#9298). <!-- maestro-release-note:adeeb2b0ab0c -->
+- Refresh bundled model catalog (#9275). <!-- maestro-release-note:c458cc8d29b0 -->
+- Polished full-page Radar visuals for #9252-#9256 (#9273). <!-- maestro-release-note:70fb68fc7d6f -->
+- Bump modernc.org/sqlite in /products/ghostlight/control (#9229). <!-- maestro-release-note:1df6b36c13ca -->
+- Bump the npm-minor-patch group in /apps/grid with 5 updates (#9244). <!-- maestro-release-note:9a2289f69bab -->
+- Bump playwright (#9231). <!-- maestro-release-note:b2b84674ff3d -->
+- Bump @types/node in /sdk/maestro/agent-typescript (#9238). <!-- maestro-release-note:4633c479634d -->
+- Bump vite in /config/maestro-product-template (#9243). <!-- maestro-release-note:6b218ed6eb24 -->
+- Pr screenshot spec + twenty-parity demo page (9252-9256) (#9259). <!-- maestro-release-note:0fd7e1d6019c -->
+- Bump jsdom from 26.1.0 to 30.0.1 in /apps/grid (#9245). <!-- maestro-release-note:cea9d489fbad -->
+- Gate the Radar browser suite in the component lane (#9247). <!-- maestro-release-note:1d5d466172f7 -->
+- Place cache-independent jobs and add local-disk sccache (#9249). <!-- maestro-release-note:ca03cf9214f3 -->
+
+### Fixed
+
+- Recognize cfg test module files (#9297). <!-- maestro-release-note:af6091a1c18c -->
+- Include build-time script imports in image (#9293). <!-- maestro-release-note:176c67d3ae16 -->
+- Retry proven GitHub rate limits (#9295). <!-- maestro-release-note:9ea6040f8a6c -->
+- Give the IAM handover hook egress so its proxy can authenticate (#9296). <!-- maestro-release-note:f6c3b3a5356a -->
+- Require causal tool success before masking (#9277). <!-- maestro-release-note:ac6c0a301a20 -->
+- Classify cancelled aggregate checks (#9276). <!-- maestro-release-note:8dd26f14800e -->
+- Investigate enclosing symbols (#9286). <!-- maestro-release-note:b46741ddd3b1 -->
+- Restore current-main CI gates (#9285). <!-- maestro-release-note:9cfadb78667e -->
+- Validate Clay rows and table defaults (#9289). <!-- maestro-release-note:da5962821c52 -->
+- Reject raw bodies at every scenario path (#9290). <!-- maestro-release-note:a11ae966cc91 -->
+- Restore the typecheck and drop the service name from demo copy (#9281). <!-- maestro-release-note:451ab40d55b3 -->
+- Remove unwired Clay stub (#9294). <!-- maestro-release-note:6425d64da688 -->
+
 ## [0.10.89] - 2026-09-14
 
 ### Changed

@@ -816,7 +816,7 @@ pub fn resolve_specialist(name: &str, cwd: &Path) -> Result<Profile> {
     let name = normalize_name(name)?;
     let trusted = crate::config::workspace_trusted_in_global_config(cwd);
     let plugins = crate::plugins::PluginRegistry::discover_for_workspace(cwd);
-    profiles_for_delegation(cwd, &plugins.agent_dirs(), trusted)?
+    profiles_for_delegation(cwd, &plugins.agent_paths(), trusted)?
         .into_iter()
         .find(|profile| profile.name == name)
         .with_context(|| format!("specialist `{name}` was not found in an authorized scope"))
@@ -861,7 +861,7 @@ fn profiles() -> Result<Vec<Profile>> {
     let plugins = crate::plugins::PluginRegistry::discover_for_workspace(&cwd);
     profiles_for_delegation(
         &cwd,
-        &plugins.agent_dirs(),
+        &plugins.agent_paths(),
         crate::config::workspace_trusted_in_global_config(&cwd),
     )
 }
@@ -900,15 +900,21 @@ pub(crate) fn profiles_for_delegation(
         let profile = trusted_builtin_validator_profile(role);
         found.insert(profile.name.clone(), profile);
     }
-    for dir in agent_dirs.iter().filter(|_| workspace_trusted) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            continue;
+    for path in agent_dirs.iter().filter(|_| workspace_trusted) {
+        let candidates: Vec<PathBuf> = if path.is_file() {
+            vec![path.clone()]
+        } else {
+            fs::read_dir(path)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                .map(|entry| entry.path())
+                .collect()
         };
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_file())
-                && entry.path().extension().is_some_and(|ext| ext == "md")
-            {
-                if let Ok(profile) = read_profile(&entry.path(), Scope::Project) {
+        for candidate in candidates {
+            if candidate.extension().is_some_and(|ext| ext == "md") {
+                if let Ok(profile) = read_profile(&candidate, Scope::Project) {
                     found.insert(profile.name.clone(), profile);
                 }
             }
@@ -1166,6 +1172,27 @@ mod tests {
         assert!(read_profile(&path, Scope::Builtin).is_err());
         // A user override also cannot declare its provenance in frontmatter.
         assert_eq!(read_profile(&path, Scope::User).unwrap().scope, Scope::User);
+    }
+
+    #[test]
+    fn filtered_plugin_agent_path_loads_only_that_profile() {
+        let workspace = tempfile::tempdir().unwrap();
+        let plugin_agents = workspace.path().join("plugin/agents");
+        fs::create_dir_all(&plugin_agents).unwrap();
+        let included = plugin_agents.join("included.md");
+        fs::write(&included, "---\nname: included\n---\nIncluded profile").unwrap();
+        fs::write(
+            plugin_agents.join("excluded.md"),
+            "---\nname: excluded\n---\nExcluded profile",
+        )
+        .unwrap();
+
+        let profiles =
+            profiles_for_delegation(workspace.path(), std::slice::from_ref(&included), true)
+                .unwrap();
+
+        assert!(profiles.iter().any(|profile| profile.name == "included"));
+        assert!(!profiles.iter().any(|profile| profile.name == "excluded"));
     }
 
     #[test]

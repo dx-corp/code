@@ -105,7 +105,7 @@ pub const NATIVE_UTILITY_COMMANDS: [&str; 44] = [
     "setup",
 ];
 
-const GLOBAL_FLAGS_WITH_VALUES: [&str; 27] = [
+const GLOBAL_FLAGS_WITH_VALUES: [&str; 28] = [
     "--mode",
     "--provider",
     "--specialist",
@@ -133,6 +133,7 @@ const GLOBAL_FLAGS_WITH_VALUES: [&str; 27] = [
     "--junit",
     "--replay",
     "--record-scenario",
+    "--plugin",
 ];
 
 /// Recognize a utility-subcommand invocation and reconstruct its forwarded
@@ -447,6 +448,10 @@ struct Args {
     #[arg(long)]
     api_key: Option<String>,
 
+    /// Load a local plugin for this process only without changing plugin state.
+    #[arg(long = "plugin", value_name = "PATH", action = clap::ArgAction::Append)]
+    plugins: Vec<std::path::PathBuf>,
+
     /// Continue the previous session.
     #[arg(short, long)]
     r#continue: bool,
@@ -509,6 +514,7 @@ struct NativeExecOptions {
     api_key: Option<String>,
     prompt_stdin: bool,
     prompt: String,
+    plugins: Vec<std::path::PathBuf>,
 }
 
 fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptions {
@@ -588,6 +594,13 @@ fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptio
             }
         } else if let Some(value) = arg.strip_prefix("--api-key=") {
             options.api_key = Some(value.to_string());
+        } else if arg == "--plugin" {
+            i += 1;
+            if i < raw_args.len() {
+                options.plugins.push(std::path::PathBuf::from(&raw_args[i]));
+            }
+        } else if let Some(value) = arg.strip_prefix("--plugin=") {
+            options.plugins.push(std::path::PathBuf::from(value));
         } else if arg == "--prompt-stdin" {
             options.prompt_stdin = true;
         } else if arg == "--worktree" || arg == "-w" {
@@ -1024,6 +1037,7 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
                         return Ok(2);
                     }
                 };
+            configure_ephemeral_plugins(&options.plugins)?;
             let code = crate::print_mode::run_print_mode(crate::print_mode::PrintModeOptions {
                 specialist: options.specialist,
                 prompt: options.prompt,
@@ -1118,6 +1132,8 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
     // stays in Args so the flag validates and shows up in --help.
     let _ = args.worktree.as_deref();
 
+    configure_ephemeral_plugins(&args.plugins)?;
+
     if args.no_session {
         // SessionManager still creates an id for UI purposes, but callers that
         // honor this env skip durable transcript persistence.
@@ -1169,6 +1185,25 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
         Ok(app)
     })
     .await
+}
+
+fn configure_ephemeral_plugins(paths: &[std::path::PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut admitted = Vec::with_capacity(paths.len());
+    for path in paths {
+        if !path.is_dir() {
+            anyhow::bail!("one-run plugin is not a directory: {}", path.display());
+        }
+        admitted
+            .push(dunce::canonicalize(path).with_context(|| {
+                format!("failed to resolve one-run plugin: {}", path.display())
+            })?);
+    }
+    let value = std::env::join_paths(admitted).context("plugin path cannot be encoded")?;
+    std::env::set_var("MAESTRO_EPHEMERAL_PLUGINS", value);
+    Ok(())
 }
 
 /// The trust command writes global trust for the current working directory.
@@ -1518,6 +1553,36 @@ mod tests {
         assert!(args.print);
         assert!(args.json);
         assert_eq!(args.prompt, vec!["hello"]);
+    }
+
+    #[test]
+    fn one_run_plugin_flag_is_repeatable_and_not_prompt_text() {
+        use clap::Parser;
+        let args = Args::try_parse_from([
+            "maestro-tui",
+            "--plugin",
+            "./first",
+            "--plugin=./second",
+            "hello",
+        ])
+        .expect("parse plugin paths");
+        assert_eq!(
+            args.plugins,
+            vec![
+                std::path::PathBuf::from("./first"),
+                std::path::PathBuf::from("./second")
+            ]
+        );
+        assert_eq!(args.prompt, vec!["hello"]);
+
+        let exec = parse_native_exec_options(
+            &["--plugin", "./first", "hello"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(exec.plugins, vec![std::path::PathBuf::from("./first")]);
+        assert_eq!(exec.prompt, "hello");
     }
 
     #[test]
