@@ -4,7 +4,20 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { stagedFiles, verifyStagedFiles } from './verify-staged-release.mjs';
+import {
+  releaseCertificateIdentityRegexp,
+  stagedFiles,
+  verifyStagedFiles,
+} from './verify-staged-release.mjs';
+
+test('release certificate identity accepts only the exact Mono workflow in either org alias', () => {
+  const identity = new RegExp(releaseCertificateIdentityRegexp);
+  assert.match('https://github.com/evalops/mono/.github/workflows/maestro-release.yml@refs/heads/main', identity);
+  assert.match('https://github.com/dx-corp/mono/.github/workflows/maestro-release.yml@refs/heads/main', identity);
+  assert.doesNotMatch('https://github.com/attacker/mono/.github/workflows/maestro-release.yml@refs/heads/main', identity);
+  assert.doesNotMatch('https://github.com/dx-corp/mono/.github/workflows/release.yml@refs/heads/main', identity);
+  assert.doesNotMatch('https://github.com/dx-corp/mono/.github/workflows/maestro-release.yml@refs/heads/feature', identity);
+});
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'staged-release-'));

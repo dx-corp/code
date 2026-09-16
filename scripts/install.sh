@@ -9,8 +9,9 @@ PRERELEASE_CHANNEL_KEY_ID="preview-2026-08-912a0dab"
 STABLE_CHANNEL_PUBLIC_KEY="IYgvaSwf2E9DioyEZ6Qcp/QMD1xpsjS0JgYluAAt0pE="
 PRERELEASE_CHANNEL_PUBLIC_KEY="4DS+odrY7y1PMg7o4s0jY1FkgcPQb8jjdy0Nst05soA="
 # Historical blobs were signed by evalops/maestro-internal and evalops/maestro
-# release.yml. Live blobs are signed by evalops/mono maestro-release.yml.
-COSIGN_IDENTITY_REGEXP='^https://github.com/evalops/(maestro-internal/.github/workflows/release\.yml|maestro/.github/workflows/release\.yml|mono/.github/workflows/maestro-release\.yml)@'
+# release.yml. Live blobs are signed by Mono's maestro-release.yml. Keep both
+# organization aliases valid across the evalops -> dx-corp slug cutover.
+COSIGN_IDENTITY_REGEXP='^https://github.com/(evalops|dx-corp)/(maestro-internal/.github/workflows/release\.yml|maestro/.github/workflows/release\.yml|mono/.github/workflows/maestro-release\.yml)@'
 COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
 fail() {
