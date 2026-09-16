@@ -35,6 +35,7 @@ impl Default for CacheConfig {
                 "write".to_string(),
                 "edit".to_string(),
                 "explore".to_string(),
+                "repository_symbols".to_string(),
                 "extract_document".to_string(),
                 "spawn_subagent".to_string(),
                 "coding_task".to_string(),

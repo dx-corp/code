@@ -15,6 +15,7 @@ pub(super) fn profile_fixture_definitions() -> HashMap<String, crate::agent::Too
         "write",
         "tool_search",
         "explore",
+        "repository_symbols",
         "get_rlm_context",
         "set_rlm_context",
         "websearch",
@@ -54,6 +55,7 @@ fn fast_tool_profile_is_small_but_has_an_escape_hatch() {
         "set_rlm_context",
         "websearch",
         "vscode_get_definition",
+        "repository_symbols",
     ] {
         assert!(!active.contains(excluded));
     }

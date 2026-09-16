@@ -684,6 +684,11 @@ pub struct ToolExecutor {
     /// what a repeat read returns to the model.
     read_snapshots: RwLock<HashMap<String, String>>,
 
+    /// Session-local, revision-addressed Rust symbol projection. The schema is
+    /// deferred behind `tool_search`; the index itself is built lazily on the
+    /// first admitted call.
+    repository_symbols: Arc<maestro_workspace::symbols::RepositorySymbolIndex>,
+
     /// MCP client for resource tools (lazy-initialized)
     mcp_client: tokio::sync::Mutex<Option<Arc<crate::mcp::McpClient>>>,
 
@@ -776,6 +781,7 @@ fn is_reserved_execute_dispatch_name(name: &str) -> bool {
             | "find"
             | "Find"
             | "search"
+            | "repository_symbols"
             | "Search"
             | "parallel_ripgrep"
             | "tool_search"
@@ -987,6 +993,10 @@ impl ToolExecutor {
         let inline_tools_list = load_inline_tools(cwd_path);
         let mut registry = ToolRegistry::new();
         let inline_tools = register_inline_tools(&mut registry, inline_tools_list);
+        let repository_symbols = Arc::new(maestro_workspace::symbols::RepositorySymbolIndex::new(
+            &cwd,
+            maestro_workspace::symbols::SymbolIndexConfig::default(),
+        ));
 
         Self {
             code_authority: None,
@@ -1008,6 +1018,7 @@ impl ToolExecutor {
             registry,
             cache: RwLock::new(ToolResultCache::default()),
             read_snapshots: RwLock::new(HashMap::new()),
+            repository_symbols,
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -1038,6 +1049,10 @@ impl ToolExecutor {
         let cwd = cwd.into();
         let mut registry = ToolRegistry::new();
         let inline_tools = register_inline_tools(&mut registry, inline_tools_list);
+        let repository_symbols = Arc::new(maestro_workspace::symbols::RepositorySymbolIndex::new(
+            &cwd,
+            maestro_workspace::symbols::SymbolIndexConfig::default(),
+        ));
 
         Self {
             code_authority: None,
@@ -1059,6 +1074,7 @@ impl ToolExecutor {
             registry,
             cache: RwLock::new(ToolResultCache::default()),
             read_snapshots: RwLock::new(HashMap::new()),
+            repository_symbols,
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -1093,6 +1109,10 @@ impl ToolExecutor {
         let inline_tools_list = load_inline_tools(cwd_path);
         let mut registry = ToolRegistry::new();
         let inline_tools = register_inline_tools(&mut registry, inline_tools_list);
+        let repository_symbols = Arc::new(maestro_workspace::symbols::RepositorySymbolIndex::new(
+            &cwd,
+            maestro_workspace::symbols::SymbolIndexConfig::default(),
+        ));
 
         Self {
             code_authority: None,
@@ -1114,6 +1134,7 @@ impl ToolExecutor {
             registry,
             cache: RwLock::new(ToolResultCache::new(cache_config)),
             read_snapshots: RwLock::new(HashMap::new()),
+            repository_symbols,
             mcp_client: tokio::sync::Mutex::new(None),
             mcp_sync_lock: tokio::sync::Mutex::new(()),
             mcp_tool_annotations: RwLock::new(HashMap::new()),
@@ -2017,6 +2038,14 @@ impl ToolExecutor {
         }
     }
 
+    fn invalidates_repository_symbols(&self, tool_name: &str) -> bool {
+        self.get_inline_tool(tool_name).is_some()
+            || matches!(
+                tool_name.to_ascii_lowercase().as_str(),
+                "bash" | "write" | "edit" | "notebook_edit" | "background_tasks" | "coding_task"
+            )
+    }
+
     /// Check if a tool exists in the registry
     ///
     /// Performs case-insensitive lookup. Returns true if the tool is registered,
@@ -2633,6 +2662,13 @@ impl ToolExecutor {
         // Execute the tool
         let mut result =
             vault_tool_result_credentials(&self.credential_vault, generation, uncached_result);
+
+        // A mutating tool can leave workspace changes even when it reports a
+        // failure (for example, `bash` may write before a later command exits
+        // non-zero). Invalidate on every admitted attempt, not just success.
+        if self.invalidates_repository_symbols(tool_name) {
+            self.repository_symbols.invalidate();
+        }
 
         // Store result in cache for cacheable tools
         if is_cacheable && !synthetically_cancelled && !result.is_cancelled() {

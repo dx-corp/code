@@ -3,6 +3,7 @@
 pub mod files;
 pub mod git;
 pub mod integration;
+pub mod symbols;
 pub mod worktree;
 
 pub use integration::{

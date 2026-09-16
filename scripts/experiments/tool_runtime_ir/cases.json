@@ -1,0 +1,66 @@
+{
+  "schema": "evalops.maestro.tool-runtime-ir-experiment.v1",
+  "cases": [
+    {
+      "id": "repo-orientation-across-turns",
+      "max_concurrency": 4,
+      "calls": [
+        {"id":"manifest","tool":"read","effect":"read","depends_on":[],"turn":1,"duration_ms":42,"result_tokens":420,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"runtime-search","tool":"grep","effect":"read","depends_on":[],"turn":2,"duration_ms":88,"result_tokens":690,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"test-search","tool":"grep","effect":"read","depends_on":[],"turn":3,"duration_ms":71,"result_tokens":510,"capability_generation":"cap-17","workspace_revision":"rev-a"}
+      ]
+    },
+    {
+      "id": "dependent-inspection",
+      "max_concurrency": 4,
+      "calls": [
+        {"id":"find-owner","tool":"grep","effect":"read","depends_on":[],"turn":1,"duration_ms":95,"result_tokens":380,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"read-owner","tool":"read","effect":"read","depends_on":["find-owner"],"turn":2,"duration_ms":64,"result_tokens":860,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"read-tests","tool":"read","effect":"read","depends_on":["find-owner"],"turn":3,"duration_ms":58,"result_tokens":730,"capability_generation":"cap-17","workspace_revision":"rev-a"}
+      ]
+    },
+    {
+      "id": "mutation-barrier",
+      "max_concurrency": 4,
+      "calls": [
+        {"id":"read-source","tool":"read","effect":"read","depends_on":[],"turn":1,"duration_ms":40,"result_tokens":620,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"read-test","tool":"read","effect":"read","depends_on":[],"turn":1,"duration_ms":55,"result_tokens":540,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"edit-source","tool":"edit","effect":"write","depends_on":["read-source","read-test"],"turn":2,"duration_ms":24,"result_tokens":35,"capability_generation":"cap-17","workspace_revision":"rev-a"},
+        {"id":"run-test","tool":"bash","effect":"unknown","depends_on":["edit-source"],"turn":3,"duration_ms":900,"result_tokens":240,"capability_generation":"cap-17","workspace_revision":"rev-b"},
+        {"id":"read-diff","tool":"diff","effect":"read","depends_on":["run-test"],"turn":4,"duration_ms":31,"result_tokens":280,"capability_generation":"cap-17","workspace_revision":"rev-b"}
+      ]
+    }
+  ],
+  "speculations": [
+    {
+      "id": "exact-read",
+      "prediction": {"tool":"read","effect":"read","args":{"path":"src/lib.rs"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":60,"generation_remaining_ms":45},
+      "actual": {"tool":"read","effect":"read","args":{"path":"src/lib.rs"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":60,"generation_remaining_ms":45}
+    },
+    {
+      "id": "changed-arguments",
+      "prediction": {"tool":"grep","effect":"read","args":{"pattern":"ToolPlan","path":"src"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":80,"generation_remaining_ms":30},
+      "actual": {"tool":"grep","effect":"read","args":{"pattern":"ToolPlan","path":"tests"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":80,"generation_remaining_ms":30}
+    },
+    {
+      "id": "changed-capability-generation",
+      "prediction": {"tool":"read","effect":"read","args":{"path":"Cargo.toml"},"capability_generation":"cap-16","workspace_revision":"rev-a","duration_ms":35,"generation_remaining_ms":20},
+      "actual": {"tool":"read","effect":"read","args":{"path":"Cargo.toml"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":35,"generation_remaining_ms":20}
+    },
+    {
+      "id": "changed-workspace-revision",
+      "prediction": {"tool":"read","effect":"read","args":{"path":"src/agent.rs"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":50,"generation_remaining_ms":25},
+      "actual": {"tool":"read","effect":"read","args":{"path":"src/agent.rs"},"capability_generation":"cap-17","workspace_revision":"rev-b","duration_ms":50,"generation_remaining_ms":25}
+    },
+    {
+      "id": "write-is-never-speculated",
+      "prediction": {"tool":"edit","effect":"write","args":{"path":"src/lib.rs","old":"a","new":"b"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":25,"generation_remaining_ms":10},
+      "actual": {"tool":"edit","effect":"write","args":{"path":"src/lib.rs","old":"a","new":"b"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":25,"generation_remaining_ms":10}
+    },
+    {
+      "id": "unknown-is-never-speculated",
+      "prediction": {"tool":"bash","effect":"unknown","args":{"command":"cargo test"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":900,"generation_remaining_ms":200},
+      "actual": {"tool":"bash","effect":"unknown","args":{"command":"cargo test"},"capability_generation":"cap-17","workspace_revision":"rev-a","duration_ms":900,"generation_remaining_ms":200}
+    }
+  ]
+}

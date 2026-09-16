@@ -28,6 +28,7 @@ fn is_known_native_read_only_tool(tool_name: &str) -> bool {
             | "list"
             | "find"
             | "search"
+            | "repository_symbols"
             | "parallel_ripgrep"
             | "websearch"
             | "web_fetch"
@@ -107,6 +108,12 @@ mod tests {
     fn test_native_parallel_read_only_classifier_preconditions() {
         assert!(is_native_parallel_read_only_tool_call(
             "read", false, None, false
+        ));
+        assert!(is_native_parallel_read_only_tool_call(
+            "repository_symbols",
+            false,
+            None,
+            false
         ));
         assert!(!is_native_parallel_read_only_tool_call(
             "read_probe",
