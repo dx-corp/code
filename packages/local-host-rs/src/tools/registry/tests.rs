@@ -444,6 +444,35 @@ fn test_registry_has_default_tools() {
     assert!(registry.get("glob").is_some());
     assert!(registry.get("grep").is_some());
     assert!(registry.get("edit").is_some());
+    let symbols = registry
+        .get("repository_symbols")
+        .expect("repository_symbols tool");
+    assert_eq!(
+        symbols.tool.input_schema["required"],
+        serde_json::json!(["symbol"])
+    );
+    assert!(!registry.requires_approval(
+        "repository_symbols",
+        &serde_json::json!({"symbol": "Needle"})
+    ));
+}
+
+#[test]
+fn repository_symbols_requires_explicit_schema_activation() {
+    let registry = ToolRegistry::new();
+    let explore_operations = &registry
+        .get("explore")
+        .expect("explore tool")
+        .tool
+        .input_schema["properties"]["operations"]["items"]["properties"]["tool"]["enum"];
+    assert!(
+        explore_operations
+            .as_array()
+            .expect("explore tool enum")
+            .iter()
+            .all(|name| name.as_str() != Some("repository_symbols")),
+        "the initially visible explore schema must not bypass tool_search activation"
+    );
 }
 
 #[test]
@@ -901,7 +930,7 @@ async fn test_mcp_status_clears_removed_server_state() {
 fn test_registry_tool_count() {
     let registry = ToolRegistry::new();
     let count = registry.tools().count();
-    assert_eq!(count, 68); // includes recall_output and durable subagent control
+    assert_eq!(count, 69); // includes repository_symbols and durable subagent control
 }
 
 #[test]
@@ -2076,6 +2105,123 @@ async fn test_executor_search_max_results_does_not_globally_cap_file_output() {
 }
 
 #[tokio::test]
+async fn repository_symbols_executes_and_refreshes_after_native_write() {
+    let dir = isolated_tempdir();
+    let source = dir.path().join("src");
+    std::fs::create_dir_all(&source).expect("create source");
+    let file = source.join("model.rs");
+    std::fs::write(
+        &file,
+        "pub struct Needle;\nfn use_it() { let _ = Needle; }\n",
+    )
+    .expect("write source");
+    let executor = ToolExecutor::new(dir.path().display().to_string());
+
+    let initial = executor
+        .execute(
+            "repository_symbols",
+            &serde_json::json!({"symbol": "Needle", "maxResults": 20}),
+            None,
+            "symbols-initial",
+        )
+        .await;
+    assert!(initial.success, "symbol lookup failed: {:?}", initial.error);
+    let initial_json: serde_json::Value =
+        serde_json::from_str(&initial.output).expect("symbol JSON");
+    assert_eq!(initial_json["definitions"][0]["path"], "src/model.rs");
+    let initial_revision = initial_json["revision"]
+        .as_str()
+        .expect("initial revision")
+        .to_string();
+
+    let write = executor
+        .execute(
+            "write",
+            &serde_json::json!({
+                "file_path": file.display().to_string(),
+                "content": "pub enum Replacement { Value }\n"
+            }),
+            None,
+            "symbols-write",
+        )
+        .await;
+    assert!(write.success, "write failed: {:?}", write.error);
+
+    let refreshed = executor
+        .execute(
+            "repository_symbols",
+            &serde_json::json!({"symbol": "Replacement", "maxResults": 20}),
+            None,
+            "symbols-refreshed",
+        )
+        .await;
+    assert!(
+        refreshed.success,
+        "refreshed lookup failed: {:?}",
+        refreshed.error
+    );
+    let refreshed_json: serde_json::Value =
+        serde_json::from_str(&refreshed.output).expect("refreshed symbol JSON");
+    assert_eq!(refreshed_json["definitions"][0]["kind"], "enum");
+    assert_ne!(
+        refreshed_json["revision"].as_str().expect("new revision"),
+        initial_revision
+    );
+}
+
+#[tokio::test]
+async fn repository_symbols_refreshes_after_a_failed_mutating_shell_command() {
+    let dir = isolated_tempdir();
+    let source = dir.path().join("src");
+    std::fs::create_dir_all(&source).expect("create source");
+    let file = source.join("model.rs");
+    std::fs::write(&file, "pub struct Needle;\n").expect("write source");
+    let executor = ToolExecutor::new(dir.path().display().to_string());
+
+    let initial = executor
+        .execute(
+            "repository_symbols",
+            &serde_json::json!({"symbol": "Needle"}),
+            None,
+            "symbols-failed-bash-initial",
+        )
+        .await;
+    assert!(initial.success, "symbol lookup failed: {:?}", initial.error);
+
+    let bash = executor
+        .execute(
+            "bash",
+            &serde_json::json!({
+                "command": format!(
+                    "printf 'pub enum Replacement {{ Value }}\\n' > '{}'; exit 1",
+                    file.display()
+                )
+            }),
+            None,
+            "symbols-failed-bash",
+        )
+        .await;
+    assert!(!bash.success, "shell command should retain its failure");
+
+    let refreshed = executor
+        .execute(
+            "repository_symbols",
+            &serde_json::json!({"symbol": "Replacement"}),
+            None,
+            "symbols-failed-bash-refreshed",
+        )
+        .await;
+    assert!(
+        refreshed.success,
+        "refreshed lookup failed: {:?}",
+        refreshed.error
+    );
+    let refreshed_json: serde_json::Value =
+        serde_json::from_str(&refreshed.output).expect("refreshed symbol JSON");
+    assert_eq!(refreshed_json["definitions"][0]["kind"], "enum");
+}
+
+#[tokio::test]
 async fn test_executor_edit_file() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("edit_test.txt");
@@ -2619,18 +2765,26 @@ async fn explore_runs_nested_tool_hooks_for_each_operation() {
         serde_json::from_str(&output).expect("explore output should be JSON");
     assert_eq!(results.len(), 3);
     assert!(results[0]["success"].as_bool().unwrap());
-    assert!(
-        results[0]["output"]
-            .as_str()
-            .unwrap()
-            .contains("allowed content")
-    );
     assert!(results[1]["success"].as_bool().unwrap());
-    assert!(
-        results[1]["output"]
-            .as_str()
-            .unwrap()
-            .starts_with("Unchanged since previous read:")
+    let duplicate_read_outputs = [
+        results[0]["output"].as_str().unwrap(),
+        results[1]["output"].as_str().unwrap(),
+    ];
+    assert_eq!(
+        duplicate_read_outputs
+            .iter()
+            .filter(|output| output.contains("allowed content"))
+            .count(),
+        1,
+        "one concurrent read must retain the full file contents"
+    );
+    assert_eq!(
+        duplicate_read_outputs
+            .iter()
+            .filter(|output| output.starts_with("Unchanged since previous read:"))
+            .count(),
+        1,
+        "the duplicate concurrent read must use the session projection"
     );
     assert!(!results[2]["success"].as_bool().unwrap());
     assert!(

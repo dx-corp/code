@@ -323,9 +323,15 @@ async fn cli_runtime_reports_identity_and_drains_a_manifest() {
         Path::new(manifest_path).is_file(),
         "drain manifest must be written under the workspace: {manifest_path}"
     );
+    let canonical_manifest =
+        dunce::canonicalize(manifest_path).expect("drain manifest path is canonicalizable");
+    let canonical_workspace =
+        dunce::canonicalize(workspace.path()).expect("workspace path is canonicalizable");
     assert!(
-        Path::new(manifest_path).starts_with(workspace.path()),
-        "drain manifest must stay under the workspace root"
+        canonical_manifest.starts_with(&canonical_workspace),
+        "drain manifest must stay under the workspace root: {} is not under {}",
+        canonical_manifest.display(),
+        canonical_workspace.display()
     );
 
     let identity: Value = client

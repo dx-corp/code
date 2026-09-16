@@ -1034,6 +1034,73 @@ pub(super) async fn run_grep_with_fallback(
 }
 
 impl ToolExecutor {
+    async fn execute_repository_symbols(&self, args: &serde_json::Value) -> ToolResult {
+        let symbol = args
+            .get("symbol")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let max_results = match args.get("maxResults") {
+            Some(value) => match value.as_u64() {
+                Some(value @ 1..=100) => value as usize,
+                _ => return ToolResult::failure("maxResults must be between 1 and 100"),
+            },
+            None => 20,
+        };
+        match self.repository_symbols.query(symbol, max_results) {
+            Ok(_) | Err(maestro_workspace::symbols::SymbolIndexError::NotReady) => {}
+            Err(error) => return ToolResult::failure(error.to_string()),
+        }
+
+        if self.repository_symbols.needs_blocking_refresh() {
+            for _ in 0..2 {
+                let index = Arc::clone(&self.repository_symbols);
+                match tokio::task::spawn_blocking(move || index.refresh()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => return ToolResult::failure(error.to_string()),
+                    Err(error) => {
+                        return ToolResult::failure(format!(
+                            "repository symbol refresh failed: {error}"
+                        ));
+                    }
+                }
+                if !self.repository_symbols.needs_blocking_refresh() {
+                    break;
+                }
+            }
+            if self.repository_symbols.needs_blocking_refresh() {
+                return ToolResult::failure(
+                    "repository changed repeatedly while the symbol index was refreshing",
+                );
+            }
+        } else if self.repository_symbols.needs_background_refresh()
+            && self.repository_symbols.begin_background_refresh()
+        {
+            let index = Arc::clone(&self.repository_symbols);
+            tokio::spawn(async move {
+                let worker = Arc::clone(&index);
+                let _ = tokio::task::spawn_blocking(move || worker.refresh()).await;
+                index.end_background_refresh();
+            });
+        }
+
+        let result = match self.repository_symbols.query(symbol, max_results) {
+            Ok(result) => result,
+            Err(error) => return ToolResult::failure(error.to_string()),
+        };
+        let details = serde_json::json!({
+            "revision": result.revision.clone(),
+            "indexedFiles": result.indexed_files,
+            "skippedFiles": result.skipped_files,
+            "indexTruncated": result.index_truncated,
+            "indexAgeMs": result.index_age_ms,
+            "truncated": result.truncated,
+        });
+        match serde_json::to_string(&result) {
+            Ok(output) => ToolResult::success(output).with_details(details),
+            Err(error) => ToolResult::failure(format!("serialize repository symbols: {error}")),
+        }
+    }
+
     async fn execute_search(&self, args: &serde_json::Value) -> ToolResult {
         let start_time = Instant::now();
         let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
@@ -3022,6 +3089,7 @@ impl ToolExecutor {
                 }
             }
             "search" | "Search" => self.execute_search(args).await,
+            "repository_symbols" => self.execute_repository_symbols(args).await,
             "parallel_ripgrep" | "ParallelRipgrep" => {
                 let patterns = args.get("patterns").and_then(|v| v.as_array()).cloned();
                 let patterns = match patterns {

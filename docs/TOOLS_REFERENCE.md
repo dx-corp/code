@@ -12,7 +12,9 @@ new tools or debugging existing ones.
 
 OpenAI Codex app-server sessions use a smaller curated profile by default so the
 model-visible surface stays focused while the full Maestro registry remains
-available for explicit selection.
+available for explicit selection. Experimental tools such as
+`repository_symbols` stay out of the initial profiles and must be activated
+through `tool_search` (or selected by an explicit all-tools configuration).
 
 | Profile | Use | Tools |
 | --- | --- | --- |
@@ -52,6 +54,7 @@ error distinctions.
 | `read` | Reads file contents with syntax-aware chunking. Supports text, images, PDFs, and Jupyter notebooks. | Accepts `path`, optional `startLine`/`endLine`. Images are optimized with Sharp if available. PDFs are extracted to text. Notebooks display formatted cells with outputs. |
 | `list` | Lists files in a directory (non-recursive by default). | Supports glob filters and depth. Used for context discovery. |
 | `search` | Ripgrep-style text search. | Args mirror `rg` (`pattern`, `path`, `glob`). Output includes file:line matches. Default max results now capped to avoid huge responses; oversized outputs are truncated and marked. |
+| `repository_symbols` | Experimental Rust symbol localization backed by a session-local incremental index. | Takes one unqualified `symbol` and optional `maxResults` (1-100). Results include definitions, referencing files, a content revision, age, and explicit truncation/skipped-file metadata. It is a search projection, not authorization evidence. |
 | `diff` | Wrapper around `git diff`. | Modes: workspace, staged, or custom ranges. Also supports `mode: "status"` (legacy) but prefer the dedicated `status` tool. |
 | `status` | Structured `git status` (porcelain v2). | Options: `branchSummary` (-b), `includeIgnored` (`--ignored=matching`), `paths`. Returns parsed status in details + summary text. |
 | `bash` | Executes shell commands (`bash -lc`). | Default timeout 90s (max 600s) and 40KB output cap; mutating commands require a plan when safe-mode is on. Runs from repo root; stdout/stderr streamed. In bash mode, `cd` is handled internally. |

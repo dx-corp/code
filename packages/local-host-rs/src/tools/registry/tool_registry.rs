@@ -428,6 +428,33 @@ impl ToolRegistry {
             },
         );
 
+        tools.insert(
+            "repository_symbols".to_string(),
+            ToolDefinition {
+                tool: Tool::new(
+                    "repository_symbols",
+                    "Experimental: find Rust symbol definitions and referencing files from a revision-addressed incremental repository index.",
+                )
+                .with_schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "One unqualified Rust identifier"
+                        },
+                        "maxResults": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "description": "Maximum definitions and referencing files to return (default 20)"
+                        }
+                    },
+                    "required": ["symbol"]
+                })),
+                requires_approval: false,
+            },
+        );
+
         // Tool search keeps the default model-facing tool profile small while
         // retaining an explicit escape hatch for less common capabilities.
         tools.insert(
@@ -1524,7 +1551,7 @@ impl ToolRegistry {
     ///
     /// // Count tools
     /// let count = registry.tools().count();
-    /// assert_eq!(count, 68);  // includes recall_output and durable subagent control
+    /// assert_eq!(count, 69);  // includes repository_symbols and durable subagent control
     ///
     /// // List tool names
     /// for tool_def in registry.tools() {
