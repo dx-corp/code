@@ -4768,8 +4768,8 @@ fn resolve_spawn_profile_with_trust(
         .clone()
         .unwrap_or_else(|| format!("role-{}", request.role.label()));
     let plugin_registry = crate::plugins::PluginRegistry::discover_for_workspace(cwd);
-    let agent_dirs = plugin_registry.agent_dirs();
-    let profiles = crate::agents_cli::profiles_for_delegation(cwd, &agent_dirs, trusted)
+    let agent_paths = plugin_registry.agent_paths();
+    let profiles = crate::agents_cli::profiles_for_delegation(cwd, &agent_paths, trusted)
         .map_err(|error| format!("load agent profiles: {error}"))?;
     let Some(profile) = profiles.into_iter().find(|profile| {
         profile.name == profile_name

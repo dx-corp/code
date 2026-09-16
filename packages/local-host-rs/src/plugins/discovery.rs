@@ -16,6 +16,8 @@ pub enum PluginOrigin {
     User = 2,
     /// Project plugins: `.maestro/plugins/*`
     Project = 3,
+    /// Explicit one-run plugin loaded from `--plugin`.
+    Ephemeral = 4,
 }
 
 impl PluginOrigin {
@@ -27,6 +29,7 @@ impl PluginOrigin {
             Self::LegacyProject => "legacy-project",
             Self::User => "user",
             Self::Project => "project",
+            Self::Ephemeral => "ephemeral",
         }
     }
 

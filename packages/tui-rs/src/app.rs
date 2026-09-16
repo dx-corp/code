@@ -1468,6 +1468,13 @@ impl App {
         let mut state = AppState::new();
         state.locale = ui_prefs.locale();
         state.context_window = context_window;
+        for error in plugin_registry.admission_errors() {
+            state.add_system_message(
+                state
+                    .locale
+                    .format("Plugin admission failed: {0}", std::slice::from_ref(error)),
+            );
+        }
         let queue_modes = crate::ui_state::load_queue_modes();
         if let Some(mode) = queue_modes.steering_mode {
             state.steering_mode = mode;
@@ -2991,7 +2998,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         }) {
             self.state.add_system_message(notice);
         }
-        let plugin_command_dirs = self.plugin_registry.command_dirs();
+        let plugin_command_dirs = self.plugin_registry.command_paths();
         self.custom_prompts =
             crate::prompts::load_prompts_with_plugin_dirs(&workspace_dir, &plugin_command_dirs);
         self.exec_commands =

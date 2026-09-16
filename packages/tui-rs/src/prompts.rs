@@ -197,6 +197,15 @@ fn scan_prompts_directory(dir: &Path, source_type: PromptSource) -> Vec<PromptDe
         return prompts;
     }
 
+    if dir.is_file() {
+        if dir.extension().is_some_and(|extension| extension == "md") {
+            if let Some(prompt) = load_prompt_from_file(dir, source_type) {
+                prompts.push(prompt);
+            }
+        }
+        return prompts;
+    }
+
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -512,6 +521,21 @@ Ship $ARGUMENTS
 
         assert_eq!(prompt.source_type, PromptSource::Plugin);
         assert_eq!(prompt.description.as_deref(), Some("Review from plugin"));
+    }
+
+    #[test]
+    fn loads_an_exact_filtered_plugin_prompt_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let path = temp.path().join("plugin/commands/review.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "Review exactly this resource").unwrap();
+
+        let prompts = load_prompts_with_plugin_dirs(&workspace, std::slice::from_ref(&path));
+
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].source_path, path);
+        assert_eq!(prompts[0].source_type, PromptSource::Plugin);
     }
 
     #[test]

@@ -23,7 +23,7 @@ impl PreparedStartup {
         let plugin_registry = PluginRegistry::discover();
         let (loaded_skills, skill_load_errors) =
             SkillLoader::with_plugins(&plugin_registry).load_all_with_paths();
-        let dirs = plugin_registry.command_dirs();
+        let dirs = plugin_registry.command_paths();
         let custom_prompts = crate::prompts::load_prompts_with_plugin_dirs(&workspace, &dirs);
         let exec_commands = crate::exec_commands::discover_with_plugin_dirs(&workspace, &dirs);
         let (managed_setup, managed_setup_identity_scope) = match session {
