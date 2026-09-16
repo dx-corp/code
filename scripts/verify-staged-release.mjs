@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { verifySourceManifest } from './release-source-manifest.mjs';
 
 export const platforms = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64'];
+export const releaseCertificateIdentityRegexp = '^https://github.com/(evalops|dx-corp)/mono/\\.github/workflows/maestro-release\\.yml@refs/heads/main$';
 export const stagedFiles = [
   'release-metadata.json', 'release-source-manifest.json',
   ...platforms.flatMap(p => [`maestro-${p}`, `smoked-${p}.txt`, `rustc-${p}.txt`, `runtime-passport-maestro-${p}.json`]),
@@ -53,7 +54,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const [dir, version] = process.argv.slice(2);
   if (!dir || !version) throw new Error('Usage: verify-staged-release.mjs DIRECTORY VERSION');
   execFileSync('cosign', ['verify-blob', '--bundle', join(dir, 'MONO_SHA256SUMS.cosign.bundle'),
-    '--certificate-identity', 'https://github.com/evalops/mono/.github/workflows/maestro-release.yml@refs/heads/main',
+    '--certificate-identity-regexp', releaseCertificateIdentityRegexp,
     '--certificate-oidc-issuer', 'https://token.actions.githubusercontent.com', join(dir, 'MONO_SHA256SUMS')], { stdio: 'inherit' });
   const metadata = verifyStagedFiles(dir, version);
   execFileSync(process.execPath, [new URL('./verify-release-smoke-coverage.mjs', import.meta.url).pathname, dir], {

@@ -106,3 +106,32 @@ test("installer and release workflow preserve receipt metadata", () => {
 	assert.match(channelManifest, /createPrivateKey/);
 	assert.match(channelResolver, /alpha or beta/);
 });
+
+test("installer certificate identity accepts historical and renamed organization aliases only", () => {
+	const installer = read("scripts/install.sh");
+	const source = installer.match(/^COSIGN_IDENTITY_REGEXP='([^']+)'$/m)?.[1];
+	assert.ok(source, "installer must define its Cosign certificate identity regular expression");
+	const identity = new RegExp(source);
+	for (const owner of ["evalops", "dx-corp"]) {
+		assert.match(
+			`https://github.com/${owner}/maestro-internal/.github/workflows/release.yml@refs/tags/v0.10.90`,
+			identity,
+		);
+		assert.match(
+			`https://github.com/${owner}/maestro/.github/workflows/release.yml@refs/tags/v0.10.90`,
+			identity,
+		);
+		assert.match(
+			`https://github.com/${owner}/mono/.github/workflows/maestro-release.yml@refs/heads/main`,
+			identity,
+		);
+	}
+	assert.doesNotMatch(
+		"https://github.com/attacker/mono/.github/workflows/maestro-release.yml@refs/heads/main",
+		identity,
+	);
+	assert.doesNotMatch(
+		"https://github.com/dx-corp/mono/.github/workflows/release.yml@refs/heads/main",
+		identity,
+	);
+});
