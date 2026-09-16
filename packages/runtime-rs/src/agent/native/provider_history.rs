@@ -10,7 +10,14 @@ pub(super) const OBSERVATION_FULL_TURNS: usize = 2;
 #[derive(Clone)]
 struct ObservationCall {
     tool_name: String,
-    read_path: Option<String>,
+    context_effect: Option<NativeContextEffect>,
+    turn: usize,
+    sequence: usize,
+}
+
+#[derive(Clone)]
+struct FrontierPoint {
+    call_id: String,
     turn: usize,
     sequence: usize,
 }
@@ -21,6 +28,7 @@ pub(super) fn project_observation_history(
     messages: &Arc<Vec<Message>>,
     keep_recent_turns: usize,
     recall_available: bool,
+    context_effect: impl Fn(&str, &Value) -> Option<NativeContextEffect>,
 ) -> Arc<Vec<Message>> {
     if !recall_available {
         return Arc::clone(messages);
@@ -43,20 +51,18 @@ pub(super) fn project_observation_history(
                 } => {
                     sequence = sequence.saturating_add(1);
                     let tool_name = name.to_ascii_lowercase();
-                    let read_path = (tool_name == "read")
-                        .then(|| {
-                            input
-                                .get("path")
-                                .or_else(|| input.get("file_path"))
-                                .and_then(Value::as_str)
-                                .map(str::to_owned)
-                        })
-                        .flatten();
+                    let context_effect = context_effect(name, input).filter(|effect| {
+                        let resource_key = match effect {
+                            NativeContextEffect::Observe { resource_key }
+                            | NativeContextEffect::Mutate { resource_key } => resource_key,
+                        };
+                        !resource_key.trim().is_empty()
+                    });
                     calls.insert(
                         id.clone(),
                         ObservationCall {
                             tool_name,
-                            read_path,
+                            context_effect,
                             turn,
                             sequence,
                         },
@@ -74,28 +80,32 @@ pub(super) fn project_observation_history(
         }
     }
 
-    let latest_completed_read = calls
-        .iter()
-        .filter(|(id, call)| {
-            call.tool_name == "read"
-                && call.read_path.is_some()
-                && call.turn < turn
-                && successful_results.contains(*id)
-        })
-        .fold(
-            HashMap::<&str, (usize, usize, &str)>::new(),
-            |mut latest, (id, call)| {
-                let path = call.read_path.as_deref().expect("filtered read path");
-                let candidate = (call.turn, call.sequence, id.as_str());
-                if latest
-                    .get(path)
-                    .is_none_or(|current| (candidate.0, candidate.1) > (current.0, current.1))
-                {
-                    latest.insert(path, candidate);
-                }
-                latest
-            },
-        );
+    let mut latest_observation = HashMap::<String, FrontierPoint>::new();
+    let mut latest_mutation = HashMap::<String, FrontierPoint>::new();
+    for (call_id, call) in &calls {
+        if call.turn >= turn || !successful_results.contains(call_id) {
+            continue;
+        }
+        let Some(effect) = &call.context_effect else {
+            continue;
+        };
+        let (resource_key, frontier) = match effect {
+            NativeContextEffect::Observe { resource_key } => {
+                (resource_key, &mut latest_observation)
+            }
+            NativeContextEffect::Mutate { resource_key } => (resource_key, &mut latest_mutation),
+        };
+        let candidate = FrontierPoint {
+            call_id: call_id.clone(),
+            turn: call.turn,
+            sequence: call.sequence,
+        };
+        if frontier.get(resource_key).is_none_or(|current| {
+            (candidate.turn, candidate.sequence) > (current.turn, current.sequence)
+        }) {
+            frontier.insert(resource_key.clone(), candidate);
+        }
+    }
 
     let mut projected = messages.as_ref().clone();
     let mut changed = false;
@@ -118,26 +128,41 @@ pub(super) fn project_observation_history(
             let Some(call) = calls.get(tool_use_id) else {
                 continue;
             };
-            if !matches!(call.tool_name.as_str(), "read" | "grep" | "bash") {
+            if call.turn >= turn {
                 continue;
             }
 
-            let superseded_by = call.read_path.as_deref().and_then(|path| {
-                latest_completed_read
-                    .get(path)
-                    .filter(|(latest_turn, latest_sequence, latest_id)| {
-                        (*latest_turn, *latest_sequence) > (call.turn, call.sequence)
-                            && *latest_id != tool_use_id
-                    })
-                    .map(|(_, _, latest_id)| *latest_id)
+            let observation_resource = match &call.context_effect {
+                Some(NativeContextEffect::Observe { resource_key }) => Some(resource_key),
+                _ => None,
+            };
+            let invalidated_by = observation_resource.and_then(|resource_key| {
+                latest_mutation
+                    .get(resource_key)
+                    .filter(|latest| (latest.turn, latest.sequence) > (call.turn, call.sequence))
+            });
+            let superseded_by = observation_resource.and_then(|resource_key| {
+                latest_observation.get(resource_key).filter(|latest| {
+                    (latest.turn, latest.sequence) > (call.turn, call.sequence)
+                        && latest.call_id != *tool_use_id
+                })
             });
             let age = turn.saturating_sub(call.turn);
-            if let Some(latest_id) = superseded_by {
+            if let Some(latest) = invalidated_by {
                 *content = format!(
-                    "[Earlier read result superseded by `{latest_id}` at a later user-turn boundary. Use `recall_output` with id `{tool_use_id}` to retrieve it.]"
+                    "[Earlier observation invalidated by successful mutation `{}` at a later user-turn boundary. Use `recall_output` with id `{tool_use_id}` to retrieve it.]",
+                    latest.call_id
                 );
                 changed = true;
-            } else if age >= keep_recent_turns {
+            } else if let Some(latest) = superseded_by {
+                *content = format!(
+                    "[Earlier observation superseded by `{}` at a later user-turn boundary. Use `recall_output` with id `{tool_use_id}` to retrieve it.]",
+                    latest.call_id
+                );
+                changed = true;
+            } else if matches!(call.tool_name.as_str(), "read" | "grep" | "bash")
+                && age >= keep_recent_turns
+            {
                 *content = format!(
                     "[Earlier {} result omitted after {age} user turns. Use `recall_output` with id `{tool_use_id}` to retrieve it.]",
                     call.tool_name

@@ -61,11 +61,11 @@ pub use native::{
 };
 pub use native::{managed_turn_lineage_id, runtime_system_prompt};
 pub use native_host::{
-    ApprovalMode, NativeCodexAuth, NativeCodingCompletion, NativeExecutionHost,
-    NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookEvent, NativeHookResult,
-    NativeHostFuture, NativeModelCapabilities, NativeModelRoute, NativeReadOnlyToolCall,
-    NativeResolvedClient, NativeToolAnnotations, NativeToolExecutionOptions, QueueMode,
-    ToolDefinition,
+    ApprovalMode, NativeCodexAuth, NativeCodingCompletion, NativeContextEffect,
+    NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookEvent,
+    NativeHookResult, NativeHostFuture, NativeModelCapabilities, NativeModelRoute,
+    NativeReadOnlyToolCall, NativeResolvedClient, NativeToolAnnotations,
+    NativeToolExecutionOptions, QueueMode, ToolDefinition,
 };
 pub use protocol::{
     DenialReason, ExecutionPhase, ExecutionReceipt, ExecutionSource, ExecutionStatus, FromAgent,

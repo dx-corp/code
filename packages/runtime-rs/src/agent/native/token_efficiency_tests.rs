@@ -1,6 +1,6 @@
 use super::tests::*;
 use super::{ExternalToolSchemaPolicy, NativeAgentConfig};
-use crate::agent::FromAgent;
+use crate::agent::{FromAgent, NativeContextEffect, NativeExecutionHost};
 use crate::ai::{ContentBlock, Message, MessageContent, Role, UnifiedClient};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -8,6 +8,18 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+
+#[test]
+fn sdk_hosts_default_to_opaque_context_effects() {
+    let host = RuntimeTestHost::new(
+        "/workspace",
+        UnifiedClient::Scripted(crate::ai::ScriptedClient::new("sdk-default", vec![])),
+    );
+
+    let effect = host.tool_context_effect("custom_read", &json!({"id": "42"}));
+
+    assert_eq!(effect, Option::<NativeContextEffect>::None);
+}
 
 #[test]
 fn provider_request_ids_are_stable_and_change_with_identity_inputs() {
@@ -113,6 +125,17 @@ fn observation_turn(
     input: serde_json::Value,
     output: &str,
 ) -> Vec<Message> {
+    observation_turn_with_status(prompt, call_id, tool_name, input, output, false)
+}
+
+fn observation_turn_with_status(
+    prompt: &str,
+    call_id: &str,
+    tool_name: &str,
+    input: serde_json::Value,
+    output: &str,
+    is_error: bool,
+) -> Vec<Message> {
     vec![
         Message {
             role: Role::User,
@@ -132,10 +155,23 @@ fn observation_turn(
             content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                 tool_use_id: call_id.to_owned(),
                 content: output.to_owned(),
-                is_error: Some(false),
+                is_error: Some(is_error),
             }]),
         },
     ]
+}
+
+fn test_file_context_effect(name: &str, input: &Value) -> Option<NativeContextEffect> {
+    let resource_key = input
+        .get("path")
+        .or_else(|| input.get("file_path"))?
+        .as_str()?
+        .to_owned();
+    match name.to_ascii_lowercase().as_str() {
+        "read" => Some(NativeContextEffect::Observe { resource_key }),
+        "edit" | "write" => Some(NativeContextEffect::Mutate { resource_key }),
+        _ => None,
+    }
 }
 
 fn tool_result_content<'a>(messages: &'a [Message], call_id: &str) -> Option<&'a str> {
@@ -150,6 +186,21 @@ fn tool_result_content<'a>(messages: &'a [Message], call_id: &str) -> Option<&'a
         }),
         MessageContent::Text(_) => None,
     })
+}
+
+fn total_tool_result_chars(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter_map(|message| match &message.content {
+            MessageContent::Blocks(blocks) => Some(blocks),
+            MessageContent::Text(_) => None,
+        })
+        .flatten()
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { content, .. } => Some(content.chars().count()),
+            _ => None,
+        })
+        .sum()
 }
 
 #[test]
@@ -174,7 +225,12 @@ fn provider_history_masks_only_aged_verbose_observations() {
     });
     let durable = Arc::new(messages);
 
-    let projected = super::provider_history::project_observation_history(&durable, 2, true);
+    let projected = super::provider_history::project_observation_history(
+        &durable,
+        2,
+        true,
+        test_file_context_effect,
+    );
 
     assert!(
         tool_result_content(&projected, "read-old").is_some_and(|content| content
@@ -201,7 +257,12 @@ fn provider_history_stays_full_when_the_sdk_host_does_not_offer_recall() {
         json!({"path":"src/lib.rs"}),
         "old read output",
     ));
-    let projected = super::provider_history::project_observation_history(&durable, 0, false);
+    let projected = super::provider_history::project_observation_history(
+        &durable,
+        0,
+        false,
+        test_file_context_effect,
+    );
 
     assert!(Arc::ptr_eq(&durable, &projected));
     assert_eq!(
@@ -239,8 +300,12 @@ fn provider_history_defers_same_turn_read_supersession_until_a_boundary() {
         },
     ]);
     let within_turn = Arc::new(messages.clone());
-    let projected_within_turn =
-        super::provider_history::project_observation_history(&within_turn, 10, true);
+    let projected_within_turn = super::provider_history::project_observation_history(
+        &within_turn,
+        10,
+        true,
+        test_file_context_effect,
+    );
     assert_eq!(
         tool_result_content(&projected_within_turn, "read-first"),
         Some("first version"),
@@ -251,8 +316,12 @@ fn provider_history_defers_same_turn_read_supersession_until_a_boundary() {
         role: Role::User,
         content: MessageContent::text("turn two"),
     });
-    let after_boundary =
-        super::provider_history::project_observation_history(&Arc::new(messages), 10, true);
+    let after_boundary = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
     assert!(
         tool_result_content(&after_boundary, "read-first").is_some_and(|content| content
             .contains("superseded")
@@ -261,6 +330,264 @@ fn provider_history_defers_same_turn_read_supersession_until_a_boundary() {
     assert_eq!(
         tool_result_content(&after_boundary, "read-second"),
         Some("second version")
+    );
+}
+
+#[test]
+fn causal_context_frontier_invalidates_an_observation_after_a_successful_mutation() {
+    let mut messages = observation_turn(
+        "inspect",
+        "read-before",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "stale source",
+    );
+    messages.extend(observation_turn(
+        "change it",
+        "edit-after",
+        "edit",
+        json!({"path":"src/lib.rs"}),
+        "updated",
+    ));
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::text("verify"),
+    });
+    let durable = Arc::new(messages);
+
+    let projected = super::provider_history::project_observation_history(
+        &durable,
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert!(
+        tool_result_content(&projected, "read-before").is_some_and(|content| {
+            content.contains("invalidated")
+                && content.contains("edit-after")
+                && content.contains("read-before")
+        })
+    );
+    assert_eq!(
+        tool_result_content(&projected, "edit-after"),
+        Some("updated"),
+        "mutation outputs are not observations and must remain untouched"
+    );
+    assert_eq!(
+        tool_result_content(&durable, "read-before"),
+        Some("stale source"),
+        "provider projection must not mutate durable history"
+    );
+}
+
+#[test]
+fn causal_context_frontier_ignores_failed_mutations() {
+    let mut messages = observation_turn(
+        "inspect",
+        "read-before",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "still current",
+    );
+    messages.extend(observation_turn_with_status(
+        "attempt change",
+        "edit-failed",
+        "edit",
+        json!({"path":"src/lib.rs"}),
+        "permission denied",
+        true,
+    ));
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::text("continue"),
+    });
+
+    let projected = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert_eq!(
+        tool_result_content(&projected, "read-before"),
+        Some("still current")
+    );
+}
+
+#[test]
+fn causal_context_frontier_keeps_a_fresh_observation_after_mutation() {
+    let mut messages = observation_turn(
+        "inspect",
+        "read-old",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "old source",
+    );
+    messages.extend(observation_turn(
+        "change it",
+        "edit-source",
+        "edit",
+        json!({"path":"src/lib.rs"}),
+        "updated",
+    ));
+    messages.extend(observation_turn(
+        "inspect again",
+        "read-fresh",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "fresh source",
+    ));
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::text("continue"),
+    });
+
+    let projected = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert!(
+        tool_result_content(&projected, "read-old")
+            .is_some_and(|content| content.contains("invalidated"))
+    );
+    assert_eq!(
+        tool_result_content(&projected, "read-fresh"),
+        Some("fresh source")
+    );
+}
+
+#[test]
+fn causal_context_frontier_is_scoped_to_one_resource() {
+    let mut messages = observation_turn(
+        "inspect source",
+        "read-source",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "source state",
+    );
+    messages.extend(observation_turn(
+        "inspect config",
+        "read-config",
+        "read",
+        json!({"path":"config.toml"}),
+        "config state",
+    ));
+    messages.extend(observation_turn(
+        "change source",
+        "edit-source",
+        "edit",
+        json!({"path":"src/lib.rs"}),
+        "updated",
+    ));
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::text("continue"),
+    });
+
+    let projected = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert!(
+        tool_result_content(&projected, "read-source")
+            .is_some_and(|content| content.contains("invalidated"))
+    );
+    assert_eq!(
+        tool_result_content(&projected, "read-config"),
+        Some("config state")
+    );
+}
+
+#[test]
+fn causal_context_frontier_waits_for_a_user_turn_boundary() {
+    let mut messages = observation_turn(
+        "inspect",
+        "read-before",
+        "read",
+        json!({"path":"src/lib.rs"}),
+        "cache prefix",
+    );
+    messages.extend([
+        Message {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "edit-same-turn".into(),
+                name: "edit".into(),
+                input: json!({"path":"src/lib.rs"}),
+                gemini_context: None,
+            }]),
+        },
+        Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "edit-same-turn".into(),
+                content: "updated".into(),
+                is_error: Some(false),
+            }]),
+        },
+    ]);
+
+    let projected = super::provider_history::project_observation_history(
+        &Arc::new(messages),
+        10,
+        true,
+        test_file_context_effect,
+    );
+
+    assert_eq!(
+        tool_result_content(&projected, "read-before"),
+        Some("cache prefix")
+    );
+}
+
+#[test]
+fn causal_context_frontier_reclaims_stale_observation_bytes() {
+    let stale_output = "x".repeat(24_000);
+    let mut messages = observation_turn(
+        "inspect",
+        "read-large",
+        "read",
+        json!({"path":"src/generated.rs"}),
+        &stale_output,
+    );
+    messages.extend(observation_turn(
+        "replace it",
+        "write-generated",
+        "write",
+        json!({"path":"src/generated.rs"}),
+        "written",
+    ));
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::text("continue"),
+    });
+    let durable = Arc::new(messages);
+
+    let projected = super::provider_history::project_observation_history(
+        &durable,
+        10,
+        true,
+        test_file_context_effect,
+    );
+    let durable_chars = total_tool_result_chars(&durable);
+    let projected_chars = total_tool_result_chars(&projected);
+    println!(
+        "causal-context-frontier durable_chars={durable_chars} projected_chars={projected_chars} saved_chars={}",
+        durable_chars.saturating_sub(projected_chars)
+    );
+
+    assert!(projected_chars < durable_chars);
+    assert_eq!(
+        tool_result_content(&durable, "read-large"),
+        Some(stale_output.as_str())
     );
 }
 
