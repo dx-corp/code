@@ -18,7 +18,7 @@ env:
 
 jobs:
   tag-current-version:
-    runs-on: ${{ github.repository == 'evalops/maestro-internal' && (vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest') || (vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ github.repository == 'dx-corp/maestro-internal' && (vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest') || (vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest') }}
     timeout-minutes: 45
     permissions:
       actions: read
@@ -42,11 +42,11 @@ jobs:
         uses: ./.github/actions/release-context
         with:
           fallback-to-package-version: "true"
-          create-tag-if-missing: "${{ github.repository != 'evalops/maestro' }}"
+          create-tag-if-missing: "${{ github.repository != 'dx-corp/maestro' }}"
 
       - id: registry-release
         name: Check npm registry release
-        if: ${{ github.repository == 'evalops/maestro' }}
+        if: ${{ github.repository == 'dx-corp/maestro' }}
         env:
           PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
@@ -84,7 +84,7 @@ jobs:
 
       - id: staged-release
         name: Check signed Mono staging
-        if: ${{ github.repository == 'evalops/maestro' }}
+        if: ${{ github.repository == 'dx-corp/maestro' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
@@ -107,7 +107,7 @@ jobs:
 
       - id: active-release
         name: Check active public release workflow
-        if: ${{ github.repository == 'evalops/maestro' && steps.registry-release.outputs.published != 'true' }}
+        if: ${{ github.repository == 'dx-corp/maestro' && steps.registry-release.outputs.published != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
@@ -133,7 +133,7 @@ jobs:
       # in flight (queued/waiting/in_progress). A release waiting on the
       # npm-release environment approval must not red every subsequent main push.
       - name: Require version bump for existing release tag
-        if: ${{ github.repository == 'evalops/maestro' && steps.release.outputs.tag_exists == 'true' && steps.release.outputs.tag_matches_head != 'true' && steps.release.outputs.package_changed_since_tag == 'true' && steps.registry-release.outputs.published != 'true' && (steps.active-release.outputs.active_count == '0' || steps.active-release.outputs.active_count == '') }}
+        if: ${{ github.repository == 'dx-corp/maestro' && steps.release.outputs.tag_exists == 'true' && steps.release.outputs.tag_matches_head != 'true' && steps.release.outputs.package_changed_since_tag == 'true' && steps.registry-release.outputs.published != 'true' && (steps.active-release.outputs.active_count == '0' || steps.active-release.outputs.active_count == '') }}
         env:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
@@ -176,7 +176,7 @@ jobs:
 
   verify-published-registry-package:
     needs: tag-current-version
-    if: ${{ github.repository == 'evalops/maestro' && needs.tag-current-version.outputs.registry_published == 'true' }}
+    if: ${{ github.repository == 'dx-corp/maestro' && needs.tag-current-version.outputs.registry_published == 'true' }}
     runs-on: ${{ vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -222,7 +222,7 @@ jobs:
     needs:
       - tag-current-version
       - verify-published-registry-package
-    if: ${{ always() && github.repository == 'evalops/maestro' && needs.tag-current-version.result == 'success' && needs.tag-current-version.outputs.staged_ready == 'true' && (needs.tag-current-version.outputs.registry_published != 'true' || needs.verify-published-registry-package.result == 'success') && (needs.tag-current-version.outputs.tag_exists != 'true' || needs.tag-current-version.outputs.registry_published != 'true') && (needs.tag-current-version.outputs.active_release_count == '0' || needs.tag-current-version.outputs.active_release_count == '') }}
+    if: ${{ always() && github.repository == 'dx-corp/maestro' && needs.tag-current-version.result == 'success' && needs.tag-current-version.outputs.staged_ready == 'true' && (needs.tag-current-version.outputs.registry_published != 'true' || needs.verify-published-registry-package.result == 'success') && (needs.tag-current-version.outputs.tag_exists != 'true' || needs.tag-current-version.outputs.registry_published != 'true') && (needs.tag-current-version.outputs.active_release_count == '0' || needs.tag-current-version.outputs.active_release_count == '') }}
     runs-on: ${{ vars.PUBLIC_PR_VALIDATION_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:

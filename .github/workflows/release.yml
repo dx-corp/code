@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository == 'evalops/maestro' && github.ref == 'refs/heads/main'
+    if: github.repository == 'dx-corp/maestro' && github.ref == 'refs/heads/main'
     runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -87,7 +87,7 @@ jobs:
           timeout 60s git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$release_sha" FETCH_HEAD; then
             release_branch="releases/${release_tag}"
-            rules="$(timeout 60s gh api "repos/evalops/maestro/rules/branches/releases%2F${release_tag}")"
+            rules="$(timeout 60s gh api "repos/dx-corp/maestro/rules/branches/releases%2F${release_tag}")"
             jq -e '
               any(.[]; .type == "pull_request") and
               any(.[]; .type == "non_fast_forward") and
@@ -328,7 +328,7 @@ jobs:
           publish_with_token() {
             local tarball="$1"
             if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
-              echo "::error::OIDC publish failed and secrets.NPM_TOKEN is empty. Configure npm trusted publishing for evalops/maestro release.yml (npm-release env) and ensure this job has id-token: write, or set a granular NPM_TOKEN with write on @evalops/maestro."
+              echo "::error::OIDC publish failed and secrets.NPM_TOKEN is empty. Configure npm trusted publishing for dx-corp/maestro release.yml (npm-release env) and ensure this job has id-token: write, or set a granular NPM_TOKEN with write on @evalops/maestro."
               return 1
             fi
 
