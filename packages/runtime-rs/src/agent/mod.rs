@@ -65,7 +65,7 @@ pub use native_host::{
     NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookEvent,
     NativeHookResult, NativeHostFuture, NativeModelCapabilities, NativeModelRoute,
     NativeReadOnlyToolCall, NativeResolvedClient, NativeToolAnnotations,
-    NativeToolExecutionOptions, QueueMode, ToolDefinition,
+    NativeToolExecutionOptions, NativeToolOperationAdmission, QueueMode, ToolDefinition,
 };
 pub use protocol::{
     DenialReason, ExecutionPhase, ExecutionReceipt, ExecutionSource, ExecutionStatus, FromAgent,

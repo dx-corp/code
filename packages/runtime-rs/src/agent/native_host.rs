@@ -28,6 +28,7 @@ use super::safety::WorkflowStateSnapshot;
 use super::steer_signal::SteerSignal;
 use maestro_ai::Tool;
 use maestro_ai::UnifiedClient;
+use maestro_runtime_contracts::{ToolOperationRecord, ToolReplayPolicy};
 
 /// Approval policy consumed by the native loop.  The composing TUI maps its
 /// existing state selector to this runtime value at construction time.
@@ -208,6 +209,22 @@ pub struct NativeToolExecutionOptions<'a> {
     pub approved_inline_env: Option<&'a HashMap<String, String>>,
 }
 
+/// Host-owned replay admission for one already policy-admitted operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeToolOperationAdmission {
+    pub replay_policy: ToolReplayPolicy,
+    pub idempotency_key: Option<String>,
+}
+
+impl Default for NativeToolOperationAdmission {
+    fn default() -> Self {
+        Self {
+            replay_policy: ToolReplayPolicy::Never,
+            idempotency_key: None,
+        }
+    }
+}
+
 /// The one native-specific execution boundary.  Implement this around the
 /// existing concrete `ToolExecutor` and `IntegratedHookSystem` in the host
 /// crate.  In particular, `execute_tool` must call the current receipt-aware
@@ -239,6 +256,11 @@ pub trait NativeExecutionHost: Send + Sync {
     fn requires_approval(&self, name: &str, args: &Value) -> bool;
     fn is_mcp_tool(&self, name: &str) -> bool;
     fn tool_annotations(&self, name: &str) -> Option<NativeToolAnnotations>;
+    /// Make an explicit host decision about crash replay. The runtime never
+    /// derives this value from the tool name or model-authored arguments.
+    fn tool_operation_admission(&self, _name: &str, _args: &Value) -> NativeToolOperationAdmission {
+        NativeToolOperationAdmission::default()
+    }
     fn ensure_mcp_annotations<'a>(&'a self) -> NativeHostFuture<'a, Result<(), String>>;
     fn inline_tool_approval_context(&self, name: &str) -> Option<InlineToolApprovalContext>;
     fn is_explicit_inline_read_only_tool(&self, name: &str) -> bool;
@@ -372,6 +394,17 @@ pub trait NativeExecutionHost: Send + Sync {
     ) -> NativeHostFuture<'a, NativeHookResult>;
     fn hook_handle_overflow<'a>(&'a self) -> NativeHostFuture<'a, bool>;
     fn hook_checkpoint_transcript_before_response<'a>(&'a self) -> NativeHostFuture<'a, ()>;
+    fn hook_record_tool_operation<'a>(
+        &'a self,
+        _record: &'a ToolOperationRecord,
+    ) -> NativeHostFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn hook_load_tool_operations<'a>(
+        &'a self,
+    ) -> NativeHostFuture<'a, Result<Vec<ToolOperationRecord>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     fn hook_session_id<'a>(&'a self) -> NativeHostFuture<'a, Option<String>>;
     fn hook_set_session_context<'a>(
         &'a self,
@@ -546,6 +579,14 @@ impl NativeExecutionHostHandle {
     #[must_use]
     pub fn tool_annotations(&self, name: &str) -> Option<NativeToolAnnotations> {
         self.0.tool_annotations(name)
+    }
+
+    pub fn tool_operation_admission(
+        &self,
+        name: &str,
+        args: &Value,
+    ) -> NativeToolOperationAdmission {
+        self.0.tool_operation_admission(name, args)
     }
 
     pub fn ensure_mcp_annotations<'a>(&'a self) -> NativeHostFuture<'a, Result<(), String>> {
@@ -774,6 +815,19 @@ impl NativeExecutionHostHandle {
 
     pub fn hook_checkpoint_transcript_before_response<'a>(&'a self) -> NativeHostFuture<'a, ()> {
         self.0.hook_checkpoint_transcript_before_response()
+    }
+
+    pub fn hook_record_tool_operation<'a>(
+        &'a self,
+        record: &'a ToolOperationRecord,
+    ) -> NativeHostFuture<'a, Result<(), String>> {
+        self.0.hook_record_tool_operation(record)
+    }
+
+    pub fn hook_load_tool_operations<'a>(
+        &'a self,
+    ) -> NativeHostFuture<'a, Result<Vec<ToolOperationRecord>, String>> {
+        self.0.hook_load_tool_operations()
     }
 
     #[must_use]

@@ -20,6 +20,7 @@ mod receipts;
 mod session_event;
 pub mod telemetry;
 pub mod tool_details;
+pub mod tool_operation;
 pub mod tool_wire;
 pub mod turn_outcome;
 
@@ -86,6 +87,11 @@ pub use telemetry::{
 pub use tool_details::{
     BashDetails, BatchDetails, DiffDetails, EditDetails, GlobDetails, GrepDetails, ImageDetails,
     InlineToolDetails, ListDetails, ReadDetails, ToolDetails, WebFetchDetails, WriteDetails,
+};
+pub use tool_operation::{
+    MAX_TOOL_OPERATION_PROGRESS_BYTES, TOOL_OPERATION_CUSTOM_TYPE, ToolOperationError,
+    ToolOperationLedger, ToolOperationOutcome, ToolOperationPhase, ToolOperationRecord,
+    ToolOperationRecovery, ToolReplayPolicy,
 };
 pub use turn_outcome::{TurnFailureClass, TurnPhase};
 

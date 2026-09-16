@@ -2,7 +2,146 @@
 
 use super::*;
 
+pub(super) fn tool_operation_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(u64::MAX, |duration| {
+            duration.as_millis().min(u64::MAX as u128) as u64
+        })
+}
+
 impl NativeAgentRunner {
+    async fn begin_tool_operation(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        admitted_arguments: &Value,
+    ) -> Result<maestro_runtime_contracts::ToolOperationRecord, String> {
+        let admission = self
+            .tool_executor
+            .tool_operation_admission(tool_name, admitted_arguments);
+        let planned = maestro_runtime_contracts::ToolOperationRecord::planned(
+            call_id,
+            tool_name,
+            admitted_arguments.clone(),
+            admission.idempotency_key,
+            admission.replay_policy,
+            tool_operation_now_ms(),
+        )
+        .map_err(|error| error.to_string())?;
+        self.hooks
+            .hook_record_tool_operation(&planned)
+            .await
+            .map_err(|error| format!("failed to persist planned tool operation: {error}"))?;
+        let pending = planned
+            .effect_pending(tool_operation_now_ms())
+            .map_err(|error| error.to_string())?;
+        self.hooks
+            .hook_record_tool_operation(&pending)
+            .await
+            .map_err(|error| format!("failed to persist pending tool effect: {error}"))?;
+        Ok(pending)
+    }
+
+    pub(super) async fn record_tool_operation_outcome(
+        &self,
+        pending: maestro_runtime_contracts::ToolOperationRecord,
+        execution: &ToolExecution,
+    ) {
+        let outcome = maestro_runtime_contracts::ToolOperationOutcome::new(
+            execution.model_content(),
+            execution.is_error(),
+            Some(execution.receipt.clone()),
+        );
+        let ready = match pending.outcome_ready(outcome, tool_operation_now_ms()) {
+            Ok(ready) => ready,
+            Err(error) => {
+                self.tool_executor.report_diagnostic(format!(
+                    "tool operation outcome rejected for {}: {error}",
+                    execution.receipt.call_id
+                ));
+                return;
+            }
+        };
+        if let Err(error) = self.hooks.hook_record_tool_operation(&ready).await {
+            self.tool_executor.report_diagnostic(format!(
+                "tool operation outcome persistence failed for {}: {error}",
+                execution.receipt.call_id
+            ));
+        }
+    }
+
+    pub(super) async fn complete_tool_operation(&self, call_id: &str) {
+        let records = match self.hooks.hook_load_tool_operations().await {
+            Ok(records) => records,
+            Err(error) => {
+                self.tool_executor.report_diagnostic(format!(
+                    "tool operation completion load failed for {call_id}: {error}"
+                ));
+                return;
+            }
+        };
+        let Some(ready) = records.into_iter().find(|record| {
+            record.call_id == call_id
+                && record.phase == maestro_runtime_contracts::ToolOperationPhase::OutcomeReady
+        }) else {
+            return;
+        };
+        let completed = match ready.completed(tool_operation_now_ms()) {
+            Ok(completed) => completed,
+            Err(error) => {
+                self.tool_executor.report_diagnostic(format!(
+                    "tool operation completion rejected for {call_id}: {error}"
+                ));
+                return;
+            }
+        };
+        if let Err(error) = self.hooks.hook_record_tool_operation(&completed).await {
+            self.tool_executor.report_diagnostic(format!(
+                "tool operation completion persistence failed for {call_id}: {error}"
+            ));
+        }
+    }
+
+    pub(super) async fn replay_tool_operation(
+        &mut self,
+        pending: maestro_runtime_contracts::ToolOperationRecord,
+    ) -> ToolExecution {
+        let call_id = pending.call_id.clone();
+        let tool_name = pending.tool_name.clone();
+        let args = tool_args_for_execution(
+            &tool_name,
+            &pending.admitted_arguments,
+            &self.credential_vault,
+        );
+        let started = Instant::now();
+        let cancel = self.shutdown_token.child_token();
+        let terminal_drain_required =
+            native_tool_requires_terminal_drain(&self.tool_executor, &tool_name, &args);
+        self.set_active_tool_cancel_token(Some(cancel.clone()), terminal_drain_required);
+        let execution = self
+            .tool_executor
+            .execute_tool(
+                &tool_name,
+                &args,
+                Some(&self.event_tx),
+                &call_id,
+                NativeToolExecutionOptions {
+                    cancel,
+                    approved_inline_env: None,
+                },
+            )
+            .await;
+        let execution = self
+            .tool_executor
+            .with_managed_policy(execution.with_duration(started.elapsed().as_millis() as u64));
+        self.set_active_tool_cancel_token(None, false);
+        invalidate_cache_after_serial_tool(&self.tool_executor, &tool_name, true);
+        self.record_tool_operation_outcome(pending, &execution)
+            .await;
+        execution
+    }
+
     pub(super) async fn execute_recall_output(
         &mut self,
         args: &Value,
@@ -263,10 +402,26 @@ impl NativeAgentRunner {
             self.tool_executor
                 .set_subagent_parent_requests(parent_record.user_requests);
         }
+        let operation = match self.begin_tool_operation(call_id, tool_name, args).await {
+            Ok(operation) => operation,
+            Err(error) => {
+                return ToolExecution::from_legacy(
+                    call_id,
+                    tool_name,
+                    ExecutionSource::Native,
+                    ToolResult::failure(format!(
+                        "Tool was not executed because its durable operation record failed: {error}"
+                    )),
+                )
+                .with_managed_policy(self.tool_executor.managed_policy_metadata());
+            }
+        };
         let started = Instant::now();
         let span = tool_span_for_call(tool_name, Some(call_id));
         if tool_name.eq_ignore_ascii_case("recall_output") {
             let execution = self.execute_recall_output(args, call_id).await;
+            self.record_tool_operation_outcome(operation, &execution)
+                .await;
             record_outcome(
                 &span,
                 if execution.is_error() {
@@ -281,6 +436,8 @@ impl NativeAgentRunner {
         }
         if tool_name.eq_ignore_ascii_case("tool_search") {
             let execution = span.in_scope(|| self.execute_tool_search(args, call_id));
+            self.record_tool_operation_outcome(operation, &execution)
+                .await;
             record_outcome(
                 &span,
                 if execution.is_error() {
@@ -340,6 +497,8 @@ impl NativeAgentRunner {
             started.elapsed(),
             execution.is_error().then_some("tool_error"),
         );
+        self.record_tool_operation_outcome(operation, &execution)
+            .await;
         execution
     }
     /// Build the model result for a decided tool call. Approved local tools
@@ -549,6 +708,7 @@ impl NativeAgentRunner {
             Some(&result.receipt),
         );
 
+        self.complete_tool_operation(&call_id).await;
         ContentBlock::ToolResult {
             tool_use_id: call_id,
             content: result_content,
@@ -636,6 +796,14 @@ impl NativeAgentRunner {
         }
 
         let pending_calls = std::mem::take(pending);
+        let mut operations = HashMap::new();
+        for call in &pending_calls {
+            let operation = self
+                .begin_tool_operation(&call.call_id, &call.tool_name, &call.resolved_args)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            operations.insert(call.call_id.clone(), operation);
+        }
         let cancel_token = CancellationToken::new();
         self.set_active_tool_cancel_token(Some(cancel_token.clone()), false);
         // These calls run concurrently in one batch, so the batch is the only
@@ -664,6 +832,9 @@ impl NativeAgentRunner {
                 )
                 .with_managed_policy(self.tool_executor.managed_policy_metadata())
             });
+            if let Some(operation) = operations.remove(&call.call_id) {
+                self.record_tool_operation_outcome(operation, &result).await;
+            }
             let content = result.model_content();
             let is_error = result.is_error();
 
@@ -719,10 +890,11 @@ impl NativeAgentRunner {
             );
 
             tool_results.push(ContentBlock::ToolResult {
-                tool_use_id: call.call_id,
+                tool_use_id: call.call_id.clone(),
                 content: final_content,
                 is_error: Some(reported_error),
             });
+            self.complete_tool_operation(&call.call_id).await;
         }
 
         Ok(())

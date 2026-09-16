@@ -151,6 +151,7 @@ mod manager;
 mod model_history;
 mod reader;
 mod selective_summary;
+pub mod tool_operations;
 mod wire_format_generated;
 mod writer;
 
