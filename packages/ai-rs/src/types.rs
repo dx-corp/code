@@ -115,6 +115,27 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "ToolSchemaEnforcement::is_off")]
+    pub schema_enforcement: ToolSchemaEnforcement,
+}
+
+/// Provider-neutral constrained-sampling policy for a tool's JSON schema.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSchemaEnforcement {
+    /// Preserve the provider's unconstrained tool behavior.
+    #[default]
+    Off,
+    /// Use strict schema enforcement when the provider and schema support it.
+    Prefer,
+    /// Reject request preparation unless strict schema enforcement is available.
+    Require,
+}
+
+impl ToolSchemaEnforcement {
+    fn is_off(&self) -> bool {
+        *self == Self::Off
+    }
 }
 
 impl Tool {
@@ -127,12 +148,19 @@ impl Tool {
                 "properties": {},
                 "required": []
             }),
+            schema_enforcement: ToolSchemaEnforcement::Off,
         }
     }
 
     #[must_use]
     pub fn with_schema(mut self, schema: serde_json::Value) -> Self {
         self.input_schema = schema;
+        self
+    }
+
+    #[must_use]
+    pub fn with_schema_enforcement(mut self, enforcement: ToolSchemaEnforcement) -> Self {
+        self.schema_enforcement = enforcement;
         self
     }
 }
@@ -419,6 +447,28 @@ mod tests {
         });
         let tool = Tool::new("read", "Read a file").with_schema(schema.clone());
         assert_eq!(tool.input_schema, schema);
+    }
+
+    #[test]
+    fn tool_schema_enforcement_is_explicit_and_defaults_off() {
+        let default_tool = Tool::new("read", "Read a file");
+        assert_eq!(default_tool.schema_enforcement, ToolSchemaEnforcement::Off);
+
+        let preferred =
+            Tool::new("read", "Read a file").with_schema_enforcement(ToolSchemaEnforcement::Prefer);
+        assert_eq!(preferred.schema_enforcement, ToolSchemaEnforcement::Prefer);
+    }
+
+    #[test]
+    fn tool_schema_enforcement_off_preserves_legacy_wire_shape() {
+        let serialized = serde_json::to_value(Tool::new("read", "Read a file")).unwrap();
+        assert!(serialized.get("schema_enforcement").is_none());
+
+        let preferred = serde_json::to_value(
+            Tool::new("read", "Read a file").with_schema_enforcement(ToolSchemaEnforcement::Prefer),
+        )
+        .unwrap();
+        assert_eq!(preferred["schema_enforcement"], "prefer");
     }
 
     // ========================================================================

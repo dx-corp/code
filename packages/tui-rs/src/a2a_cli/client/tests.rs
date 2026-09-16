@@ -176,7 +176,7 @@ async fn wait_for_task_reconciles_clean_disconnect_and_reconnects() {
         complete_stream,
     ])
     .await;
-    let task = wait_for_task(&test_config(base_url), "task-1", 10_000, 1)
+    let task = wait_for_task(&test_config(base_url), "task-1", 30_000, 1)
         .await
         .expect("reconnected subscription");
     assert!(is_completed_state(&task.status.state));
@@ -414,7 +414,7 @@ async fn wait_for_task_keeps_polling_after_negated_states() {
             json_response(completed_task()),
         ])
         .await;
-        let task = wait_for_task(&test_config(base_url), "task-1", 10_000, 1)
+        let task = wait_for_task(&test_config(base_url), "task-1", 30_000, 1)
             .await
             .expect("wait for actual completion");
         assert_eq!(

@@ -768,6 +768,13 @@ mod tests {
                     Err(error) => panic!("collector accept failed: {error}"),
                 }
             };
+            // On macOS an accepted socket can inherit O_NONBLOCK from the
+            // listener. The collector wants a bounded blocking read; leaving
+            // the inherited flag set turns an ordinary scheduling gap into a
+            // spurious WouldBlock failure before the exporter writes headers.
+            stream
+                .set_nonblocking(false)
+                .expect("blocking collector stream");
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();

@@ -81,6 +81,7 @@ pub mod app_message;
 mod bedrock;
 pub mod cache_topology;
 mod client;
+pub(crate) mod constrained_sampling;
 mod error;
 mod google;
 mod kimi;
