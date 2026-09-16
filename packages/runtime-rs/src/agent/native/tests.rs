@@ -80,8 +80,10 @@ pub(super) struct RuntimeTestHost {
     client: Arc<UnifiedClient>,
     session_id: Arc<Mutex<Option<String>>>,
     provider_admission_blocked: Arc<AtomicBool>,
+    model_allowed_blocked: Arc<AtomicBool>,
     experiment: Arc<Mutex<Option<maestro_runtime_contracts::experiments::ExperimentAssignment>>>,
     block_provider_after_tool: bool,
+    block_model_after_tool: bool,
     post_tool_context: Option<String>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     completed_tool_executions: Arc<AtomicUsize>,
@@ -129,8 +131,10 @@ impl RuntimeTestHost {
             client: Arc::new(client),
             session_id: Arc::new(Mutex::new(None)),
             provider_admission_blocked: Arc::new(AtomicBool::new(false)),
+            model_allowed_blocked: Arc::new(AtomicBool::new(false)),
             experiment: Arc::new(Mutex::new(None)),
             block_provider_after_tool: false,
+            block_model_after_tool: false,
             post_tool_context: None,
             checkpoint_barrier: None,
             completed_tool_executions: Arc::new(AtomicUsize::new(0)),
@@ -171,6 +175,11 @@ impl RuntimeTestHost {
 
     fn with_provider_admission_blocked_after_tool(mut self) -> Self {
         self.block_provider_after_tool = true;
+        self
+    }
+
+    fn with_model_blocked_after_tool(mut self) -> Self {
+        self.block_model_after_tool = true;
         self
     }
 
@@ -400,6 +409,9 @@ impl NativeExecutionHost for RuntimeTestHost {
                 self.provider_admission_blocked
                     .store(true, Ordering::SeqCst);
             }
+            if self.block_model_after_tool {
+                self.model_allowed_blocked.store(true, Ordering::SeqCst);
+            }
             execution
         })
     }
@@ -424,6 +436,9 @@ impl NativeExecutionHost for RuntimeTestHost {
             if self.block_provider_after_tool {
                 self.provider_admission_blocked
                     .store(true, Ordering::SeqCst);
+            }
+            if self.block_model_after_tool {
+                self.model_allowed_blocked.store(true, Ordering::SeqCst);
             }
             executions
         })
@@ -681,8 +696,15 @@ impl NativeExecutionHost for RuntimeTestHost {
         Ok(context.to_owned())
     }
 
-    fn model_allowed(&self, _model_id: &str) -> Option<String> {
-        None
+    fn model_allowed(&self, model_id: &str) -> Option<String> {
+        (self.model_allowed_blocked.load(Ordering::SeqCst)
+            && model_id
+                .split_once('/')
+                .is_some_and(|(provider, model_id)| {
+                    provider.eq_ignore_ascii_case("openrouter")
+                        && model_id == "stealth/union-alphax"
+                }))
+        .then(|| "fixture model consent was revoked".to_owned())
     }
 
     fn resolve_model(&self, _model_id: &str) -> Result<NativeResolvedClient, String> {
@@ -1279,6 +1301,99 @@ async fn provider_admission_blocks_the_next_round_after_tool_completion() {
         "the denied second round must not consume or retry the next provider response"
     );
     agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn revoked_model_consent_blocks_the_next_provider_round() {
+    let scripted = crate::ai::ScriptedClient::new(
+        "runtime-test/model-consent",
+        vec![
+            crate::ai::ScriptedResponse {
+                blocks: vec![crate::ai::ScriptedBlock::ToolUse {
+                    id: "call-before-model-revocation".to_owned(),
+                    name: "read".to_owned(),
+                    input: serde_json::json!({"path": "Cargo.toml"}),
+                }],
+                stop_reason: crate::ai::StopReason::ToolUse,
+                error: None,
+            },
+            crate::ai::ScriptedResponse::text("must remain queued after revocation"),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let config = NativeAgentConfig {
+        model: "OpenRouter/stealth/union-alphax".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        max_turn_steps: 4,
+        ..NativeAgentConfig::default()
+    };
+    let host = RuntimeTestHost::new(
+        config.cwd.clone(),
+        UnifiedClient::Scripted(scripted.clone()),
+    )
+    .with_model_blocked_after_tool();
+    let completed_tool_executions = Arc::clone(&host.completed_tool_executions);
+    let (agent, mut events) =
+        new_runtime_test_agent_with_host(config, host).expect("model-consent test agent");
+
+    agent
+        .prompt("run one tool before revocation".to_owned(), Vec::new())
+        .await
+        .expect("prompt queued");
+    let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::Error {
+                    message,
+                    terminal: true,
+                    ..
+                }) => break message,
+                Some(FromAgent::TurnCompleted { .. }) => {
+                    panic!("revoked consent must block the second provider round")
+                }
+                Some(_) => {}
+                None => panic!("agent event channel closed before consent denial"),
+            }
+        }
+    })
+    .await
+    .expect("model consent denial event");
+
+    assert_eq!(completed_tool_executions.load(Ordering::SeqCst), 1);
+    assert!(
+        terminal.contains("fixture model consent was revoked"),
+        "{terminal}"
+    );
+    assert_eq!(
+        scripted.remaining(),
+        1,
+        "revocation must be checked before the next provider request"
+    );
+    agent.shutdown().await;
+}
+
+#[test]
+fn provider_request_policy_routes_restore_the_active_provider_namespace() {
+    assert_eq!(
+        provider_request_policy_model_id("openrouter/stealth/union-alphax", "stealth/union-alphax"),
+        "openrouter/stealth/union-alphax"
+    );
+    assert_eq!(
+        provider_request_policy_model_id("openrouter/openai/gpt-5.6", "openai/gpt-5.6"),
+        "openrouter/openai/gpt-5.6"
+    );
+    assert_eq!(
+        provider_request_policy_model_id("openai/gpt-5.6", "openai/gpt-5.6"),
+        "openai/gpt-5.6"
+    );
+    assert_eq!(
+        provider_request_policy_model_id(
+            "OpenRouter/stealth/union-alphax",
+            "openrouter/stealth/union-alphax",
+        ),
+        "openrouter/stealth/union-alphax"
+    );
 }
 
 #[test]

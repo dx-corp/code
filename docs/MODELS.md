@@ -44,6 +44,41 @@ or `unknown` without rewriting capability metadata. An OpenRouter model id that
 is not in the snapshot still routes; capability metadata is unknown until the
 next catalog refresh.
 
+### OpenRouter Stealth models
+
+Routes under `openrouter/stealth/*` are hidden and blocked by default. Enable
+them only after reviewing the disclosure:
+
+```bash
+# TUI slash command
+/stealth-models status
+/stealth-models on
+/stealth-models off
+
+# Native CLI equivalent
+deixic-code stealth-models status
+deixic-code stealth-models on
+deixic-code stealth-models off
+```
+
+Consent is versioned and stored only in the user-global Maestro configuration;
+repository and project configuration cannot grant it. When consent is current,
+all present and future `openrouter/stealth/*` catalog rows appear in the model
+selector with a persistent `Stealth · experimental` badge. Turning consent off
+blocks the next native provider request, including a follow-up request in an
+already-running tool turn.
+
+Stealth routes are subject to separate OpenRouter Stealth terms, hide the
+upstream provider identity, and can change or disappear without notice. Provider
+terms can allow prompts or responses to be retained or used for training,
+evaluation, or improvement. Do not send confidential, customer, or regulated
+data unless your organization has authorized that use. Maestro's opt-in only
+unlocks these routes; it does not change OpenRouter privacy settings, provider
+routing, or account guardrails. Review OpenRouter's current
+[Terms of Service](https://openrouter.ai/terms) and
+[Privacy documentation](https://openrouter.ai/docs/features/privacy-and-logging)
+before enabling them.
+
 Run `maestro doctor` for offline config, provider, selected-model, and Codex tool
 schema checks. The JSON report is versioned (`schema_version: 1`):
 

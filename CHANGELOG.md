@@ -8,6 +8,10 @@ versioning when releases are cut.
 
 ### Added
 
+- Add versioned, user-global opt-in support for every
+  `openrouter/stealth/*` model, with fail-closed request admission, explicit
+  data-use warnings, picker hiding while disabled, and a persistent
+  `Stealth · experimental` badge while enabled.
 - Add an opt-in coding acceptance workflow with task readiness checks, independent
   review and behavior validators, revision-bound evidence, and enforced handoff
   dispositions. Hosted completion records the decision in Platform before a task

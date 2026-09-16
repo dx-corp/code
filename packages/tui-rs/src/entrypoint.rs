@@ -58,7 +58,7 @@ mod shutdown_signal;
 /// utility handler instead of the interactive TUI, headless server, or
 /// exec/print bridges; `packages/maestro-rs` no longer keeps an independent
 /// copy of this list (see `maestro::cli::classify`).
-pub const NATIVE_UTILITY_COMMANDS: [&str; 44] = [
+pub const NATIVE_UTILITY_COMMANDS: [&str; 45] = [
     "acp",
     "sessions",
     "search",
@@ -86,6 +86,7 @@ pub const NATIVE_UTILITY_COMMANDS: [&str; 44] = [
     "orb",
     "config",
     "experiments",
+    "stealth-models",
     "mission",
     "evalops",
     "operating-plane",

@@ -1661,6 +1661,9 @@ pub fn check_url_allowed(url: &str) -> Option<String> {
 }
 
 pub fn check_model_allowed(model_id: &str) -> Option<String> {
+    if let Some(reason) = crate::stealth_models::check_model_allowed(model_id) {
+        return Some(reason);
+    }
     let policy = match load_policy(false) {
         Ok(policy) => policy,
         Err(err) => {

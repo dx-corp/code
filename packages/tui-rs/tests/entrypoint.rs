@@ -29,8 +29,8 @@ fn argv(words: &[&str]) -> Vec<OsString> {
 fn every_native_utility_command_routes_to_the_utility_handler() {
     assert_eq!(
         NATIVE_UTILITY_COMMANDS.len(),
-        44,
-        "this test's evidence baseline is 44 utility commands; update it deliberately \
+        45,
+        "this test's evidence baseline is 45 utility commands; update it deliberately \
          if the canonical table changes size"
     );
 
@@ -39,6 +39,13 @@ fn every_native_utility_command_routes_to_the_utility_handler() {
     assert_eq!(
         native_utility_tokens(&experiment_args[1..]),
         Some(vec!["experiments".to_owned(), "off".to_owned()])
+    );
+
+    assert!(NATIVE_UTILITY_COMMANDS.contains(&"stealth-models"));
+    let stealth_args = argv(&["stealth-models", "status"]);
+    assert_eq!(
+        native_utility_tokens(&stealth_args[1..]),
+        Some(vec!["stealth-models".to_owned(), "status".to_owned()])
     );
 
     let workflow_args = argv(&["workflow", "--help"]);

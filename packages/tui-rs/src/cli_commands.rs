@@ -104,6 +104,7 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
         "openai" => crate::openai_cli::run_openai(&args[1..]).await,
         "computer" | "orb" => crate::orb_cli::run_orb(&args[1..]).await,
         "experiments" => run_experiments(&args[1..]),
+        "stealth-models" => run_stealth_models(&args[1..]),
         "config" => crate::config_cli::run_config(&args[1..]).await,
         "operating-plane" => crate::operating_plane_cli::run_operating_plane(&args[1..]).await,
         "painter" => crate::painter_cli::run_painter(&args[1..]),
@@ -163,6 +164,43 @@ fn parse_experiment_args(args: &[String]) -> Result<(&str, bool)> {
             "--json" if !json => json = true,
             "status" | "on" | "off" if action.is_none() => action = Some(argument.as_str()),
             _ => bail!("Usage: deixic-code experiments [status|on|off] [--json]"),
+        }
+    }
+    Ok((action.unwrap_or("status"), json))
+}
+
+fn run_stealth_models(args: &[String]) -> Result<i32> {
+    if args.first().is_some_and(|arg| is_help(arg)) {
+        println!("Usage: deixic-code stealth-models [status|on|off] [--json]");
+        return Ok(0);
+    }
+    let (action, json) = parse_stealth_model_args(args)?;
+    let message = maestro_local_host::stealth_models::command(action)?;
+    if json {
+        let consent = maestro_local_host::stealth_models::load()?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "enabled": consent.permits(),
+                "consent_version": consent.consent_version,
+                "revision": consent.revision,
+                "explanation": message,
+            }))?
+        );
+    } else {
+        println!("{message}");
+    }
+    Ok(0)
+}
+
+fn parse_stealth_model_args(args: &[String]) -> Result<(&str, bool)> {
+    let mut action = None;
+    let mut json = false;
+    for argument in args {
+        match argument.as_str() {
+            "--json" if !json => json = true,
+            "status" | "on" | "off" if action.is_none() => action = Some(argument.as_str()),
+            _ => bail!("Usage: deixic-code stealth-models [status|on|off] [--json]"),
         }
     }
     Ok((action.unwrap_or("status"), json))
@@ -1681,7 +1719,7 @@ mod tests {
 
 #[cfg(test)]
 mod experiment_cli_tests {
-    use super::parse_experiment_args;
+    use super::{parse_experiment_args, parse_stealth_model_args};
 
     #[test]
     fn experiments_cli_defaults_to_status_and_rejects_ambiguous_mutations() {
@@ -1694,6 +1732,20 @@ mod experiment_cli_tests {
             vec!["--json".into(), "--json".into()],
         ] {
             assert!(parse_experiment_args(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn stealth_model_cli_defaults_to_status_and_rejects_ambiguous_mutations() {
+        assert_eq!(parse_stealth_model_args(&[]).unwrap(), ("status", false));
+        let args = vec!["on".into(), "--json".into()];
+        assert_eq!(parse_stealth_model_args(&args).unwrap(), ("on", true));
+        for args in [
+            vec!["on".into(), "off".into()],
+            vec!["yes".into()],
+            vec!["--json".into(), "--json".into()],
+        ] {
+            assert!(parse_stealth_model_args(&args).is_err());
         }
     }
 }

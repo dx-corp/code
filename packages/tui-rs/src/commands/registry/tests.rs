@@ -2007,3 +2007,24 @@ fn experiment_preferences_are_discoverable_and_invalid_consent_is_rejected() {
             .is_err()
     );
 }
+
+#[test]
+fn stealth_model_consent_command_is_discoverable_and_rejects_ambiguous_mutations() {
+    let _guard = maestro_local_host::config::test_process_env_lock();
+    let home = tempdir().expect("temporary Maestro home");
+    let previous = std::env::var_os("MAESTRO_HOME");
+    std::env::set_var("MAESTRO_HOME", home.path());
+    let registry = build_command_registry();
+    let output = registry.execute("/stealth-models status", "/tmp", None, None);
+    let ambiguous = registry.execute("/stealth-models on off", "/tmp", None, None);
+    match previous {
+        Some(value) => std::env::set_var("MAESTRO_HOME", value),
+        None => std::env::remove_var("MAESTRO_HOME"),
+    }
+
+    let output = output.unwrap();
+    assert!(
+        matches!(output, CommandOutput::Message(message) if message.contains("Stealth models"))
+    );
+    assert!(ambiguous.is_err());
+}
