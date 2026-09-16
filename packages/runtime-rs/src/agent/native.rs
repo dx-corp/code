@@ -470,6 +470,23 @@ fn policy_model_id(model: &str) -> String {
     }
 }
 
+fn provider_request_policy_model_id(active_model: &str, request_model: &str) -> String {
+    let active = policy_model_id(active_model);
+    let Some((provider, _)) = active.split_once('/') else {
+        return policy_model_id(request_model);
+    };
+    if request_model
+        .split_once('/')
+        .is_some_and(|(request_provider, model_id)| {
+            request_provider.eq_ignore_ascii_case(provider) && !model_id.is_empty()
+        })
+    {
+        request_model.to_owned()
+    } else {
+        format!("{provider}/{request_model}")
+    }
+}
+
 fn is_tool_result_only_user_message(message: &Message) -> bool {
     message.role == Role::User
         && matches!(
@@ -3787,6 +3804,18 @@ impl NativeAgentRunner {
         request_id: &str,
         model: Option<&str>,
     ) -> Result<()> {
+        let policy_model =
+            model.map(|model| provider_request_policy_model_id(&self.config.model, model));
+        if let Some(reason) = policy_model
+            .as_deref()
+            .and_then(|model| self.tool_executor.model_allowed(model))
+        {
+            return Err(anyhow::Error::new(ProviderAdmissionDenied {
+                kind: kind.to_owned(),
+                request_id: request_id.to_owned(),
+                reason,
+            }));
+        }
         let result = self
             .hooks
             .hook_pre_provider_request(kind, request_id, model)

@@ -260,6 +260,8 @@ pub struct ModelSelector {
     show_all_affordance: bool,
     /// When false, `show` keeps an injected fixture catalog (tests).
     reload_live_catalog: bool,
+    /// User-global, versioned consent; project configuration cannot grant it.
+    stealth_models_enabled: bool,
 }
 
 impl Default for ModelSelector {
@@ -288,6 +290,7 @@ impl ModelSelector {
             show_all: false,
             show_all_affordance: false,
             reload_live_catalog: true,
+            stealth_models_enabled: maestro_local_host::stealth_models::permits_current(),
         }
     }
 
@@ -297,8 +300,15 @@ impl ModelSelector {
         selector.catalog_models = models.clone();
         selector.models = models;
         selector.reload_live_catalog = false;
+        selector.stealth_models_enabled = false;
         selector.filter();
         selector
+    }
+
+    #[cfg(test)]
+    fn set_stealth_models_enabled_for_test(&mut self, enabled: bool) {
+        self.stealth_models_enabled = enabled;
+        self.filter();
     }
 
     /// Set the current model (for highlighting)
@@ -423,6 +433,9 @@ impl ModelSelector {
 
     /// Show the modal
     pub fn show(&mut self) {
+        if self.reload_live_catalog {
+            self.stealth_models_enabled = maestro_local_host::stealth_models::permits_current();
+        }
         self.reload_catalog_from_cache();
         self.picker.open();
         self.show_all = false;
@@ -571,6 +584,9 @@ impl ModelSelector {
             .iter()
             .enumerate()
             .filter(|(_, m)| {
+                if !self.model_visible(m) {
+                    return false;
+                }
                 if query.is_empty() {
                     return true;
                 }
@@ -669,18 +685,17 @@ impl ModelSelector {
     fn focused_slice(&self) -> Vec<usize> {
         let mut slice: Vec<usize> = Vec::new();
         for &(provider, id) in PREFERRED_MODELS {
-            if let Some(index) = self
-                .models
-                .iter()
-                .position(|model| model.provider == provider && model.id == id)
-            {
+            if let Some(index) = self.models.iter().position(|model| {
+                self.model_visible(model) && model.provider == provider && model.id == id
+            }) {
                 slice.push(index);
             }
         }
         if let Some(current) = &self.current_model {
             let canonical_current = canonical_current_route(current, &self.models);
             if let Some(idx) = self.models.iter().position(|model| {
-                model_matches_current(model, current, canonical_current.as_deref())
+                self.model_visible(model)
+                    && model_matches_current(model, current, canonical_current.as_deref())
             }) {
                 if !slice.contains(&idx) {
                     slice.push(idx);
@@ -688,7 +703,10 @@ impl ModelSelector {
             }
         }
         for (idx, model) in self.models.iter().enumerate() {
-            if model.verification.source == "local-runtime" && !slice.contains(&idx) {
+            if self.model_visible(model)
+                && model.verification.source == "local-runtime"
+                && !slice.contains(&idx)
+            {
                 slice.push(idx);
             }
         }
@@ -698,11 +716,9 @@ impl ModelSelector {
             else {
                 continue;
             };
-            if let Some(idx) = self
-                .models
-                .iter()
-                .position(|model| model.id == default_id && model.provider == *provider)
-            {
+            if let Some(idx) = self.models.iter().position(|model| {
+                self.model_visible(model) && model.id == default_id && model.provider == *provider
+            }) {
                 if !slice.contains(&idx) {
                     slice.push(idx);
                 }
@@ -710,6 +726,14 @@ impl ModelSelector {
         }
         slice.truncate(FOCUSED_SLICE_LIMIT.max(retained_rows));
         slice
+    }
+
+    fn model_visible(&self, model: &ModelInfo) -> bool {
+        self.stealth_models_enabled
+            || !maestro_local_host::stealth_models::is_openrouter_stealth_model(
+                &model.provider,
+                &model.id,
+            )
     }
 
     pub(crate) fn cycle_routes(&self) -> Vec<String> {
@@ -749,6 +773,11 @@ impl ModelSelector {
             .and_then(|current| canonical_current_route(current, &self.models));
         let models = &self.models;
         let current_model = &self.current_model;
+        let visible_model_count = self
+            .models
+            .iter()
+            .filter(|model| self.model_visible(model))
+            .count();
         self.picker.render(
             frame,
             inner,
@@ -769,7 +798,7 @@ impl ModelSelector {
                     return ListItem::new(Line::from(Span::styled(
                         maestro_ui::localization::format(
                             "… show all {0} models (Tab)",
-                            &[(models.len()).to_string()],
+                            &[(visible_model_count).to_string()],
                         ),
                         Style::default().fg(theme.focus),
                     )));
@@ -843,6 +872,9 @@ fn model_route_summary(model: &ModelInfo) -> String {
 }
 
 fn model_status_summary(model: &ModelInfo) -> &'static str {
+    if maestro_local_host::stealth_models::is_openrouter_stealth_model(&model.provider, &model.id) {
+        return "Stealth · experimental";
+    }
     use crate::model_catalog::VerificationState;
     match (model.verification.source.as_str(), model.verification.state) {
         ("local-runtime", VerificationState::Verified) => "Local · detected",
@@ -878,6 +910,47 @@ fn capability_summary(model: &ModelInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stealth_models_are_hidden_until_consent_and_keep_a_warning_badge() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let models = vec![
+            test_model("openai/gpt-5.6", "openrouter"),
+            test_model("stealth/union-alphax", "OpenRouter"),
+        ];
+        let mut selector = ModelSelector::with_models(models);
+        selector.set_current_model(Some("OpenRouter/stealth/union-alphax".to_owned()));
+        selector.show();
+        selector.insert_str("stealth");
+        assert!(selector.filtered.is_empty());
+        assert!(
+            selector
+                .cycle_routes()
+                .iter()
+                .all(|route| !route.contains("/stealth/"))
+        );
+
+        selector.set_stealth_models_enabled_for_test(true);
+        selector.show();
+        selector.insert_str("stealth");
+        assert_eq!(
+            selector.selected_model_id().as_deref(),
+            Some("OpenRouter/stealth/union-alphax")
+        );
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        terminal
+            .draw(|frame| selector.render(frame, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Stealth · experimental"), "{text}");
+    }
+
     #[test]
     fn managed_model_picker_shows_funding_and_upstream_without_changing_route() {
         use ratatui::{Terminal, backend::TestBackend};

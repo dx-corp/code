@@ -2162,6 +2162,20 @@ fn build_builtin_registry() -> CommandRegistry {
     );
     registry.register(
         Command::new(
+            "stealth-models",
+            "Review or change access to experimental OpenRouter Stealth models",
+            CommandCategory::Config,
+            Box::new(|ctx| {
+                maestro_local_host::stealth_models::command(ctx.raw_args.trim())
+                    .map(CommandOutput::Message)
+                    .map_err(|error| CommandError::new(error.to_string()))
+            }),
+        )
+        .usage("/stealth-models [status|on|off]")
+        .group(vec!["status", "on", "off"]),
+    );
+    registry.register(
+        Command::new(
             "preferences",
             "Open Experiments preferences",
             CommandCategory::Config,

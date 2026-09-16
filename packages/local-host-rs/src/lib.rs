@@ -62,6 +62,7 @@ pub mod skill_cli;
 pub mod skill_package_cli;
 pub mod skills;
 pub mod state;
+pub mod stealth_models;
 pub mod telemetry;
 pub mod terminal_info;
 pub mod tool_output;
