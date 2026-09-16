@@ -104,7 +104,7 @@ jobs:
             exit 0
           fi
 
-          if grep -Eiq "(https://github[.]com/evalops/(mono|maestro-internal)/pull/[0-9]+|evalops/(mono|maestro-internal)#[0-9]+|maestro-internal#[0-9]+)" <<< "${PR_BODY:-}"; then
+          if grep -Eiq "(https://github[.]com/(dx-corp|evalops)/(mono|maestro-internal)/pull/[0-9]+|(dx-corp|evalops)/(mono|maestro-internal)#[0-9]+|maestro-internal#[0-9]+)" <<< "${PR_BODY:-}"; then
             echo "Mirrored source provenance link found."
             exit 0
           fi
@@ -116,7 +116,7 @@ jobs:
           fi
 
           # shellcheck disable=SC2016 # Backticks are literal Markdown delimiters in the printf format.
-          printf -v comment_body '%s\nThis PR changes mirrored Maestro source files in the public repo, but it does not link the matching private source-of-truth PR.\n\nLink the matching evalops/mono source PR (legacy maestro-internal links remain accepted), then re-run the check:\n\n- `https://github.com/evalops/mono/pull/<number>`\n- `evalops/mono#<number>`\n- `maestro-internal#<number>`\n\nMirrored files touched:\n\n%s' \
+          printf -v comment_body '%s\nThis PR changes mirrored Maestro source files in the public repo, but it does not link the matching private source-of-truth PR.\n\nLink the matching dx-corp/mono source PR (legacy evalops and maestro-internal links remain accepted), then re-run the check:\n\n- `https://github.com/dx-corp/mono/pull/<number>`\n- `dx-corp/mono#<number>`\n- `maestro-internal#<number>`\n\nMirrored files touched:\n\n%s' \
             "$marker" "$file_list"
 
           existing_comment_id="$(
@@ -137,5 +137,5 @@ jobs:
               -f body="$comment_body" >/dev/null
           fi
 
-          echo "::error::Public PRs that touch mirrored source must link the matching evalops/mono source PR."
+          echo "::error::Public PRs that touch mirrored source must link the matching dx-corp/mono source PR."
           exit 1
