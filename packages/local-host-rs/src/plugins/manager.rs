@@ -758,6 +758,12 @@ fn find_installed_path(destination_root: &Path, name: &str) -> Option<std::path:
         })
 }
 
+fn encoded_integrity_path(path: &Path) -> Result<&[u8]> {
+    path.to_str()
+        .map(str::as_bytes)
+        .context("plugin path is not valid UTF-8")
+}
+
 /// Compute a stable digest over regular package files and relative paths.
 pub fn package_integrity(root: &Path) -> Result<String> {
     let mut files = Vec::new();
@@ -785,9 +791,9 @@ pub fn package_integrity(root: &Path) -> Result<String> {
         let relative = path
             .strip_prefix(root)
             .context("plugin file escaped package root")?;
-        let relative = relative.to_string_lossy();
+        let relative = encoded_integrity_path(relative)?;
         digest.update((relative.len() as u64).to_be_bytes());
-        digest.update(relative.as_bytes());
+        digest.update(relative);
         let bytes = fs::read(&path)?;
         digest.update((bytes.len() as u64).to_be_bytes());
         digest.update(bytes);
@@ -1572,5 +1578,39 @@ mod tests {
 
         let error = validate_tree(source.path()).unwrap_err();
         assert!(error.to_string().contains("lifecycle scripts"), "{error:#}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn integrity_path_encoding_rejects_non_utf8_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid_name = OsString::from_vec(vec![b'p', b'l', b'u', b'g', b'i', b'n', 0x80]);
+        let invalid_path = Path::new(&invalid_name);
+        let error = encoded_integrity_path(invalid_path).unwrap_err();
+
+        assert!(
+            error.to_string().contains("plugin path is not valid UTF-8"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn package_integrity_rejects_non_utf8_filenames() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let source = TempDir::new().unwrap();
+        let invalid_name = OsString::from_vec(vec![b'p', b'l', b'u', b'g', b'i', b'n', 0x80]);
+        fs::write(source.path().join(invalid_name), "same bytes").unwrap();
+
+        let error = package_integrity(source.path()).unwrap_err();
+
+        assert!(
+            error.to_string().contains("plugin path is not valid UTF-8"),
+            "{error:#}"
+        );
     }
 }
