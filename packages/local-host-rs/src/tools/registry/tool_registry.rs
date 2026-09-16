@@ -4,7 +4,7 @@ use super::super::bash::BashTool;
 use super::super::image::ImageTool;
 use super::super::web_fetch::WebFetchTool;
 use crate::agent::ToolDefinition;
-use crate::ai::Tool;
+use crate::ai::{Tool, ToolSchemaEnforcement};
 
 /// Tool registry that holds tool definitions with schemas and validation logic
 ///
@@ -1443,6 +1443,10 @@ impl ToolRegistry {
                 requires_approval: false,
             },
         );
+
+        for definition in tools.values_mut() {
+            definition.tool.schema_enforcement = ToolSchemaEnforcement::Prefer;
+        }
 
         Self { tools }
     }

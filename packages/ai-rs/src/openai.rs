@@ -116,7 +116,7 @@ use super::op_secret;
 use super::transform::{OutboundTarget, transform_messages_for_target};
 use super::types::{
     ContentBlock, ImageSource, ManagedGatewayReceipt, Message, MessageContent,
-    ProviderStreamErrorKind, RequestConfig, Role, StreamEvent, Tool,
+    ProviderStreamErrorKind, RequestConfig, Role, StreamEvent, Tool, ToolSchemaEnforcement,
 };
 
 // The managed gateway owns a 45-second default provider attempt, plus
@@ -1839,7 +1839,7 @@ impl OpenAiClient {
         &self,
         messages: &[Message],
         config: &RequestConfig,
-    ) -> serde_json::Value {
+    ) -> Result<serde_json::Value> {
         let model = self.request_model_name(&config.model);
         let messages = transform_messages_for_target(messages, OutboundTarget::OpenAiResponses);
         // Convert messages to Responses API format
@@ -2000,20 +2000,33 @@ impl OpenAiClient {
 
         // Add tools (filtered for Responses API compatibility)
         if !config.tools.is_empty() {
+            for tool in config
+                .tools
+                .iter()
+                .filter(|tool| !tool.name.trim().is_empty())
+            {
+                if tool.schema_enforcement == ToolSchemaEnforcement::Require {
+                    crate::constrained_sampling::resolve_strict_json_schema(tool, true)?;
+                }
+            }
             let compatible_tools = filter_responses_api_tools(&config.tools);
             if !compatible_tools.is_empty() {
                 let tools: Vec<serde_json::Value> = compatible_tools
                     .iter()
                     .map(|tool| {
-                        serde_json::json!({
+                        let strict_schema =
+                            crate::constrained_sampling::resolve_strict_json_schema(tool, true)?;
+                        let strict = strict_schema.is_some();
+                        let parameters = strict_schema.unwrap_or_else(|| tool.input_schema.clone());
+                        Ok(serde_json::json!({
                             "type": "function",
                             "name": tool.name,
                             "description": tool.description,
-                            "strict": false,
-                            "parameters": tool.input_schema
-                        })
+                            "strict": strict,
+                            "parameters": parameters
+                        }))
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
                 body["tools"] = serde_json::json!(tools);
             }
         }
@@ -2034,7 +2047,7 @@ impl OpenAiClient {
         // This enables streaming of reasoning text (only encrypted_content is valid)
         body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
 
-        body
+        Ok(body)
     }
 
     /// Build the appropriate request body based on model
@@ -2049,6 +2062,7 @@ impl OpenAiClient {
             config,
             self.uses_responses_api_for(&config.model),
         )
+        .expect("test request configuration must be valid")
     }
 
     pub(crate) fn build_request_body_for_api(
@@ -2056,9 +2070,9 @@ impl OpenAiClient {
         messages: &[Message],
         config: &RequestConfig,
         responses: bool,
-    ) -> serde_json::Value {
+    ) -> Result<serde_json::Value> {
         let mut body = if responses {
-            self.build_responses_request_body(messages, config)
+            self.build_responses_request_body(messages, config)?
         } else {
             self.build_chat_request_body(messages, config)
         };
@@ -2102,7 +2116,7 @@ impl OpenAiClient {
         if let Some(object) = body.as_object_mut() {
             object.extend(self.request_extensions.clone());
         }
-        body
+        Ok(body)
     }
 
     /// Resolve the full request URL for a model.
@@ -2208,11 +2222,8 @@ impl OpenAiClient {
         }
 
         let is_responses_api = self.authorized_responses_api_for(&config.model)?;
-        let mut body = self.managed_request(self.build_request_body_for_api(
-            messages,
-            config,
-            is_responses_api,
-        ))?;
+        let request_body = self.build_request_body_for_api(messages, config, is_responses_api)?;
+        let mut body = self.managed_request(request_body)?;
 
         if self.managed_inference_authorization.is_some() {
             let (required, forbidden) = if is_responses_api {
@@ -3320,7 +3331,9 @@ mod tests {
             .unwrap()
             .with_volatile_tail(Some("clock and plan".into())),
         );
-        let body = client.build_request_body_for_api(&history, &config, false);
+        let body = client
+            .build_request_body_for_api(&history, &config, false)
+            .unwrap();
         assert_eq!(
             body["messages"][0]["content"][0]["cache_control"]["ttl"],
             "1h"
@@ -3345,7 +3358,9 @@ mod tests {
             crate::cache_topology::PreparedPrompt::auxiliary(&history, &config, scope.namespace())
                 .unwrap(),
         );
-        let auxiliary = client.build_request_body_for_api(&history, &config, false);
+        let auxiliary = client
+            .build_request_body_for_api(&history, &config, false)
+            .unwrap();
         assert_eq!(auxiliary["messages"][0]["content"], "checkpoint");
         assert!(auxiliary.get("prompt_cache_key").is_none());
     }
@@ -4179,7 +4194,7 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             ..Default::default()
         };
         let client = OpenAiClient::new("test-key").unwrap();
-        let body = client.build_responses_request_body(&[], &config);
+        let body = client.build_responses_request_body(&[], &config).unwrap();
         assert_eq!(body["max_output_tokens"], 128_000);
     }
 
@@ -5044,6 +5059,113 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
     }
 
     #[test]
+    fn responses_tool_schema_prefer_supported_is_strict() {
+        let client = OpenAiClient::new("test-key").unwrap();
+        let config = RequestConfig {
+            model: "gpt-5.6".into(),
+            tools: vec![
+                Tool::new("read", "Read a file")
+                    .with_schema(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "limit": {"type": "integer"}
+                        },
+                        "required": ["path"]
+                    }))
+                    .with_schema_enforcement(ToolSchemaEnforcement::Prefer),
+            ]
+            .into(),
+            ..RequestConfig::default()
+        };
+
+        let body = client
+            .build_responses_request_body(&[], &config)
+            .expect("supported strict schema");
+        assert_eq!(body["tools"][0]["strict"], true);
+        assert_eq!(
+            body["tools"][0]["parameters"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            body["tools"][0]["parameters"]["required"],
+            serde_json::json!(["limit", "path"])
+        );
+    }
+
+    #[test]
+    fn responses_tool_schema_prefer_unsupported_falls_back_without_dropping_tool() {
+        let client = OpenAiClient::new("test-key").unwrap();
+        let original = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "value": {"$ref": "#/$defs/value"}
+            }
+        });
+        let config = RequestConfig {
+            model: "gpt-5.6".into(),
+            tools: vec![
+                Tool::new("lookup", "Look up a value")
+                    .with_schema(original.clone())
+                    .with_schema_enforcement(ToolSchemaEnforcement::Prefer),
+            ]
+            .into(),
+            ..RequestConfig::default()
+        };
+
+        let body = client
+            .build_responses_request_body(&[], &config)
+            .expect("prefer must fall back");
+        assert_eq!(body["tools"][0]["name"], "lookup");
+        assert_eq!(body["tools"][0]["strict"], false);
+        assert_eq!(body["tools"][0]["parameters"], original);
+    }
+
+    #[test]
+    fn responses_tool_schema_off_preserves_existing_wire_shape() {
+        let client = OpenAiClient::new("test-key").unwrap();
+        let original = serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}}
+        });
+        let config = RequestConfig {
+            model: "gpt-5.6".into(),
+            tools: vec![Tool::new("read", "Read a file").with_schema(original.clone())].into(),
+            ..RequestConfig::default()
+        };
+
+        let body = client
+            .build_responses_request_body(&[], &config)
+            .expect("off is infallible");
+        assert_eq!(body["tools"][0]["strict"], false);
+        assert_eq!(body["tools"][0]["parameters"], original);
+    }
+
+    #[test]
+    fn responses_tool_schema_require_unsupported_fails_request_preparation() {
+        let client = OpenAiClient::new("test-key").unwrap();
+        let config = RequestConfig {
+            model: "gpt-5.6".into(),
+            tools: vec![
+                Tool::new("lookup", "Look up a value")
+                    .with_schema(serde_json::json!({
+                        "type": "object",
+                        "properties": {"value": {"oneOf": [{"type": "string"}]}}
+                    }))
+                    .with_schema_enforcement(ToolSchemaEnforcement::Require),
+            ]
+            .into(),
+            ..RequestConfig::default()
+        };
+
+        let error = client
+            .build_responses_request_body(&[], &config)
+            .expect_err("required strict schema must fail closed");
+        assert!(error.to_string().contains("lookup"));
+        assert!(error.to_string().contains("oneOf"));
+    }
+
+    #[test]
     fn trims_api_key_before_building_headers() {
         let client = OpenAiClient::new("  test-key\n").unwrap();
         let headers = client.headers();
@@ -5308,7 +5430,9 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             chat["messages"][0]["tool_calls"][0]["id"],
             chat["messages"][1]["tool_call_id"]
         );
-        let responses = client.build_responses_request_body(&history, &config);
+        let responses = client
+            .build_responses_request_body(&history, &config)
+            .unwrap();
         assert!(responses.to_string().contains("Claude reasoning evidence"));
         let input = responses["input"].as_array().unwrap();
         let call = input.iter().find(|x| x["type"] == "function_call").unwrap();
@@ -5350,7 +5474,9 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             (ids[0], "read", serde_json::json!({}), "a"),
             (ids[1], "read", serde_json::json!({}), "b"),
         ]);
-        let body = client.build_responses_request_body(&history, &RequestConfig::default());
+        let body = client
+            .build_responses_request_body(&history, &RequestConfig::default())
+            .unwrap();
         assert_eq!(body["input"][0]["id"], "fc_a");
         assert_eq!(body["input"][1]["id"], "fc_b");
         assert_eq!(body["input"][2]["call_id"], "shared");
@@ -5441,13 +5567,15 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
                 ),
             ],
         ] {
-            let body = client.build_responses_request_body(
-                &tool_call_history(&calls),
-                &RequestConfig {
-                    model: "openai/gpt-5.1-codex-max".to_string(),
-                    ..Default::default()
-                },
-            );
+            let body = client
+                .build_responses_request_body(
+                    &tool_call_history(&calls),
+                    &RequestConfig {
+                        model: "openai/gpt-5.1-codex-max".to_string(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
             let input = body["input"].as_array().expect("Responses input");
             assert_eq!(input.len(), calls.len() * 2);
 
@@ -5571,7 +5699,9 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
                         serde_json::json!({"provider":provider}),
                     )
                     .unwrap();
-                let body = client.build_responses_request_body(&restored, &config);
+                let body = client
+                    .build_responses_request_body(&restored, &config)
+                    .unwrap();
                 if provider == "openai" {
                     assert!(body["input"][0].get("extra_content").is_none());
                 } else {
@@ -5605,7 +5735,11 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
                     serde_json::json!(provider);
                 client.set_managed_inference_authorization(Some(authorization.to_string()));
                 let body = client
-                    .managed_request(client.build_responses_request_body(&restored, &config))
+                    .managed_request(
+                        client
+                            .build_responses_request_body(&restored, &config)
+                            .unwrap(),
+                    )
                     .unwrap();
                 assert!(body.get("provider_ref").is_none());
                 assert_eq!(
@@ -5621,7 +5755,8 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             }
             let other = OpenAiClient::new("test-key")
                 .unwrap()
-                .build_responses_request_body(&restored, &config);
+                .build_responses_request_body(&restored, &config)
+                .unwrap();
             assert!(other["input"][0].get("extra_content").is_none());
         }
     }
@@ -5629,14 +5764,16 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
     #[test]
     fn responses_requests_use_max_output_tokens() {
         let client = OpenAiClient::new("test-key").unwrap();
-        let body = client.build_responses_request_body(
-            &[],
-            &RequestConfig {
-                model: "gpt-5.1-codex-max".to_string(),
-                max_tokens: 1234,
-                ..Default::default()
-            },
-        );
+        let body = client
+            .build_responses_request_body(
+                &[],
+                &RequestConfig {
+                    model: "gpt-5.1-codex-max".to_string(),
+                    max_tokens: 1234,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
         assert_eq!(body["max_output_tokens"], 1234);
         assert!(body.get("max_tokens").is_none());
@@ -5678,13 +5815,15 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             },
         ];
 
-        let body = client.build_responses_request_body(
-            &messages,
-            &RequestConfig {
-                model: "gpt-5.1-codex-max".to_string(),
-                ..Default::default()
-            },
-        );
+        let body = client
+            .build_responses_request_body(
+                &messages,
+                &RequestConfig {
+                    model: "gpt-5.1-codex-max".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         let input = body["input"].as_array().expect("Responses input");
         let call_ids: Vec<&str> = input
             .iter()

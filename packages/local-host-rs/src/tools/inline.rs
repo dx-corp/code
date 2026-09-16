@@ -68,7 +68,7 @@ use super::details::InlineToolDetails;
 use super::process_utils::{kill_process_tree, set_new_process_group};
 use super::shell_env::{resolve_shell_environment, resolve_shell_environment_approval_context};
 use crate::agent::ToolResult;
-use crate::ai::Tool;
+use crate::ai::{Tool, ToolSchemaEnforcement};
 use crate::safety::expand_tilde;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -266,6 +266,7 @@ impl InlineTool {
             name: self.definition.name.clone(),
             description: self.definition.description.clone(),
             input_schema: self.build_schema(),
+            schema_enforcement: ToolSchemaEnforcement::Off,
         }
     }
 

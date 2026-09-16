@@ -287,19 +287,19 @@ fn render_all() -> Vec<(&'static str, Observed)> {
     vec![
         (
             "openai-chat",
-            observe_openai_chat(&openai.build_request_body_for_api(
-                &messages,
-                &config("openai/gpt-4.1"),
-                false,
-            )),
+            observe_openai_chat(
+                &openai
+                    .build_request_body_for_api(&messages, &config("openai/gpt-4.1"), false)
+                    .expect("OpenAI Chat request"),
+            ),
         ),
         (
             "openai-responses",
-            observe_openai_responses(&openai.build_request_body_for_api(
-                &messages,
-                &config("openai/gpt-5.5"),
-                true,
-            )),
+            observe_openai_responses(
+                &openai
+                    .build_request_body_for_api(&messages, &config("openai/gpt-5.5"), true)
+                    .expect("OpenAI Responses request"),
+            ),
         ),
         ("anthropic", observe_anthropic(&anthropic_body)),
         ("google", observe_gemini(&google_body)),

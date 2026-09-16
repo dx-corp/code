@@ -986,6 +986,34 @@ fn tool_search_schema_avoids_top_level_combinators() {
 }
 
 #[test]
+fn built_in_tools_prefer_strict_schema_while_external_tools_opt_in() {
+    use crate::ai::{Tool, ToolSchemaEnforcement};
+
+    let mut registry = ToolRegistry::new();
+    assert!(
+        registry.tools().all(|definition| {
+            definition.tool.schema_enforcement == ToolSchemaEnforcement::Prefer
+        })
+    );
+
+    registry.register(
+        "external",
+        ToolDefinition {
+            tool: Tool::new("external", "External tool"),
+            requires_approval: true,
+        },
+    );
+    assert_eq!(
+        registry
+            .get("external")
+            .expect("registered external tool")
+            .tool
+            .schema_enforcement,
+        ToolSchemaEnforcement::Off,
+    );
+}
+
+#[test]
 fn test_registered_tool_schemas_are_openai_safe() {
     let registry = ToolRegistry::new();
     let mut issues = Vec::new();
