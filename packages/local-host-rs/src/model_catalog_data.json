@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789457621,
+  "generated_at": 1789544007,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1552,7 +1552,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 235929
+        "output_tokens": 943718
       },
       "verification": {
         "state": "catalog",
@@ -1941,7 +1941,7 @@
     },
     {
       "id": "anthropic/claude-opus-5",
-      "name": "Claude Opus 5",
+      "name": "Anthropic: Claude Opus 5",
       "provider": "openrouter",
       "description": "Claude Opus 5 is Anthropic’s flagship model for demanding reasoning, coding, and long-horizon agentic work. It is…",
       "capabilities": {
@@ -4706,7 +4706,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 182520
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
@@ -8143,6 +8143,25 @@
         "streaming": true,
         "context_tokens": 1048576,
         "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.2:free",
+      "name": "Z.ai: GLM 5.2 (free)",
+      "provider": "openrouter",
+      "description": "GLM 5.2 is a large-scale reasoning model from Z.ai. It supports text input and output with a 1M-token context window,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 32768,
+        "output_tokens": 29491
       },
       "verification": {
         "state": "catalog",
