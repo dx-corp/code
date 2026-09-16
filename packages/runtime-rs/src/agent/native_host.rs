@@ -109,6 +109,17 @@ pub struct ToolDefinition {
     pub requires_approval: bool,
 }
 
+/// Content-free description of how one admitted tool call relates to the
+/// model-facing context. Effects influence provider projection only; they do
+/// not grant execution, policy, approval, replay, or completion authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeContextEffect {
+    /// The completed call observed the named resource.
+    Observe { resource_key: String },
+    /// The completed call changed the named resource.
+    Mutate { resource_key: String },
+}
+
 /// The annotations the concrete MCP/inline implementation resolved for a
 /// tool.  The runtime only needs these safety hints for the native read-only
 /// classifier and action-firewall call.
@@ -212,6 +223,11 @@ pub trait NativeExecutionHost: Send + Sync {
 
     // Immutable registry/metadata surface.
     fn tool_definitions(&self) -> Vec<ToolDefinition>;
+    /// Return an optional stable resource effect for provider-context
+    /// projection. Hosts remain opaque by default.
+    fn tool_context_effect(&self, _name: &str, _args: &Value) -> Option<NativeContextEffect> {
+        None
+    }
     fn has_native_tool(&self, name: &str) -> bool;
     fn is_reserved_tool(&self, name: &str) -> bool;
     fn goal_tools_visible(&self) -> bool;
@@ -470,6 +486,11 @@ impl NativeExecutionHostHandle {
     #[must_use]
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.0.tool_definitions()
+    }
+
+    #[must_use]
+    pub fn tool_context_effect(&self, name: &str, args: &Value) -> Option<NativeContextEffect> {
+        self.0.tool_context_effect(name, args)
     }
 
     #[must_use]

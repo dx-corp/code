@@ -74,7 +74,7 @@ fn empty_runtime_audit() -> Arc<RwLock<RuntimeAuditSnapshot>> {
 /// tool behavior small and deterministic; concrete filesystem/process/MCP
 /// behavior remains covered by the TUI host tests.
 #[derive(Clone)]
-struct RuntimeTestHost {
+pub(super) struct RuntimeTestHost {
     cwd: Arc<std::path::PathBuf>,
     client: Arc<UnifiedClient>,
     session_id: Arc<Mutex<Option<String>>>,
@@ -95,7 +95,7 @@ struct RuntimeTestHost {
 }
 
 impl RuntimeTestHost {
-    fn new(cwd: impl Into<std::path::PathBuf>, client: UnifiedClient) -> Self {
+    pub(super) fn new(cwd: impl Into<std::path::PathBuf>, client: UnifiedClient) -> Self {
         let tool_definitions = [
             ("bash", "Run a deterministic shell fixture"),
             ("read", "Read a deterministic fixture file"),

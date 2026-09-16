@@ -113,9 +113,9 @@ use super::message_queue::{
     MAX_PENDING_MESSAGES, MessageQueue, PendingMessage, PromptKind, QueuePlacement,
 };
 use super::native_host::{
-    ApprovalMode, NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookEvent,
-    NativeHookResult, NativeModelCapabilities, NativeModelRoute, NativeResolvedClient,
-    NativeToolExecutionOptions, QueueMode, ToolDefinition,
+    ApprovalMode, NativeContextEffect, NativeExecutionHostHandle, NativeFirewallVerdict,
+    NativeHookEvent, NativeHookResult, NativeModelCapabilities, NativeModelRoute,
+    NativeResolvedClient, NativeToolExecutionOptions, QueueMode, ToolDefinition,
 };
 use super::reminders::{ReminderEngine, ToolOutcome as ReminderToolOutcome};
 use super::safety::stable_stringify;

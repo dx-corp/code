@@ -258,6 +258,7 @@ impl NativeAgentRunner {
                 &self.messages,
                 OBSERVATION_FULL_TURNS,
                 self.active_tool_names.contains("recall_output"),
+                |name, args| self.tool_executor.tool_context_effect(name, args),
             );
             let provider_messages =
                 resolve_provider_history_shared(&request_messages, &self.credential_vault)?;

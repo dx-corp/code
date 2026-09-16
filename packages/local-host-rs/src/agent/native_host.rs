@@ -7,13 +7,13 @@
 //! `ToolExecutor` and one `IntegratedHookSystem` for the whole actor.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use maestro_runtime::agent::{
     FromAgent, InlineToolApprovalContext, NativeCodexAuth, NativeCodingCompletion,
-    NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookEvent,
-    NativeHookResult, NativeHostFuture, NativeModelCapabilities, NativeModelRoute,
+    NativeContextEffect, NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict,
+    NativeHookEvent, NativeHookResult, NativeHostFuture, NativeModelCapabilities, NativeModelRoute,
     NativeReadOnlyToolCall, NativeResolvedClient, NativeToolAnnotations,
     NativeToolExecutionOptions, SteerSignal, ToolDefinition, ToolExecution, WorkflowStateSnapshot,
 };
@@ -29,6 +29,55 @@ use crate::safety::{ActionFirewall, FirewallContext, FirewallVerdict};
 use crate::tools::{BatchConfig, BatchExecutor, BatchToolCall, ToolExecutor};
 
 type ModelResolver = dyn Fn(&str, bool) -> Result<NativeResolvedClient, String> + Send + Sync;
+
+fn lexical_resource_path(cwd: &Path, input: &str) -> Option<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let input = Path::new(input);
+    let path = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        cwd.join(input)
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.file_name() {
+                Some(name) if name != ".." => {
+                    normalized.pop();
+                }
+                _ if !path.is_absolute() => normalized.push(".."),
+                _ => {}
+            },
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    let resource_key = normalized.to_string_lossy().into_owned();
+    (!resource_key.is_empty()).then_some(resource_key)
+}
+
+fn local_file_context_effect(cwd: &Path, name: &str, args: &Value) -> Option<NativeContextEffect> {
+    let observes = match name.to_ascii_lowercase().as_str() {
+        "read" => true,
+        "write" | "edit" => false,
+        _ => return None,
+    };
+    let raw_path = args
+        .get("path")
+        .or_else(|| args.get("file_path"))?
+        .as_str()?;
+    let resource_key = lexical_resource_path(cwd, raw_path)?;
+    if observes {
+        Some(NativeContextEffect::Observe { resource_key })
+    } else {
+        Some(NativeContextEffect::Mutate { resource_key })
+    }
+}
 
 /// Concrete TUI owner of the native runtime execution boundary.
 pub struct LocalNativeExecutionHost {
@@ -166,6 +215,10 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
 
     fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.executor.tool_definitions().cloned().collect()
+    }
+
+    fn tool_context_effect(&self, name: &str, args: &Value) -> Option<NativeContextEffect> {
+        local_file_context_effect(Path::new(self.executor.cwd()), name, args)
     }
 
     fn has_native_tool(&self, name: &str) -> bool {
@@ -889,6 +942,62 @@ mod tests {
             }),
             recording,
         )
+    }
+
+    #[test]
+    fn local_context_effect_normalizes_equivalent_file_paths() {
+        let cwd = Path::new("/workspace/project");
+
+        assert_eq!(
+            local_file_context_effect(
+                cwd,
+                "read",
+                &serde_json::json!({"path":"./src/../src/lib.rs"}),
+            ),
+            Some(NativeContextEffect::Observe {
+                resource_key: "/workspace/project/src/lib.rs".to_owned(),
+            })
+        );
+        assert_eq!(
+            local_file_context_effect(cwd, "EDIT", &serde_json::json!({"path":"src/lib.rs"}),),
+            Some(NativeContextEffect::Mutate {
+                resource_key: "/workspace/project/src/lib.rs".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn local_context_effect_accepts_file_path_for_writes() {
+        assert_eq!(
+            local_file_context_effect(
+                Path::new("/workspace"),
+                "write",
+                &serde_json::json!({"file_path":"config.toml"}),
+            ),
+            Some(NativeContextEffect::Mutate {
+                resource_key: "/workspace/config.toml".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn local_context_effect_rejects_empty_or_opaque_tools() {
+        assert_eq!(
+            local_file_context_effect(
+                Path::new("/workspace"),
+                "read",
+                &serde_json::json!({"path":"  "}),
+            ),
+            None
+        );
+        assert_eq!(
+            local_file_context_effect(
+                Path::new("/workspace"),
+                "bash",
+                &serde_json::json!({"path":"src/lib.rs"}),
+            ),
+            None
+        );
     }
 
     #[test]
