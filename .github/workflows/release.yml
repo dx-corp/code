@@ -328,7 +328,7 @@ jobs:
           publish_with_token() {
             local tarball="$1"
             if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
-              echo "::error::OIDC publish failed and secrets.NPM_TOKEN is empty. Configure npm trusted publishing for evalops/maestro release.yml (npm-release env) and ensure this job has id-token: write, or set a granular NPM_TOKEN with write on @evalops/maestro."
+              echo "::error::OIDC publish failed and secrets.NPM_TOKEN is empty. Configure npm trusted publishing for dx-corp/code release.yml (npm-release env) and ensure this job has id-token: write, or set a granular NPM_TOKEN with write on @evalops/maestro."
               return 1
             fi
 

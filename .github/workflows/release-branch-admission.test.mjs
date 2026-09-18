@@ -68,5 +68,5 @@ test("release admission requires protected history and all pinned checks", () =>
 test("public main cannot create a release tag from moving source", () => {
   const tag = parseWorkflow(readFileSync(new URL("./tag-release.yml", import.meta.url), "utf8"));
   const release = tag.jobs["tag-current-version"].steps.find(step => step.id === "release");
-  assert.equal(release.with["create-tag-if-missing"], "${{ github.repository != 'evalops/maestro' }}");
+  assert.equal(release.with["create-tag-if-missing"], "${{ github.repository != 'dx-corp/code' }}");
 });

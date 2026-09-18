@@ -8,6 +8,8 @@ const pattern = workflow.match(/if grep -Eiq "([^"\n]*https:\/\/github[^"\n]*)" 
 assert.ok(pattern, "actual workflow provenance expression");
 
 for (const link of [
+  "https://github.com/dx-corp/mono/pull/8492",
+  "dx-corp/mono#8492",
   "https://github.com/evalops/mono/pull/8492",
   "evalops/mono#8492",
   "https://github.com/evalops/maestro-internal/pull/42",
@@ -21,6 +23,7 @@ for (const link of [
 for (const link of [
   "No source PR",
   "https://github.com/another/mono/pull/8492",
+  "https://github.com/dx-corp/maestro/pull/1063",
   "https://github.com/evalops/maestro/pull/1063",
   "https://github.com/evalops/mono/issues/8492",
   "https://github.com/evalops/mono/pull/",
