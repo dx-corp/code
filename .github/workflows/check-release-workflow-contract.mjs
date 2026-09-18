@@ -427,8 +427,8 @@ export function validateReleaseWorkflow(source) {
 	]) {
 		if (
 			(name === "prepare"
-                ? job.condition !== "github.repository == 'evalops/maestro' && github.ref == 'refs/heads/main'"
-                : job.condition) ||
+				? job.condition !== "github.repository == 'dx-corp/code' && github.ref == 'refs/heads/main'"
+				: job.condition) ||
 			(job.continueOnError && job.continueOnError !== "false")
 		) {
 			failures.push(`${name} job must not be conditional or ignored`);

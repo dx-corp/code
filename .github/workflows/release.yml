@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository == 'evalops/maestro' && github.ref == 'refs/heads/main'
+    if: github.repository == 'dx-corp/code' && github.ref == 'refs/heads/main'
     runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -87,7 +87,7 @@ jobs:
           timeout 60s git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$release_sha" FETCH_HEAD; then
             release_branch="releases/${release_tag}"
-            rules="$(timeout 60s gh api "repos/evalops/maestro/rules/branches/releases%2F${release_tag}")"
+            rules="$(timeout 60s gh api "repos/dx-corp/code/rules/branches/releases%2F${release_tag}")"
             jq -e '
               any(.[]; .type == "pull_request") and
               any(.[]; .type == "non_fast_forward") and
