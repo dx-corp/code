@@ -20,7 +20,7 @@ npm run build
 npm run smoke:release-native-only
 ```
 
-`npm run build` compiles the optimized `maestro` binary and materializes the native npm package under `vendor/maestro/<platform>-<arch>`. The checked-in browser assets under `packages/web/dist` are served directly by the Rust control plane.
+`npm run build` compiles the optimized `maestro` binary and materializes the native npm package under `vendor/maestro/<platform>-<arch>`.
 
 ## Packed-package verification
 

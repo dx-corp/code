@@ -1,6 +1,6 @@
 {
   "name": "@evalops/deixic-code",
-  "description": "Deixic Code — native Rust coding agent, CLI, TUI, and web runtime gateway",
+  "description": "Deixic Code — native Rust coding agent, CLI, TUI, and runtime gateway",
   "version": "0.10.90",
   "private": false,
   "type": "module",
@@ -19,7 +19,6 @@
     "bin",
     "vendor/maestro",
     "skills",
-    "packages/web/dist",
     "proto/maestro/v1/protocol-compatibility-manifest.json"
   ],
   "scripts": {
@@ -35,7 +34,6 @@
     "start": "./bin/deixic-code",
     "cli": "./bin/deixic-code",
     "tui": "./bin/deixic-code",
-    "web": "./bin/deixic-code web",
     "check:localization": "python3 scripts/check-localization.py && python3 scripts/test_check_localization.py",
     "check:deixic-code-naming": "node scripts/check-deixic-code-naming.mjs && node --test scripts/check-deixic-code-naming.test.mjs",
     "check:workspace-contract": "node scripts/check-workspace-contract.mjs",

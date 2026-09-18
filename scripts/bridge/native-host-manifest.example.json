@@ -1,9 +1,0 @@
-{
-  "name": "com.evalops.composer_bridge",
-  "description": "Maestro bridge native messaging host",
-  "path": "/ABSOLUTE/PATH/TO/composer/scripts/bridge/native-host.js",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://YOUR_EXTENSION_ID/"
-  ]
-}

@@ -50,7 +50,6 @@ mod local;
 mod markitdown;
 mod migrations;
 mod model_catalog;
-mod runtime_assets;
 mod session_messaging;
 mod sessions;
 
@@ -104,14 +103,12 @@ pub(crate) use http::MAX_JSON_BODY_BYTES;
 #[cfg(test)]
 use http::parse_request_head;
 use http::{
-    RequestHead, header_end, json_response, origin_allowed, percent_decode_component, query_flag,
-    read_request_body, read_request_body_with_limit, read_request_head, requested_cors_origin,
-    response, response_cors_credentials_header, response_cors_origin, response_with_extra_headers,
-    response_with_extra_headers_and_length, response_with_no_store, text_response,
-    with_response_cors_origin,
+    RequestHead, header_end, json_response, mime_for_path, origin_allowed,
+    percent_decode_component, query_flag, read_request_body, read_request_body_with_limit,
+    read_request_head, requested_cors_origin, response, response_cors_credentials_header,
+    response_cors_origin, response_with_extra_headers, response_with_extra_headers_and_length,
+    response_with_no_store, text_response, with_response_cors_origin,
 };
-#[cfg(test)]
-use http::{response_with_cache_and_length, response_with_no_store_and_length};
 use local::*;
 use markitdown::{extract_with_markitdown, should_prefer_markitdown, should_try_markitdown};
 pub(crate) use model_catalog::{ModelInfo, available_models, default_model, resolve_model};
@@ -120,7 +117,6 @@ use model_catalog::{
     ModelRegistry, builtin_models, default_model_from_registry, emergency_default_model,
     merge_configured_models, merge_llm_gateway_model_catalog,
 };
-use runtime_assets::*;
 #[cfg(test)]
 pub(crate) use session_messaging::{
     LIST_SESSION_PEERS_TOOL, SEND_SESSION_MESSAGE_TOOL, SESSION_MESSAGE_INBOX_CAP, SessionMessage,
@@ -296,8 +292,6 @@ pub struct RuntimeGatewayConfig {
     usage_file_path: PathBuf,
     a2a_tasks_file_path: PathBuf,
     automation_file_path: PathBuf,
-    static_root: PathBuf,
-    static_cache_max_age: u64,
     llm_gateway_models_url: Option<String>,
     llm_gateway_token: Option<String>,
     llm_gateway_org_id: Option<String>,
@@ -353,13 +347,6 @@ impl RuntimeGatewayConfig {
             usage_file_path: usage_file_path(),
             a2a_tasks_file_path: a2a_tasks_file_path(),
             automation_file_path: automation_file_path(),
-            static_root: env::var("MAESTRO_WEB_STATIC_ROOT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("packages/web/dist")),
-            static_cache_max_age: env::var("MAESTRO_STATIC_MAX_AGE")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(86_400),
             llm_gateway_models_url,
             llm_gateway_token: if openrouter_models {
                 trimmed_env("MAESTRO_OPENROUTER_API_KEY")
@@ -406,18 +393,11 @@ impl RuntimeGatewayConfig {
             usage_file_path: state_root.join("usage.jsonl"),
             a2a_tasks_file_path: state_root.join("a2a-tasks.json"),
             automation_file_path: state_root.join("automations.json"),
-            static_root: PathBuf::from("packages/web/dist"),
-            static_cache_max_age: 0,
             llm_gateway_models_url: None,
             llm_gateway_token: None,
             llm_gateway_org_id: None,
             llm_gateway_timeout_ms: 2_500,
         }
-    }
-
-    pub fn with_static_root(mut self, static_root: PathBuf) -> Self {
-        self.static_root = static_root;
-        self
     }
 
     pub fn with_session_store_path(mut self, session_store_path: PathBuf) -> Self {
@@ -601,8 +581,6 @@ struct OnboardingStep {
 struct ServerSnapshot {
     uptime: f64,
     version: String,
-    #[serde(rename = "staticCacheMaxAgeSeconds")]
-    static_cache_max_age_seconds: u64,
     runtime: &'static str,
 }
 
@@ -821,26 +799,6 @@ async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Re
                 .write_all(&response)
                 .await
                 .context("failed to write local endpoint response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_runtime_config_request(&head) {
-            let response = runtime_config_response(&head, &state.config);
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write runtime config response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_static_asset_request(&head) {
-            let response = static_response(&head, &state.config).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write static asset response")?;
             let _ = stream.shutdown().await;
             return Ok(());
         }
@@ -1467,7 +1425,6 @@ async fn build_status_snapshot(state: &AppState) -> StatusSnapshot {
         server: ServerSnapshot {
             uptime: state.started_at.elapsed().as_secs_f64(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            static_cache_max_age_seconds: state.config.static_cache_max_age,
             runtime: "rust-control-plane",
         },
         database: DatabaseSnapshot {

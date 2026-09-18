@@ -164,6 +164,58 @@ fn openai_api_key_resolves_native_client_without_identity() {
 }
 
 #[test]
+fn local_runtime_ignores_expired_stored_identity_but_managed_route_does_not() {
+    let _guard = crate::config::test_process_env_lock();
+    let _restore = EnvRestore::capture(&identity_env_names(false, true));
+    let maestro_home = tempfile::tempdir().expect("maestro home");
+    std::env::set_var("MAESTRO_HOME", maestro_home.path());
+    std::env::set_var("MAESTRO_OAUTH_STORAGE_MODE", "file");
+    std::env::set_var("MAESTRO_DISABLE_KEYCHAIN", "1");
+    for name in [
+        crate::credential_mode::ACCESS_TOKEN_ENV,
+        crate::credential_mode::ACCESS_TOKEN_FILE_ENV,
+        crate::credential_mode::ORG_ID_ENV,
+        crate::credential_mode::WORKSPACE_ID_ENV,
+        "MAESTRO_IDENTITY_URL",
+        crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV,
+    ] {
+        std::env::remove_var(name);
+    }
+    std::fs::write(
+        maestro_home.path().join("oauth.json"),
+        serde_json::to_vec(&json!({
+            "evalops": {
+                "type": "oauth",
+                "refresh": "",
+                "access": "expired-airplane-token",
+                "expires": 1,
+                "metadata": {
+                    "organizationId": "org-test",
+                    "workspaceId": "workspace-test",
+                    "identityBaseUrl": "https://identity.evalops.dev"
+                }
+            }
+        }))
+        .expect("stored OAuth fixture"),
+    )
+    .expect("write stored OAuth fixture");
+    crate::init_cli::invalidate_evalops_credentials_cache();
+
+    let (resolved, telemetry_scope) = super::resolve_native_client("ollama/qwen3", None)
+        .expect("local runtime must remain available offline");
+    assert_eq!(resolved.provider_name, "ollama");
+    assert!(resolved.client.is_some());
+    assert!(telemetry_scope.is_none());
+
+    let managed = match super::resolve_native_client("evalops/gpt-5.5", None) {
+        Ok(_) => panic!("managed inference must not use an expired offline session"),
+        Err(error) => error,
+    };
+    assert!(format!("{managed:#}").contains("EvalOps login expired"));
+    crate::init_cli::invalidate_evalops_credentials_cache();
+}
+
+#[test]
 fn evalops_route_requires_identity_even_with_openai_api_key() {
     let _guard = crate::config::test_process_env_lock();
     let mut names = identity_env_names(false, true);

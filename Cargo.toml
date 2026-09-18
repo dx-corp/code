@@ -60,9 +60,9 @@ glob = "0.3"
 # CIDR types for the structured sandbox network policy (MIT OR Apache-2.0).
 ipnet = "2.11"
 libc = "0.2"
-opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
-opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "rt-tokio"] }
 maestro-ai = { path = "packages/ai-rs", default-features = false }
 maestro-a2a-ledger = { path = "packages/a2a-ledger-rs" }
 maestro-runtime-gateway = { path = "packages/runtime-gateway-rs" }
@@ -115,7 +115,7 @@ tokio-rustls = "0.26"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = "0.32"
+tracing-opentelemetry = "0.33"
 wait-timeout = "0.2"
 windows-sys = "0.61"
 x509-parser = "0.18"

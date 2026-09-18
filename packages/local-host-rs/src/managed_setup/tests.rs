@@ -452,6 +452,22 @@ fn a_session_with_no_platform_binding_is_unmanaged() {
 }
 
 #[test]
+fn offline_local_startup_is_quiet_but_keeps_stored_tenant_mcp_fail_closed() {
+    let client = ManagedSetupClient::offline_local(Some(&session()));
+    assert_eq!(client.origin(), ManagedSetupOrigin::FailedClosed);
+    assert!(client.is_managed());
+    assert_eq!(
+        client.mcp_policy().decide("anything", None, "stdio"),
+        McpDecision::RefusedNotAllowlisted
+    );
+    assert!(client.notices().is_empty());
+
+    let standalone = ManagedSetupClient::offline_local(None);
+    assert_eq!(standalone.origin(), ManagedSetupOrigin::Unmanaged);
+    assert!(!standalone.is_managed());
+}
+
+#[test]
 fn a_cache_written_by_a_future_schema_is_ignored() {
     let home = tempfile::tempdir().expect("tempdir");
     let cache = home.path().join(CACHE_FILE_NAME);

@@ -55,7 +55,8 @@ test("installer and release workflow preserve receipt metadata", () => {
 	const channelResolver = read("scripts/resolve-release-channel.mjs");
 	assert.match(installer, /release-metadata\.json/);
 	assert.match(installer, /install-receipt\.json/);
-	assert.match(installer, /cp \"\$tmpdir\/\$web_asset\" \"\$release_dir\/\$web_asset\"/);
+	assert.doesNotMatch(installer, /\$web_asset/);
+	assert.doesNotMatch(installer, /webSha256/);
 	assert.match(installer, /MAESTRO_STARTUP_UPDATE_STATE/);
 	assert.match(installer, /MAESTRO_INSTALL_CHANNEL/);
 	assert.match(installer, /MAESTRO_UPDATE_CHANNEL/);
@@ -72,9 +73,11 @@ test("installer and release workflow preserve receipt metadata", () => {
 	assert.doesNotMatch(installer, /maestro-\$\{install_channel\}-channel/);
 	assert.match(installer, /receipt_hash_file/);
 	assert.doesNotMatch(installer, /refusing installation without release receipt metadata/);
-	assert.match(updater, /restore_verified_web_tree/);
+	assert.doesNotMatch(updater, /restore_verified_web_tree/);
+	assert.doesNotMatch(updater, /web_sha256/);
+	assert.doesNotMatch(updater, /MAESTRO_WEB_STATIC_ROOT/);
 	assert.match(updater, /load_verified_release_metadata/);
-	assert.match(updater, /Command::new\("tar"\)/);
+	assert.doesNotMatch(updater, /Command::new\("tar"\)/);
 	assert.match(updater, /durability_warning/);
 	assert.match(updater, /legacy_channel_manifest_url/);
 	assert.match(updater, /GITHUB_RELEASES_API_URL/);
@@ -103,6 +106,8 @@ test("installer and release workflow preserve receipt metadata", () => {
 	assert.match(release, /release-metadata\.json/);
 	assert.match(release, /create-release-channel-manifest\.mjs/);
 	assert.match(release, /channel-manifest\.json/);
+	assert.doesNotMatch(release, /maestro-web-dist/);
+	assert.doesNotMatch(release, /packages\/web\/dist/);
 	assert.match(channelManifest, /createPrivateKey/);
 	assert.match(channelResolver, /alpha or beta/);
 });

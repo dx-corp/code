@@ -13,7 +13,7 @@ test("tag-release does not cancel in-progress runs", () => {
 
 test("tag-release dispatches a public release after tagging", () => {
 	assert.match(workflow, /dispatch-public-release:/);
-	assert.match(workflow, /github\.repository == 'dx-corp\/maestro'/);
+	assert.match(workflow, /github\.repository == 'dx-corp\/code'/);
 	assert.doesNotMatch(workflow, /github\.repository == 'evalops\/maestro'/);
 });
 

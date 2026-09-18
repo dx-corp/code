@@ -3,14 +3,12 @@
 Use this index to jump to the right guide quickly and see how the pieces connect.
 
 ## Start Here
-- [Quickstart](QUICKSTART.md) — installation, environment prep, builds, and the fast path to running the CLI/TUI/Web.
+- [Quickstart](QUICKSTART.md) — installation, environment prep, builds, and the fast path to running the CLI/TUI.
 - [TUI User Guide](../packages/tui-rs/docs/user-guide/README.md) — numbered native TUI guide (getting started through worktrees).
 - [Contributor Runbook](CONTRIBUTOR_RUNBOOK.md) — day-one flow for contributors (build, lint, verify).
 - [Feature Guide](FEATURES.md) — user-facing capabilities across the TUI and CLI with power-user tips.
 - [Dynamic workflows](DYNAMIC_WORKFLOWS.md) — run bounded, resumable workflow graphs from the native CLI.
-- [Web UI Guide](WEB_UI.md) — browser workflow and TUI/Web parity appendix.
 - [Compatibility and migration](DEIXIC_CODE_MIGRATION.md) — canonical names, retained Maestro coordinates, and publication boundaries.
-- [Conductor Bridge](CONDUCTOR_BRIDGE.md) — connect the Conductor extension to a local Deixic Code server.
 
 ## Core Reference
 - [Tools Reference](TOOLS_REFERENCE.md) — authoritative slash command and flag definitions.

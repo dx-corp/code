@@ -102,7 +102,6 @@ MAESTRO_INSTALL_METHOD=package \
 MAESTRO_PACKAGE_NAME='${packageMetadata.name}' \
 MAESTRO_PACKAGE_ROOT="$root" \
 MAESTRO_VERSION='${packageMetadata.version}' \
-MAESTRO_WEB_STATIC_ROOT="\${MAESTRO_WEB_STATIC_ROOT:-$root/packages/web/dist}" \
   exec "$root/vendor/maestro/$os-$arch/maestro" "$@"
 `;
 const launcherPath = resolve("bin", "maestro");

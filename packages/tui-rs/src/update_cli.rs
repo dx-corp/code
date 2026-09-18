@@ -42,7 +42,6 @@ const RELEASE_METADATA_SCHEMA: &str = "evalops.maestro.release-metadata.v1";
 const UPDATE_HISTORY_FILE: &str = "update-history.json";
 const INSTALL_RECEIPT_FILE: &str = "install-receipt.json";
 const RELEASE_METADATA_FILE: &str = "release-metadata.json";
-const WEB_ARCHIVE_FILE: &str = "maestro-web-dist.tar.gz";
 static UPDATE_ATTEMPT_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(unix)]
 const INSTALL_CLEANUP_GRACE: Duration = Duration::from_secs(2);
@@ -165,8 +164,6 @@ struct InstallVerification {
     signature_verified: bool,
     #[serde(default)]
     artifact_sha256: Option<String>,
-    #[serde(default)]
-    web_sha256: Option<String>,
     #[serde(default)]
     metadata_sha256: Option<String>,
     #[serde(default)]
@@ -1749,16 +1746,10 @@ fn is_verified_release(release_dir: &Path, version: &Version, receipt: &InstallR
         && verification.manifest_checksum_verified
         && verification.signature_verified
         && release_binary_path(release_dir).is_file()
-        && release_dir.join(WEB_ARCHIVE_FILE).is_file()
         && verification
             .artifact_sha256
             .as_deref()
             .zip(sha256_file(&release_binary_path(release_dir)).as_deref())
-            .is_some_and(|(expected, actual)| expected == actual)
-        && verification
-            .web_sha256
-            .as_deref()
-            .zip(sha256_file(&release_dir.join(WEB_ARCHIVE_FILE)).as_deref())
             .is_some_and(|(expected, actual)| expected == actual)
         && metadata_verified
 }
@@ -1872,78 +1863,6 @@ fn reported_version_matches(reported: &str, expected: &str) -> bool {
         .any(|version| version == expected)
 }
 
-fn restore_verified_web_tree(release_dir: &Path) -> Result<()> {
-    let archive = release_dir.join(WEB_ARCHIVE_FILE);
-    let temporary = tempfile::Builder::new()
-        .prefix(".web-restore-")
-        .tempdir_in(release_dir)
-        .with_context(|| format!("Failed to stage web restore in {}", release_dir.display()))?;
-    let status = Command::new("tar")
-        .args(["-xzf"])
-        .arg(&archive)
-        .arg("-C")
-        .arg(temporary.path())
-        .status()
-        .with_context(|| format!("Failed to run tar for {}", archive.display()))?;
-    if !status.success() {
-        bail!(
-            "{}",
-            crate::localization::cli_locale().format(
-                "Failed to extract verified web archive {0}",
-                &[(archive.display()).to_string()]
-            )
-        );
-    }
-    if !temporary.path().join("index.html").is_file() {
-        bail!(
-            "{}",
-            crate::localization::cli_locale().format(
-                "Verified web archive {0} has no index.html",
-                &[(archive.display()).to_string()]
-            )
-        );
-    }
-    let restored = temporary.keep();
-    let web_dir = release_dir.join("web");
-    let backup = release_dir.join(format!(".web-backup-{}", now_ms()));
-    let had_web_tree = fs::symlink_metadata(&web_dir).is_ok();
-    if backup.exists() {
-        bail!(
-            "{}",
-            crate::localization::cli_locale().format(
-                "Web restore backup path already exists: {0}",
-                &[(backup.display()).to_string()]
-            )
-        );
-    }
-    if had_web_tree {
-        fs::rename(&web_dir, &backup).with_context(|| {
-            format!(
-                "Failed to stage the existing web tree for {}",
-                release_dir.display()
-            )
-        })?;
-    }
-    if let Err(error) = fs::rename(&restored, &web_dir) {
-        if had_web_tree {
-            let _ = fs::rename(&backup, &web_dir);
-        } else {
-            let _ = fs::remove_dir_all(&restored);
-        }
-        return Err(error).with_context(|| {
-            format!(
-                "Failed to atomically restore the web tree for {}",
-                release_dir.display()
-            )
-        });
-    }
-    if had_web_tree {
-        fs::remove_dir_all(&backup)
-            .with_context(|| format!("Failed to remove the old web tree {}", backup.display()))?;
-    }
-    Ok(())
-}
-
 fn select_rollback_release(
     data_dir: &Path,
     current: &str,
@@ -1996,7 +1915,7 @@ fn launcher_contents(
     version: &str,
 ) -> Vec<u8> {
     format!(
-        "#!/usr/bin/env bash\nset -eu\nrelease_dir={}\ninstall_dir={}\ndata_dir={}\nrelease_version={}\nexport MAESTRO_WEB_STATIC_ROOT=\"${{MAESTRO_WEB_STATIC_ROOT:-$release_dir/web}}\"\nexport MAESTRO_INSTALL_METHOD=release\nexport MAESTRO_INSTALL_DIR=\"$install_dir\"\nexport MAESTRO_DATA_DIR=\"$data_dir\"\nexport MAESTRO_STARTUP_UPDATE_STATE=\"${{MAESTRO_STARTUP_UPDATE_STATE:-$data_dir/startup-update-state.json}}\"\nexport MAESTRO_VERSION=\"$release_version\"\nexec \"$release_dir/bin/maestro\" \"$@\"\n",
+        "#!/usr/bin/env bash\nset -eu\nrelease_dir={}\ninstall_dir={}\ndata_dir={}\nrelease_version={}\nexport MAESTRO_INSTALL_METHOD=release\nexport MAESTRO_INSTALL_DIR=\"$install_dir\"\nexport MAESTRO_DATA_DIR=\"$data_dir\"\nexport MAESTRO_STARTUP_UPDATE_STATE=\"${{MAESTRO_STARTUP_UPDATE_STATE:-$data_dir/startup-update-state.json}}\"\nexport MAESTRO_VERSION=\"$release_version\"\nexec \"$release_dir/bin/maestro\" \"$@\"\n",
         shell_quote_path(release_dir),
         shell_quote_path(install_dir),
         shell_quote_path(data_dir),
@@ -2388,7 +2307,6 @@ pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> 
     let mut restart = Command::new(launcher(&context));
     restart
         .args(raw_args.iter().skip(1))
-        .env_remove("MAESTRO_WEB_STATIC_ROOT")
         .env("MAESTRO_SKIP_STARTUP_UPDATE", "1");
     match restart.status() {
         Ok(status) => Some(status.code().unwrap_or(1)),
@@ -2745,16 +2663,6 @@ async fn run_rollback(requested: Option<String>, json: bool) -> Result<i32> {
     );
     begin_update_attempt(history_path.as_deref(), &attempt)?;
     if let Err(error) = verify_retained_release(&release) {
-        let _ = finish_update_attempt(
-            history_path.as_deref(),
-            &attempt.attempt_id,
-            "failed",
-            Some(format!("{error:#}")),
-            Some(release.receipt.clone()),
-        );
-        return Err(error);
-    }
-    if let Err(error) = restore_verified_web_tree(&release.release_dir) {
         let _ = finish_update_attempt(
             history_path.as_deref(),
             &attempt.attempt_id,
@@ -3878,29 +3786,8 @@ mod tests {
         let release_dir = data_dir.join("releases/0.9.0/native.fixture");
         let binary = release_dir.join("bin/maestro");
         fs::create_dir_all(binary.parent().expect("binary parent")).expect("create binary dir");
-        fs::create_dir_all(release_dir.join("web")).expect("create web dir");
         fs::write(&binary, b"#!/bin/sh\nprintf 'maestro 0.9.0\\n'\n").expect("write binary");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("chmod binary");
-        fs::write(release_dir.join("web/index.html"), b"fixture web").expect("write web");
-        fs::write(release_dir.join("web/app.js"), b"fixture js").expect("write web script");
-        let web_archive = release_dir.join(WEB_ARCHIVE_FILE);
-        let archive_source = temporary.path().join("web-source");
-        fs::create_dir_all(&archive_source).expect("create web archive source");
-        fs::write(archive_source.join("index.html"), b"fixture web")
-            .expect("write archived web index");
-        fs::write(archive_source.join("app.js"), b"fixture js").expect("write archived web script");
-        assert!(
-            Command::new("tar")
-                .args(["-czf"])
-                .arg(&web_archive)
-                .args(["-C"])
-                .arg(&archive_source)
-                .arg(".")
-                .status()
-                .expect("create web archive")
-                .success()
-        );
-        let web_archive_bytes = fs::read(&web_archive).expect("read web archive");
         let metadata = VersionMetadata {
             version: "0.9.0".to_owned(),
             schema_version: Some("evalops.maestro.release-metadata.v1".to_owned()),
@@ -3928,7 +3815,6 @@ mod tests {
                 manifest_checksum_verified: true,
                 signature_verified: true,
                 artifact_sha256: sha256_file(&binary),
-                web_sha256: sha256_file(&web_archive),
                 metadata_sha256: sha256_file(&metadata_path),
                 metadata_checksum_verified: true,
             },
@@ -3962,34 +3848,6 @@ mod tests {
         let selected = select_rollback_release(&data_dir, "1.0.0", None).expect("select rollback");
         verify_retained_release(&selected).expect("verify retained binary");
 
-        fs::remove_file(selected.release_dir.join("web/index.html"))
-            .expect("remove extracted web index");
-        assert_eq!(
-            list_verified_releases(&data_dir)
-                .expect("list release with missing extracted index")
-                .len(),
-            1
-        );
-        fs::remove_file(selected.release_dir.join("web/app.js"))
-            .expect("remove extracted web script");
-        restore_verified_web_tree(&selected.release_dir).expect("restore extracted web tree");
-        assert_eq!(
-            fs::read(selected.release_dir.join("web/index.html")).expect("read restored index"),
-            b"fixture web"
-        );
-        assert_eq!(
-            fs::read(selected.release_dir.join("web/app.js")).expect("read restored script"),
-            b"fixture js"
-        );
-
-        fs::write(&web_archive, b"corrupted archive").expect("corrupt web archive");
-        assert!(
-            list_verified_releases(&data_dir)
-                .expect("list corrupted web archive")
-                .is_empty()
-        );
-        fs::write(&web_archive, &web_archive_bytes).expect("restore web archive");
-
         let launcher = temporary.path().join("bin/maestro");
         fs::create_dir_all(launcher.parent().expect("launcher parent"))
             .expect("create launcher dir");
@@ -4007,7 +3865,6 @@ mod tests {
         let launcher_text = fs::read_to_string(&launcher).expect("read launcher");
         assert!(launcher_text.contains("MAESTRO_STARTUP_UPDATE_STATE"));
         assert!(launcher_text.contains(&selected.release_dir.display().to_string()));
-        assert!(selected.release_dir.join("web/index.html").is_file());
 
         fs::remove_file(&metadata_path).expect("remove optional metadata fixture");
         receipt.verification.metadata_sha256 = None;

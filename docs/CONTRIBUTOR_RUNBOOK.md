@@ -19,7 +19,7 @@ npm run build
 npm run smoke:release-native-only
 ```
 
-The browser bundle under `packages/web/dist` is a versioned static input. Product code, protocols, adapters, CLI, TUI, and the runtime gateway are Rust.
+Product code, protocols, adapters, CLI, TUI, and the runtime gateway are Rust.
 
 ## 2. Inner loop
 
@@ -44,7 +44,6 @@ The browser bundle under `packages/web/dist` is a versioned static input. Produc
 ## 4. Docs and references
 
 - TUI/CLI UX: `docs/FEATURES.md`
-- Web parity: `docs/WEB_UI.md`
 - Tool behavior: `docs/TOOLS_REFERENCE.md`
 - Native crates: `packages/maestro-rs`, `packages/tui-rs`, `packages/runtime-gateway-rs`, and `packages/ambient-agent-rs`
 - Historical design documents are reference material, not current build instructions.

@@ -27,7 +27,7 @@
 			"argv": ["--mode", "headless"],
 			"route": "native-headless"
 		},
-		{ "name": "web", "argv": ["web"], "route": "native-control-plane" },
+		{ "name": "serve", "argv": ["serve"], "route": "native-control-plane" },
 		{ "name": "a2a", "argv": ["a2a", "--help"], "route": "native" },
 		{
 			"name": "hosted-runner",
@@ -39,8 +39,8 @@
 		{ "name": "skill", "argv": ["skill", "--help"], "route": "native" },
 		{ "name": "update", "argv": ["update", "--help"], "route": "native" },
 		{
-			"name": "web-rejects-prompt",
-			"argv": ["web", "prompt"],
+			"name": "serve-rejects-prompt",
+			"argv": ["serve", "prompt"],
 			"route": "native-control-plane",
 			"exitCode": 1
 		}

@@ -1270,14 +1270,22 @@ pub(crate) fn composer_editor_width(area_width: u16) -> u16 {
 /// is never `openai-codex/gpt-5.6 via openai-codex`.
 #[must_use]
 fn chrome_model_label(model: &str) -> String {
-    if let Some(info) = crate::model_catalog::find_model(model) {
+    let label = if let Some(info) = crate::model_catalog::find_model(model) {
         if !info.name.is_empty() {
-            return info.name;
+            info.name
+        } else {
+            model.to_string()
         }
-    }
-    match model.rsplit_once('/') {
-        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
-        _ => model.to_string(),
+    } else {
+        match model.rsplit_once('/') {
+            Some((_, rest)) if !rest.is_empty() => rest.to_string(),
+            _ => model.to_string(),
+        }
+    };
+    if crate::local_models::is_local_model_route(model) {
+        format!("{label} · Local")
+    } else {
+        label
     }
 }
 
@@ -3625,6 +3633,7 @@ mod tests {
     fn chrome_model_label_inherits_catalog_name() {
         assert_eq!(chrome_model_label("openai-codex/gpt-5.6"), "GPT-5.6");
         assert_eq!(chrome_model_label("gpt-5.6"), "GPT-5.6");
+        assert_eq!(chrome_model_label("ollama/qwen3"), "qwen3 · Local");
         assert_eq!(
             chrome_model_label("openrouter/openai/gpt-4o-mini"),
             "OpenAI: GPT-4o-mini"

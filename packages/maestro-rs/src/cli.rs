@@ -13,7 +13,7 @@ use std::ffi::OsString;
 /// variant removes that dead computation and the duplicated table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Web { port: Option<u16> },
+    Serve { port: Option<u16> },
     Forward,
     Help,
     Version,
@@ -43,7 +43,7 @@ where
     ) {
         return Ok(Command::Help);
     }
-    if first == Some("web") {
+    if first == Some("serve") {
         let mut port = None;
         let mut index = 1;
         while index < strings.len() {
@@ -54,22 +54,22 @@ where
                 port = Some(
                     value
                         .parse::<u16>()
-                        .map_err(|_| format!("invalid web port: {value}"))?,
+                        .map_err(|_| format!("invalid serve port: {value}"))?,
                 );
             } else if let Some(value) = argument.strip_prefix("--port=") {
                 port = Some(
                     value
                         .parse::<u16>()
-                        .map_err(|_| format!("invalid web port: {value}"))?,
+                        .map_err(|_| format!("invalid serve port: {value}"))?,
                 );
             } else {
                 return Err(format!(
-                    "`maestro web` does not accept prompt arguments or option `{argument}`"
+                    "`maestro serve` does not accept prompt arguments or option `{argument}`"
                 ));
             }
             index += 1;
         }
-        return Ok(Command::Web { port });
+        return Ok(Command::Serve { port });
     }
 
     // Every other invocation (interactive TUI, `exec`/`print`/`-p`,

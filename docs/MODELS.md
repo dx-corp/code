@@ -256,6 +256,13 @@ API. The three providers do not require API keys. Provider-qualified routes such
 as `llamacpp/Qwen3.8-27B`, `lmstudio/my-model`, and `ollama/qwen3.6:27b` preserve
 the chosen runtime even when multiple servers expose the same model ID.
 
+These explicit local routes are airplane-safe. Deixic Code does not refresh or
+introspect a stored EvalOps Identity session during startup or local-client
+construction, and it does not attach cached organization or workspace scope to
+the turn. An expired stored login therefore cannot block the local model. A
+managed `evalops/...` route still requires live Identity and llm-gateway access;
+there is no offline fallback from managed inference to a local runtime.
+
 Start a recent llama.cpp build with its tool-aware Jinja renderer enabled:
 
 ```bash

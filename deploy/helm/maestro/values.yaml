@@ -22,7 +22,7 @@ operatingLayer:
   evidenceRetentionDays: 90
 
 image:
-  repository: ghcr.io/evalops/maestro
+  repository: ghcr.io/dx-corp/maestro
   # Defaults to Chart.appVersion when empty. Prefer immutable sha-* tags or digest.
   tag: ""
   digest: ""

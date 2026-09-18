@@ -1468,6 +1468,14 @@ impl App {
         let mut state = AppState::new();
         state.locale = ui_prefs.locale();
         state.context_window = context_window;
+        let configured_model = crate::codex_auth::resolve_default_model();
+        if crate::local_models::is_local_model_route(&configured_model) {
+            // Paint an explicit local selection in the first usable frame.
+            // Agent construction will confirm the same authless route, but
+            // the welcome screen must not show an Identity gate while that
+            // local-only work completes.
+            state.model = Some(configured_model.clone());
+        }
         for error in plugin_registry.admission_errors() {
             state.add_system_message(
                 state
@@ -1509,7 +1517,7 @@ impl App {
 
         let initial_thinking = crate::model_dynamics::configured_thinking(
             &app_config,
-            &crate::codex_auth::resolve_default_model(),
+            &configured_model,
             &crate::config::model_dynamics_config(),
         );
         state.thinking_level = initial_thinking;

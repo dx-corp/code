@@ -19,7 +19,7 @@ concurrency:
 jobs:
   unresolved-review-threads:
     if: ${{ github.event.pull_request.draft == false }}
-    uses: evalops/.github/.github/workflows/review-thread-guard.yml@d45c0bca2cf2ccea6786c57c9b5e84df09009fc8
+    uses: dx-corp/.github/.github/workflows/review-thread-guard.yml@d45c0bca2cf2ccea6786c57c9b5e84df09009fc8
     with:
       pr_number: ${{ github.event.pull_request.number }}
       min_severity: high

@@ -6,6 +6,8 @@ const workflow = await readFile(new URL("./channel-release.yml", import.meta.url
 const releaseWorkflow = await readFile(new URL("./release.yml", import.meta.url), "utf8");
 
 test("preview schedules finalize only staged signed candidates", () => {
+ assert.match(workflow, /if: github\.repository == 'dx-corp\/code' && github\.ref == 'refs\/heads\/main'/);
+ assert.doesNotMatch(workflow, /github\.repository == '(?:evalops|dx-corp)\/maestro'/);
  assert.match(workflow, /"0 5 \* \* \*" # alpha/);
  assert.match(workflow, /"30 5 \* \* \*" # beta/);
  assert.match(workflow, /MONO_SHA256SUMS\.cosign\.bundle/);

@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789544007,
+  "generated_at": 1789716653,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1324,7 +1324,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 943718
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -1343,7 +1343,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 393216
+        "output_tokens": 943718
       },
       "verification": {
         "state": "catalog",
@@ -1552,7 +1552,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -2331,7 +2331,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 16000
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -2529,6 +2529,25 @@
       }
     },
     {
+      "id": "deepseek/deepseek-v4-flash-0731:free",
+      "name": "DeepSeek: DeepSeek V4 Flash 0731 (free)",
+      "provider": "openrouter",
+      "description": "DeepSeek V4 Flash 0731 is a sparse mixture-of-experts model from DeepSeek, with 13B active parameters out of 284B…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 393216
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "deepseek/deepseek-v4-flash-vision-exp",
       "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
       "provider": "openrouter",
@@ -2540,7 +2559,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 943718
+        "output_tokens": 262144
       },
       "verification": {
         "state": "catalog",
@@ -4118,25 +4137,6 @@
         "streaming": true,
         "context_tokens": 131072,
         "output_tokens": 104857
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "mistralai/mistral-large-2512",
-      "name": "Mistral: Mistral Large 3 2512",
-      "provider": "openrouter",
-      "description": "Mistral Large 3 2512 is Mistral’s most capable model to date, featuring a sparse mixture-of-experts architecture with…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 209715
       },
       "verification": {
         "state": "catalog",
@@ -5732,7 +5732,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 65536
       },
       "verification": {
         "state": "catalog",
@@ -6736,7 +6736,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
@@ -7155,6 +7155,25 @@
         "streaming": true,
         "context_tokens": 1000000,
         "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "qwen/qwen3.8-27b:free",
+      "name": "Qwen: Qwen3.8 27B (free)",
+      "provider": "openrouter",
+      "description": "Qwen3.8 27B is an open-weight dense vision-language model from Qwen. It is suited for coding, professional workflows,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -7624,7 +7643,7 @@
       "description": "UnslopNemo v4.1 is the latest addition from the creator of Rocinante, designed for adventure writing and role-play…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": true,
+        "tools": false,
         "vision": false,
         "reasoning": false,
         "streaming": true,
@@ -7706,6 +7725,25 @@
         "streaming": true,
         "context_tokens": 1048576,
         "output_tokens": 262144
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "unbiased/pareto",
+      "name": "Pareto",
+      "provider": "openrouter",
+      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -8142,7 +8180,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 128000
+        "output_tokens": 163840
       },
       "verification": {
         "state": "catalog",
