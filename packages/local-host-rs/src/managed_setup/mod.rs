@@ -459,6 +459,31 @@ impl ManagedSetupClient {
         }
     }
 
+    /// Resolve startup policy for an explicitly selected local runtime.
+    ///
+    /// Local inference does not need live Identity, but a stored tenant
+    /// selector must not silently become unmanaged authority. Keep managed
+    /// MCP access fail-closed without turning normal airplane-mode startup
+    /// into an error banner; the TUI identifies the local route in its chrome.
+    #[must_use]
+    pub fn offline_local(session: Option<&PlatformSession>) -> Self {
+        let Some(session) = session else {
+            return Self::unmanaged();
+        };
+        Self {
+            setup: ManagedSetup {
+                organization_id: session.organization_id.clone(),
+                workspace_id: session.workspace_id.clone().unwrap_or_default(),
+                mcp: McpPolicy::deny_all(),
+                ..ManagedSetup::default()
+            },
+            origin: ManagedSetupOrigin::FailedClosed,
+            notices: Vec::new(),
+            fetched_at: None,
+            served_from_cache: false,
+        }
+    }
+
     /// Resolve the document for a session start.
     ///
     /// `session` is `None` when the process is in BYOK mode. `fetch` is the

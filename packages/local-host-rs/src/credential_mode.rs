@@ -5,11 +5,12 @@
 //! Identity session (workspace-scoped for llm-gateway, or the hosted Runner
 //! Host service credential). A direct provider explicitly selected with its
 //! own API key (OpenAI, Anthropic, Google, xAI, OpenRouter, and other local
-//! BYOK sources) constructs a native agent without Identity. Identity is
-//! still required when no direct credential exists, and a present Identity
-//! session is still verified rather than ignored. Hosted residents use the
-//! established tenant-bound Runner Host service credential exclusively for
-//! managed inference.
+//! BYOK sources) constructs a native agent without Identity. Explicit local
+//! runtime routes never contact Identity, even when a stored session exists,
+//! so an unavailable refresh or introspection endpoint cannot block offline
+//! inference. Other present Identity sessions are still verified rather than
+//! ignored. Hosted residents use the established tenant-bound Runner Host
+//! service credential exclusively for managed inference.
 
 use std::collections::HashMap;
 
@@ -312,13 +313,21 @@ pub fn require_ready(model: &str) -> Result<DetectedMode> {
 /// authorized it, when one exists.
 ///
 /// Direct-provider BYOK remains `DetectedMode::Byok` and does not contact
-/// Identity when no session is present. A stored or env Identity session is
-/// still verified before it authorizes managed inference or binds telemetry.
-/// Native telemetry uses that session to pin a completed turn to its
-/// originating tenant rather than rediscovering whatever account happens to
-/// be active during a later retry.
+/// Identity when no session is present. Explicit local runtime routes also
+/// stay unbound when a stored session exists: they neither need network
+/// authority nor receive cached tenant scope. Other stored or env Identity
+/// sessions are still verified before they authorize managed inference or
+/// bind telemetry. Native telemetry uses that live session to pin a completed
+/// turn to its originating tenant rather than rediscovering whatever account
+/// happens to be active during a later retry.
 pub fn require_ready_with_identity(model: &str) -> Result<(DetectedMode, Option<PlatformSession>)> {
     let env = std::env::vars().collect::<HashMap<String, String>>();
+    if !hosted_runner_mode(&env)
+        && crate::local_models::is_local_model_route(model)
+        && admits_direct_provider_without_identity(model, &env)
+    {
+        return Ok((DetectedMode::Byok, None));
+    }
     if !hosted_runner_mode(&env)
         && platform_session_from(None, &env).is_none()
         && crate::init_cli::load_evalops_snapshot()

@@ -778,6 +778,32 @@ fn pty_startup_composer_edits_before_managed_setup_finishes() {
     session.shutdown();
 }
 
+/// An explicit local route must paint a usable shell without waiting for
+/// Identity. The compact local badge is the visible airplane-mode contract.
+#[test]
+fn pty_local_model_loads_when_identity_is_unreachable() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut mock = MockOpenAiServer::start(Vec::new());
+    mock.identity_base_url = "http://127.0.0.1:9".to_owned();
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let started = Instant::now();
+    let mut session =
+        PtySession::spawn_with_args(&mock, workdir.path(), &["--model", "ollama/qwen3"]);
+
+    session.wait_for_text("qwen3 · Local", Duration::from_secs(5));
+    assert!(
+        !session.screen_text().contains("Sign in to choose a model"),
+        "local startup must not render an Identity gate"
+    );
+    assert_eq!(
+        mock.request_count(),
+        0,
+        "opening a local shell must not call a model gateway"
+    );
+    eprintln!("offline local shell ready in {:?}", started.elapsed());
+    session.shutdown();
+}
+
 /// The grouped `/model` menu must open its child selector and let Escape
 /// return to chat without issuing a provider request. A follow-up turn proves
 /// the modal stack was actually dismissed rather than only painted away.
