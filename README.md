@@ -64,7 +64,7 @@ deixic-code setup                   # check auth/config and show the next setup 
 deixic-code "fix the failing test" # interactive with an initial prompt
 deixic-code exec "summarize this repository"
 deixic-code --headless              # NDJSON protocol over stdio
-deixic-code web --port 3000         # browser UI and HTTP runtime gateway
+deixic-code serve --port 3000       # HTTP runtime gateway
 deixic-code hosted-runner
 ```
 
@@ -107,14 +107,14 @@ Rust owns every agent/runtime path:
 - `packages/session-history-rs`: remote redacted session-history adapter
 - `packages/runtime-gateway-rs`: HTTP/SSE/WebSocket runtime gateway
 
-The repository contains no TypeScript source or TypeScript build toolchain. The browser UI is a versioned static asset snapshot served by the Rust runtime gateway; agent execution, protocols, adapters, CLI, and TUI are Rust.
+The repository contains no TypeScript source or TypeScript build toolchain. Agent execution, protocols, adapters, CLI, and TUI are Rust.
 
 ```sh
 cargo test --workspace --locked
 npm run check:rust-only-runtime
 ```
 
-See [Architecture](docs/ARCHITECTURE.md), [Quickstart](docs/QUICKSTART.md), and [Web UI](docs/WEB_UI.md).
+See [Architecture](docs/ARCHITECTURE.md) and [Quickstart](docs/QUICKSTART.md).
 
 Use the [terminal screenshot framework](docs/tui-screenshots.md) to capture the
 native UI with local fixtures, custom dimensions, and verifiable PNG bundles.

@@ -1482,7 +1482,7 @@
 			"tenant": "tenant-a",
 			"request": {
 				"project": "fixture-project",
-				"repository_url": "https://github.com/evalops/maestro.git",
+				"repository_url": "https://github.com/evalops/mono.git",
 				"prompt": "fixture atomic prompt",
 				"idempotency_key": "atomic-case-1"
 			},
@@ -1522,7 +1522,7 @@
 			"tenant": "tenant-a",
 			"request": {
 				"project": "fixture-project",
-				"repository_url": "https://github.com/evalops/maestro.git",
+				"repository_url": "https://github.com/evalops/mono.git",
 				"prompt": "fixture atomic prompt",
 				"idempotency_key": "atomic-case-1"
 			},
@@ -1592,7 +1592,7 @@
 			"tenant": "tenant-a",
 			"request": {
 				"project": "fixture-project",
-				"repository_url": "https://github.com/evalops/maestro.git",
+				"repository_url": "https://github.com/evalops/mono.git",
 				"prompt": "fixture override prompt",
 				"runtime_profile": "sandboxwich/restricted/sandboxed_container/unprivileged",
 				"idempotency_key": "atomic-override-1"
@@ -1732,7 +1732,7 @@
 			"tenant": "tenant-a",
 			"request": {
 				"project": "fixture-project",
-				"repository_url": "https://github.com/evalops/maestro.git",
+				"repository_url": "https://github.com/evalops/mono.git",
 				"prompt": "fixture rejected prompt",
 				"runtime_profile": "sandboxwich/unavailable/sandboxed_container/unprivileged",
 				"idempotency_key": "atomic-rejected-1"

@@ -2587,8 +2587,6 @@ fn auth_test_config() -> Config {
         usage_file_path: PathBuf::from("usage.jsonl"),
         a2a_tasks_file_path: unique_test_dir("maestro-a2a-tasks").join("tasks.json"),
         automation_file_path: unique_test_dir("maestro-automations").join("automations.json"),
-        static_root: PathBuf::from("dist"),
-        static_cache_max_age: 0,
         llm_gateway_models_url: None,
         llm_gateway_token: None,
         llm_gateway_org_id: None,
@@ -12241,8 +12239,13 @@ fn default_model_handles_empty_registry() {
 fn head_response_keeps_get_content_length_without_body() {
     let _guard = ENV_LOCK.blocking_lock();
 
-    let response =
-        response_with_cache_and_length(200, "text/plain; charset=utf-8", &[], 60, "hello".len());
+    let response = response_with_extra_headers_and_length(
+        200,
+        "text/plain; charset=utf-8",
+        &[],
+        "Cache-Control: no-store, no-cache, must-revalidate\r\n",
+        "hello".len(),
+    );
     let response = String::from_utf8(response).expect("response should be utf-8");
 
     assert!(response.contains("Content-Length: 5\r\n"));
@@ -12451,156 +12454,6 @@ fn chat_prompt_preserves_structured_history() {
 }
 
 #[test]
-fn spa_entry_response_uses_no_store() {
-    let _guard = ENV_LOCK.blocking_lock();
-
-    let response =
-        response_with_no_store_and_length(200, "text/html; charset=utf-8", &[], "index".len());
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(response.contains("Content-Length: 5\r\n"));
-    assert!(response.contains("Cache-Control: no-store, no-cache, must-revalidate\r\n"));
-}
-
-#[test]
-fn runtime_config_script_serializes_csrf_without_api_key() {
-    let mut config = auth_test_config();
-    config.csrf_token = Some("csrf\"token".to_string());
-
-    let script = String::from_utf8(runtime_config_script(&config)).expect("script should be utf-8");
-
-    assert!(!script.contains("api-key"));
-    assert!(script.contains("delete window.__MAESTRO_API_KEY__;"));
-    assert!(script.contains("window.__MAESTRO_CSRF_TOKEN__ = \"csrf\\\"token\";"));
-}
-
-#[test]
-fn runtime_config_head_reports_script_length_without_body() {
-    let mut config = auth_test_config();
-    config.csrf_token = Some("csrf-token".to_string());
-    let head = RequestHead {
-        method: "HEAD".to_string(),
-        path: RUNTIME_CONFIG_SCRIPT_PATH.to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-    let expected_length = runtime_config_script(&config).len();
-
-    let response = runtime_config_response(&head, &config);
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(response.contains("Content-Type: application/javascript; charset=utf-8\r\n"));
-    assert!(response.contains(&format!("Content-Length: {expected_length}\r\n")));
-    assert!(response.ends_with("\r\n\r\n"));
-}
-
-#[tokio::test]
-async fn spa_entry_injects_runtime_config_script_when_browser_auth_configured() {
-    let root = TestDir::new("runtime-config-spa");
-    let index = "<html><head><title>Maestro</title></head><body>ok</body></html>";
-    fs::write(root.path().join("index.html"), index).expect("index should be written");
-    let mut config = auth_test_config();
-    config.static_root = root.path().to_path_buf();
-    config.csrf_token = Some("csrf-token".to_string());
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([("x-maestro-api-key".to_string(), "api-key".to_string())]),
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-    let body = response_body_text(&response);
-
-    assert!(body.contains(RUNTIME_CONFIG_SCRIPT_TAG));
-    assert!(body.contains("</head><body>ok</body>"));
-    assert!(!body.contains("window.__MAESTRO_API_KEY__ ="));
-    assert!(response.contains(&format!(
-        "Set-Cookie: {RUNTIME_SESSION_COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Lax\r\n",
-        runtime_session_api_key_cookie_value(&config).expect("cookie should be available")
-    )));
-    assert!(response.contains(&format!("Content-Length: {}\r\n", body.len())));
-}
-
-#[test]
-fn runtime_session_cookie_authorizes_same_origin_browser_requests() {
-    let config = auth_test_config();
-    let cookie = runtime_session_cookie_value(&config, "jonathan@evalops.dev")
-        .expect("cookie should be available");
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/api/status".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([(
-            "cookie".to_string(),
-            format!("theme=dark; {RUNTIME_SESSION_COOKIE_NAME}={cookie}; other=value"),
-        )]),
-    };
-
-    let context = auth_context(&head, &config).expect("cookie should authorize request");
-
-    assert!(!context.unrestricted);
-    assert_eq!(context.subject.as_deref(), Some("jonathan@evalops.dev"));
-}
-
-#[test]
-fn bearer_token_identity_wins_over_runtime_session_cookie() {
-    let _guard = ENV_LOCK.blocking_lock();
-    let previous = env::var_os("MAESTRO_JWT_SECRET");
-    env::set_var("MAESTRO_JWT_SECRET", "shared-secret");
-    let config = auth_test_config();
-    let cookie =
-        runtime_session_cookie_value(&config, "cookie-user").expect("cookie should be available");
-    let bearer_user = "bearer-user";
-    let token = identity_jwt_bearer_token(b"shared-secret", bearer_user);
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/api/status".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([
-            ("authorization".to_string(), format!("Bearer {token}")),
-            (
-                "cookie".to_string(),
-                format!("{RUNTIME_SESSION_COOKIE_NAME}={cookie}"),
-            ),
-        ]),
-    };
-
-    let context = auth_context(&head, &config).expect("bearer token should authorize");
-
-    assert_eq!(context.subject.as_deref(), Some(bearer_user));
-    assert!(!context.unrestricted);
-
-    if let Some(previous) = previous {
-        env::set_var("MAESTRO_JWT_SECRET", previous);
-    } else {
-        env::remove_var("MAESTRO_JWT_SECRET");
-    }
-}
-
-#[test]
-fn loopback_api_key_runtime_session_cookie_keeps_legacy_unrestricted_access() {
-    let _guard = ENV_LOCK.blocking_lock();
-    let config = auth_test_config();
-    let cookie = runtime_session_api_key_cookie_value(&config).expect("cookie should be available");
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/api/sessions".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([(
-            "cookie".to_string(),
-            format!("{RUNTIME_SESSION_COOKIE_NAME}={cookie}"),
-        )]),
-    };
-
-    let context = auth_context(&head, &config).expect("api-key cookie should authorize");
-
-    assert!(context.subject.is_none());
-    assert!(context.unrestricted);
-}
-
-#[test]
 fn loopback_static_key_remains_unrestricted_for_mutations() {
     let _guard = ENV_LOCK.blocking_lock();
     let config = auth_test_config();
@@ -12637,45 +12490,10 @@ fn hosted_loopback_static_key_requires_write_scope_for_mutations() {
     };
     assert!(authorize(&head, &config).is_err());
 
-    let cookie = runtime_session_api_key_cookie_value(&config).expect("cookie should be available");
-    let cookie_head = RequestHead {
-        method: head.method.clone(),
-        path: head.path.clone(),
-        query: head.query.clone(),
-        headers: HashMap::from([(
-            "cookie".to_string(),
-            format!("{RUNTIME_SESSION_COOKIE_NAME}={cookie}"),
-        )]),
-    };
-    assert!(authorize(&cookie_head, &config).is_err());
-
     env::set_var("MAESTRO_WEB_API_KEY_SCOPES", "maestro:write");
     assert!(authorize(&head, &config).is_ok());
-    assert!(authorize(&cookie_head, &config).is_ok());
 
     restore_env(snapshot);
-}
-
-#[test]
-fn scoped_runtime_session_cookie_for_api_key_sentinel_subject_stays_scoped() {
-    let config = auth_test_config();
-    let subject = "api-key:unrestricted";
-    let cookie =
-        runtime_session_cookie_value(&config, subject).expect("cookie should be available");
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/api/sessions".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([(
-            "cookie".to_string(),
-            format!("{RUNTIME_SESSION_COOKIE_NAME}={cookie}"),
-        )]),
-    };
-
-    let context = auth_context(&head, &config).expect("scoped cookie should authorize");
-
-    assert_eq!(context.subject.as_deref(), Some(subject));
-    assert!(!context.unrestricted);
 }
 
 #[test]
@@ -12725,28 +12543,10 @@ fn trusted_proxy_auth_requires_shared_proxy_token() {
     assert_eq!(context.workspace_id.as_deref(), Some("workspace-proxy"));
     assert_eq!(context.scopes, vec!["maestro:write"]);
     assert!(!context.unrestricted);
-    let cookie = spa_entry_session_cookie_value(&trusted, &config)
-        .expect("trusted proxy session cookie should be available");
     let mut mutation = trusted;
     mutation.method = "POST".to_string();
     mutation.path = "/api/config".to_string();
     assert!(authorize(&mutation, &config).is_ok());
-    let cookie_mutation = RequestHead {
-        method: "POST".to_string(),
-        path: "/api/config".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::from([(
-            "cookie".to_string(),
-            format!("{RUNTIME_SESSION_COOKIE_NAME}={cookie}"),
-        )]),
-    };
-    assert!(authorize(&cookie_mutation, &config).is_ok());
-    let cookie_context = auth_context(&cookie_mutation, &config).expect("cookie auth");
-    assert_eq!(cookie_context.organization_id.as_deref(), Some("org-proxy"));
-    assert_eq!(
-        cookie_context.workspace_id.as_deref(),
-        Some("workspace-proxy")
-    );
 
     if let Some(previous) = previous {
         env::set_var("MAESTRO_WEB_TRUST_PROXY_AUTH_TOKEN", previous);
@@ -12780,7 +12580,7 @@ fn trusted_proxy_token_counts_as_configured_auth() {
 }
 
 #[test]
-fn web_auth_mode_matrix_pins_control_plane_access() {
+fn auth_mode_matrix_pins_control_plane_access() {
     let _guard = ENV_LOCK.blocking_lock();
     let preserved_env: Vec<_> = [
         "MAESTRO_WEB_TRUST_PROXY_AUTH_TOKEN",
@@ -12799,11 +12599,6 @@ fn web_auth_mode_matrix_pins_control_plane_access() {
     let mut open_dev_config = auth_test_config();
     open_dev_config.api_key = None;
     open_dev_config.require_key = false;
-    let scoped_cookie = runtime_session_cookie_value(&api_key_config, "web-user")
-        .expect("scoped cookie should be available");
-    let api_key_cookie = runtime_session_api_key_cookie_value(&api_key_config)
-        .expect("api-key cookie should be available");
-
     struct AuthMatrixCase {
         name: &'static str,
         config: Config,
@@ -12838,26 +12633,6 @@ fn web_auth_mode_matrix_pins_control_plane_access() {
             name: "bearer api key grants unrestricted loopback access",
             config: api_key_config.clone(),
             headers: HashMap::from([("authorization".to_string(), "Bearer api-key".to_string())]),
-            expected_subject: None,
-            expected_unrestricted: Some(true),
-        },
-        AuthMatrixCase {
-            name: "scoped runtime session cookie stays subject-scoped",
-            config: api_key_config.clone(),
-            headers: HashMap::from([(
-                "cookie".to_string(),
-                format!("{RUNTIME_SESSION_COOKIE_NAME}={scoped_cookie}"),
-            )]),
-            expected_subject: Some("web-user"),
-            expected_unrestricted: Some(false),
-        },
-        AuthMatrixCase {
-            name: "legacy api-key runtime session cookie stays unrestricted",
-            config: api_key_config.clone(),
-            headers: HashMap::from([(
-                "cookie".to_string(),
-                format!("{RUNTIME_SESSION_COOKIE_NAME}={api_key_cookie}"),
-            )]),
             expected_subject: None,
             expected_unrestricted: Some(true),
         },
@@ -12940,140 +12715,6 @@ fn web_auth_mode_matrix_pins_control_plane_access() {
     }
 }
 
-#[tokio::test]
-async fn loopback_api_key_web_first_load_requires_authenticated_cookie_issuer() {
-    let root = TestDir::new("runtime-config-spa-loopback-api-key");
-    fs::write(root.path().join("index.html"), "<html><head></head></html>")
-        .expect("index should be written");
-    let mut config = auth_test_config();
-    config.static_root = root.path().to_path_buf();
-    config.listen_host = "127.0.0.1".to_string();
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(!response.contains("Set-Cookie: maestro_web_session="));
-}
-
-#[tokio::test]
-async fn spa_entry_does_not_mint_session_cookie_without_authenticated_issuer() {
-    let root = TestDir::new("runtime-config-spa-unauth");
-    fs::write(root.path().join("index.html"), "<html><head></head></html>")
-        .expect("index should be written");
-    let mut config = auth_test_config();
-    config.static_root = root.path().to_path_buf();
-    config.listen_host = "0.0.0.0".to_string();
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(!response.contains("Set-Cookie: maestro_web_session="));
-}
-
-#[tokio::test]
-async fn spa_entry_head_uses_injected_body_length() {
-    let root = TestDir::new("runtime-config-spa-head");
-    let index = "<html><head></head><body>ok</body></html>";
-    fs::write(root.path().join("index.html"), index).expect("index should be written");
-    let mut config = auth_test_config();
-    config.static_root = root.path().to_path_buf();
-    let expected_length = spa_entry_body(index.as_bytes(), &config).len();
-    let head = RequestHead {
-        method: "HEAD".to_string(),
-        path: "/".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(response.contains(&format!("Content-Length: {expected_length}\r\n")));
-    assert!(response.ends_with("\r\n\r\n"));
-}
-
-#[tokio::test]
-async fn spa_entry_without_browser_auth_does_not_inject_runtime_config() {
-    let root = TestDir::new("runtime-config-spa-disabled");
-    let index = "<html><head></head><body>ok</body></html>";
-    fs::write(root.path().join("index.html"), index).expect("index should be written");
-    let mut config = auth_test_config();
-    config.static_root = root.path().to_path_buf();
-    config.api_key = None;
-    config.csrf_token = None;
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(!response.contains(RUNTIME_CONFIG_SCRIPT_PATH));
-    assert!(response.contains(index));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn canonical_static_path_rejects_symlink_escape() {
-    let base = env::temp_dir().join(format!(
-        "maestro-static-test-{}-{}",
-        process::id(),
-        ATTACHMENT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let root = base.join("static");
-    let outside = base.join("outside");
-    tokio::fs::create_dir_all(&root).await.expect("create root");
-    tokio::fs::create_dir_all(&outside)
-        .await
-        .expect("create outside");
-    tokio::fs::write(outside.join("secret.txt"), "secret")
-        .await
-        .expect("write secret");
-    std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("secret.txt"))
-        .expect("create symlink");
-
-    assert!(matches!(
-        canonical_static_path(&root, &root.join("secret.txt")).await,
-        StaticPathResolution::Forbidden
-    ));
-
-    let _ = tokio::fs::remove_dir_all(base).await;
-}
-
-#[test]
-fn missing_asset_paths_do_not_spa_fallback() {
-    let asset = RequestHead {
-        method: "GET".to_string(),
-        path: "/assets/app.js".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-    let route = RequestHead {
-        method: "GET".to_string(),
-        path: "/settings".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-
-    assert!(!should_spa_fallback(&asset));
-    assert!(should_spa_fallback(&route));
-}
-
 #[test]
 fn prepared_attachments_drop_removes_temp_dir() {
     let dir = env::temp_dir().join(format!(
@@ -13144,35 +12785,11 @@ fn telemetry_explicit_false_overrides_endpoint_and_file_configuration() {
 }
 
 #[test]
-fn resolves_missing_static_paths_within_root() {
-    let root = TestDir::new("static-root");
-    fs::write(root.path().join("index.html"), "<html></html>").expect("index should be written");
-
-    let resolved =
-        resolve_static_path(root.path(), "/assets/app.js").expect("path should stay in root");
-
-    assert_eq!(resolved, root.path().join("assets/app.js"));
-}
-
-#[cfg(unix)]
-#[test]
-fn rejects_static_paths_that_escape_through_symlinks() {
-    let root = TestDir::new("static-root");
-    let outside = TestDir::new("outside-root");
-    let escape = root.path().join("escape");
-    fs::write(root.path().join("index.html"), "<html></html>").expect("index should be written");
-    fs::write(outside.path().join("secret.txt"), "secret").expect("secret should be written");
-    std::os::unix::fs::symlink(outside.path(), &escape).expect("symlink should be created");
-
-    assert!(resolve_static_path(root.path(), "/escape/secret.txt").is_none());
-}
-
-#[test]
 fn validates_run_script_inputs() {
     assert!(is_valid_script_name("build:all"));
     assert!(!is_valid_script_name("build && rm -rf /"));
     assert!(contains_shell_metachars("foo; bar"));
-    assert!(!contains_shell_metachars("--filter packages/web"));
+    assert!(!contains_shell_metachars("--filter packages/tui"));
     assert_eq!(
         runner_args_for_script("npm", "db:migrate"),
         ["--ignore-scripts", "run", "db:migrate"]
@@ -13546,96 +13163,6 @@ async fn prepared_attachments_use_workspace_for_docker_sandbox() {
 }
 
 #[tokio::test]
-async fn missing_static_asset_returns_404_instead_of_index() {
-    let static_root = unique_test_dir("maestro-static-asset");
-    fs::create_dir_all(&static_root).expect("static root should exist");
-    fs::write(static_root.join("index.html"), "<html>ok</html>").expect("index should exist");
-
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/assets/app.js".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-    let config = Config {
-        listen_host: "127.0.0.1".to_string(),
-        listen_port: 8080,
-        api_key: None,
-        allowed_hosts: Vec::new(),
-        require_key: false,
-        require_key_explicitly_disabled: false,
-        csrf_token: None,
-        require_csrf: false,
-        cwd: PathBuf::from("."),
-        session_store_path: static_root.join("sessions.json"),
-        session_messages_path: static_root.join("session-messages.json"),
-        command_prefs_path: static_root.join("command-prefs.json"),
-        usage_file_path: static_root.join("usage.json"),
-        a2a_tasks_file_path: static_root.join("a2a-tasks.json"),
-        automation_file_path: static_root.join("automations.json"),
-        static_root: static_root.clone(),
-        static_cache_max_age: 60,
-        llm_gateway_models_url: None,
-        llm_gateway_token: None,
-        llm_gateway_org_id: None,
-        llm_gateway_timeout_ms: 2_500,
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
-    assert!(!response.contains("<html>ok</html>"));
-
-    let _ = fs::remove_dir_all(static_root);
-}
-
-#[tokio::test]
-async fn missing_spa_route_falls_back_to_index() {
-    let static_root = unique_test_dir("maestro-static-spa");
-    fs::create_dir_all(&static_root).expect("static root should exist");
-    fs::write(static_root.join("index.html"), "<html>ok</html>").expect("index should exist");
-
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/chat/session".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-    };
-    let config = Config {
-        listen_host: "127.0.0.1".to_string(),
-        listen_port: 8080,
-        api_key: None,
-        allowed_hosts: Vec::new(),
-        require_key: false,
-        require_key_explicitly_disabled: false,
-        csrf_token: None,
-        require_csrf: false,
-        cwd: PathBuf::from("."),
-        session_store_path: static_root.join("sessions.json"),
-        session_messages_path: static_root.join("session-messages.json"),
-        command_prefs_path: static_root.join("command-prefs.json"),
-        usage_file_path: static_root.join("usage.json"),
-        a2a_tasks_file_path: static_root.join("a2a-tasks.json"),
-        automation_file_path: static_root.join("automations.json"),
-        static_root: static_root.clone(),
-        static_cache_max_age: 60,
-        llm_gateway_models_url: None,
-        llm_gateway_token: None,
-        llm_gateway_org_id: None,
-        llm_gateway_timeout_ms: 2_500,
-    };
-
-    let response = static_response(&head, &config).await;
-    let response = String::from_utf8(response).expect("response should be utf-8");
-
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(response.contains("<html>ok</html>"));
-
-    let _ = fs::remove_dir_all(static_root);
-}
-
-#[tokio::test]
 async fn delete_session_subpath_returns_404_without_removing_session() {
     let root = TestDir::new("session-delete-subpath");
     let session_id = "session-1".to_string();
@@ -13670,8 +13197,6 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
             usage_file_path: root.path().join("usage.json"),
             a2a_tasks_file_path: root.path().join("a2a-tasks.json"),
             automation_file_path: root.path().join("automations.json"),
-            static_root: root.path().to_path_buf(),
-            static_cache_max_age: 60,
             llm_gateway_models_url: None,
             llm_gateway_token: None,
             llm_gateway_org_id: None,
@@ -13763,8 +13288,6 @@ async fn invalid_session_store_is_left_untouched_and_future_writes_are_blocked()
             usage_file_path: root.path().join("usage.json"),
             a2a_tasks_file_path: root.path().join("a2a-tasks.json"),
             automation_file_path: root.path().join("automations.json"),
-            static_root: root.path().to_path_buf(),
-            static_cache_max_age: 60,
             llm_gateway_models_url: None,
             llm_gateway_token: None,
             llm_gateway_org_id: None,

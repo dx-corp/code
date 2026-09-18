@@ -210,7 +210,6 @@ The HTTP runtime gateway is authenticated by
   The custom HMAC `MAESTRO_AUTH_SHARED_SECRET` authenticator is gone.
 - A trusted proxy can authenticate a subject with
   `MAESTRO_WEB_TRUST_PROXY_AUTH_TOKEN` and an identity header.
-- Runtime session cookies are HMAC-bound to the configured API key.
 - State-changing `/api/` and A2A requests require the configured CSRF token
   when CSRF enforcement is enabled.
 - Non-loopback binds require configured authentication. Disabling the key
@@ -250,7 +249,7 @@ For a local or shared deployment:
 - For a remote bind, configure a supported tenant-bearing JWT or trusted-proxy
   authenticator for session and chat routes. A static `MAESTRO_WEB_API_KEY` may
   additionally protect non-tenant process routes; use `MAESTRO_PROFILE=prod`
-  and configure CSRF for browser clients.
+  and configure CSRF for remote access.
 - Keep approval mode at prompt or fail for untrusted work. Do not combine
   automatic approval with `danger-full-access`.
 - Select `read-only` or `workspace-write` sandboxing where the host supports

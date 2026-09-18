@@ -11,8 +11,8 @@ protocol, storage, environment, and artifact identifiers for compatibility.
 - Persistent sessions, resume/export/import, usage and cost accounting
 - Account-scoped hosted Computer handoffs: freeze a selected remote diff/files/artifacts
   for another same-tenant thread, then list or read the immutable package by digest
-- Web runtime gateway with SSE/WebSocket chat, automations, A2A, hosted runners, telemetry, and model management
+- Runtime gateway (`maestro serve`) with SSE/WebSocket chat, automations, A2A, hosted runners, telemetry, and model management
 - Scripted scenarios, replay, trajectory evaluation, and protocol conformance
 - Slack and GitHub adapters backed by the native runtime gateway
 
-All product execution, browser runtime-gateway, and adapter behavior runs through Rust. The browser client is a checked-in static asset snapshot served by the native runtime gateway.
+All product execution, runtime-gateway, and adapter behavior runs through Rust.

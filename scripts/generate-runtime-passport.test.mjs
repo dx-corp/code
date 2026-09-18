@@ -80,7 +80,7 @@ test("conformance rejects a tag-only OCI reference without an artifact digest", 
 	try {
 		execFileSync(
 			process.execPath,
-			["scripts/run-runtime-conformance.mjs", "--docker-image", "ghcr.io/evalops/maestro:review"],
+			["scripts/run-runtime-conformance.mjs", "--docker-image", "ghcr.io/dx-corp/maestro:review"],
 			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 		);
 	} catch (caught) {
@@ -98,7 +98,7 @@ test("conformance rejects an artifact digest that differs from the pinned OCI im
 			[
 				"scripts/run-runtime-conformance.mjs",
 				"--docker-image",
-				`ghcr.io/evalops/maestro@sha256:${"a".repeat(64)}`,
+				`ghcr.io/dx-corp/maestro@sha256:${"a".repeat(64)}`,
 				"--artifact-digest",
 				`sha256:${"b".repeat(64)}`,
 			],

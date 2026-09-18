@@ -74,7 +74,6 @@ case "$platform" in
 esac
 
 asset="maestro-${platform}"
-web_asset="maestro-web-dist.tar.gz"
 metadata_asset="release-metadata.json"
 case "$platform" in
   darwin-x64)
@@ -991,7 +990,6 @@ signature_verified=0
 metadata_checksum_verified=0
 metadata_available=0
 binary_checksum_verified=0
-web_checksum_verified=0
 if fetch_manifest "$manifest" "${release_url}/SHA256SUMS"; then
   manifest_available=1
   manifest_sha256="$(receipt_hash_file "$manifest")"
@@ -1037,13 +1035,10 @@ if [[ "$manifest_available" == "1" && "$metadata_manifest_entry" == "0" ]]; then
 fi
 
 download "${release_url}/${asset}" "$tmpdir/$asset" "$asset"
-download "${release_url}/${web_asset}" "$tmpdir/$web_asset" "$web_asset"
 progress_step 2 "Verifying checksum..."
 if [[ "$manifest_available" == "1" ]]; then
   verify_manifest_checksum "$manifest" "$tmpdir/$asset" "$asset"
-  verify_manifest_checksum "$manifest" "$tmpdir/$web_asset" "$web_asset"
   binary_checksum_verified=1
-  web_checksum_verified=1
   if [[ "$allow_unsigned" == "1" || "$allow_unsigned" == "true" || "$allow_unsigned" == "yes" ]]; then
     printf 'Checksum manifest verified; signature verification was explicitly bypassed.\n' >&2
   else
@@ -1053,9 +1048,6 @@ fi
 
 progress_step 3 "Installing update..."
 chmod 755 "$tmpdir/$asset"
-mkdir -p "$tmpdir/maestro-web"
-tar -xzf "$tmpdir/$web_asset" -C "$tmpdir/maestro-web"
-[[ -f "$tmpdir/maestro-web/index.html" ]] || fail "$web_asset does not contain index.html"
 
 version_output="$("$tmpdir/$asset" --version 2>/dev/null)" ||
   fail "Downloaded Maestro binary could not report its version"
@@ -1079,7 +1071,6 @@ stage="$(mktemp -d "$release_root/.staging.XXXXXX")" ||
 mkdir -p "$stage/bin"
 cp "$tmpdir/$asset" "$stage/bin/maestro"
 chmod 755 "$stage/bin/maestro"
-mv "$tmpdir/maestro-web" "$stage/web"
 
 release_version_root="$release_root/$release_version"
 mkdir -p "$release_version_root"
@@ -1088,21 +1079,17 @@ staged_version="$("$stage/bin/maestro" --version)" ||
 release_dir="$(mktemp -d "$release_version_root/${platform}.XXXXXX")" ||
   fail "Could not create release directory"
 mv "$stage/bin" "$release_dir/bin"
-mv "$stage/web" "$release_dir/web"
-cp "$tmpdir/$web_asset" "$release_dir/$web_asset"
 if [[ "$metadata_available" == "1" ]]; then
   cp "$tmpdir/$metadata_asset" "$release_dir/$metadata_asset"
 fi
 binary_receipt_sha256="$(receipt_hash_file "$release_dir/bin/maestro")"
-web_receipt_sha256="$(receipt_hash_file "$tmpdir/$web_asset")"
 metadata_receipt_sha256=""
 if [[ "$metadata_available" == "1" ]]; then
   metadata_receipt_sha256="$(receipt_hash_file "$tmpdir/$metadata_asset")"
 fi
 installed_at_ms="$(( $(date +%s) * 1000 ))"
 verified=0
-if [[ "$signature_verified" == "1" && "$binary_checksum_verified" == "1" &&
-  "$web_checksum_verified" == "1" ]]; then
+if [[ "$signature_verified" == "1" && "$binary_checksum_verified" == "1" ]]; then
   verified=1
 fi
 {
@@ -1117,7 +1104,6 @@ fi
   printf '    "manifestChecksumVerified": %s,\n' "$([[ "$manifest_available" == "1" ]] && printf true || printf false)"
   printf '    "signatureVerified": %s,\n' "$([[ "$signature_verified" == "1" ]] && printf true || printf false)"
   printf '    "artifactSha256": "%s",\n' "$binary_receipt_sha256"
-  printf '    "webSha256": "%s",\n' "$web_receipt_sha256"
   printf '    "metadataSha256": '
   if [[ "$metadata_available" == "1" ]]; then
     printf '"%s",\n' "$metadata_receipt_sha256"
@@ -1166,7 +1152,6 @@ install_channel_quoted="$(shell_quote "$install_channel")"
 	# These lines are intentionally literal: they are the generated launcher.
 	# shellcheck disable=SC2016
 	printf '%s\n' \
-		'export MAESTRO_WEB_STATIC_ROOT="${MAESTRO_WEB_STATIC_ROOT:-$release_dir/web}"' \
 		'export MAESTRO_INSTALL_METHOD=release' \
 		'export MAESTRO_INSTALL_DIR="$install_dir"' \
 		'export MAESTRO_DATA_DIR="$data_dir"' \

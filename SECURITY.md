@@ -32,7 +32,7 @@ We follow a 90-day coordinated disclosure window. If you report a vulnerability,
 This policy applies to the Maestro codebase and its official packages:
 
 - `@evalops/maestro` and all `@evalops/*` packages
-- Official Docker images (`ghcr.io/evalops/maestro`)
+- Official Docker images (`ghcr.io/dx-corp/maestro`)
 - The Maestro VS Code extension and JetBrains plugin
 
 ## Recognition
@@ -41,13 +41,13 @@ We appreciate security researchers who help keep Maestro safe. With your permiss
 
 ## Running the container image
 
-`ghcr.io/evalops/maestro` binds the runtime gateway to `0.0.0.0`, so it requires
+`ghcr.io/dx-corp/maestro` binds the runtime gateway to `0.0.0.0`, so it requires
 API-key auth and will refuse to start without it:
 
 ```bash
 docker run --rm -p 3000:3000 \
   -e MAESTRO_WEB_API_KEY="$(openssl rand -hex 32)" \
-  ghcr.io/evalops/maestro
+  ghcr.io/dx-corp/maestro
 ```
 
 Clients send the key as `Authorization: Bearer <key>` or `x-maestro-api-key`.
@@ -68,7 +68,7 @@ with or without a port. If you front the server with a tunnel or a proxy that
 rewrites `Host`, list the extra names:
 
 ```bash
-MAESTRO_WEB_ALLOWED_HOSTS="maestro.tunnel.example,dev.box.internal" maestro web
+MAESTRO_WEB_ALLOWED_HOSTS="maestro.tunnel.example,dev.box.internal" maestro serve
 ```
 
 Non-loopback binds are not `Host`-checked, because the names that reach them are

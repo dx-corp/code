@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789544007,
+  "generated_at": 1789630828,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1324,7 +1324,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 943718
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -1552,7 +1552,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -6736,7 +6736,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
@@ -7409,6 +7409,25 @@
       }
     },
     {
+      "id": "stealth/union-alpha",
+      "name": "Union Alpha",
+      "provider": "openrouter",
+      "description": "Union Alpha is a multimodal model built for research, coding, and agentic workflows, while delivering frontier-level…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "stepfun/step-3.5-flash",
       "name": "StepFun: Step 3.5 Flash",
       "provider": "openrouter",
@@ -7624,7 +7643,7 @@
       "description": "UnslopNemo v4.1 is the latest addition from the creator of Rocinante, designed for adventure writing and role-play…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": true,
+        "tools": false,
         "vision": false,
         "reasoning": false,
         "streaming": true,
@@ -8009,7 +8028,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 16384
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -8142,7 +8161,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 128000
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",

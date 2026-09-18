@@ -8,7 +8,6 @@ const files = [
 	"docs/ARCHITECTURE.md",
 	"docs/TUI_ARCHITECTURE.md",
 	"docs/NATIVE_TUI_PARITY.md",
-	"docs/WEB_UI.md",
 	"docs/FEATURES.md",
 	"docs/QUICKSTART.md",
 	"docs/CONTRIBUTOR_RUNBOOK.md",

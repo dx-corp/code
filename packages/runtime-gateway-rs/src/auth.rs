@@ -12,7 +12,6 @@ use crate::{Config, now_millis, trimmed_env};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum AuthSource {
     IdentityJwt,
-    SessionCookie,
     StaticGatewayKey,
     TrustedProxy,
     #[default]
@@ -33,7 +32,6 @@ impl AuthContext {
     pub(crate) fn actor_label(&self) -> String {
         let source = match self.source {
             AuthSource::IdentityJwt => "identity-jwt",
-            AuthSource::SessionCookie => "session-cookie",
             AuthSource::StaticGatewayKey => "api-key",
             AuthSource::TrustedProxy => "trusted-proxy",
             AuthSource::LoopbackDev => "loopback-dev",
@@ -60,20 +58,6 @@ impl AuthContext {
     }
 }
 
-enum RuntimeSessionAuth {
-    Scoped {
-        subject: String,
-        organization_id: Option<String>,
-        workspace_id: Option<String>,
-        scopes: Vec<String>,
-    },
-    ApiKey,
-}
-
-pub(crate) const RUNTIME_SESSION_COOKIE_NAME: &str = "maestro_web_session";
-const RUNTIME_SESSION_COOKIE_CONTEXT: &[u8] = b"maestro-web-session:v1";
-const RUNTIME_SESSION_SCOPED_COOKIE_CONTEXT: &[u8] = b"maestro-web-session-scoped:v1";
-const RUNTIME_SESSION_API_KEY_COOKIE_CONTEXT: &[u8] = b"maestro-web-session-api-key:v1";
 const RUNTIME_WRITE_SCOPE: &str = "maestro:write";
 // Elevated role required to mutate process-global control surfaces: the managed
 // enterprise safety policy (`/api/admin/*`) and MCP server configuration
@@ -329,30 +313,6 @@ pub(crate) fn auth_context(head: &RequestHead, config: &Config) -> Option<AuthCo
         return Some(context);
     }
 
-    if let Some(session_auth) = runtime_session_cookie_auth(head, config) {
-        return Some(match session_auth {
-            RuntimeSessionAuth::ApiKey => AuthContext {
-                source: AuthSource::StaticGatewayKey,
-                scopes: configured_api_key_scopes(),
-                unrestricted: static_key_is_unrestricted(config),
-                ..AuthContext::default()
-            },
-            RuntimeSessionAuth::Scoped {
-                subject,
-                organization_id,
-                workspace_id,
-                scopes,
-            } => AuthContext {
-                subject: Some(subject),
-                organization_id,
-                workspace_id,
-                scopes,
-                source: AuthSource::SessionCookie,
-                unrestricted: false,
-            },
-        });
-    }
-
     if !config.require_key && !auth_is_configured(config) {
         return Some(AuthContext {
             source: AuthSource::LoopbackDev,
@@ -381,78 +341,6 @@ pub(crate) fn header_auth_matches(
             matches(bearer) || matches(header_key)
         })
         .unwrap_or(false)
-}
-
-fn runtime_session_cookie_auth(head: &RequestHead, config: &Config) -> Option<RuntimeSessionAuth> {
-    let provided = cookie_value(head, RUNTIME_SESSION_COOKIE_NAME)?;
-    let (encoded_subject, _signature) = provided.split_once('.')?;
-    let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(encoded_subject).ok()?).ok()?;
-    let api_key_expected = runtime_session_api_key_cookie_value(config)?;
-    if constant_time_eq(provided.as_bytes(), api_key_expected.as_bytes()) {
-        return Some(RuntimeSessionAuth::ApiKey);
-    }
-    if let Some(expected) = runtime_session_cookie_value_for_payload(
-        config,
-        RUNTIME_SESSION_SCOPED_COOKIE_CONTEXT,
-        &payload,
-    ) {
-        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-            let payload: Value = serde_json::from_str(&payload).ok()?;
-            let subject = payload
-                .get("subject")
-                .and_then(Value::as_str)
-                .and_then(nonempty_str)
-                .map(str::to_owned)?;
-            let organization_id = payload
-                .get("organizationId")
-                .or_else(|| payload.get("organization_id"))
-                .and_then(Value::as_str)
-                .and_then(nonempty_str)
-                .map(str::to_owned);
-            let workspace_id = payload
-                .get("workspaceId")
-                .or_else(|| payload.get("workspace_id"))
-                .and_then(Value::as_str)
-                .and_then(nonempty_str)
-                .map(str::to_owned);
-            let scopes = payload
-                .get("scopes")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::trim)
-                        .filter(|scope| !scope.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            return Some(RuntimeSessionAuth::Scoped {
-                subject,
-                organization_id,
-                workspace_id,
-                scopes,
-            });
-        }
-    }
-    let expected = runtime_session_cookie_value(config, &payload)?;
-    constant_time_eq(provided.as_bytes(), expected.as_bytes()).then_some(
-        RuntimeSessionAuth::Scoped {
-            subject: payload,
-            organization_id: None,
-            workspace_id: None,
-            scopes: Vec::new(),
-        },
-    )
-}
-
-pub(crate) fn cookie_value<'a>(head: &'a RequestHead, name: &str) -> Option<&'a str> {
-    let cookies = head.headers.get("cookie")?;
-    cookies.split(';').find_map(|cookie| {
-        let (cookie_name, value) = cookie.trim().split_once('=')?;
-        (cookie_name == name).then_some(value)
-    })
 }
 
 pub(crate) fn trusted_proxy_auth_identity(head: &RequestHead) -> Option<(String, Vec<String>)> {
@@ -983,62 +871,4 @@ pub(crate) fn hmac_sha256_base64url(secret: &[u8], payload: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts arbitrary key sizes");
     mac.update(payload);
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
-}
-
-pub(crate) fn runtime_session_cookie_value(config: &Config, subject: &str) -> Option<String> {
-    runtime_session_cookie_value_for_payload(config, RUNTIME_SESSION_COOKIE_CONTEXT, subject)
-}
-
-pub(crate) fn runtime_session_cookie_value_with_identity(
-    config: &Config,
-    subject: &str,
-    organization_id: Option<&str>,
-    workspace_id: Option<&str>,
-    scopes: &[String],
-) -> Option<String> {
-    let mut payload = serde_json::Map::new();
-    payload.insert("subject".to_string(), Value::String(subject.to_string()));
-    if let Some(organization_id) = organization_id.and_then(nonempty_str) {
-        payload.insert(
-            "organizationId".to_string(),
-            Value::String(organization_id.to_string()),
-        );
-    }
-    if let Some(workspace_id) = workspace_id.and_then(nonempty_str) {
-        payload.insert(
-            "workspaceId".to_string(),
-            Value::String(workspace_id.to_string()),
-        );
-    }
-    payload.insert("scopes".to_string(), serde_json::json!(scopes));
-    let payload = Value::Object(payload);
-    let payload = serde_json::to_string(&payload).ok()?;
-    runtime_session_cookie_value_for_payload(
-        config,
-        RUNTIME_SESSION_SCOPED_COOKIE_CONTEXT,
-        &payload,
-    )
-}
-
-pub(crate) fn runtime_session_api_key_cookie_value(config: &Config) -> Option<String> {
-    runtime_session_cookie_value_for_payload(
-        config,
-        RUNTIME_SESSION_API_KEY_COOKIE_CONTEXT,
-        "api-key",
-    )
-}
-
-pub(crate) fn runtime_session_cookie_value_for_payload(
-    config: &Config,
-    context: &[u8],
-    payload: &str,
-) -> Option<String> {
-    let api_key = config.api_key.as_deref()?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(api_key.as_bytes()).ok()?;
-    mac.update(context);
-    mac.update(b":");
-    mac.update(payload.as_bytes());
-    let encoded_subject = URL_SAFE_NO_PAD.encode(payload.as_bytes());
-    let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-    Some(format!("{encoded_subject}.{signature}"))
 }

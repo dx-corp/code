@@ -39,9 +39,9 @@ test("the guard rejects a missing command alias", () => {
 });
 
 test("the guard rejects stale customer-facing Maestro display copy", () => {
-	const path = "packages/web/dist/index.html";
+	const path = "packages/maestro-rs/src/main.rs";
 	const content = readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
-		.replace("<title>Deixic Code", "<title>Maestro");
+		.replace('const HELP: &str = "Deixic Code', 'const HELP: &str = "Maestro');
 	const problems = findDeixicCodeNamingProblems(root, new Map([[path, content]]));
 	assert(problems.some((problem) => problem.includes("stale display text")));
 });
