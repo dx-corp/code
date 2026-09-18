@@ -20,7 +20,7 @@ concurrency:
   group: \${{ github.workflow }}-\${{ startsWith(github.event.client_payload.version || inputs.version, 'v') && (github.event.client_payload.version || inputs.version) || format('v{0}', github.event.client_payload.version || inputs.version) }}
 jobs:
   prepare:
-    if: github.repository == 'evalops/maestro' && github.ref == 'refs/heads/main'
+    if: github.repository == 'dx-corp/code' && github.ref == 'refs/heads/main'
     runs-on: \${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

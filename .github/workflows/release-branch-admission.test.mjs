@@ -48,7 +48,7 @@ test("release admission requires protected history and all pinned checks", () =>
     const main = git("rev-parse", "HEAD");
     const orphan = git("commit-tree", "HEAD^{tree}", "-m", "unreviewed identical source");
     const tools = join(root,"tools"); mkdirSync(tools);
-    writeFileSync(join(tools,"gh"), '#!/bin/sh\n[ "$*" = "api repos/evalops/maestro/rules/branches/releases%2Fv0.10.76" ] || exit 91\nprintf "%s\\n" "$TEST_RELEASE_RULES"\n', {mode:0o755});
+    writeFileSync(join(tools,"gh"), '#!/bin/sh\n[ "$*" = "api repos/dx-corp/code/rules/branches/releases%2Fv0.10.76" ] || exit 91\nprintf "%s\\n" "$TEST_RELEASE_RULES"\n', {mode:0o755});
     const run = (sha, policy) => spawnSync("bash", ["--norc", "-e", "-c", admission], {
       cwd, encoding:"utf8", timeout:10000,
       env:{...process.env, PATH:`${tools}:${process.env.PATH}`, release_sha:sha, release_tag:"v0.10.76", TEST_RELEASE_RULES:JSON.stringify(policy)},
