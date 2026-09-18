@@ -3,6 +3,7 @@
 //! agent, tool executor, or MCP connection can run before policy is resolved.
 
 use super::*;
+use crate::state::InteractionMode;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 pub(super) struct PreparedStartup {
@@ -27,8 +28,9 @@ impl PreparedStartup {
         let custom_prompts = crate::prompts::load_prompts_with_plugin_dirs(&workspace, &dirs);
         let exec_commands = crate::exec_commands::discover_with_plugin_dirs(&workspace, &dirs);
         let (managed_setup, managed_setup_identity_scope) = match session {
-            PlatformSessionResolution::Detect => resolve_verified_managed_setup(
-                crate::credential_mode::current_verified_identity_session(),
+            PlatformSessionResolution::Detect => resolve_startup_managed_setup(
+                &crate::codex_auth::resolve_default_model(),
+                crate::credential_mode::current_verified_identity_session,
                 || match crate::credential_mode::detect() {
                     Ok(crate::credential_mode::DetectedMode::Platform(session)) => Some(session),
                     _ => None,
@@ -50,6 +52,24 @@ impl PreparedStartup {
             managed_setup_identity_scope,
         }
     }
+}
+
+fn resolve_startup_managed_setup(
+    model: &str,
+    verified: impl FnOnce() -> anyhow::Result<crate::credential_mode::PlatformSession>,
+    unverified: impl FnOnce() -> Option<crate::credential_mode::PlatformSession>,
+) -> (
+    crate::managed_setup::ManagedSetupClient,
+    Option<crate::telemetry::TelemetryIdentityScope>,
+) {
+    if crate::local_models::is_local_model_route(model) {
+        let stored = unverified();
+        return (
+            crate::managed_setup::ManagedSetupClient::offline_local(stored.as_ref()),
+            None,
+        );
+    }
+    resolve_verified_managed_setup(verified(), unverified)
 }
 
 fn preparation<T: Send + 'static>(
@@ -74,6 +94,10 @@ pub(super) fn prepare_with_composer(
     let rx = preparation(|| PreparedStartup::load(PlatformSessionResolution::Detect))?;
     let mut state = AppState::new();
     state.locale = crate::ui_prefs::UiPrefs::load_default().locale();
+    let configured_model = crate::codex_auth::resolve_default_model();
+    if crate::local_models::is_local_model_route(&configured_model) {
+        state.model = Some(configured_model);
+    }
     state.status = Some(
         state
             .locale
@@ -102,7 +126,7 @@ pub(super) fn prepare_with_composer(
                     height: input_height,
                     ..area
                 };
-                let input = ChatInputWidget::new(
+                let mut input = ChatInputWidget::new(
                     &state.textarea,
                     ChatInputWidgetOptions {
                         busy: false,
@@ -110,6 +134,13 @@ pub(super) fn prepare_with_composer(
                         ghost_text: None,
                     },
                 );
+                if state.model.is_some() {
+                    input = input.with_runtime_footer(
+                        state.model.as_deref(),
+                        state.thinking_level,
+                        InteractionMode::Normal,
+                    );
+                }
                 let cursor = input.cursor_pos(input_area);
                 frame.render_widget(input, input_area);
                 if input_area.y > area.y {
@@ -208,6 +239,40 @@ fn edit_draft(state: &mut AppState, event: AppTerminalEvent) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn local_model_startup_does_not_resolve_live_identity_or_bind_tenant_scope() {
+        for model in ["llamacpp/qwen3", "lmstudio/gemma", "ollama/llama3.2"] {
+            let verified_calls = Cell::new(0);
+            let unverified_calls = Cell::new(0);
+            let (managed_setup, identity_scope) = resolve_startup_managed_setup(
+                model,
+                || {
+                    verified_calls.set(verified_calls.get() + 1);
+                    panic!("local startup must not contact Identity")
+                },
+                || {
+                    unverified_calls.set(unverified_calls.get() + 1);
+                    Some(crate::credential_mode::PlatformSession {
+                        access_token: "stale-token".to_owned(),
+                        organization_id: "org-test".to_owned(),
+                        workspace_id: Some("workspace-test".to_owned()),
+                        provider_ref: serde_json::json!({}),
+                        email: None,
+                        user_id: None,
+                    })
+                },
+            );
+            assert_eq!(
+                managed_setup.origin(),
+                crate::managed_setup::ManagedSetupOrigin::FailedClosed
+            );
+            assert!(identity_scope.is_none());
+            assert_eq!(verified_calls.get(), 0);
+            assert_eq!(unverified_calls.get(), 1);
+        }
+    }
 
     #[test]
     fn startup_renders_and_edits_before_preparation_is_released() {

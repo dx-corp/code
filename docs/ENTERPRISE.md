@@ -15,16 +15,19 @@ model turn starts.
 | Mode | How it is selected | Inference | Secrets |
 | --- | --- | --- | --- |
 | Platform | `maestro evalops login` or `MAESTRO_EVALOPS_ACCESS_TOKEN` + `MAESTRO_EVALOPS_ORG_ID` | `llm-gateway` with a `provider_ref` | Org keys live in Platform `keys`. Deixic Code does not unwrap them. |
-| BYOK | No identity session, plus one usable local connection | Direct vendor APIs | Local keyring, env, file, 1Password, or delegated provider login. |
+| BYOK | An explicit local-runtime route, or no identity session plus one usable local connection | Local runtimes or direct vendor APIs | Local keyring, env, file, 1Password, or delegated provider login. |
 
 There is no Deixic Code-owned password, user table, or RBAC implementation. Human
 login, org membership, and permission checks belong to Platform `identity`.
 Managed provider credentials belong to Platform `keys`. Managed inference
 belongs to `llm-gateway`.
 
-Platform mode ignores local provider keys. It does not fall back to
+Platform mode ignores local vendor keys. It does not fall back to
 `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` when `llm-gateway` or `identity` is
-unavailable. Sign out and complete BYOK if you need a local path.
+unavailable. Explicit `llamacpp/...`, `lmstudio/...`, and `ollama/...` routes
+are a separate authless local path: they do not contact Identity or inherit
+cached tenant scope. Selecting a local runtime is explicit; a managed route is
+never silently redirected to it.
 
 ## First-run
 
@@ -70,7 +73,11 @@ read.
 
 ## BYOK mode
 
-No identity session. No `llm-gateway`. A usable local connection is required.
+No `llm-gateway`. A usable local connection is required. Explicit local-runtime
+routes remain available when a stored Identity session is expired or the
+network is unavailable; their turns are unbound from organization and workspace
+telemetry. Managed setup derived from an unverified stored selector remains
+fail-closed and cannot authorize tenant operations.
 
 ```sh
 maestro connections add anthropic-api-key work --secret-stdin
