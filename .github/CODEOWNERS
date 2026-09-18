@@ -1,6 +1,6 @@
 # Default owners for everything in this repo
-* @evalops/frontend-team
+* @dx-corp/frontend-team
 
 # Infrastructure and deployment changes require SRE review
-Dockerfile @evalops/sre-team @evalops/frontend-team
-.github/ @evalops/sre-team @evalops/frontend-team
+Dockerfile @dx-corp/sre-team @dx-corp/frontend-team
+.github/ @dx-corp/sre-team @dx-corp/frontend-team
