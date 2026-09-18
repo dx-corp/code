@@ -15,7 +15,6 @@
 			"body": "ok"
 		},
 		{ "method": "GET", "path": "/readyz" },
-		{ "method": "GET", "path": "/.well-known/evalops/remote-runner/identity" },
 		{ "method": "POST", "path": "/.well-known/evalops/remote-runner/drain" },
 		{ "method": "POST", "path": "/api/platform/a2a/push" },
 		{ "method": "GET", "path": "/api/a2a/cockpit" },
@@ -33,7 +32,6 @@
 		{ "method": "POST", "path": "/api/headless/sessions/:id/heartbeat" },
 		{ "method": "POST", "path": "/api/headless/sessions/:id/disconnect" },
 		{ "method": "POST", "path": "/api/headless/sessions/:id/messages" },
-		{ "method": "GET", "path": "/debug/z" },
 		{ "method": "GET", "path": "/api/files" },
 		{ "method": "GET", "path": "/api/commands" },
 		{ "method": "GET", "path": "/api/command-prefs" },

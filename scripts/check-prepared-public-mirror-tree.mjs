@@ -76,11 +76,6 @@ if (credentialArtifacts.length > 0) {
 	);
 }
 
-const browserEntry = resolve(targetRoot, "packages/web/dist/index.html");
-if (!existsSync(browserEntry)) {
-	fail(`Prepared public mirror is missing versioned browser assets: ${browserEntry}`);
-}
-
 const boundaryScript = resolve(
 	targetRoot,
 	"scripts/check-public-surface-boundary.mjs",

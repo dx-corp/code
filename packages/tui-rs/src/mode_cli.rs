@@ -414,6 +414,30 @@ fn provider_name(provider: ModelProvider) -> &'static str {
     }
 }
 
+fn provider_family(provider: ModelProvider) -> &'static str {
+    match provider {
+        ModelProvider::Anthropic => "anthropic",
+        ModelProvider::OpenAi | ModelProvider::OpenAiCodex => "openai",
+        ModelProvider::Google => "google",
+    }
+}
+
+/// The read-only oracle and cross-check reviewers must come from a different
+/// provider family than the primary model, so a second opinion never shares
+/// the primary's blind spots. Keep the level's preferred provider when it
+/// already differs; otherwise switch to the other major family.
+fn cross_provider(preferred: ModelProvider, primary: ModelProvider) -> ModelProvider {
+    if provider_family(preferred) != provider_family(primary) {
+        return preferred;
+    }
+    match primary {
+        ModelProvider::Anthropic => ModelProvider::OpenAiCodex,
+        ModelProvider::OpenAi | ModelProvider::OpenAiCodex | ModelProvider::Google => {
+            ModelProvider::Anthropic
+        }
+    }
+}
+
 fn effort_name(effort: ReasoningEffort) -> &'static str {
     match effort {
         ReasoningEffort::Low => "low",
@@ -585,6 +609,7 @@ fn profile_json(mode: AgentMode, provider: ModelProvider) -> Option<Value> {
         ),
         AgentMode::Replay => return None,
     };
+    let oracle_provider = cross_provider(oracle_provider, provider);
     let profile_config = find_mode(level)?;
     let specialist =
         |specialist_provider: ModelProvider, tier: ModelTier, effort: ReasoningEffort| {
@@ -652,7 +677,7 @@ fn profile_json(mode: AgentMode, provider: ModelProvider) -> Option<Value> {
             specialists.insert(
                 "reviewer".into(),
                 specialist(
-                    ModelProvider::Anthropic,
+                    cross_provider(ModelProvider::Anthropic, provider),
                     ModelTier::Opus,
                     ReasoningEffort::High,
                 ),
@@ -674,7 +699,7 @@ fn profile_json(mode: AgentMode, provider: ModelProvider) -> Option<Value> {
             specialists.insert(
                 "reviewer".into(),
                 specialist(
-                    ModelProvider::OpenAiCodex,
+                    cross_provider(ModelProvider::OpenAiCodex, provider),
                     ModelTier::Opus,
                     ReasoningEffort::XHigh,
                 ),
@@ -864,6 +889,106 @@ mod tests {
         assert_eq!(value["agentProfile"]["primary"]["reasoningEffort"], "xhigh");
         assert_eq!(value["agentProfile"]["oracle"]["provider"], "anthropic");
         assert_eq!(value["agentProfile"]["oracle"]["readOnly"], true);
+    }
+
+    #[test]
+    fn oracle_and_cross_check_reviewers_never_share_the_primary_provider_family() {
+        let providers = [
+            ModelProvider::Anthropic,
+            ModelProvider::OpenAi,
+            ModelProvider::OpenAiCodex,
+            ModelProvider::Google,
+        ];
+        let family = |name: &str| match name {
+            "anthropic" => "anthropic",
+            "openai" | "openai-codex" => "openai",
+            "google" => "google",
+            other => panic!("unknown provider {other}"),
+        };
+        for level in ["low", "medium", "high", "ultra"] {
+            for provider in providers {
+                let value = describe_mode(find_mode(level).unwrap(), provider);
+                let profile = &value["agentProfile"];
+                let primary = family(profile["primary"]["provider"].as_str().unwrap());
+                let oracle = family(profile["oracle"]["provider"].as_str().unwrap());
+                assert_ne!(
+                    oracle, primary,
+                    "{level} oracle shares the {primary} family for primary {provider:?}"
+                );
+                if matches!(level, "high" | "ultra") {
+                    let reviewer = family(
+                        profile["specialists"]["reviewer"]["provider"]
+                            .as_str()
+                            .unwrap(),
+                    );
+                    assert_ne!(
+                        reviewer, primary,
+                        "{level} reviewer shares the {primary} family for primary {provider:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cross_provider_keeps_a_different_preferred_family_and_switches_a_shared_one() {
+        use ModelProvider::{Anthropic, Google, OpenAi, OpenAiCodex};
+        let all = [Anthropic, OpenAi, OpenAiCodex, Google];
+        for preferred in all {
+            for primary in all {
+                let chosen = cross_provider(preferred, primary);
+                assert_ne!(
+                    provider_family(chosen),
+                    provider_family(primary),
+                    "preferred {preferred:?} with primary {primary:?} chose {chosen:?}"
+                );
+                if provider_family(preferred) != provider_family(primary) {
+                    assert_eq!(
+                        chosen, preferred,
+                        "a preferred provider outside the primary family is kept"
+                    );
+                }
+            }
+        }
+        assert_eq!(cross_provider(Anthropic, Anthropic), OpenAiCodex);
+        assert_eq!(cross_provider(OpenAiCodex, OpenAi), Anthropic);
+        assert_eq!(cross_provider(OpenAi, OpenAiCodex), Anthropic);
+        assert_eq!(cross_provider(Google, Google), Anthropic);
+    }
+
+    #[test]
+    fn profile_second_opinions_are_pinned_for_representative_primaries() {
+        let oracle = |level: &str, provider: ModelProvider| {
+            describe_mode(find_mode(level).unwrap(), provider)["agentProfile"]["oracle"]["provider"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let reviewer = |level: &str, provider: ModelProvider| {
+            describe_mode(find_mode(level).unwrap(), provider)["agentProfile"]["specialists"]
+                ["reviewer"]["provider"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        // Unchanged where the level's preference already differs from the primary.
+        assert_eq!(oracle("high", ModelProvider::OpenAiCodex), "anthropic");
+        assert_eq!(reviewer("high", ModelProvider::OpenAiCodex), "anthropic");
+        assert_eq!(oracle("ultra", ModelProvider::Anthropic), "openai-codex");
+        assert_eq!(reviewer("ultra", ModelProvider::Anthropic), "openai-codex");
+        // Switched where the preference used to share the primary's family.
+        assert_eq!(oracle("medium", ModelProvider::Anthropic), "openai-codex");
+        assert_eq!(oracle("high", ModelProvider::Anthropic), "openai-codex");
+        assert_eq!(reviewer("high", ModelProvider::Anthropic), "openai-codex");
+        assert_eq!(oracle("low", ModelProvider::OpenAi), "anthropic");
+        assert_eq!(oracle("ultra", ModelProvider::OpenAiCodex), "anthropic");
+        assert_eq!(reviewer("ultra", ModelProvider::OpenAiCodex), "anthropic");
+        // The Oracle stays read-only and on the top tier whichever family wins.
+        for provider in [ModelProvider::Anthropic, ModelProvider::OpenAiCodex] {
+            let value = describe_mode(find_mode("high").unwrap(), provider);
+            assert_eq!(value["agentProfile"]["oracle"]["readOnly"], true);
+            assert_eq!(value["agentProfile"]["oracle"]["reasoningEffort"], "high");
+        }
     }
 
     #[test]

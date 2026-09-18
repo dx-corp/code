@@ -4,7 +4,7 @@
 //! command list and its own `--headless`/`--rpc`/`--mode=headless`/`exec`/
 //! `print`/`-p` matching, independently of the routing here — with nothing
 //! enforcing that the two stayed in sync. `maestro-rs` now forwards
-//! everything except `web`/`--help`/`--version` to `run_cli` unchanged, so
+//! everything except `serve`/`--help`/`--version` to `run_cli` unchanged, so
 //! this crate's `entrypoint` module is the single place that decides
 //! whether a subcommand reaches the utility handler, the headless server,
 //! the exec/print bridge, or the interactive TUI. This test drives that

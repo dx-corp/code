@@ -186,53 +186,13 @@ pub(crate) fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> 
     response_with_extra_headers(status, content_type, body, "")
 }
 
-pub(crate) fn response_with_cache(
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-    cache_seconds: u64,
-) -> Vec<u8> {
-    response_with_extra_headers_and_length(
-        status,
-        content_type,
-        body,
-        &format!("Cache-Control: public, max-age={cache_seconds}\r\n"),
-        body.len(),
-    )
-}
-
-pub(crate) fn response_with_cache_and_length(
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-    cache_seconds: u64,
-    content_length: usize,
-) -> Vec<u8> {
-    response_with_extra_headers_and_length(
-        status,
-        content_type,
-        body,
-        &format!("Cache-Control: public, max-age={cache_seconds}\r\n"),
-        content_length,
-    )
-}
-
 pub(crate) fn response_with_no_store(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
-    response_with_no_store_and_length(status, content_type, body, body.len())
-}
-
-pub(crate) fn response_with_no_store_and_length(
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-    content_length: usize,
-) -> Vec<u8> {
     response_with_extra_headers_and_length(
         status,
         content_type,
         body,
         "Cache-Control: no-store, no-cache, must-revalidate\r\n",
-        content_length,
+        body.len(),
     )
 }
 
@@ -418,4 +378,20 @@ pub(crate) fn percent_decode_component(value: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&decoded).to_string()
+}
+
+pub(crate) fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }

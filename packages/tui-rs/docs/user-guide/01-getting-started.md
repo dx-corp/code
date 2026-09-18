@@ -62,7 +62,7 @@ Other common entrypoints:
 
 ```bash
 deixic-code "…"                 # interactive TUI with trailing prompt
-deixic-code web                 # browser UI on http://localhost:8080
+deixic-code serve --port 8080   # HTTP runtime gateway on http://localhost:8080
 deixic-code --resume            # interactive session picker
 deixic-code --continue          # resume most recent session for this cwd
 ```

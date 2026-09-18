@@ -93,7 +93,7 @@ if (existsSync(scenario)) {
 }
 
 const port = 31_000 + Math.floor(Math.random() * 1_000);
-const server = spawn(binary, ["web", "--port", String(port)], {
+const server = spawn(binary, ["serve", "--port", String(port)], {
 	env,
 	stdio: ["ignore", "pipe", "pipe"],
 });
@@ -109,13 +109,7 @@ try {
 		} catch {}
 		await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
 	}
-	if (!healthy) throw new Error("native web health smoke failed");
-	if (existsSync(resolve("packages/web/dist/index.html"))) {
-		const response = await fetch(`http://127.0.0.1:${port}/`);
-		if (!response.ok || !(await response.text()).includes("<html")) {
-			throw new Error("native web asset smoke failed");
-		}
-	}
+	if (!healthy) throw new Error("native serve health smoke failed");
 } finally {
 	server.kill("SIGTERM");
 }

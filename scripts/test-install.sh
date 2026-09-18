@@ -56,14 +56,11 @@ case "$platform_os:$platform_arch" in
 esac
 
 asset="maestro-$platform"
-web_asset="maestro-web-dist.tar.gz"
 release_dir="$fixture/v0.0.1"
 manifest_failure_release_dir="$fixture/v0.0.2"
 legacy_release_dir="$fixture/v0.0.8"
 unsigned_legacy_release_dir="$fixture/v0.0.9"
-mkdir -p "$release_dir" "$manifest_failure_release_dir" "$legacy_release_dir" "$unsigned_legacy_release_dir" "$fixture/web-source" "$fixture/home"
-printf '%s\n' '<!doctype html><title>fixture</title>' > "$fixture/web-source/index.html"
-tar -czf "$release_dir/$web_asset" -C "$fixture/web-source" .
+mkdir -p "$release_dir" "$manifest_failure_release_dir" "$legacy_release_dir" "$unsigned_legacy_release_dir" "$fixture/home"
 
 write_fixture_binary() {
   local version="$1"
@@ -71,7 +68,7 @@ write_fixture_binary() {
   {
     printf '%s\n' '#!/bin/sh'
 	    # shellcheck disable=SC2016
-	    printf 'if [ "$1" = "--version" ]; then printf "maestro %s\\n"; elif [ "$1" = "--print-web-root" ]; then printf "%%s\\n" "$MAESTRO_WEB_STATIC_ROOT"; else printf "fixture binary\\n"; fi\n' "$version"
+	    printf 'if [ "$1" = "--version" ]; then printf "maestro %s\\n"; else printf "fixture binary\\n"; fi\n' "$version"
   } > "$target_dir/$asset"
   chmod 755 "$target_dir/$asset"
 }
@@ -79,39 +76,30 @@ write_fixture_binary() {
 write_manifest() {
   local target_dir="${1:-$release_dir}"
   local binary_digest
-  local web_digest
   binary_digest="$(hash_file "$target_dir/$asset")"
-  web_digest="$(hash_file "$target_dir/$web_asset")"
   {
     printf '%s  %s\n' "$binary_digest" "$asset"
-    printf '%s  %s\n' "$web_digest" "$web_asset"
   } > "$target_dir/SHA256SUMS"
 }
 
 write_fixture_binary "0.0.1"
 write_manifest
 cp "$release_dir/$asset" "$manifest_failure_release_dir/$asset"
-cp "$release_dir/$web_asset" "$manifest_failure_release_dir/$web_asset"
 write_fixture_binary "0.0.8" "$legacy_release_dir"
-cp "$release_dir/$web_asset" "$legacy_release_dir/$web_asset"
 write_manifest "$legacy_release_dir"
 write_fixture_binary "0.0.9" "$unsigned_legacy_release_dir"
-cp "$release_dir/$web_asset" "$unsigned_legacy_release_dir/$web_asset"
 
 preview_release_dir="$fixture/v0.0.3-beta.1"
 mkdir -p "$preview_release_dir"
 write_fixture_binary "0.0.3-beta.1"
 write_manifest
 cp "$release_dir/$asset" "$preview_release_dir/$asset"
-cp "$release_dir/$web_asset" "$preview_release_dir/$web_asset"
 {
   printf '%s  %s\n' "$(hash_file "$preview_release_dir/$asset")" "$asset"
-  printf '%s  %s\n' "$(hash_file "$preview_release_dir/$web_asset")" "$web_asset"
 } > "$preview_release_dir/SHA256SUMS"
 alpha_release_dir="$fixture/v0.0.4-alpha.1"
 mkdir -p "$alpha_release_dir"
 write_fixture_binary "0.0.4-alpha.1" "$alpha_release_dir"
-cp "$release_dir/$web_asset" "$alpha_release_dir/$web_asset"
 write_manifest "$alpha_release_dir"
 write_fixture_binary "0.0.1"
 write_manifest
@@ -514,8 +502,6 @@ grep -q '^export MAESTRO_VERSION=' "$install_dir/maestro" ||
 release_binary="$(find "$data_dir/releases" -type f -path '*/bin/maestro' -print -quit)"
 [[ -n "$release_binary" ]] || fail "versioned release binary was not staged"
 release_root="$(dirname "$(dirname "$release_binary")")"
-[[ -f "$release_root/web/index.html" ]] || fail "web assets were not staged beside the binary"
-[[ -f "$release_root/$web_asset" ]] || fail "verified web archive was not retained beside the binary"
 [[ -f "$release_root/install-receipt.json" ]] || fail "install receipt was not staged beside the binary"
 python3 - "$release_root/install-receipt.json" <<'PY'
 import json
@@ -526,7 +512,7 @@ assert receipt["schemaVersion"] == "evalops.maestro.install-receipt.v1"
 assert receipt["version"] == "0.0.1"
 assert receipt["verified"] is False
 assert receipt["verification"]["artifactSha256"].startswith("sha256:")
-assert receipt["verification"]["webSha256"].startswith("sha256:")
+assert "webSha256" not in receipt["verification"]
 assert receipt["verification"]["metadataSha256"] is None
 assert receipt["releaseMetadataAsset"] is None
 PY
@@ -535,17 +521,6 @@ case "$release_dir_name" in
   "$platform".??????) ;;
   *) fail "release directory is not uniquely allocated: $release_dir_name" ;;
 esac
-
-custom_web_root="$fixture/custom-web-root"
-[[ "$(MAESTRO_WEB_STATIC_ROOT="$custom_web_root" "$install_dir/maestro" --print-web-root)" == "$custom_web_root" ]] ||
-  fail "launcher overwrote an explicit MAESTRO_WEB_STATIC_ROOT"
-default_web_root="$(
-  unset MAESTRO_WEB_STATIC_ROOT
-  "$install_dir/maestro" --print-web-root
-)"
-expected_default_web_root="$(cd "$release_root/web" && pwd -P)"
-[[ "$default_web_root" == "$expected_default_web_root" ]] ||
-  fail "launcher did not provide the bundled default web root"
 
 runtime_version_install_dir="$fixture/runtime-version-bin"
 runtime_version_data_dir="$fixture/runtime-version-data"

@@ -63,14 +63,14 @@ test("daemon-local fixture creation is a shell step before file search", () => {
 test("detached Docker conformance keeps the fixture stdin open", () => {
 	const args = dockerConformanceRunArgs({
 		containerName: "maestro-runtime-conformance-test",
-		dockerImage: "ghcr.io/evalops/maestro@sha256:" + "a".repeat(64),
+		dockerImage: "ghcr.io/dx-corp/maestro@sha256:" + "a".repeat(64),
 	});
 
 	assert.deepEqual(args.slice(0, 4), ["run", "-d", "-i", "--rm"]);
 	assert.deepEqual(args.slice(-4), [
 		"--mount",
 		"type=tmpfs,destination=/conformance-workspace",
-		"ghcr.io/evalops/maestro@sha256:" + "a".repeat(64),
+		"ghcr.io/dx-corp/maestro@sha256:" + "a".repeat(64),
 		"conformance",
 	]);
 	assert.equal(args.some((argument) => argument.includes("/tmp/maestro-runtime-conformance-test")), false);

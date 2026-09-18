@@ -43,11 +43,11 @@ budgets:
   maxCostUsd: 5
 ```
 
-Oracle configurations must be read-only and reasoning-capable at runtime. The built-in profiles prefer a different provider family for the Oracle on higher levels.
+Oracle configurations must be read-only and reasoning-capable at runtime. The built-in profiles always choose the Oracle, and the high and ultra reviewer specialists, from a different provider family than the primary model (`cross_provider` in `packages/tui-rs/src/mode_cli.rs`). Runtime reviewer subagent dispatch for the canonical levels still uses the parent provider; see evalops/mono#9321.
 
 ## Routing evidence
 
-An assistant response completing without an error is not a verified success. Automatic promotion requires at least 20 verified outcomes for the workload. Verification results, explicit user acceptance, rejection, and retries can supply outcome evidence; unverified runs remain useful for latency and cost observations only.
+An assistant response completing without an error is not a verified success. There is no automatic promotion today: the model-candidate lifecycle is not wired into profile defaults, so any promotion is a manual, advisory decision (tracked in evalops/mono#9322). When automatic promotion ships, it must require at least 20 verified outcomes for the workload. Verification results, explicit user acceptance, rejection, and retries can supply outcome evidence; unverified runs remain useful for latency and cost observations only.
 
 Clients can request a profile through `X-Maestro-Agent-Profile` (or the compatibility `X-Composer-Agent-Profile`) and inspect the versioned resolved profile on the routing decision.
 

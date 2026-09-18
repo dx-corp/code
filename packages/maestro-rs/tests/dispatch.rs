@@ -25,18 +25,18 @@ struct FixtureCase {
 }
 
 #[test]
-fn web_dispatches_to_in_process_control_plane() {
-    assert_eq!(classify(["web"]).unwrap(), Command::Web { port: None });
+fn serve_dispatches_to_in_process_control_plane() {
+    assert_eq!(classify(["serve"]).unwrap(), Command::Serve { port: None });
     assert_eq!(
-        classify(["web", "--port", "9090"]).unwrap(),
-        Command::Web { port: Some(9090) }
+        classify(["serve", "--port", "9090"]).unwrap(),
+        Command::Serve { port: Some(9090) }
     );
 }
 
 #[test]
 fn exec_is_forwarded_to_native_dispatch() {
     // `classify` no longer distinguishes exec/print/headless/utility argv from
-    // one another; it only needs to know whether to serve the in-process web
+    // one another; it only needs to know whether to serve the in-process
     // control plane. Everything else forwards to `maestro_tui::run_cli`, which
     // owns the real routing decision (see `packages/tui-rs/tests/entrypoint.rs`).
     assert_eq!(classify(["exec", "hello"]).unwrap(), Command::Forward);
@@ -84,7 +84,7 @@ fn frozen_cli_routes_are_owned_by_native_dispatch() {
         let command = result.unwrap_or_else(|error| panic!("{}: {error}", case.name));
         match (case.route.as_str(), case.name.as_str()) {
             ("native-control-plane", _) => {
-                assert_eq!(command, Command::Web { port: None }, "{}", case.name)
+                assert_eq!(command, Command::Serve { port: None }, "{}", case.name)
             }
             ("native", "version") => assert_eq!(command, Command::Version, "{}", case.name),
             ("native", "help" | "hidden-help") => {
@@ -99,8 +99,8 @@ fn frozen_cli_routes_are_owned_by_native_dispatch() {
 }
 
 #[test]
-fn web_rejects_prompt_arguments() {
-    assert!(classify(["web", "prompt"]).is_err());
+fn serve_rejects_prompt_arguments() {
+    assert!(classify(["serve", "prompt"]).is_err());
 }
 
 #[test]

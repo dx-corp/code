@@ -6,7 +6,7 @@
 
 Audience: operators and contributors configuring approvals and sandboxing.
 
-Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md) · [Web UI](WEB_UI.md)
+Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md)
 
 Deixic Code can execute shell commands and change files on the host. The action
 firewall, approval flow, policy checks, and optional native sandbox are
@@ -216,7 +216,7 @@ For a shared or remote web deployment:
 MAESTRO_PROFILE=prod \
 MAESTRO_JWT_JWKS_URL="https://identity.example/.well-known/jwks.json" \
 MAESTRO_WEB_CSRF_TOKEN="$(openssl rand -hex 32)" \
-maestro web
+maestro serve
 ```
 
 The runtime gateway requires authentication on non-loopback binds. It accepts
