@@ -1408,13 +1408,11 @@ pub fn configured_model_route(workspace_dir: &Path, profile_name: Option<&str>) 
 ///    already-existing env var the user typed is a pure bugfix (today it is
 ///    silently ignored by the interactive TUI), not a default-behavior change
 ///    that needs staging.
-/// 2. The staged-rollout gate `MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT`. While
-///    this is unset/false, the
-///    interactive TUI keeps its historical unsandboxed-by-default behavior —
-///    this ships the sandboxing mechanism as an enabling primitive, not as a
-///    default-behavior flip, until a follow-up PR promotes it after an
-///    internal soak period.
-/// 3. Once the gate is set, `ComposerConfig::resolved_sandbox_policy` (which
+/// 2. The promoted rollout gate `MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT`. The
+///    interactive TUI now sandboxes by default; setting the gate to an explicit
+///    opt-out (`0`, `false`, `no`, `off`) restores the historical unsandboxed
+///    behavior. Unset or unrecognized values keep the sandbox on.
+/// 3. Otherwise, `ComposerConfig::resolved_sandbox_policy` (which
 ///    itself defaults to [`crate::sandbox::SandboxPolicy::workspace_write_default`]
 ///    unless the config says otherwise).
 #[must_use]
@@ -1433,10 +1431,21 @@ pub fn resolve_interactive_sandbox_policy(
         // Empty or unrecognized: fall through rather than silently disabling
         // the sandbox on a typo.
     }
-    if !env_flag_enabled("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT") {
+    if env_flag_disabled("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT") {
         return None;
     }
     config.resolved_sandbox_policy()
+}
+
+/// An explicit opt-out value. Unset or unrecognized values never disable a
+/// safety default, so a typo keeps the sandbox on.
+fn env_flag_disabled(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
 }
 
 /// Parse `MAESTRO_SANDBOX_MODE`. `Some(None)` means "explicitly no sandbox"
@@ -1450,15 +1459,6 @@ fn parse_sandbox_mode_env_override(value: &str) -> Option<Option<crate::sandbox:
         "read-only" => Some(Some(SandboxPolicy::ReadOnly)),
         _ => None,
     }
-}
-
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
 }
 
 /// The `{ ... }` block creates a temporary scope. The read lock is released
@@ -2014,20 +2014,42 @@ model_reasoning_effort = "high"
             ..Default::default()
         };
 
-        // Stage 1: even though DEFAULT_CONFIG.sandbox_mode is already
-        // `WorkspaceWrite`, the interactive TUI must not enforce it until the
-        // internal gate is explicitly set — this is what makes the change an
-        // enabling primitive rather than an immediate default flip.
-        assert!(
-            resolve_interactive_sandbox_policy(&workspace_write_config).is_none(),
-            "gate off + no env override must stay unsandboxed"
-        );
+        // Promoted default: with no env at all, the interactive TUI enforces
+        // the config's workspace-write policy.
+        let default_policy = resolve_interactive_sandbox_policy(&workspace_write_config)
+            .expect("no env must sandbox by default");
+        assert!(matches!(
+            default_policy,
+            crate::sandbox::SandboxPolicy::WorkspaceWrite { .. }
+        ));
+        assert!(default_policy.has_full_network_access());
 
-        // Once the internal gate is set, the config's resolved policy applies.
+        // Explicit opt-out values restore the unsandboxed behavior.
+        for opt_out in ["0", "false", "FALSE", " no ", "off"] {
+            env::set_var("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT", opt_out);
+            assert!(
+                resolve_interactive_sandbox_policy(&workspace_write_config).is_none(),
+                "{opt_out:?} must opt out of the sandbox default"
+            );
+        }
+
+        // Legacy opt-in values and typos never disable the safety default.
+        for keeps_sandbox in ["1", "true", "yes", "on", "", "flase", "disabled"] {
+            env::set_var("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT", keeps_sandbox);
+            assert!(
+                resolve_interactive_sandbox_policy(&workspace_write_config).is_some(),
+                "{keeps_sandbox:?} must keep the sandbox on"
+            );
+        }
+
+        // A config that explicitly asks for full access is still honored.
+        env::remove_var("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT");
+        let full_access_config = ComposerConfig {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        };
+        assert!(resolve_interactive_sandbox_policy(&full_access_config).is_none());
         env::set_var("MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT", "1");
-        let gated_policy = resolve_interactive_sandbox_policy(&workspace_write_config);
-        assert!(gated_policy.is_some(), "gate on must resolve a policy");
-        assert!(gated_policy.unwrap().has_full_network_access());
 
         // An explicit env override always wins over the gate + config.
         env::set_var("MAESTRO_SANDBOX_MODE", "read-only");

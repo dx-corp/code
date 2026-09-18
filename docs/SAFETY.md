@@ -9,8 +9,8 @@ Audience: operators and contributors configuring approvals and sandboxing.
 Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md)
 
 Deixic Code can execute shell commands and change files on the host. The action
-firewall, approval flow, policy checks, and optional native sandbox are
-independent layers. No layer makes an untrusted repository safe by itself.
+firewall, approval flow, policy checks, and native sandbox are independent
+layers. No layer makes an untrusted repository safe by itself.
 
 ## Action firewall
 
@@ -186,6 +186,11 @@ Platform backends:
 - Linux: Landlock for filesystem access plus seccomp for network-disabled
   policies;
 - other platforms: native sandboxing is unavailable.
+
+The interactive TUI applies the configured policy by default (`workspace-write`
+unless the config says otherwise). `MAESTRO_SANDBOX_MODE` overrides it for one
+run, and `MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT=0` is an internal opt-out for
+hosts where the native mechanism breaks real sessions.
 
 The sandbox is applied in the child immediately before `exec`. The child
 environment is cleared and replaced with the filtered environment passed by
