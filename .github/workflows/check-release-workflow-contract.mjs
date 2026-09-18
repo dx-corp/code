@@ -380,6 +380,16 @@ export function validateReleaseWorkflow(source) {
 	}
 	if (!prepare || !binaries || !publish || !release || !canary) return failures;
 
+	for (const [name, job] of Object.entries(jobs)) {
+		if (job.steps.some((step) =>
+			/(?:packages\/web\/dist|maestro-web-dist|release-web-dist)/u.test(
+				JSON.stringify([executableLines(step.run), step.with]),
+			),
+		)) {
+			failures.push(`${name} must not require or package obsolete browser assets`);
+		}
+	}
+
 	if (!hasExactPermissions(permissions, { contents: "read" })) {
 		failures.push("workflow default permissions must be exactly contents: read");
 	}
@@ -604,7 +614,6 @@ export function validateReleaseWorkflow(source) {
 		JSON.stringify([
 			"set -euo pipefail",
 			`test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"`,
-			"test -f packages/web/dist/index.html",
 			"npm run check:rust-only-runtime",
 		])
 	) {
@@ -838,7 +847,6 @@ export function validateReleaseWorkflow(source) {
 	);
 	for (const artifactName of [
 		"npm-tarball-${{ needs.prepare.outputs.release_tag }}",
-		"release-web-dist-${{ needs.prepare.outputs.release_tag }}",
 	]) {
 		if (
 			!publishUploads.some(
@@ -853,7 +861,7 @@ export function validateReleaseWorkflow(source) {
 		step.uses.startsWith("actions/download-artifact@"),
 	);
 	if (
-		releaseDownloads.length !== 3 ||
+		releaseDownloads.length !== 2 ||
 		!releaseDownloads.some(
 			(step) =>
 				step.with.name ===
@@ -865,12 +873,6 @@ export function validateReleaseWorkflow(source) {
 				step.with.pattern === "maestro-*" &&
 				step.with.path === "release-assets" &&
 				step.with["merge-multiple"] === "true",
-		) ||
-		!releaseDownloads.some(
-			(step) =>
-				step.with.name ===
-					"release-web-dist-${{ needs.prepare.outputs.release_tag }}" &&
-				step.with.path === "release-assets",
 		)
 	) {
 		failures.push("github-release must restore the exact immutable release artifacts");

@@ -138,7 +138,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
-          test -f packages/web/dist/index.html
           npm run check:rust-only-runtime
       - name: Publish to npm
         env:
@@ -238,11 +237,6 @@ jobs:
           name: npm-tarball-\${{ needs.prepare.outputs.release_tag }}
           overwrite: true
           path: package.tgz
-      - uses: actions/upload-artifact@sha
-        with:
-          name: release-web-dist-\${{ needs.prepare.outputs.release_tag }}
-          overwrite: true
-          path: maestro-web-dist.tar.gz
   github-release:
     needs: [prepare, binaries, publish, post-publish-canary]
     runs-on: \${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
@@ -262,10 +256,6 @@ jobs:
           pattern: maestro-*
           path: release-assets
           merge-multiple: true
-      - uses: actions/download-artifact@sha
-        with:
-          name: release-web-dist-\${{ needs.prepare.outputs.release_tag }}
-          path: release-assets
       - name: Verify release tag has not moved
         env:
           EXPECTED_RELEASE_SHA: \${{ needs.prepare.outputs.release_sha }}
@@ -947,8 +937,8 @@ test("rejects a non-retryable or incomplete GitHub release job", () => {
 	);
 
 	const missingArtifact = completeWorkflow.replace(
-		"          name: release-web-dist-${{ needs.prepare.outputs.release_tag }}",
-		"          name: wrong-web-artifact",
+		"          name: npm-tarball-${{ needs.prepare.outputs.release_tag }}",
+		"          name: wrong-npm-artifact",
 	);
 	assert.ok(
 		validateReleaseWorkflow(missingArtifact).some((failure) =>
@@ -1093,13 +1083,41 @@ test("required CI tooling lane runs the release workflow contracts", async () =>
 	);
 });
 
-test("versioned browser asset is present in the release source tree", async () => {
-	const html = await readFile(
-		new URL("../../packages/web/dist/index.html", import.meta.url),
-		"utf8",
-	);
-	assert.match(html, /<!doctype html>/iu);
-});
+for (const [name, step] of [
+	["browser input requirement", "      - run: test -f packages/web/dist/index.html"],
+	["browser archive packaging", "      - run: tar -czf maestro-web-dist.tar.gz -C packages/web/dist ."],
+	["browser archive signing", "      - run: sha256sum maestro-web-dist.tar.gz > SHA256SUMS"],
+	["browser artifact upload", `      - uses: actions/upload-artifact@sha
+        with:
+          name: release-web-dist-${releaseSha}
+          path: maestro-web-dist.tar.gz`],
+	["browser artifact download", `      - uses: actions/download-artifact@sha
+        with:
+          name: release-web-dist-${releaseSha}
+          path: release-assets`],
+]) {
+	test(`rejects obsolete ${name}`, () => {
+		assert.deepEqual(validateReleaseWorkflow(completeWorkflow), []);
+		const workflow = completeWorkflow.replace(
+			"      - name: Verify release tag has not moved",
+			`${step}\n      - name: Verify release tag has not moved`,
+		);
+		assert.ok(validateReleaseWorkflow(workflow).some((failure) =>
+			failure.includes("obsolete browser assets"),
+		));
+	});
+}
+
+for (const line of [
+	`          test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"`,
+	"          npm run check:rust-only-runtime",
+]) {
+	test(`rejects missing native input check: ${line.trim()}`, () => {
+		assert.ok(validateReleaseWorkflow(completeWorkflow.replace(line, "")).some((failure) =>
+			failure.includes("exact native package input checks"),
+		));
+	});
+}
 
 for (const line of ['          git merge-base --is-ancestor "$release_sha" FETCH_HEAD', '          timeout 60s git fetch --no-tags origin main']) {
  test(`rejects missing ancestry guard: ${line.trim()}`, () => {

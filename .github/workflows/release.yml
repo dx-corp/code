@@ -254,18 +254,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
-          test -f packages/web/dist/index.html
           npm run check:rust-only-runtime
       - name: Materialize native npm package
         run: node scripts/materialize-native-package.mjs --input-dir release-binaries
-      - name: Package browser assets for native installs
-        run: tar -czf maestro-web-dist.tar.gz -C packages/web/dist .
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          retention-days: 14
-          name: release-web-dist-${{ needs.prepare.outputs.release_tag }}
-          overwrite: true
-          path: maestro-web-dist.tar.gz
       - id: pack
         run: |
           PACK_JSON=$(npm pack --json)
@@ -465,10 +456,6 @@ jobs:
           pattern: maestro-*
           path: release-assets
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
-        with:
-          name: release-web-dist-${{ needs.prepare.outputs.release_tag }}
-          path: release-assets
       - name: Install cosign
         run: |
           set -euo pipefail
@@ -514,7 +501,6 @@ jobs:
             maestro-darwin-x64
             maestro-linux-arm64
             maestro-linux-x64
-            maestro-web-dist.tar.gz
           )
           files+=(release-metadata.json version.json channel-manifest.json manifest.json)
           files+=(runtime-passport-maestro-*.json code-device-*.json)
