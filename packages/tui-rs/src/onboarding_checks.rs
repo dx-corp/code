@@ -422,6 +422,8 @@ mod tests {
             summary: "untrusted detail must not reach onboarding".to_owned(),
             detail: Some("sensitive detail".to_owned()),
             live: true,
+            duration_ms: None,
+            remediation: None,
         }
     }
 

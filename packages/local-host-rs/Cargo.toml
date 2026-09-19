@@ -57,7 +57,7 @@ wait-timeout.workspace = true
 
 # Serialization for IPC
 ring.workspace = true
-ed25519-dalek = { version = "2", default-features = false }
+ed25519-dalek = { version = "3", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 prost = "0.14"
@@ -117,7 +117,7 @@ serde_yaml.workspace = true
 # Lua scripting for hooks (optional)
 # Uses vendored Lua to avoid system dependency
 # "send" feature makes Lua thread-safe (uses Arc instead of Rc)
-mlua = { version = "0.10", features = ["lua54", "serialize", "vendored", "send"], optional = true }
+mlua = { version = "0.12", features = ["lua54", "serialize", "vendored", "send"], optional = true }
 
 # WASM runtime for hook plugins (optional)
 wasmtime = { version = "47", optional = true }

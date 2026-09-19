@@ -975,6 +975,19 @@ enum AgentCommand {
         path: String,
     },
 
+    /// Enable or disable the live hook system owned by the execution host.
+    SetHooksEnabled {
+        enabled: bool,
+    },
+
+    /// Reload hook configuration in the live execution host.
+    ReloadHooks,
+
+    /// Read live hook counts and metrics from the execution host.
+    InspectHooks {
+        reply: oneshot::Sender<super::native_host::NativeHookRuntimeSnapshot>,
+    },
+
     /// Update whether the goal lifecycle tools are exposed to the model.
     SetGoalToolsVisible {
         visible: bool,
@@ -1951,6 +1964,33 @@ impl NativeAgent {
             .send(AgentCommand::SetHookLogFile { path: path.into() })
             .map_err(|e| anyhow::anyhow!("Failed to set hook log file: {e}"))?;
         Ok(())
+    }
+
+    /// Enable or disable hooks in the live native execution host.
+    pub fn set_hooks_enabled(&self, enabled: bool) -> Result<()> {
+        self.command_tx
+            .send(AgentCommand::SetHooksEnabled { enabled })
+            .map_err(|e| anyhow::anyhow!("Failed to update hook state: {e}"))?;
+        Ok(())
+    }
+
+    /// Reload hooks from the execution host's authoritative configuration.
+    pub fn reload_hooks(&self) -> Result<()> {
+        self.command_tx
+            .send(AgentCommand::ReloadHooks)
+            .map_err(|e| anyhow::anyhow!("Failed to reload hooks: {e}"))?;
+        Ok(())
+    }
+
+    /// Return the live hook state owned by the native execution host.
+    pub async fn inspect_hooks(&self) -> Result<super::native_host::NativeHookRuntimeSnapshot> {
+        let (reply, response) = oneshot::channel();
+        self.command_tx
+            .send(AgentCommand::InspectHooks { reply })
+            .map_err(|e| anyhow::anyhow!("Failed to inspect hooks: {e}"))?;
+        response
+            .await
+            .map_err(|e| anyhow::anyhow!("Hook inspection was interrupted: {e}"))
     }
 
     /// Set whether the goal lifecycle tools are exposed to the model.

@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789716653,
+  "generated_at": 1789802841,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1324,7 +1324,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 393216
       },
       "verification": {
         "state": "catalog",
@@ -1552,7 +1552,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 235929
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -2578,7 +2578,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -2597,7 +2597,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 393216
       },
       "verification": {
         "state": "catalog",
@@ -4706,7 +4706,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 182520
       },
       "verification": {
         "state": "catalog",
@@ -4782,7 +4782,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -5951,7 +5951,7 @@
       "id": "openrouter/auto-beta",
       "name": "Auto Router (Beta)",
       "provider": "openrouter",
-      "description": "Auto Router (Beta) is a task-aware router from OpenRouter. It classifies each request, then routes it the [most…",
+      "description": "The experimental version of our Auto Router where we test new improvements. Use it to get the latest and greatest…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -6220,6 +6220,25 @@
         "protocol": "openai-chat",
         "tools": true,
         "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 32768
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "prism-ml/ternary-bonsai-2-27b",
+      "name": "PrismML: Ternary Bonsai 2 27B",
+      "provider": "openrouter",
+      "description": "Bonsai 2 27B is a 27B-parameter reasoning model from PrismML derived from Qwen3.8-27B. It supports coding,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
@@ -8180,7 +8199,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 163840
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -8218,7 +8237,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943717
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -8237,6 +8256,25 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
+        "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.3-flashx",
+      "name": "Z.ai: GLM 5.3 FlashX",
+      "provider": "openrouter",
+      "description": "GLM-5.3-FlashX is the high-speed variant of Z.ai's GLM-5.3-Flash, a native multimodal model delivering inference…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
         "output_tokens": 131072
       },
       "verification": {

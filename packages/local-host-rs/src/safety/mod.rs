@@ -53,6 +53,7 @@
 
 mod bash_analyzer;
 mod dangerous_patterns;
+mod disconnected_deployment;
 mod firewall;
 pub mod guardian;
 mod path_containment;
@@ -72,6 +73,7 @@ pub use dangerous_patterns::{
     DangerousPattern, PatternMatch, Severity, check_dangerous_patterns, has_high_severity_pattern,
     most_severe_match,
 };
+pub use disconnected_deployment::disconnected_deployment_contract;
 pub use firewall::{ActionFirewall, FirewallContext, FirewallVerdict};
 pub use maestro_runtime::agent::denial_memory::{DenialMemory, MAX_DENIAL_TARGET_CHARS};
 pub use maestro_runtime::agent::workflow_state::{

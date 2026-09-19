@@ -18,6 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{Cursor, Read};
 use std::net::IpAddr;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::process;
@@ -606,10 +608,119 @@ struct HookConcurrencySnapshot {
 
 pub async fn serve(config: RuntimeGatewayConfig) -> anyhow::Result<()> {
     config.validate_startup()?;
+    parse_ownership_watch(
+        env::var("MAESTRO_PARENT_PID").ok().as_deref(),
+        env::var("MAESTRO_LIVENESS_FD").ok().as_deref(),
+    )?;
     let listen_addr = config.listen_addr();
     let listener = TcpListener::bind(&listen_addr).await?;
     println!("maestro rust server listening on http://{}", listen_addr);
     serve_listener(listener, config).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnershipWatch {
+    ParentPid(u32),
+    LivenessFd(i32),
+}
+
+fn parse_ownership_watch(
+    parent_pid: Option<&str>,
+    liveness_fd: Option<&str>,
+) -> anyhow::Result<Option<OwnershipWatch>> {
+    if parent_pid.is_some() && liveness_fd.is_some() {
+        anyhow::bail!("MAESTRO_PARENT_PID and MAESTRO_LIVENESS_FD are mutually exclusive");
+    }
+    if let Some(value) = parent_pid {
+        let pid = value
+            .parse::<u32>()
+            .context("MAESTRO_PARENT_PID must be a positive process id")?;
+        if pid == 0 || pid == std::process::id() {
+            anyhow::bail!("MAESTRO_PARENT_PID must identify another live process");
+        }
+        return Ok(Some(OwnershipWatch::ParentPid(pid)));
+    }
+    if let Some(value) = liveness_fd {
+        let fd = value
+            .parse::<i32>()
+            .context("MAESTRO_LIVENESS_FD must be a non-negative file descriptor")?;
+        if fd < 0 {
+            anyhow::bail!("MAESTRO_LIVENESS_FD must be a non-negative file descriptor");
+        }
+        return Ok(Some(OwnershipWatch::LivenessFd(fd)));
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(_pid: u32) -> bool {
+    true
+}
+
+async fn wait_for_owner_loss(watch: OwnershipWatch) -> String {
+    match watch {
+        OwnershipWatch::ParentPid(pid) => loop {
+            if !process_is_alive(pid) {
+                return format!("parent_process_exited:{pid}");
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        },
+        OwnershipWatch::LivenessFd(fd) => {
+            #[cfg(unix)]
+            {
+                tokio::task::spawn_blocking(move || {
+                    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+                    let mut byte = [0_u8; 1];
+                    loop {
+                        match file.read(&mut byte) {
+                            Ok(0) => return format!("liveness_pipe_closed:{fd}"),
+                            Ok(_) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(error) => return format!("liveness_pipe_failed:{fd}:{error}"),
+                        }
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| format!("liveness_monitor_failed:{error}"))
+            }
+            #[cfg(not(unix))]
+            {
+                format!("liveness_fd_unsupported:{fd}")
+            }
+        }
+    }
+}
+
+async fn write_daemon_exit_receipt(reason: &str) -> anyhow::Result<()> {
+    let Some(path) = env::var_os("MAESTRO_DAEMON_EXIT_RECEIPT").map(PathBuf::from) else {
+        return Ok(());
+    };
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let payload = serde_json::to_vec_pretty(&serde_json::json!({
+        "schemaVersion": 1,
+        "status": "stopped",
+        "reason": reason,
+        "pid": std::process::id(),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))?;
+    tokio::fs::write(&temporary, payload).await?;
+    tokio::fs::rename(&temporary, &path).await?;
+    Ok(())
 }
 
 pub async fn serve_listener(
@@ -617,6 +728,10 @@ pub async fn serve_listener(
     config: RuntimeGatewayConfig,
 ) -> anyhow::Result<()> {
     config.validate_startup()?;
+    let ownership_watch = parse_ownership_watch(
+        env::var("MAESTRO_PARENT_PID").ok().as_deref(),
+        env::var("MAESTRO_LIVENESS_FD").ok().as_deref(),
+    )?;
     let _telemetry = TelemetryGuard::init(TelemetryConfig::new(
         "maestro-runtime-gateway",
         env!("CARGO_PKG_VERSION"),
@@ -692,8 +807,23 @@ pub async fn serve_listener(
     );
     maybe_spawn_a2a_platform_registration_loop(config.clone());
 
+    let mut owner_loss = Box::pin(async move {
+        match ownership_watch {
+            Some(watch) => wait_for_owner_loss(watch).await,
+            None => std::future::pending::<String>().await,
+        }
+    });
+
     loop {
-        let (stream, _) = match listener.accept().await {
+        let accepted = tokio::select! {
+            reason = &mut owner_loss => {
+                eprintln!("runtime-gateway owner lost: {reason}");
+                write_daemon_exit_receipt(&reason).await?;
+                return Ok(());
+            }
+            accepted = listener.accept() => accepted,
+        };
+        let (stream, _) = match accepted {
             Ok(connection) => connection,
             Err(error) => {
                 eprintln!("runtime-gateway accept failed: {error}");

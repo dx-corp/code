@@ -395,7 +395,7 @@ pub fn disconnected_authority()
         .and_then(|(profile, metadata)| profile.authority.map(|authority| (authority, metadata))))
 }
 
-fn disconnected_policy_verified()
+pub(super) fn disconnected_policy_verified()
 -> Result<Option<(DisconnectedPolicy, ManagedPolicyMetadata)>, String> {
     let Some(managed) = load_managed_policy(false)? else {
         return Ok(None);
@@ -2143,6 +2143,9 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod deployment_tests;
+    use crate::safety::disconnected_deployment_contract;
+
     use super::*;
     use ring::signature::KeyPair;
 
@@ -2336,30 +2339,6 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_policy_uses_signed_machine_routes_and_rejects_tampering() {
-        let _lock = test_env_guard();
-        let fixture = MachineFixture::new();
-        fixture.install(private_profile());
-        assert!(vendor_network_disabled());
-        assert!(
-            disconnected_route("ollama/customer-model")
-                .unwrap()
-                .is_some()
-        );
-        assert!(disconnected_route("openai/gpt-5.5").is_err());
-        assert!(require_vendor_network().is_err());
-        let path = fixture.directory.path().join("managed-policy.json");
-        let mut envelope: ManagedPolicyEnvelope =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        envelope.policy.disconnected.as_mut().unwrap().routes[0].endpoint =
-            "https://api.openai.com/v1".into();
-        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
-        assert!(disconnected_policy().is_err());
-        assert!(vendor_network_disabled());
-        assert!(check_tool_allowed("read").is_some());
-    }
-
-    #[test]
     fn disconnected_admission_never_verifies_stored_identity() {
         let _env = crate::config::test_process_env_lock();
         let _lock = test_env_guard();
@@ -2540,6 +2519,11 @@ mod tests {
         envelope.expires_at = 2;
         std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
         assert!(disconnected_policy().unwrap_err().contains("expired"));
+        assert!(
+            disconnected_deployment_contract()
+                .unwrap_err()
+                .contains("expired")
+        );
         assert!(vendor_network_disabled());
         assert!(check_model_allowed("ollama/customer-model").is_some());
         assert!(check_tool_allowed("read").is_some());

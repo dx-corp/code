@@ -319,6 +319,8 @@ mod tests {
             summary: summary.to_owned(),
             detail: detail.map(str::to_owned),
             live: false,
+            duration_ms: None,
+            remediation: None,
         }
     }
 

@@ -692,6 +692,49 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         self.with_hooks(move |hooks| hooks.set_log_file(path))
     }
 
+    fn hook_set_enabled(&self, enabled: bool) -> NativeHostFuture<'_, ()> {
+        self.with_hooks(move |hooks| {
+            if enabled {
+                hooks.enable();
+            } else {
+                hooks.disable();
+            }
+        })
+    }
+
+    fn hook_reload(&self) -> NativeHostFuture<'_, Result<(), String>> {
+        self.with_hooks(|hooks| {
+            hooks
+                .reload()
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn hook_runtime_snapshot(
+        &self,
+    ) -> NativeHostFuture<'_, maestro_runtime::agent::native_host::NativeHookRuntimeSnapshot> {
+        self.with_hooks(|hooks| {
+            let stats = hooks.stats();
+            let metrics = hooks.metrics();
+            maestro_runtime::agent::native_host::NativeHookRuntimeSnapshot {
+                native_hooks: stats.native_hooks,
+                lua_scripts: stats.lua_scripts,
+                wasm_plugins: stats.wasm_plugins,
+                enabled: stats.enabled,
+                pre_tool_use_count: metrics.pre_tool_use_count,
+                post_tool_use_count: metrics.post_tool_use_count,
+                overflow_count: metrics.overflow_count,
+                blocks: metrics.blocks,
+                total_duration_ms: metrics
+                    .total_duration
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            }
+        })
+    }
+
     fn render_hook_context(&self, event: NativeHookEvent, context: &str) -> Result<String, String> {
         render_hook_context(Self::hook_event(event), context)
             .map_err(|error| render_hook_context_error(&error))

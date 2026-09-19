@@ -30,6 +30,14 @@ const a2aTmuxSmoke = readFileSync(
 	new URL("./smoke-maestro-a2a-tmux.sh", import.meta.url),
 	"utf8",
 );
+const interactiveTuiSmoke = readFileSync(
+	new URL("./smoke-tui-interactive.sh", import.meta.url),
+	"utf8",
+);
+const setupRust = readFileSync(
+	new URL("../.github/actions/setup-rust/action.yml", import.meta.url),
+	"utf8",
+);
 
 test("maestro-ci concurrency is per ref and cancels in-progress PR runs", () => {
 	assert.match(
@@ -224,6 +232,38 @@ test("CI caps rustc codegen units and compile jobs", () => {
 	assert.match(workflow, /CARGO_PROFILE_TEST_CODEGEN_UNITS: "16"/);
 	assert.match(workflow, /CARGO_BUILD_JOBS: "4"/);
 	assert.match(workflow, /RUST_TOOLCHAIN: "1\.95\.0"/);
+});
+
+test("Rust setup uses Google-backed sccache and forbids the GitHub backend", () => {
+	const configure =
+		setupRust
+			.split("    - name: Configure Google-backed sccache")[1]
+			?.split("\n    - name: Cache Cargo")[0] ?? "";
+	const cargoCache =
+		setupRust
+			.split("    - name: Cache Cargo")[1]
+			?.split("\n    - name: Configure Cargo network resilience")[0] ?? "";
+	assert.match(configure, /uses: \.\/\.github\/actions\/setup-sccache/);
+	assert.match(configure, /version: v0\.17\.0/);
+	assert.match(configure, /backend: auto/);
+	assert.match(configure, /allow-gha-fallback: "false"/);
+	assert.doesNotMatch(configure, /SCCACHE_GHA_ENABLED/);
+	assert.match(cargoCache, /cargo-inputs-v3/);
+	assert.match(cargoCache, /cache-targets: "false"/);
+});
+
+test("interactive TUI smoke isolates state and skips first-run onboarding", () => {
+	assert.match(interactiveTuiSmoke, /SMOKE_HOME="\$\(mktemp -d/);
+	assert.match(interactiveTuiSmoke, /trap cleanup EXIT/);
+	assert.match(interactiveTuiSmoke, /\{"onboardingSeen":true\}/);
+	assert.match(interactiveTuiSmoke, /export MAESTRO_HOME=\$QUOTED_SMOKE_HOME/);
+	assert.match(interactiveTuiSmoke, /export MAESTRO_TELEMETRY=0/);
+	assert.match(interactiveTuiSmoke, /export MAESTRO_AUTO_UPDATE=0/);
+	assert.ok(
+		interactiveTuiSmoke.indexOf("export MAESTRO_HOME=$QUOTED_SMOKE_HOME") <
+			interactiveTuiSmoke.indexOf("'$BIN' --provider openai"),
+		"isolated preferences must be active before the TUI starts",
+	);
 });
 
 test("network and long-running operations are bounded", () => {

@@ -68,6 +68,7 @@ pub async fn run_config(args: &[String]) -> Result<i32> {
             println!("{}", config_help());
             Ok(0)
         }
+        "deployment" => run_deployment(&args[1..]),
         "path" | "paths" => run_path(&args[1..]),
         "list" | "ls" => run_list(&args[1..]),
         "get" => run_get(&args[1..]),
@@ -103,6 +104,7 @@ Commands:
   set <key> <value> [--scope ...]
                                Write a dotted TOML key
   show | status                Inspect sources and print a secret-safe generation digest
+  deployment --json            Inspect the signed disconnected profile without network requests
   validate                     Validate provider JSON + TOML config files
   init [--preset <id>] [--force]
                                Create project .maestro/config.json
@@ -112,6 +114,17 @@ Commands:
 Options:
   --json                       Machine-readable output where supported
   --help, -h                   Show this help"
+}
+
+fn run_deployment(args: &[String]) -> Result<i32> {
+    anyhow::ensure!(
+        args == ["--json"],
+        "Usage: deixic-code config deployment --json"
+    );
+    let contract = maestro_local_host::safety::disconnected_deployment_contract()
+        .map_err(anyhow::Error::msg)?;
+    println!("{}", serde_json::to_string_pretty(&contract)?);
+    Ok(0)
 }
 
 fn run_path(args: &[String]) -> Result<i32> {
@@ -2386,6 +2399,24 @@ mod tests {
         match value {
             Some(value) => env::set_var(name, value),
             None => env::remove_var(name),
+        }
+    }
+
+    #[test]
+    fn deployment_inspection_rejects_mutation_and_probe_flags() {
+        for args in [
+            vec![],
+            vec!["--live"],
+            vec!["--json", "--live"],
+            vec!["--json", "--set"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(
+                run_deployment(&args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Usage:")
+            );
         }
     }
 

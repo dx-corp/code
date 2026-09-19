@@ -1,6 +1,6 @@
 //! Typed native `maestro doctor` report.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,10 @@ pub struct DoctorCheck {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub live: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,26 +66,59 @@ pub struct DoctorReport {
 struct DoctorOptions {
     json: bool,
     live: bool,
+    verbose: bool,
+    timeout_ms: u64,
     model: Option<String>,
+    categories: HashSet<String>,
 }
 
 fn parse_options(args: &[String]) -> Result<DoctorOptions> {
     let mut options = DoctorOptions {
         json: false,
         live: false,
+        verbose: false,
+        timeout_ms: 10_000,
         model: None,
+        categories: HashSet::new(),
     };
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => options.json = true,
             "--live" => options.live = true,
+            "--verbose" => options.verbose = true,
+            "--timeout" => {
+                index += 1;
+                options.timeout_ms = args
+                    .get(index)
+                    .context("--timeout requires milliseconds")?
+                    .parse::<u64>()
+                    .context("--timeout must be a positive integer")?;
+                if options.timeout_ms == 0 {
+                    bail!("--timeout must be a positive integer");
+                }
+            }
+            value if value.starts_with("--timeout=") => {
+                options.timeout_ms = value[10..]
+                    .parse::<u64>()
+                    .context("--timeout must be a positive integer")?;
+                if options.timeout_ms == 0 {
+                    bail!("--timeout must be a positive integer");
+                }
+            }
             "--model" => {
                 index += 1;
                 options.model = Some(args.get(index).context("--model requires a value")?.clone());
             }
             value if value.starts_with("--model=") => {
                 options.model = Some(value[8..].to_owned());
+            }
+            "--connectivity" | "--network" => {
+                options.categories.insert("network".to_owned());
+            }
+            "--config" | "--certs" | "--proxy" | "--auth" | "--daemon" | "--runner" | "--mcp"
+            | "--hooks" | "--plugins" => {
+                options.categories.insert(args[index][2..].to_owned());
             }
             "--help" | "-h" | "help" => bail!("help"),
             other => bail!("unknown doctor option: {other}"),
@@ -104,6 +141,8 @@ fn check(
         summary: summary.into(),
         detail,
         live,
+        duration_ms: None,
+        remediation: None,
     }
 }
 
@@ -674,6 +713,425 @@ async fn managed_setup_check(
     }
 }
 
+fn measured(mut item: DoctorCheck, started: Instant, verbose: bool) -> DoctorCheck {
+    if verbose {
+        item.duration_ms = Some(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+    }
+    item
+}
+
+fn mcp_config_check(cwd: &Path, verbose: bool) -> DoctorCheck {
+    let started = Instant::now();
+    let config = crate::mcp::load_mcp_config(Some(cwd));
+    let enabled = config.enabled_servers().count();
+    let item = if config.issues.is_empty() {
+        check(
+            "mcp",
+            CheckStatus::Pass,
+            format!("{enabled} enabled MCP server(s); configuration is valid"),
+            None,
+            false,
+        )
+    } else {
+        let mut item = check(
+            "mcp",
+            CheckStatus::Fail,
+            format!("{} MCP configuration issue(s)", config.issues.len()),
+            Some(
+                config
+                    .issues
+                    .iter()
+                    .map(|issue| format!("{}: {}", issue.path.display(), issue.message))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+            false,
+        );
+        item.remediation = Some(
+            "Run `deixic-code mcp status` and repair the reported configuration source.".to_owned(),
+        );
+        item
+    };
+    measured(item, started, verbose)
+}
+
+fn hooks_config_check(cwd: &Path, verbose: bool) -> DoctorCheck {
+    let started = Instant::now();
+    let item = match crate::hooks::load_hook_config(cwd) {
+        Ok(config) if !config.skipped_untrusted_paths.is_empty() => {
+            let mut item = check(
+                "hooks",
+                CheckStatus::Warning,
+                format!(
+                    "{} effective hook(s); project hooks were skipped in an untrusted workspace",
+                    config.hooks.len()
+                ),
+                Some(
+                    config
+                        .skipped_untrusted_paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                false,
+            );
+            item.remediation = Some("Inspect with `deixic-code hooks list --json`; grant workspace trust only after reviewing the hook files.".to_owned());
+            item
+        }
+        Ok(config) => check(
+            "hooks",
+            CheckStatus::Pass,
+            format!(
+                "{} effective hook(s) from {} configuration source(s)",
+                config.hooks.len(),
+                config.source_paths.len()
+            ),
+            None,
+            false,
+        ),
+        Err(error) => {
+            let mut item = check(
+                "hooks",
+                CheckStatus::Fail,
+                "hook configuration failed to load",
+                Some(error.to_string()),
+                false,
+            );
+            item.remediation = Some(
+                "Run `deixic-code hooks list --json` and repair the rejected source file."
+                    .to_owned(),
+            );
+            item
+        }
+    };
+    measured(item, started, verbose)
+}
+
+fn plugin_config_check(cwd: &Path, verbose: bool) -> DoctorCheck {
+    let started = Instant::now();
+    let registry = crate::plugins::PluginRegistry::discover_for_workspace(cwd);
+    let item = if !registry.admission_errors().is_empty() {
+        let mut item = check(
+            "plugins",
+            CheckStatus::Fail,
+            format!(
+                "{} plugin admission error(s)",
+                registry.admission_errors().len()
+            ),
+            Some(registry.admission_errors().join("; ")),
+            false,
+        );
+        item.remediation = Some(
+            "Run `deixic-code plugins list --json` and repair or remove the rejected plugin."
+                .to_owned(),
+        );
+        item
+    } else if let Some(notice) = registry.untrusted_skip_notice() {
+        check(
+            "plugins",
+            CheckStatus::Warning,
+            format!("{} trusted plugin(s) loaded", registry.len()),
+            Some(notice),
+            false,
+        )
+    } else {
+        check(
+            "plugins",
+            CheckStatus::Pass,
+            format!("{} trusted plugin(s) loaded", registry.len()),
+            None,
+            false,
+        )
+    };
+    measured(item, started, verbose)
+}
+
+fn proxy_config_check(verbose: bool) -> DoctorCheck {
+    let started = Instant::now();
+    let configured = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok().map(|value| (name, value)))
+        .filter(|(_, value)| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    let invalid = configured
+        .iter()
+        .filter_map(|(name, value)| {
+            reqwest::Url::parse(value)
+                .err()
+                .map(|error| format!("{name}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    let item = if !invalid.is_empty() {
+        let mut item = check(
+            "proxy",
+            CheckStatus::Fail,
+            "proxy environment contains an invalid URL",
+            Some(invalid.join("; ")),
+            false,
+        );
+        item.remediation = Some("Set HTTP_PROXY, HTTPS_PROXY, or ALL_PROXY to an absolute proxy URL, or remove the invalid value.".to_owned());
+        item
+    } else if configured.is_empty() {
+        check(
+            "proxy",
+            CheckStatus::Pass,
+            "direct network path; no proxy configured",
+            None,
+            false,
+        )
+    } else {
+        check(
+            "proxy",
+            CheckStatus::Pass,
+            format!("{} proxy variable(s) configured", configured.len()),
+            Some(
+                configured
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            false,
+        )
+    };
+    measured(item, started, verbose)
+}
+
+fn certificate_config_check(verbose: bool) -> DoctorCheck {
+    let started = Instant::now();
+    let configured = ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]
+        .into_iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| (name, PathBuf::from(value)))
+        })
+        .collect::<Vec<_>>();
+    let missing = configured
+        .iter()
+        .filter(|(_, path)| !path.is_file())
+        .map(|(name, path)| format!("{name}={}", path.display()))
+        .collect::<Vec<_>>();
+    let item = if !missing.is_empty() {
+        let mut item = check(
+            "certs",
+            CheckStatus::Fail,
+            "custom certificate bundle is missing or not a file",
+            Some(missing.join("; ")),
+            false,
+        );
+        item.remediation = Some(
+            "Install the certificate bundle or remove the stale environment override.".to_owned(),
+        );
+        item
+    } else if configured.is_empty() {
+        check(
+            "certs",
+            CheckStatus::Pass,
+            "using the system certificate trust store",
+            None,
+            false,
+        )
+    } else {
+        check(
+            "certs",
+            CheckStatus::Pass,
+            format!(
+                "{} custom certificate bundle override(s) are readable",
+                configured.len()
+            ),
+            None,
+            false,
+        )
+    };
+    measured(item, started, verbose)
+}
+
+async fn http_health_check(
+    id: &str,
+    url: &str,
+    timeout: Duration,
+    verbose: bool,
+    remediation: &str,
+) -> DoctorCheck {
+    let started = Instant::now();
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+        Ok(_) => {
+            let mut item = check(
+                id,
+                CheckStatus::Fail,
+                "health URL must use http or https",
+                None,
+                true,
+            );
+            item.remediation = Some(remediation.to_owned());
+            return measured(item, started, verbose);
+        }
+        Err(error) => {
+            let mut item = check(
+                id,
+                CheckStatus::Fail,
+                "health URL is invalid",
+                Some(error.to_string()),
+                true,
+            );
+            item.remediation = Some(remediation.to_owned());
+            return measured(item, started, verbose);
+        }
+    };
+    let display = redacted_url(&parsed);
+    let result = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(client) => client.get(parsed).send().await,
+        Err(error) => Err(error),
+    };
+    let item = match result {
+        Ok(response) if response.status().is_success() => check(
+            id,
+            CheckStatus::Pass,
+            format!("health endpoint responded at {display}"),
+            Some(format!("HTTP {}", response.status())),
+            true,
+        ),
+        Ok(response) => {
+            let mut item = check(
+                id,
+                CheckStatus::Fail,
+                format!("health endpoint rejected the probe at {display}"),
+                Some(format!("HTTP {}", response.status())),
+                true,
+            );
+            item.remediation = Some(remediation.to_owned());
+            item
+        }
+        Err(error) => {
+            let mut item = check(
+                id,
+                CheckStatus::Fail,
+                format!("health endpoint is unreachable at {display}"),
+                Some(if error.is_timeout() {
+                    "request timed out".to_owned()
+                } else if error.is_connect() {
+                    "connection failed".to_owned()
+                } else {
+                    "request failed".to_owned()
+                }),
+                true,
+            );
+            item.remediation = Some(remediation.to_owned());
+            item
+        }
+    };
+    measured(item, started, verbose)
+}
+
+async fn daemon_check(force_live: bool, timeout: Duration, verbose: bool) -> DoctorCheck {
+    if !force_live {
+        return check(
+            "daemon",
+            CheckStatus::Skipped,
+            "daemon probe not requested",
+            Some("Run `deixic-code doctor --daemon` to probe the runtime gateway.".to_owned()),
+            true,
+        );
+    }
+    let url = std::env::var("MAESTRO_DAEMON_URL").unwrap_or_else(|_| {
+        let host = std::env::var("MAESTRO_CONTROL_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+        let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_owned());
+        format!("http://{host}:{port}/healthz")
+    });
+    http_health_check(
+        "daemon",
+        &url,
+        timeout,
+        verbose,
+        "Start `deixic-code serve`, verify its supervisor, and confirm MAESTRO_DAEMON_URL points at `/healthz`.",
+    )
+    .await
+}
+
+async fn runner_check(force_live: bool, timeout: Duration, verbose: bool) -> DoctorCheck {
+    if let Ok(url) = std::env::var("MAESTRO_RUNNER_HEALTH_URL") {
+        return http_health_check(
+            "runner",
+            &url,
+            timeout,
+            verbose,
+            "Restart the runner's external supervisor and verify its lease, credentials, and health URL.",
+        )
+        .await;
+    }
+    if let Ok(raw_pid) = std::env::var("MAESTRO_HOSTED_RUNNER_PID") {
+        let started = Instant::now();
+        let item = match raw_pid.parse::<u32>() {
+            Ok(pid) if pid > 0 && process_exists(pid) => check(
+                "runner",
+                CheckStatus::Pass,
+                format!("hosted runner process {pid} is alive"),
+                None,
+                true,
+            ),
+            Ok(pid) => {
+                let mut item = check(
+                    "runner",
+                    CheckStatus::Fail,
+                    format!("hosted runner process {pid} is not alive"),
+                    None,
+                    true,
+                );
+                item.remediation = Some("Restart the external runner supervisor; it owns replacement of the attested child generation.".to_owned());
+                item
+            }
+            Err(error) => check(
+                "runner",
+                CheckStatus::Fail,
+                "MAESTRO_HOSTED_RUNNER_PID is invalid",
+                Some(error.to_string()),
+                true,
+            ),
+        };
+        return measured(item, started, verbose);
+    }
+    let mut item = check(
+        "runner",
+        if force_live { CheckStatus::Fail } else { CheckStatus::Skipped },
+        "runner health target is not configured",
+        Some("Set MAESTRO_RUNNER_HEALTH_URL or MAESTRO_HOSTED_RUNNER_PID in the runner service environment.".to_owned()),
+        force_live,
+    );
+    item.remediation = Some("Expose the runner's authenticated health endpoint to its local supervisor and doctor process.".to_owned());
+    item
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_exists(_pid: u32) -> bool {
+    false
+}
+
+fn category_for_check(id: &str) -> &'static str {
+    match id {
+        "config" => "config",
+        "credential_mode" | "managed_setup" | "managed_inference" | "provider" | "auth_health"
+        | "codex_login" | "codex_app_server" => "auth",
+        "mcp" => "mcp",
+        "hooks" => "hooks",
+        "plugins" => "plugins",
+        "proxy" => "proxy",
+        "certs" => "certs",
+        "daemon" => "daemon",
+        "runner" => "runner",
+        "live_metadata" => "network",
+        _ => "config",
+    }
+}
+
 pub async fn build_report(model_override: Option<&str>, live: bool, cwd: &Path) -> DoctorReport {
     let requested = model_override
         .map(str::trim)
@@ -866,13 +1324,53 @@ pub async fn run_doctor(args: &[String]) -> Result<i32> {
     let options = match parse_options(args) {
         Ok(options) => options,
         Err(error) if error.to_string() == "help" => {
-            println!("Usage: deixic-code doctor [--json] [--live] [--model <provider/model>]");
+            println!(
+                "Usage: deixic-code doctor [--json] [--live] [--verbose] [--timeout <ms>] [--model <provider/model>]\n\
+                 \nProbe groups (combine as needed):\n  --connectivity  --config  --certs  --proxy  --auth  --daemon  --runner  --mcp  --hooks  --plugins"
+            );
             return Ok(0);
         }
         Err(error) => return Err(error),
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let report = build_report(options.model.as_deref(), options.live, &cwd).await;
+    let live = options.live || options.categories.contains("network");
+    let mut report = build_report(options.model.as_deref(), live, &cwd).await;
+    let timeout = Duration::from_millis(options.timeout_ms);
+    report.checks.extend([
+        mcp_config_check(&cwd, options.verbose),
+        hooks_config_check(&cwd, options.verbose),
+        plugin_config_check(&cwd, options.verbose),
+        proxy_config_check(options.verbose),
+        certificate_config_check(options.verbose),
+        daemon_check(
+            options.categories.contains("daemon")
+                || std::env::var_os("MAESTRO_DAEMON_URL").is_some(),
+            timeout,
+            options.verbose,
+        )
+        .await,
+        runner_check(
+            options.categories.contains("runner")
+                || std::env::var_os("MAESTRO_RUNNER_HEALTH_URL").is_some()
+                || std::env::var_os("MAESTRO_HOSTED_RUNNER_PID").is_some(),
+            timeout,
+            options.verbose,
+        )
+        .await,
+    ]);
+    if !options.categories.is_empty() {
+        report
+            .checks
+            .retain(|item| options.categories.contains(category_for_check(&item.id)));
+    }
+    report.ok = !report
+        .checks
+        .iter()
+        .any(|item| item.status == CheckStatus::Fail);
+    report.live_requested = report
+        .checks
+        .iter()
+        .any(|item| item.live && item.status != CheckStatus::Skipped);
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -892,6 +1390,12 @@ pub async fn run_doctor(args: &[String]) -> Result<i32> {
             );
             if let Some(detail) = &item.detail {
                 println!("          {detail}");
+            }
+            if let Some(duration_ms) = item.duration_ms {
+                println!("          duration: {duration_ms}ms");
+            }
+            if let Some(remediation) = &item.remediation {
+                println!("          fix: {remediation}");
             }
         }
     }
@@ -986,11 +1490,25 @@ mod tests {
         let args = vec![
             "--json".into(),
             "--live".into(),
+            "--verbose".into(),
+            "--timeout=2500".into(),
+            "--network".into(),
+            "--daemon".into(),
+            "--hooks".into(),
             "--model=openai/gpt-4o".into(),
         ];
         let options = parse_options(&args).expect("options");
-        assert!(options.json && options.live);
+        assert!(options.json && options.live && options.verbose);
+        assert_eq!(options.timeout_ms, 2500);
+        assert_eq!(
+            options.categories,
+            ["network", "daemon", "hooks"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
         assert_eq!(options.model.as_deref(), Some("openai/gpt-4o"));
+        assert!(parse_options(&["--timeout=0".into()]).is_err());
     }
 
     #[tokio::test]
@@ -1003,6 +1521,42 @@ mod tests {
             report.checks.last().map(|check| check.status),
             Some(CheckStatus::Skipped)
         );
+    }
+
+    #[tokio::test]
+    async fn operational_health_probe_reports_latency_and_redacts_credentials() {
+        let (base_url, server) = test_server(200, "ok", Duration::ZERO).await;
+        let url = format!(
+            "http://user:password@{}/healthz?token=secret",
+            base_url.trim_start_matches("http://")
+        );
+        let item = http_health_check(
+            "daemon",
+            &url,
+            Duration::from_secs(1),
+            true,
+            "restart daemon",
+        )
+        .await;
+        assert_eq!(item.status, CheckStatus::Pass);
+        assert!(item.duration_ms.is_some());
+        let serialized = serde_json::to_string(&item).expect("serialize check");
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("secret"));
+        server.await.expect("test server");
+
+        let failed = http_health_check(
+            "daemon",
+            "http://user:password@127.0.0.1:1/healthz?token=secret",
+            Duration::from_millis(50),
+            true,
+            "restart daemon",
+        )
+        .await;
+        assert_eq!(failed.status, CheckStatus::Fail);
+        let serialized = serde_json::to_string(&failed).expect("serialize failed check");
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("secret"));
     }
 
     #[test]

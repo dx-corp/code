@@ -29,8 +29,21 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 SESSION="maestro-tui-smoke-$$"
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/maestro-tui-smoke.XXXXXX")"
+# Invoked by the EXIT trap below.
+# shellcheck disable=SC2329
+cleanup() {
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  rm -rf -- "$SMOKE_HOME"
+}
+trap cleanup EXIT
+
+printf '%s\n' '{"onboardingSeen":true}' > "$SMOKE_HOME/ui.json"
+printf -v QUOTED_SMOKE_HOME '%q' "$SMOKE_HOME"
 tmux new-session -d -s "$SESSION" -x 100 -y 30 -c "$ROOT"
+tmux send-keys -t "$SESSION" "export MAESTRO_HOME=$QUOTED_SMOKE_HOME" Enter
+tmux send-keys -t "$SESSION" "export MAESTRO_TELEMETRY=0" Enter
+tmux send-keys -t "$SESSION" "export MAESTRO_AUTO_UPDATE=0" Enter
 tmux send-keys -t "$SESSION" "export MAESTRO_NO_SESSION=1" Enter
 # Use a dummy key so startup does not block on credential resolution for paint.
 tmux send-keys -t "$SESSION" "export OPENAI_API_KEY=sk-test-smoke" Enter
@@ -40,7 +53,6 @@ PANE="$(tmux capture-pane -t "$SESSION" -p -S -80 || true)"
 if ! printf '%s' "$PANE" | grep -E -q 'Type a message|deixic|◉|gpt-4|approvals:|trust:|sandbox:'; then
   echo "TUI did not paint expected chrome:" >&2
   printf '%s\n' "$PANE" >&2
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
   exit 1
 fi
 tmux send-keys -t "$SESSION" C-c

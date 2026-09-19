@@ -74,7 +74,7 @@ wait-timeout.workspace = true
 
 # Serialization for IPC
 ring.workspace = true
-ed25519-dalek = { version = "2", default-features = false }
+ed25519-dalek = { version = "3", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 prost = "0.14"
@@ -102,7 +102,7 @@ regex.workspace = true
 dirs.workspace = true
 dunce.workspace = true
 fd-lock.workspace = true
-toml = "0.8"
+toml = "0.9"
 libc.workspace = true
 zip.workspace = true
 tempfile.workspace = true
@@ -129,7 +129,7 @@ rand.workspace = true
 url = "2"
 
 # Shell escaping/unescaping
-shlex = "1"
+shlex = "2"
 
 # Base64 encoding for images
 base64.workspace = true
@@ -152,7 +152,7 @@ arboard = { version = "3", optional = true }
 # Lua scripting for hooks (optional)
 # Uses vendored Lua to avoid system dependency
 # "send" feature makes Lua thread-safe (uses Arc instead of Rc)
-mlua = { version = "0.10", features = ["lua54", "serialize", "vendored", "send"], optional = true }
+mlua = { version = "0.12", features = ["lua54", "serialize", "vendored", "send"], optional = true }
 
 # WASM runtime for hook plugins (optional)
 wasmtime = { version = "47", optional = true }
@@ -192,7 +192,7 @@ maestro-session = { workspace = true, features = ["test-support"] }
 # Reconstruct real terminal cells in PTY assertions, including cursor-only spaces.
 vt100 = "0.16.2"
 pretty_assertions = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 wat = "1"
 # Enables `#[tokio::test(start_paused = true)]` for deterministic timeout tests.
 tokio = { workspace = true, features = ["test-util"] }

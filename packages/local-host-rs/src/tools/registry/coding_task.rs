@@ -816,6 +816,7 @@ impl ToolExecutor {
                 let (behavior, behavior_record) =
                     self.collect_coding_validator(state, CodingValidationRole::Behavior)?;
                 let submission = CodingCompletionSubmission {
+                    computer_proof: None,
                     task_id: state.contract.task_id.clone(),
                     work_id: state.work_id.clone(),
                     repository_id: state.contract.repository_id.clone(),

@@ -481,6 +481,30 @@ struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Print the native tool catalog and exit.
+    #[arg(long)]
+    list_tools: bool,
+
+    /// Restrict a print run to these comma- or space-separated tool names.
+    #[arg(long, requires = "print", action = clap::ArgAction::Append)]
+    only_tools: Vec<String>,
+
+    /// Add tools to a print run without widening configured policy ceilings.
+    #[arg(long, requires = "print", action = clap::ArgAction::Append)]
+    add_tools: Vec<String>,
+
+    /// Remove tools from a print run.
+    #[arg(long, requires = "print", action = clap::ArgAction::Append)]
+    remove_tools: Vec<String>,
+
+    /// Attach a name or JSON object to this run; repeatable.
+    #[arg(long, requires = "print", action = clap::ArgAction::Append)]
+    tag: Vec<String>,
+
+    /// Correlate this run with related CI, release, or batch runs.
+    #[arg(long, requires = "print")]
+    log_group_id: Option<String>,
+
     /// Run as native headless protocol server on stdio.
     #[arg(long)]
     headless: bool,
@@ -516,6 +540,12 @@ struct NativeExecOptions {
     prompt_stdin: bool,
     prompt: String,
     plugins: Vec<std::path::PathBuf>,
+    list_tools: bool,
+    only_tools: Vec<String>,
+    add_tools: Vec<String>,
+    remove_tools: Vec<String>,
+    tags: Vec<String>,
+    log_group_id: Option<String>,
 }
 
 fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptions {
@@ -531,6 +561,36 @@ fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptio
             positional_only = true;
         } else if arg == "--json" || arg == "--mode=json" {
             options.json = true;
+        } else if arg == "--list-tools" {
+            options.list_tools = true;
+        } else if matches!(
+            arg.as_ref(),
+            "--only-tools" | "--add-tools" | "--remove-tools" | "--tag" | "--log-group-id"
+        ) {
+            let flag = arg.into_owned();
+            i += 1;
+            let value = raw_args
+                .get(i)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match flag.as_str() {
+                "--only-tools" => options.only_tools.push(value),
+                "--add-tools" => options.add_tools.push(value),
+                "--remove-tools" => options.remove_tools.push(value),
+                "--tag" => options.tags.push(value),
+                "--log-group-id" => options.log_group_id = Some(value),
+                _ => unreachable!(),
+            }
+        } else if let Some(value) = arg.strip_prefix("--only-tools=") {
+            options.only_tools.push(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--add-tools=") {
+            options.add_tools.push(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--remove-tools=") {
+            options.remove_tools.push(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--tag=") {
+            options.tags.push(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--log-group-id=") {
+            options.log_group_id = Some(value.to_string());
         } else if arg == "--mode" {
             i += 1;
             if i < raw_args.len() && raw_args[i] == "json" {
@@ -622,6 +682,57 @@ fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptio
     }
     options.prompt = prompt_parts.join(" ");
     options
+}
+
+fn parse_run_tags(values: &[String]) -> std::result::Result<Vec<serde_json::Value>, String> {
+    if values.len() > 32 {
+        return Err("at most 32 --tag values are allowed".to_owned());
+    }
+    values
+        .iter()
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err("--tag must not be empty".to_owned());
+            }
+            if value.len() > 512 {
+                return Err("--tag values must not exceed 512 bytes".to_owned());
+            }
+            if !value.starts_with('{') {
+                return Ok(serde_json::Value::String(value.to_owned()));
+            }
+            let parsed: serde_json::Value = serde_json::from_str(value)
+                .map_err(|error| format!("invalid --tag JSON: {error}"))?;
+            let name = parsed
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty());
+            if name.is_none() {
+                return Err("structured --tag JSON requires a non-empty `name`".to_owned());
+            }
+            Ok(parsed)
+        })
+        .collect()
+}
+
+fn parse_log_group_id(value: Option<String>) -> std::result::Result<Option<String>, String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .map(|value| {
+            if value.is_empty()
+                || value.len() > 128
+                || !value.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || "-_.:/".contains(character)
+                })
+            {
+                return Err(
+                    "--log-group-id must be 1-128 ASCII letters, digits, or -_.:/".to_owned(),
+                );
+            }
+            Ok(value)
+        })
+        .transpose()
 }
 
 fn native_exec_sandbox_policy(
@@ -813,6 +924,11 @@ pub async fn run_cli(raw_args: Vec<std::ffi::OsString>) -> Result<()> {
                             output_schema: None,
                             sandbox_policy: None,
                             fail_on_approval: false,
+                            only_tools: Vec::new(),
+                            add_tools: Vec::new(),
+                            remove_tools: Vec::new(),
+                            tags: Vec::new(),
+                            log_group_id: None,
                         })
                         .await?;
                     crate::telemetry::flush_first_party_telemetry().await;
@@ -1002,6 +1118,10 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
             // maestro print|exec [--json] [--model X] [--output-last-message P]
             //   [--output-schema S] <prompt...>
             let mut options = parse_native_exec_options(&raw_args[2..]);
+            if options.list_tools {
+                crate::print_mode::print_available_tools(options.json)?;
+                return Ok(0);
+            }
             let env_sandbox = std::env::var("MAESTRO_SANDBOX_MODE").ok();
             let sandbox_value = options.sandbox.as_deref().or(env_sandbox.as_deref());
             let sandbox_policy = match native_exec_sandbox_policy(sandbox_value) {
@@ -1029,10 +1149,24 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
             }
             if options.prompt.is_empty() {
                 eprintln!(
-                    "Usage: deixic-code {cmd} [--json] [--model <id>] [--specialist <name>] [--output-last-message <path>] [--output-schema <path|json>] <prompt>"
+                    "Usage: deixic-code {cmd} [--json] [--model <id>] [--only-tools <names>] [--add-tools <names>] [--remove-tools <names>] [--tag <name|json>] [--log-group-id <id>] <prompt>"
                 );
                 return Ok(2);
             }
+            let tags = match parse_run_tags(&options.tags) {
+                Ok(tags) => tags,
+                Err(message) => {
+                    eprintln!("{message}");
+                    return Ok(2);
+                }
+            };
+            let log_group_id = match parse_log_group_id(options.log_group_id) {
+                Ok(log_group_id) => log_group_id,
+                Err(message) => {
+                    eprintln!("{message}");
+                    return Ok(2);
+                }
+            };
             let model =
                 match native_exec_model(options.provider.as_deref(), options.model.as_deref()) {
                     Ok(model) => model,
@@ -1051,6 +1185,11 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
                 output_schema: options.output_schema,
                 sandbox_policy,
                 fail_on_approval: options.approval_mode.as_deref() == Some("fail"),
+                only_tools: options.only_tools,
+                add_tools: options.add_tools,
+                remove_tools: options.remove_tools,
+                tags,
+                log_group_id,
             })
             .await?;
             return Ok(code);
@@ -1157,6 +1296,11 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
         return Ok(code);
     }
 
+    if args.list_tools {
+        crate::print_mode::print_available_tools(args.json)?;
+        return Ok(0);
+    }
+
     // Non-interactive print mode (single-shot / exec bridge)
     if args.print {
         let prompt = initial_prompt.unwrap_or_default();
@@ -1164,6 +1308,8 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
             eprintln!("--print requires a prompt");
             return Ok(2);
         }
+        let tags = parse_run_tags(&args.tag).map_err(anyhow::Error::msg)?;
+        let log_group_id = parse_log_group_id(args.log_group_id).map_err(anyhow::Error::msg)?;
         let code = crate::print_mode::run_print_mode(crate::print_mode::PrintModeOptions {
             specialist: args.specialist,
             prompt,
@@ -1176,6 +1322,11 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
             output_schema: args.output_schema.clone(),
             sandbox_policy: None,
             fail_on_approval: false,
+            only_tools: args.only_tools,
+            add_tools: args.add_tools,
+            remove_tools: args.remove_tools,
+            tags,
+            log_group_id,
         })
         .await?;
         return Ok(code);
@@ -1557,6 +1708,47 @@ mod tests {
         assert!(args.print);
         assert!(args.json);
         assert_eq!(args.prompt, vec!["hello"]);
+
+        let tools = Args::try_parse_from(["maestro-tui", "--list-tools", "--json"])
+            .expect("parse top-level tool listing");
+        assert!(tools.list_tools);
+        assert!(!tools.print);
+    }
+
+    #[test]
+    fn one_run_tools_and_lineage_are_parsed_without_entering_the_prompt() {
+        let args = [
+            "--only-tools=read,bash",
+            "--add-tools",
+            "write",
+            "--remove-tools=write",
+            "--tag",
+            "reviewed",
+            "--tag={\"name\":\"lane\",\"value\":\"release\"}",
+            "--log-group-id",
+            "deploy:42",
+            "ship",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+        let options = parse_native_exec_options(&args);
+        assert_eq!(options.only_tools, vec!["read,bash"]);
+        assert_eq!(options.add_tools, vec!["write"]);
+        assert_eq!(options.remove_tools, vec!["write"]);
+        assert_eq!(options.tags.len(), 2);
+        assert_eq!(options.log_group_id.as_deref(), Some("deploy:42"));
+        assert_eq!(options.prompt, "ship");
+
+        let tags = parse_run_tags(&options.tags).expect("valid run tags");
+        assert_eq!(tags[0], serde_json::json!("reviewed"));
+        assert_eq!(tags[1]["name"], "lane");
+        assert!(parse_run_tags(&["{\"value\":1}".to_string()]).is_err());
+        assert_eq!(
+            parse_log_group_id(options.log_group_id).unwrap().as_deref(),
+            Some("deploy:42")
+        );
+        assert!(parse_log_group_id(Some("bad group".to_string())).is_err());
     }
 
     #[test]

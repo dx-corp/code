@@ -11,7 +11,7 @@ fn pre_main_hardening() {
     maestro_tui::process_hardening::pre_main_hardening();
 }
 
-const HELP: &str = "Deixic Code\n\nUsage:\n  deixic-code [options] [prompt]\n  deixic-code exec <prompt>\n  deixic-code -w <name> [prompt]\n  deixic-code doctor [--json] [--live] [--model <provider/model>]\n  deixic-code setup [--json] [--live] [--model <provider/model>]\n  deixic-code --headless\n  deixic-code serve [--port <port>]\n  deixic-code hosted-runner [options]\n\nCommon commands:\n  deixic-code setup       Check authentication and show the next setup step\n  deixic-code config      Inspect or change Deixic Code configuration\n  deixic-code experiments Review or change tool experiment participation\n  deixic-code models      List available models and providers\n  deixic-code sessions    List, export, or import saved sessions\n  deixic-code scenario    Run or inspect scripted scenarios\n  deixic-code run         Inspect or replay a saved session\n\nAdvanced commands:\n  deixic-code diagnostics Project compiler JSONL, optionally against a prior observation\n  deixic-code codex       Manage Codex authentication and app-server access\n  deixic-code mcp         Configure MCP servers\n  deixic-code plugins     Inspect and manage plugins\n  deixic-code connections Manage API keys and delegated accounts\n  deixic-code init        Register a Deixic agent integration\n\nCompatibility:\n  maestro remains available as an alias; MAESTRO_* variables and .maestro paths are unchanged.\n\nOptions:\n  -w, --worktree <name>  Run the session in a new git worktree at ../<repo>-wt-<name>\n                         on a new branch; interactive worktrees and branches are kept\n                         exec removes only clean worktrees with no new commits\n\nThe product runtime is native Rust; no Node.js or Bun runtime is required.";
+const HELP: &str = "Deixic Code\n\nUsage:\n  deixic-code [options] [prompt]\n  deixic-code exec <prompt>\n  deixic-code -w <name> [prompt]\n  deixic-code doctor [--json] [--live] [--verbose] [--timeout <ms>] [probe groups]\n  deixic-code setup [--json] [--live] [--model <provider/model>]\n  deixic-code --list-tools [--json]\n  deixic-code --headless\n  deixic-code serve [--port <port>] [--parent-pid <pid> | --liveness-fd <fd>]\n  deixic-code hosted-runner [options]\n\nCommon commands:\n  deixic-code setup       Check authentication and show the next setup step\n  deixic-code config      Inspect or change Deixic Code configuration\n  deixic-code experiments Review or change tool experiment participation\n  deixic-code models      List available models and providers\n  deixic-code sessions    List, export, or import saved sessions\n  deixic-code scenario    Run or inspect scripted scenarios\n  deixic-code run         Inspect or replay a saved session\n\nAdvanced commands:\n  deixic-code diagnostics Project compiler JSONL, optionally against a prior observation\n  deixic-code codex       Manage Codex authentication and app-server access\n  deixic-code mcp         Configure MCP servers\n  deixic-code plugins     Inspect and manage plugins\n  deixic-code connections Manage API keys and delegated accounts\n  deixic-code init        Register a Deixic agent integration\n\nCompatibility:\n  maestro remains available as an alias; MAESTRO_* variables and .maestro paths are unchanged.\n\nOptions:\n  -w, --worktree <name>  Run the session in a new git worktree at ../<repo>-wt-<name>\n                         on a new branch; interactive worktrees and branches are kept\n                         exec removes only clean worktrees with no new commits\n\nThe product runtime is native Rust; no Node.js or Bun runtime is required.";
 const VERSION: &str = concat!("deixic-code ", env!("CARGO_PKG_VERSION"));
 
 fn sync_command_output(command: &Command) -> Option<&'static str> {
@@ -40,9 +40,19 @@ fn main() -> Result<()> {
         .build()?
         .block_on(async move {
             match command {
-                Command::Serve { port } => {
+                Command::Serve {
+                    port,
+                    parent_pid,
+                    liveness_fd,
+                } => {
                     if let Some(port) = port {
                         std::env::set_var("PORT", port.to_string());
+                    }
+                    if let Some(parent_pid) = parent_pid {
+                        std::env::set_var("MAESTRO_PARENT_PID", parent_pid.to_string());
+                    }
+                    if let Some(liveness_fd) = liveness_fd {
+                        std::env::set_var("MAESTRO_LIVENESS_FD", liveness_fd.to_string());
                     }
                     serve(RuntimeGatewayConfig::from_env()).await
                 }

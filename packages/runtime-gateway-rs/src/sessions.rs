@@ -4,6 +4,9 @@ use crate::session_messaging::{message_targets_session, persist_message_store_sn
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct SessionCreateRequest {
     title: Option<String>,
+    tags: Option<Vec<String>>,
+    #[serde(rename = "logGroupId")]
+    log_group_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -12,6 +15,15 @@ pub(super) struct SessionUpdateRequest {
     title: Option<String>,
     favorite: Option<bool>,
     tags: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_log_group_update")]
+    log_group_id: Option<Option<String>>,
+}
+
+fn deserialize_log_group_update<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -40,6 +52,8 @@ pub(super) struct SessionRecord {
     pub(super) favorite: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) log_group_id: Option<String>,
     #[serde(default)]
     pub(super) messages: Vec<Value>,
 }
@@ -103,6 +117,13 @@ pub(super) async fn handle_session_endpoint(
                 }
             };
             let mut session = create_session_record(request.title, auth.subject.clone());
+            session.tags = request.tags.unwrap_or_default();
+            session.log_group_id = match normalize_log_group_id(request.log_group_id) {
+                Ok(log_group_id) => log_group_id,
+                Err(error) => {
+                    return json_response(400, &serde_json::json!({ "error": error }));
+                }
+            };
             bind_session_to_auth(&mut session, &auth);
             let value = session_full_value(&session);
             {
@@ -176,6 +197,18 @@ pub(super) async fn handle_session_endpoint(
                     }
                 }
             };
+            let log_group_update = match request.log_group_id.as_ref() {
+                None => None,
+                Some(None) => Some(None),
+                Some(Some(log_group_id)) => {
+                    match normalize_log_group_id(Some(log_group_id.clone())) {
+                        Ok(log_group_id) => Some(log_group_id),
+                        Err(error) => {
+                            return json_response(400, &serde_json::json!({ "error": error }));
+                        }
+                    }
+                }
+            };
             let mut sessions = state.sessions.lock().await;
             let Some(session) = sessions.sessions.get_mut(session_path.id) else {
                 return json_response(404, &serde_json::json!({ "error": "Session not found" }));
@@ -191,6 +224,9 @@ pub(super) async fn handle_session_endpoint(
             }
             if let Some(tags) = request.tags {
                 session.tags = tags;
+            }
+            if let Some(log_group_id) = log_group_update {
+                session.log_group_id = log_group_id;
             }
             session.updated_at = now_rfc3339();
             let value = session_summary_value(session);
@@ -484,8 +520,25 @@ pub(super) fn create_session_record(title: Option<String>, owner: Option<String>
         message_count: 0,
         favorite: None,
         tags: Vec::new(),
+        log_group_id: None,
         messages: Vec::new(),
     }
+}
+
+fn normalize_log_group_id(value: Option<String>) -> Result<Option<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim().to_owned();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.:/".contains(character))
+    {
+        return Err("logGroupId must be 1-128 ASCII letters, digits, or -_.:/");
+    }
+    Ok(Some(value))
 }
 
 pub(super) fn normalize_title(title: Option<String>) -> Option<String> {
@@ -1824,6 +1877,9 @@ pub(super) fn session_summary_value(session: &SessionRecord) -> Value {
     if !session.tags.is_empty() {
         value["tags"] = serde_json::json!(session.tags);
     }
+    if let Some(log_group_id) = &session.log_group_id {
+        value["logGroupId"] = Value::String(log_group_id.clone());
+    }
     value
 }
 
@@ -1949,5 +2005,35 @@ pub(super) fn pending_tool_response_from_payload(payload: &Value) -> (bool, Opti
         (true, Some(ToolResult::failure(output)))
     } else {
         (true, Some(ToolResult::success(output)))
+    }
+}
+
+#[cfg(test)]
+mod lineage_tests {
+    use super::*;
+
+    #[test]
+    fn log_group_ids_accept_stable_lineage_and_reject_unsafe_values() {
+        let create: SessionCreateRequest =
+            serde_json::from_str(r#"{"tags":["reviewed"],"logGroupId":"release:42"}"#).unwrap();
+        assert_eq!(create.tags, Some(vec!["reviewed".to_string()]));
+        assert_eq!(create.log_group_id.as_deref(), Some("release:42"));
+
+        assert_eq!(
+            normalize_log_group_id(Some(" deploy:release/42 ".to_string()))
+                .unwrap()
+                .as_deref(),
+            Some("deploy:release/42")
+        );
+        assert!(normalize_log_group_id(Some("bad group".to_string())).is_err());
+        assert!(normalize_log_group_id(Some("x".repeat(129))).is_err());
+
+        let absent: SessionUpdateRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(absent.log_group_id, None);
+        let clear: SessionUpdateRequest = serde_json::from_str(r#"{"logGroupId":null}"#).unwrap();
+        assert_eq!(clear.log_group_id, Some(None));
+        let set: SessionUpdateRequest =
+            serde_json::from_str(r#"{"logGroupId":"release:42"}"#).unwrap();
+        assert_eq!(set.log_group_id, Some(Some("release:42".to_string())));
     }
 }

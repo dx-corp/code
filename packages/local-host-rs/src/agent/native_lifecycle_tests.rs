@@ -297,6 +297,44 @@ async fn read_pid(path: &Path) -> i32 {
 }
 
 #[tokio::test]
+async fn hook_management_reads_and_changes_the_live_host() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let client = UnifiedClient::Scripted(ScriptedClient::new(
+        "scripted-replay/maestro-replay-v1",
+        Vec::new(),
+    ));
+    let hooks =
+        IntegratedHookSystem::load_from_config(workspace.path().to_str().expect("utf-8 workspace"));
+    let (agent, _events) =
+        scripted_agent_with_tui_host(scripted_config(workspace.path()), client, hooks)
+            .expect("scripted agent");
+
+    assert!(
+        agent
+            .inspect_hooks()
+            .await
+            .expect("initial snapshot")
+            .enabled
+    );
+    agent.set_hooks_enabled(false).expect("disable hooks");
+    assert!(
+        !agent
+            .inspect_hooks()
+            .await
+            .expect("disabled snapshot")
+            .enabled
+    );
+    agent.set_hooks_enabled(true).expect("enable hooks");
+    let enabled = agent.inspect_hooks().await.expect("enabled snapshot");
+    assert!(enabled.enabled);
+    assert!(
+        enabled.native_hooks >= 1,
+        "the built-in safety hook is live"
+    );
+    agent.shutdown().await;
+}
+
+#[tokio::test]
 async fn buffered_prompt_does_not_run_hooks_or_emit_prompt_events_after_shutdown() {
     let workspace = tempfile::tempdir().expect("workspace");
     let hook_log = workspace.path().join("hooks.log");

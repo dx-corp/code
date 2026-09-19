@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -1505,6 +1505,100 @@ fn run_hooks_import(args: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+pub(crate) fn effective_hooks_snapshot(cwd: &Path) -> Result<serde_json::Value> {
+    let loaded = crate::hooks::load_hook_config(cwd)?;
+    let disabled_by_environment =
+        std::env::var("MAESTRO_HOOKS_DISABLED").ok().as_deref() == Some("1");
+    let hooks = loaded
+        .hooks
+        .iter()
+        .map(|hook| {
+            let implementation = match &hook.source {
+                crate::hooks::HookSource::Command(_) => "command",
+                crate::hooks::HookSource::Http(_) => "http",
+                crate::hooks::HookSource::Prompt(_) => "prompt",
+                crate::hooks::HookSource::LuaInline(_) => "lua_inline",
+                crate::hooks::HookSource::LuaFile(_) => "lua_file",
+                crate::hooks::HookSource::Wasm(_) => "wasm",
+            };
+            serde_json::json!({
+                "event": format!("{:?}", hook.definition.event),
+                "tools": hook.definition.tools,
+                "implementation": implementation,
+                "enabled": hook.definition.enabled && loaded.settings.enabled && !disabled_by_environment,
+                "required": hook.definition.required,
+                "timeoutMs": hook.definition.timeout_ms.unwrap_or(loaded.settings.timeout_ms),
+                "description": hook.definition.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    let count = hooks.len();
+    Ok(serde_json::json!({
+        "schemaVersion": 1,
+        "enabled": loaded.settings.enabled && !disabled_by_environment,
+        "disabledByEnvironment": disabled_by_environment,
+        "sourcePaths": loaded.source_paths,
+        "skippedUntrustedPaths": loaded.skipped_untrusted_paths,
+        "hooks": hooks,
+        "count": count,
+    }))
+}
+
+pub(crate) fn format_effective_hooks(snapshot: &serde_json::Value) -> String {
+    let mut output = String::new();
+    output.push_str("Effective hooks\n");
+    output.push_str(&format!(
+        "State: {}\n",
+        if snapshot["enabled"].as_bool().unwrap_or(false) {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    ));
+    let sources = snapshot["sourcePaths"].as_array().map_or(0, Vec::len);
+    output.push_str(&format!("Sources: {sources}\n"));
+    let hooks = snapshot["hooks"].as_array().cloned().unwrap_or_default();
+    if hooks.is_empty() {
+        output.push_str("Hooks: none\n");
+    } else {
+        output.push_str("Hooks:\n");
+        for hook in hooks {
+            let tools = hook["tools"]
+                .as_array()
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .filter(|tools| !tools.is_empty())
+                .unwrap_or_else(|| "*".to_owned());
+            output.push_str(&format!(
+                "  {:<20} {:<12} tools={} {}\n",
+                hook["event"].as_str().unwrap_or("unknown"),
+                hook["implementation"].as_str().unwrap_or("unknown"),
+                tools,
+                if hook["enabled"].as_bool().unwrap_or(false) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ));
+        }
+    }
+    if let Some(skipped) = snapshot["skippedUntrustedPaths"]
+        .as_array()
+        .filter(|paths| !paths.is_empty())
+    {
+        output.push_str(&format!(
+            "Skipped untrusted hook sources: {}\n",
+            skipped.len()
+        ));
+    }
+    output
+}
+
 fn run_hooks(args: &[String]) -> Result<i32> {
     let sub = args.first().map(String::as_str).unwrap_or("status");
     if sub == "import" {
@@ -1525,45 +1619,14 @@ fn run_hooks(args: &[String]) -> Result<i32> {
         return Ok(1);
     }
 
-    println!(
-        "{}",
-        crate::localization::cli_locale().format("Hook status (native summary)", &[])
-    );
-    println!(
-        "{}",
-        crate::localization::cli_locale().format(
-            "  Runtime:    native TUI hooks (Lua/WASM/native + optional Node bridge)",
-            &[]
-        )
-    );
-    println!("{}", crate::localization::cli_locale().format("  Config:     ~/.maestro/hooks.toml and project hooks (see packages/tui-rs hooks docs)", &[]));
-    if std::env::var("MAESTRO_HOOKS_DISABLED").ok().as_deref() == Some("1") {
-        println!(
-            "{}",
-            crate::localization::cli_locale()
-                .format("  State:      disabled (MAESTRO_HOOKS_DISABLED=1)", &[])
-        );
+    let json = args.iter().any(|arg| arg == "--json");
+    let cwd = std::env::current_dir()?;
+    let snapshot = effective_hooks_snapshot(&cwd)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
     } else {
-        println!(
-            "{}",
-            crate::localization::cli_locale().format("  State:      enabled (default)", &[])
-        );
+        print!("{}", format_effective_hooks(&snapshot));
     }
-    println!();
-    println!(
-        "{}",
-        crate::localization::cli_locale().format(
-            "Inspect hooks from the interactive TUI (/hooks) for live concurrency stats.",
-            &[]
-        )
-    );
-    println!(
-        "{}",
-        crate::localization::cli_locale().format(
-            "Import a Claude Code config with `deixic-code hooks import --from-claude-code`.",
-            &[]
-        )
-    );
     Ok(0)
 }
 

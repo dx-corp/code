@@ -40,7 +40,7 @@
 
 use std::time::Duration;
 
-use rand::Rng as _;
+use rand::RngExt as _;
 
 /// Configuration for retry behavior
 #[derive(Debug, Clone)]

@@ -2670,6 +2670,7 @@ mod tests {
             ..child.clone()
         };
         let submission = CodingCompletionSubmission {
+            computer_proof: None,
             task_id: contract.task_id.clone(),
             work_id: child.work_id.clone(),
             repository_id: contract.repository_id.clone(),

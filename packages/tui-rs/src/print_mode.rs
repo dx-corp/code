@@ -37,6 +37,16 @@ pub struct PrintModeOptions {
     pub sandbox_policy: Option<SandboxPolicy>,
     /// Reject tool calls that would require interactive approval.
     pub fail_on_approval: bool,
+    /// Restrict this run to these tools before applying narrower policy ceilings.
+    pub only_tools: Vec<String>,
+    /// Add tools to the run default without widening an administrator ceiling.
+    pub add_tools: Vec<String>,
+    /// Remove tools from the effective run catalog.
+    pub remove_tools: Vec<String>,
+    /// Searchable run metadata emitted in structured output and telemetry.
+    pub tags: Vec<serde_json::Value>,
+    /// Correlation key for related CI, release, or batch runs.
+    pub log_group_id: Option<String>,
 }
 
 fn approval_denied(
@@ -158,6 +168,97 @@ fn allowed_tools_from_env() -> Result<Option<HashSet<String>>> {
         bail!("MAESTRO_PRINT_ALLOWED_TOOLS must list at least one tool");
     }
     Ok(Some(tools))
+}
+
+fn normalized_tool_names(values: &[String]) -> HashSet<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split([',', ' ']))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn available_tool_names() -> HashSet<String> {
+    crate::tools::ToolRegistry::new()
+        .tools()
+        .map(|definition| definition.tool.name.to_ascii_lowercase())
+        .collect()
+}
+
+fn effective_run_tools(
+    environment_ceiling: Option<HashSet<String>>,
+    only: &[String],
+    add: &[String],
+    remove: &[String],
+) -> Result<Option<HashSet<String>>> {
+    let available = available_tool_names();
+    let only = normalized_tool_names(only);
+    let add = normalized_tool_names(add);
+    let remove = normalized_tool_names(remove);
+    let requested = only
+        .iter()
+        .chain(add.iter())
+        .chain(remove.iter())
+        .filter(|tool| !available.contains(*tool))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !requested.is_empty() {
+        bail!(
+            "Unknown print-run tool(s): {}. Run `deixic-code exec --list-tools`.",
+            requested.join(", ")
+        );
+    }
+
+    let has_cli_selection = !only.is_empty() || !add.is_empty() || !remove.is_empty();
+    if !has_cli_selection {
+        return Ok(environment_ceiling);
+    }
+
+    let ceiling = environment_ceiling.unwrap_or_else(|| available.clone());
+    let mut effective = if only.is_empty() {
+        ceiling.clone()
+    } else {
+        only.intersection(&ceiling).cloned().collect()
+    };
+    // Additions are still bounded by the authoritative environment ceiling.
+    effective.extend(add.intersection(&ceiling).cloned());
+    effective.retain(|tool| !remove.contains(tool));
+    Ok(Some(effective))
+}
+
+pub(crate) fn print_available_tools(json: bool) -> Result<()> {
+    let registry = crate::tools::ToolRegistry::new();
+    let mut tools = registry
+        .tools()
+        .map(|definition| {
+            serde_json::json!({
+                "name": definition.tool.name,
+                "requiresApproval": definition.requires_approval,
+            })
+        })
+        .collect::<Vec<_>>();
+    tools.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"tools": tools}))?
+        );
+    } else {
+        for tool in tools {
+            println!(
+                "{:<28} {}",
+                tool["name"].as_str().unwrap_or_default(),
+                if tool["requiresApproval"].as_bool().unwrap_or(false) {
+                    "approval may be required"
+                } else {
+                    "available"
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn canonical_workspace_path(workspace: &Path, input: &str) -> Result<PathBuf> {
@@ -302,9 +403,13 @@ fn validate_print_local_model(
 
 /// Establish per-run managed request lineage before the first print prompt.
 /// This identity does not claim ownership of a persisted transcript or spills.
-pub(crate) async fn start_print_prompt(agent: &NativeAgent, prompt: String) -> Result<()> {
+pub(crate) async fn start_print_prompt(
+    agent: &NativeAgent,
+    run_id: &str,
+    prompt: String,
+) -> Result<()> {
     agent
-        .set_session_context(Some(uuid::Uuid::new_v4().to_string()), "print", false)
+        .set_session_context(Some(run_id.to_owned()), "print", false)
         .context("Failed to establish print session context")?;
     agent.send_ready();
     agent
@@ -382,6 +487,12 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         crate::local_models::replace_discovered_models(0, &[discovered], Some(&model));
     }
     let mut limits = PrintModeLimits::from_env(&model)?;
+    limits.allowed_tools = effective_run_tools(
+        limits.allowed_tools.take(),
+        &options.only_tools,
+        &options.add_tools,
+        &options.remove_tools,
+    )?;
     if let Some(tools) = specialist.as_ref().and_then(|p| p.tools.as_ref()) {
         limits.allowed_tools = Some(specialist_tool_ceiling(limits.allowed_tools.take(), tools));
     }
@@ -475,7 +586,32 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         None => ToolExecutor::with_credential_vault(&cwd, credential_vault.clone()).unattended(),
     };
 
-    start_print_prompt(&agent, options.prompt).await?;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let mut effective_tools = limits
+        .allowed_tools
+        .as_ref()
+        .map(|tools| tools.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_else(|| available_tool_names().into_iter().collect());
+    effective_tools.sort();
+    if options.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "run_started",
+                "run_id": run_id,
+                "tags": options.tags,
+                "log_group_id": options.log_group_id,
+                "effective_tools": effective_tools,
+            })
+        );
+    }
+    tracing::info!(
+        run_id = %run_id,
+        log_group_id = options.log_group_id.as_deref().unwrap_or(""),
+        tags = %serde_json::Value::Array(options.tags.clone()),
+        "print run started"
+    );
+    start_print_prompt(&agent, &run_id, options.prompt).await?;
 
     let mut exit_code = 0i32;
     let mut assistant_buf = String::new();
@@ -699,6 +835,9 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                     let done = serde_json::json!({
                         "type": "done",
                         "status": "ok",
+                        "run_id": run_id,
+                        "tags": options.tags,
+                        "log_group_id": options.log_group_id,
                     });
                     println!("{done}");
                 }
@@ -839,6 +978,11 @@ pub async fn run_print_prompts(
             },
             sandbox_policy: None,
             fail_on_approval: false,
+            only_tools: Vec::new(),
+            add_tools: Vec::new(),
+            remove_tools: Vec::new(),
+            tags: Vec::new(),
+            log_group_id: None,
         })
         .await?;
         if result != 0 {
@@ -966,6 +1110,22 @@ pub fn resolve_output_path(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn run_tool_selection_cannot_widen_environment_ceiling() {
+        let ceiling = Some(["read".to_string()].into_iter().collect());
+        let effective = super::effective_run_tools(ceiling, &[], &["read,bash".to_string()], &[])
+            .expect("valid tool selection")
+            .expect("explicit selection");
+        assert_eq!(effective, ["read".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn run_tool_selection_rejects_unknown_names() {
+        let error = super::effective_run_tools(None, &["missing-tool-9f64".to_string()], &[], &[])
+            .expect_err("unknown tools must fail closed");
+        assert!(error.to_string().contains("missing-tool-9f64"));
+    }
+
+    #[test]
     fn specialist_tools_only_narrow_the_run_ceiling() {
         let allowed = Some(["read".to_string()].into_iter().collect());
         let narrowed = super::specialist_tool_ceiling(allowed, &["read".into(), "bash".into()]);
@@ -984,6 +1144,11 @@ mod tests {
             output_schema: None,
             sandbox_policy: None,
             fail_on_approval: true,
+            only_tools: Vec::new(),
+            add_tools: Vec::new(),
+            remove_tools: Vec::new(),
+            tags: Vec::new(),
+            log_group_id: None,
         })
         .await;
         assert!(result.unwrap_err().to_string().contains("authorized scope"));
@@ -1117,6 +1282,11 @@ mod tests {
             output_schema: None,
             sandbox_policy: None,
             fail_on_approval: false,
+            only_tools: Vec::new(),
+            add_tools: Vec::new(),
+            remove_tools: Vec::new(),
+            tags: Vec::new(),
+            log_group_id: None,
         };
         assert!(!opts.json);
         assert_eq!(opts.prompt, "hi");

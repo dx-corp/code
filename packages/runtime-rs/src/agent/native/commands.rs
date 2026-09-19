@@ -293,6 +293,22 @@ impl NativeAgentRunner {
                 AgentCommand::SetHookLogFile { path } => {
                     self.hooks.hook_set_log_file(Some(path)).await;
                 }
+                AgentCommand::SetHooksEnabled { enabled } => {
+                    self.hooks.hook_set_enabled(enabled).await;
+                }
+                AgentCommand::ReloadHooks => {
+                    if let Err(error) = self.hooks.hook_reload().await {
+                        let _ = self.event_tx.send(FromAgent::Error {
+                            message: format!("Failed to reload hooks: {error}"),
+                            fatal: false,
+                            terminal: false,
+                            retryable: false,
+                        });
+                    }
+                }
+                AgentCommand::InspectHooks { reply } => {
+                    let _ = reply.send(self.hooks.hook_runtime_snapshot().await);
+                }
                 AgentCommand::SetGoalToolsVisible { visible } => {
                     self.set_goal_tools_visible(visible);
                 }
@@ -1307,6 +1323,22 @@ impl NativeAgentRunner {
                 }
                 AgentCommand::SetHookLogFile { path } => {
                     self.hooks.hook_set_log_file(Some(path)).await;
+                }
+                AgentCommand::SetHooksEnabled { enabled } => {
+                    self.hooks.hook_set_enabled(enabled).await;
+                }
+                AgentCommand::ReloadHooks => {
+                    if let Err(error) = self.hooks.hook_reload().await {
+                        let _ = self.event_tx.send(FromAgent::Error {
+                            message: format!("Failed to reload hooks: {error}"),
+                            fatal: false,
+                            terminal: false,
+                            retryable: false,
+                        });
+                    }
+                }
+                AgentCommand::InspectHooks { reply } => {
+                    let _ = reply.send(self.hooks.hook_runtime_snapshot().await);
                 }
                 AgentCommand::SetGoalToolsVisible { visible } => {
                     self.set_goal_tools_visible(visible);
