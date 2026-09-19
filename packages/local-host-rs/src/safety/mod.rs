@@ -84,11 +84,13 @@ pub use path_containment::{
     PathContainment, has_path_traversal, is_path_contained, is_system_path,
 };
 pub use policy::{
-    ManagedPolicyAuditEvent, ManagedPolicyEnvelope, ManagedPolicyMetadata,
-    ManagedPolicyPublishResult, ManagedPolicyStatus, check_model_allowed, check_path_allowed,
-    check_session_limits, get_policy_limits, managed_policy_audit, managed_policy_metadata,
-    managed_policy_status, publish_managed_policy, record_managed_policy_audit,
-    refresh_managed_policy,
+    DisconnectedAuthority, DisconnectedPolicy, DisconnectedRoute, ManagedPolicyAuditEvent,
+    ManagedPolicyEnvelope, ManagedPolicyMetadata, ManagedPolicyPublishResult, ManagedPolicyStatus,
+    check_model_allowed, check_path_allowed, check_session_limits, disconnected_authority,
+    disconnected_policy, disconnected_route, get_policy_limits, managed_policy_audit,
+    managed_policy_metadata, managed_policy_status, publish_managed_policy,
+    record_managed_policy_audit, refresh_managed_policy, require_vendor_network,
+    vendor_network_disabled,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use safe_mode::PlanModeOverride;

@@ -50,7 +50,7 @@ const IDENTITY_INTROSPECTION_TIMEOUT: std::time::Duration = std::time::Duration:
 /// caller-provided `MAESTRO_EVALOPS_ORG_ID` / workspace values are never
 /// trusted for a user-facing model turn.
 #[derive(Debug, Deserialize)]
-struct IdentityIntrospection {
+pub(crate) struct IdentityIntrospection {
     #[serde(default)]
     active: bool,
     #[serde(default)]
@@ -309,6 +309,34 @@ pub fn require_ready(model: &str) -> Result<DetectedMode> {
     require_ready_with_identity(model).map(|(mode, _identity)| mode)
 }
 
+/// Construct only the signed customer route; shared by native turns and auxiliary model calls.
+pub fn disconnected_client(model: &str) -> Result<Option<crate::ai::UnifiedClient>> {
+    let Some(route) = crate::safety::disconnected_route(model).map_err(anyhow::Error::msg)? else {
+        return Ok(None);
+    };
+    if let Some(reason) = crate::safety::check_model_allowed(model) {
+        anyhow::bail!(reason);
+    }
+    let credential = match route.credential_env {
+        Some(name) => std::env::var(&name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Disconnected route credential {name} is missing"))?,
+        None => String::new(),
+    };
+    anyhow::ensure!(
+        !credential.starts_with("op://"),
+        "Disconnected routes do not execute credential helpers"
+    );
+    let client =
+        crate::ai::UnifiedClient::OpenAI(crate::ai::OpenAiClient::with_disconnected_endpoint(
+            credential,
+            route.endpoint,
+            model.split_once('/').expect("validated model route").0,
+        )?);
+    Ok(Some(client))
+}
+
 /// Resolve a ready provider mode together with the live Identity session that
 /// authorized it, when one exists.
 ///
@@ -321,6 +349,12 @@ pub fn require_ready(model: &str) -> Result<DetectedMode> {
 /// turn to its originating tenant rather than rediscovering whatever account
 /// happens to be active during a later retry.
 pub fn require_ready_with_identity(model: &str) -> Result<(DetectedMode, Option<PlatformSession>)> {
+    if crate::safety::disconnected_route(model)
+        .map_err(anyhow::Error::msg)?
+        .is_some()
+    {
+        return Ok((DetectedMode::Byok, None));
+    }
     let env = std::env::vars().collect::<HashMap<String, String>>();
     if !hosted_runner_mode(&env)
         && crate::local_models::is_local_model_route(model)
@@ -370,6 +404,7 @@ fn ready_mode_from_verified_identity(
 /// service credentials and independently reauthorizes the exact tenant.
 /// Human-only capture and provider admission use their separate typed guards.
 pub fn current_verified_identity_session() -> Result<PlatformSession> {
+    crate::safety::require_vendor_network()?;
     current_verified_identity_session_with_env()
         .map(|(identity, _env)| identity.into_telemetry_session())
 }
@@ -403,6 +438,7 @@ fn current_verified_identity_session_with_env()
 /// Load and verify the current human Identity session for a product-owned
 /// child operation such as Session History ingestion.
 pub(crate) fn verified_current_identity_session() -> Result<PlatformSession> {
+    crate::safety::require_vendor_network()?;
     let env = std::env::vars().collect::<HashMap<String, String>>();
     let snapshot = if platform_session_from(None, &env).is_some() {
         None
@@ -656,8 +692,16 @@ fn verified_runtime_identity(
 }
 
 fn verified_platform_session(
+    session: PlatformSession,
+    introspection: IdentityIntrospection,
+) -> Result<PlatformSession> {
+    verified_platform_session_for_scope(session, introspection, IDENTITY_REQUIRED_SCOPE)
+}
+
+pub(crate) fn verified_platform_session_for_scope(
     mut session: PlatformSession,
     introspection: IdentityIntrospection,
+    required_scope: &str,
 ) -> Result<PlatformSession> {
     let organization_id = introspection
         .organization_id
@@ -674,7 +718,7 @@ fn verified_platform_session(
         .iter()
         .map(String::as_str)
         .chain(introspection.scope.split_whitespace())
-        .any(|scope| scope == IDENTITY_REQUIRED_SCOPE);
+        .any(|scope| scope == required_scope);
     if !introspection.active
         || introspection.subject.trim().is_empty()
         || introspection.token_type != "access"

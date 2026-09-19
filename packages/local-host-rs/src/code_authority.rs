@@ -1,5 +1,6 @@
 //! Code-only live tool authority. Enrollment is global user state; repository
-//! configuration cannot enable it or replace Identity's fixed HTTPS authority.
+//! configuration cannot enable it or replace Identity authority. A protected
+//! signed machine policy can select a customer-operated Identity endpoint.
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -73,7 +74,10 @@ impl CodeToolAuthority {
     }
 
     pub(crate) fn configured() -> Option<Self> {
-        let record = enrollment_path()?;
+        Self::configured_at(enrollment_path()?)
+    }
+
+    pub(crate) fn configured_at(record: PathBuf) -> Option<Self> {
         // Once the file exists, malformed state is an error at execution, not
         // a downgrade to the old approval policy.
         record.exists().then(|| {
@@ -146,6 +150,19 @@ struct Context {
 }
 impl Context {
     fn load() -> Result<Self> {
+        if let Some(customer) = crate::private_code_authority::load()? {
+            return Ok(Self {
+                http: customer.http,
+                base: customer.base,
+                token: customer.session.access_token,
+                organization: customer.session.organization_id,
+                workspace: customer
+                    .session
+                    .workspace_id
+                    .context("Customer authority requires a workspace")?,
+            });
+        }
+        crate::safety::require_vendor_network()?;
         let env: HashMap<String, String> = std::env::vars().collect();
         let snapshot = crate::init_cli::load_evalops_snapshot()?;
         let session = crate::credential_mode::platform_session_from(snapshot.as_ref(), &env)
@@ -167,6 +184,11 @@ impl Context {
         })
     }
     async fn post(&self, path: &str, body: Value) -> Result<reqwest::Response> {
+        crate::private_code_authority::validate_request_target(
+            &self.base,
+            &self.organization,
+            &self.workspace,
+        )?;
         let method = match path {
             "challenge" => "CreateCodeChallenge",
             "enroll" => "EnrollCodeDevice",
@@ -297,7 +319,13 @@ pub async fn enroll() -> Result<i32> {
         );
     }
     let generated = helper(json!({"command":"generate"})).await?;
-    crate::init_cli::perform_code_authority_login().await?;
+    if crate::safety::disconnected_authority()
+        .map_err(anyhow::Error::msg)?
+        .is_none()
+    {
+        crate::safety::require_vendor_network()?;
+        crate::init_cli::perform_code_authority_login().await?;
+    }
     let context = Context::load()?;
     let key = required(&generated, "keyId")?;
     let challenge = context.challenge(key, None).await?;

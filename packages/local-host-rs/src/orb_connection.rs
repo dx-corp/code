@@ -311,6 +311,7 @@ pub fn validate_managed_mcp_connection(connection: &ServiceConnection) -> Result
 /// request. The MCP config is a runtime snapshot, so a revoked/rotated
 /// connection must not keep using the old endpoint or credential reference.
 pub fn validate_hosted_orb_runtime_binding(config: &McpServerConfig) -> Result<()> {
+    crate::safety::require_vendor_network()?;
     if config.scope != McpConfigScope::Managed
         || config.name != HOSTED_ORB_MCP_SERVER_NAME
         || config.transport != McpTransport::Http

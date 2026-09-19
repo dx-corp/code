@@ -12,6 +12,17 @@ pub(crate) struct TurnJournal {
     records: HashMap<String, (PathBuf, Uuid)>,
 }
 
+impl Drop for TurnJournal {
+    fn drop(&mut self) {
+        // A forked child can retain this open file description until exec.
+        // Closing only our descriptor leaves its flock held by that child,
+        // even though this producer has finished. Release the lock explicitly.
+        if let Err(error) = self._lease.unlock() {
+            tracing::warn!(%error, "telemetry producer lease could not be released");
+        }
+    }
+}
+
 impl TurnJournal {
     pub(crate) fn open() -> Option<Self> {
         if first_party_telemetry_disabled() {
@@ -47,8 +58,9 @@ impl TurnJournal {
     /// description into the child. `O_CLOEXEC` closes the child's copy only at
     /// `exec`, so any process this host spawns -- a bash tool, an MCP server,
     /// an LSP, a subagent -- holds every open journal lease for the width of
-    /// its own fork-to-exec window. During that window a dropped producer's
-    /// lease still reports `WouldBlock`, and recovery used to read that as "a
+    /// its own fork-to-exec window. Normal producer Drop explicitly unlocks
+    /// the lease. If a producer exits without running destructors, the child's
+    /// inherited lease still reports `WouldBlock`, and recovery used to read that as "a
     /// live producer owns this journal" and abandon the pending record. A probe
     /// against this API with eight spawning threads lost the record in 245 of
     /// 300 trials. The window is microseconds wide, so re-reading it over a
@@ -286,6 +298,23 @@ mod tests {
             "re-opt-in must not revive revoked records"
         );
         assert!(producer.write(&event).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn producer_drop_releases_lease_even_while_an_inherited_description_remains_open() {
+        let root = tempfile::tempdir().unwrap();
+        let outbox = root.path().join("outbox");
+        let mut producer = TurnJournal::open_at(outbox.clone()).unwrap();
+        let event = super::super::tests::canonical_event(TurnStatus::Success);
+        producer.write(&event).unwrap();
+        // dup and fork preserve the same open file description and flock.
+        // Retain it throughout recovery instead of depending on exec timing.
+        let inherited = producer._lease.try_clone().unwrap();
+        drop(producer);
+        TurnJournal::recover(&outbox, &outbox.join("pending"));
+        assert_eq!(outbox_paths(&outbox).len(), 1);
+        assert!(inherited.metadata().is_ok());
     }
 
     #[test]

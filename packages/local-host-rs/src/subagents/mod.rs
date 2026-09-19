@@ -2223,6 +2223,11 @@ impl SubagentManager {
         .with_details(details)
     }
 
+    /// Runtime-held records use the same byte-preserving path encoding as persisted children.
+    pub(crate) fn coding_validator_working_directory(record: &SubagentRecord) -> PathBuf {
+        deserialize_repository_path(&record.cwd)
+    }
+
     pub(crate) fn coding_validator_record(&self, id: &str) -> Result<SubagentRecord, String> {
         self.coding_validator_receipts
             .lock()

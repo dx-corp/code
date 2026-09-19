@@ -94,6 +94,7 @@ struct HostedOrbSmokeCredential {
 const DEFAULT_SESSION_HISTORY_URL: &str = "https://api.evalops.dev";
 
 pub async fn run_evalops(args: &[String]) -> Result<i32> {
+    crate::safety::require_vendor_network()?;
     match args.first().map(String::as_str) {
         Some("device-revoke") => crate::code_authority::revoke().await,
         Some("device-enroll") => crate::code_authority::enroll().await,

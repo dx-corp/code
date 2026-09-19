@@ -544,6 +544,9 @@ fn load_cache(path: &Path) -> Option<CachedCatalog> {
 /// older than the TTL. No-ops without a tokio runtime. A long-lived process
 /// may refresh again after the TTL; startup paths never block or fail on it.
 fn maybe_spawn_background_refresh() {
+    if crate::safety::vendor_network_disabled() {
+        return;
+    }
     static LAST_REFRESH_STARTED: std::sync::atomic::AtomicU64 =
         std::sync::atomic::AtomicU64::new(0);
 
@@ -577,6 +580,7 @@ fn maybe_spawn_background_refresh() {
 /// atomically replace the cache. On failure only `checked_at` is bumped so
 /// the old data stays in use without hammering the upstream on every start.
 async fn refresh_catalog_cache() -> anyhow::Result<()> {
+    crate::safety::require_vendor_network()?;
     let Some(path) = catalog_cache_path() else {
         return Ok(());
     };

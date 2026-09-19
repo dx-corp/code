@@ -482,6 +482,7 @@ async fn start_resolved_hosted_runner_cli_runtime(
     mut config: HostedRunnerLaunchConfig,
     resolved_env: HashMap<String, String>,
 ) -> Result<HostedRunnerCliRuntime> {
+    crate::safety::require_vendor_network()?;
     let runtime_boundary = config.runtime_boundary()?;
     let launch_spec = config.launch_spec(&resolved_env)?;
     for alias in &config.runner.deprecated_env_aliases {
@@ -578,6 +579,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    crate::safety::require_vendor_network()?;
     let _telemetry = init_hosted_runner_tracing();
     let env = std::env::vars().collect::<HashMap<_, _>>();
     // Register before startup can expose readiness. Constructing an async

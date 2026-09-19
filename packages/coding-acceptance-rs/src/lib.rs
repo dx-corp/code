@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod computer;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -28,6 +30,10 @@ pub struct CodingAcceptanceContract {
     /// Exact handoff item IDs the admitting owner permits to be deferred/dismissed.
     #[serde(default)]
     pub authorized_dispositions: Vec<String>,
+    /// Exact UTF-8 source files whose blob content must differ from the admitted
+    /// baseline (or be newly added). Mode-only changes do not satisfy this option.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_paths: Vec<String>,
 }
 
 impl CodingAcceptanceContract {
@@ -42,6 +48,12 @@ impl CodingAcceptanceContract {
             || self.readiness_requirements.is_empty()
             || !self.require_review
             || !self.require_behavior
+            || self.output_paths.len() > 8
+            || (!self.output_paths.is_empty() && !unique_ids(&self.output_paths))
+            || self
+                .output_paths
+                .iter()
+                .any(|path| !valid_output_path(path))
             || self.generation == 0
             || !unique_ids(&self.required_assertion_ids)
             || !unique_ids(&self.readiness_requirements)
@@ -146,6 +158,26 @@ pub struct CodingCompletionSubmission {
     pub review: Option<CodingValidationReport>,
     pub behavior: Option<CodingValidationReport>,
     pub handoff_items: Vec<CodingHandoffItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<CodingOutputFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodingOutputFile {
+    pub path: String,
+    pub content: String,
+}
+
+pub fn valid_output_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 512
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && path
+            .split('/')
+            .all(|part| !matches!(part, "" | "." | ".." | ".git"))
 }
 
 impl CodingCompletionSubmission {
@@ -210,6 +242,30 @@ pub fn evaluate_coding_acceptance(
             .push("missing coding completion submission".into());
         return decision;
     };
+    let actual: BTreeSet<_> = submission
+        .outputs
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    let expected: BTreeSet<_> = contract.output_paths.iter().map(String::as_str).collect();
+    if actual != expected
+        || actual.len() != submission.outputs.len()
+        || submission
+            .outputs
+            .iter()
+            .any(|file| !valid_output_path(&file.path) || file.content.is_empty())
+        || submission
+            .outputs
+            .iter()
+            .map(|file| file.content.len())
+            .sum::<usize>()
+            > 65_536
+    {
+        decision
+            .reasons
+            .push("coding output manifest mismatch or size exceeded".into());
+    }
+
     if submission.task_id != contract.task_id
         || submission.repository_id != contract.repository_id
         || submission.work_id != scope.work_id
@@ -384,7 +440,13 @@ fn has_evidence(refs: &[String]) -> bool {
 fn digest(value: &impl Serialize) -> String {
     // These concrete types have no map keys or fallible custom serializers.
     let bytes = serde_json::to_vec(value).expect("coding acceptance types serialize");
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    format!(
+        "sha256:{}",
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 #[cfg(test)]
@@ -415,6 +477,7 @@ mod tests {
             readiness_requirements: vec!["test".into()],
             authorized_skips: vec![],
             authorized_dispositions: vec![],
+            output_paths: vec![],
         };
         let assertion = |id: &str| CodingAssertionResult {
             assertion_id: id.into(),
@@ -466,6 +529,7 @@ mod tests {
             review: Some(review),
             behavior: Some(behavior),
             handoff_items: vec![],
+            outputs: vec![],
         };
         (contract, submission, children)
     }
@@ -618,5 +682,47 @@ mod tests {
         let (mut contract, _, _) = fixture();
         contract.readiness_requirements = vec!["unknown-check".into()];
         assert!(contract.validate().is_err());
+    }
+    #[test]
+    fn coding_output_manifest_is_exact_and_bounded() {
+        let (mut contract, mut submission, children) = fixture();
+        contract.output_paths = vec!["sum.py".into()];
+        submission.contract_digest = contract.digest();
+        let scope = CodingAcceptanceScope {
+            organization_id: "org-1",
+            workspace_id: "workspace-1",
+            work_id: "work-1",
+            implementation_session_id: "session-impl",
+        };
+        assert!(
+            evaluate_coding_acceptance(&contract, Some(&submission), &scope, &children)
+                .reasons
+                .iter()
+                .any(|r| r.contains("output manifest"))
+        );
+        submission.outputs = vec![CodingOutputFile {
+            path: "other.py".into(),
+            content: "pass\n".into(),
+        }];
+        assert!(
+            evaluate_coding_acceptance(&contract, Some(&submission), &scope, &children)
+                .reasons
+                .iter()
+                .any(|r| r.contains("output manifest"))
+        );
+        submission.outputs[0].path = "sum.py".into();
+        assert!(
+            !evaluate_coding_acceptance(&contract, Some(&submission), &scope, &children)
+                .reasons
+                .iter()
+                .any(|r| r.contains("output manifest"))
+        );
+        submission.outputs[0].content = "x".repeat(65_537);
+        assert!(
+            evaluate_coding_acceptance(&contract, Some(&submission), &scope, &children)
+                .reasons
+                .iter()
+                .any(|r| r.contains("output manifest"))
+        );
     }
 }

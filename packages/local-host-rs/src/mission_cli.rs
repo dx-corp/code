@@ -2630,6 +2630,7 @@ mod tests {
             readiness_requirements: vec!["test".into()],
             authorized_skips: vec![],
             authorized_dispositions: vec![],
+            output_paths: Vec::new(),
         };
         let review = CodingValidationReport {
             child_id: "review-child".into(),
@@ -2689,6 +2690,7 @@ mod tests {
             review: Some(review),
             behavior: Some(behavior),
             handoff_items: vec![],
+            outputs: Vec::new(),
         };
         let feature = json!({
             "id": contract.task_id,

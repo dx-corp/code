@@ -3637,6 +3637,8 @@ mod tests {
         let tool = BashTool::new(workspace.path().display().to_string());
         let result = tool
             .execute(BashArgs {
+                // Publish the complete PID atomically: file existence must
+                // not race the shell redirection before printf writes bytes.
                 // The detached child records its PID immediately but delays
                 // the workspace mutation for 30s. A 1s delay raced the
                 // assertion path below on loaded CI runners: if the pid-file
@@ -3648,7 +3650,7 @@ mod tests {
                 // process-group assertions below remain the kill-correctness
                 // proof.
                 command: format!(
-                    "setsid sh -c 'printf %s \"$$\" > \"{}\"; sleep 30; printf leaked > \"{}\"' &",
+                    "setsid sh -c 'printf %s \"$$\" > \"{0}.tmp\"; mv -- \"{0}.tmp\" \"{0}\"; sleep 30; printf leaked > \"{1}\"' &",
                     detached_pid_path.display(),
                     sentinel.display()
                 ),

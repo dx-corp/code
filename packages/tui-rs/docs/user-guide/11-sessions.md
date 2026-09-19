@@ -54,7 +54,13 @@ Native helpers also expose `maestro sessions` early-exit subcommands.
 | `/history …` | Prompt history |
 | `/compact` | Compact older context |
 
-Keyboard: `Ctrl+O` opens the session switcher by default.
+Keyboard: `Ctrl+Alt+R` opens the session switcher.
+
+You can also open `/sessions` or `/resume` while startup is still preparing
+cloud access. The list loads in the background, and closing it restores your
+draft. Choosing a saved local-model session does not wait for cloud setup.
+Reading a saved conversation does not authorize managed inference: cloud
+models still require verified access when you use them.
 
 ---
 

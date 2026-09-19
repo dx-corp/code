@@ -69,6 +69,8 @@
 //!
 //! See `CommandArgument` in `types.rs` for argument definition details.
 
+mod session_navigation;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -1494,24 +1496,8 @@ fn build_builtin_registry() -> CommandRegistry {
         .primary(0),
     );
 
-    // Fork session
-    registry.register(
-        Command::new(
-            "fork",
-            maestro_ui::localization::tr("Fork the conversation into a new session branch"),
-            CommandCategory::Session,
-            Box::new(|_| {
-                Ok(CommandOutput::Action(CommandAction::Session(
-                    SessionAction::Fork,
-                )))
-            }),
-        )
-        .localized()
-        .usage("/fork")
-        .primary(2),
-    );
+    session_navigation::register(&mut registry);
 
-    // Rewind turns
     registry.register(
         Command::new(
             "rewind",

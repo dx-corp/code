@@ -1610,6 +1610,7 @@ mod tests {
     #[test]
     fn session_timestamp_falls_back_to_modified() {
         let mut info = SessionInfo {
+            parent_session: None,
             id: "abc".into(),
             path: PathBuf::from("/tmp/s.jsonl"),
             cwd: "/tmp".into(),

@@ -397,6 +397,7 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
     })
 }
 mod attachments;
+mod cancellation;
 mod codex;
 mod commands;
 mod context;
@@ -813,6 +814,10 @@ fn goal_tools_visible_from_execution(execution: &ToolExecution) -> Option<bool> 
 /// This enum is private to the module - external code interacts through
 /// `NativeAgent` methods which create and send these commands.
 enum AgentCommand {
+    /// Acknowledge only from the outer loop, after active-turn cleanup.
+    AwaitIdle {
+        reply: oneshot::Sender<()>,
+    },
     ApplySelectiveSummary {
         messages: Vec<Message>,
         digest: String,
@@ -1702,51 +1707,6 @@ impl NativeAgent {
             })
             .map_err(|e| anyhow::anyhow!("Failed to requeue follow-up: {e}"))?;
         Ok(())
-    }
-
-    /// Cancel the current operation
-    pub fn cancel(&self) {
-        self.cancel_with_options(true);
-    }
-
-    /// Cancel all queued and active work, close the command channel, and wait
-    /// for the background runner to exit.
-    ///
-    /// This is a lifecycle barrier:
-    /// buffered work must be preempted, active tool cleanup must finish, and
-    /// the runner task must return before this future completes. The external
-    /// repeat-signal monitor remains the hard escape hatch if platform cleanup
-    /// itself wedges.
-    pub async fn shutdown(mut self) {
-        self.shutdown_token.cancel();
-        self.cancel_with_options(true);
-        let runner_handle = self.runner_handle.take();
-        drop(self.command_tx);
-        if let Some(runner_handle) = runner_handle {
-            let _ = runner_handle.await;
-        }
-    }
-
-    /// Cancel the current operation but keep any queued prompts.
-    pub fn cancel_keep_queue(&self) {
-        self.cancel_with_options(false);
-    }
-
-    pub fn cancel_queued(&self, id: u64) {
-        let _ = self.command_tx.send(AgentCommand::CancelQueued { id });
-    }
-
-    pub fn reorder_queued(&self, id: u64, placement: QueuePlacement) {
-        let _ = self
-            .command_tx
-            .send(AgentCommand::ReorderQueued { id, placement });
-    }
-
-    fn cancel_with_options(&self, clear_pending: bool) {
-        // Preserve channel order before synchronously waking the runner. The
-        // runner can then drain every prompt queued before this cancellation.
-        let _ = self.command_tx.send(AgentCommand::Cancel { clear_pending });
-        cancel_active_operation(&self.active_cancellation);
     }
 
     /// Clear conversation history

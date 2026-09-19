@@ -345,11 +345,30 @@ impl PtySession {
     /// Fork is a fast-path subcommand and therefore cannot use the regular
     /// interactive flags prepended by [`Self::spawn`].
     fn spawn_with_args(mock: &MockOpenAiServer, workdir: &std::path::Path, args: &[&str]) -> Self {
+        Self::spawn_with_args_and_env(mock, workdir, args, &[])
+    }
+
+    fn spawn_with_args_and_env(
+        mock: &MockOpenAiServer,
+        workdir: &std::path::Path,
+        args: &[&str],
+        extra_env: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_with_size_and_env(mock, workdir, args, extra_env, 120)
+    }
+
+    fn spawn_with_size_and_env(
+        mock: &MockOpenAiServer,
+        workdir: &std::path::Path,
+        args: &[&str],
+        extra_env: &[(&str, &str)],
+        columns: u16,
+    ) -> Self {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
                 rows: 36,
-                cols: 120,
+                cols: columns,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -400,6 +419,9 @@ impl PtySession {
             "MAESTRO_PROMPT_HISTORY_FILE",
             workdir.join("prompt-history.json"),
         );
+        for (name, value) in extra_env {
+            command.env(name, value);
+        }
 
         let child = pair
             .slave
@@ -407,7 +429,7 @@ impl PtySession {
             .expect("spawn maestro-tui");
         drop(pair.slave);
 
-        let output = Arc::new(Mutex::new(TerminalCapture::new(36, 120)));
+        let output = Arc::new(Mutex::new(TerminalCapture::new(36, columns)));
         let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
         let writer = Arc::new(Mutex::new(
             pair.master.take_writer().expect("take PTY writer") as Box<dyn Write + Send>,
@@ -714,6 +736,332 @@ fn write_fork_fixture(workdir: &std::path::Path, session_id: &str) -> std::path:
     path
 }
 
+fn wait_continuity_frame(session: &PtySession, needle: &str) {
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    loop {
+        let frame = session
+            .output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .current_text();
+        if frame.contains(needle) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "current terminal frame never contained {needle:?}: {frame}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn send_continuity_bytes_until(session: &mut PtySession, bytes: &[u8], needle: &str) {
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    loop {
+        session.send_bytes(bytes);
+        let retry = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < retry {
+            if session
+                .output
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .current_text()
+                .contains(needle)
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            Instant::now() < deadline,
+            "current terminal frame never contained {needle:?}: {}",
+            session.screen_text()
+        );
+    }
+}
+
+fn save_continuity_frame(session: &PtySession, name: &str) {
+    if let Some(dir) = std::env::var_os("MAESTRO_PTY_EVIDENCE_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let frame = session
+            .output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        std::fs::write(dir.join(format!("{name}.txt")), frame.current_text()).unwrap();
+        std::fs::write(dir.join(format!("{name}.ansi")), frame.current_formatted()).unwrap();
+    }
+}
+
+fn submit_continuity_prompt(session: &mut PtySession, prompt: &str, result: &str) {
+    let input = format!("\x15{prompt}");
+    send_continuity_bytes_until(session, input.as_bytes(), &format!("> {prompt}"));
+    send_continuity_bytes_until(session, b"\r", result);
+}
+
+fn close_continuity_dialog(session: &mut PtySession, key: &[u8], title: &str) {
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    loop {
+        session.send_bytes(key);
+        let retry = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < retry {
+            if !session
+                .output
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .current_text()
+                .contains(title)
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(Instant::now() < deadline, "dialog {title:?} did not close");
+    }
+}
+
+fn approve_continuity_sleep(session: &mut PtySession) -> Vec<u32> {
+    session.wait_for_text("Action Approval Required", READY_TIMEOUT);
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    while !session.has_running_tool("sleep 6") {
+        session.send_bytes(b"y");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(Instant::now() < deadline, "sleep tool never started");
+    }
+    let table = process_table();
+    let root = session.child.process_id().unwrap();
+    let processes: Vec<_> = table
+        .iter()
+        .filter(|(pid, _, args)| args.contains("sleep 6") && is_descendant(&table, *pid, root))
+        .map(|(pid, _, _)| *pid)
+        .collect();
+    assert!(!processes.is_empty(), "capture the running tool processes");
+    session.send_bytes(b"\x15");
+    processes
+}
+
+fn assert_continuity_processes_stopped(processes: &[u32]) {
+    for &pid in processes {
+        // SAFETY: signal zero only probes existence; it cannot signal any process.
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        let error = std::io::Error::last_os_error();
+        assert!(
+            result == -1 && error.raw_os_error() == Some(libc::ESRCH),
+            "tool process {pid} must be gone before switching, including after reparenting"
+        );
+    }
+}
+
+#[test]
+fn pty_session_content_search_and_persisted_fork_navigation_preserve_draft() {
+    let _serial = PTY_TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for columns in [40, 120] {
+        let mock = MockOpenAiServer::start(vec![]);
+        let workdir = tempfile::tempdir().unwrap();
+        write_fork_fixture(workdir.path(), "search-parent");
+        let path = write_fork_fixture(workdir.path(), "search-child");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut lines = text.lines();
+        let mut header: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        header["parentSession"] = "search-parent".into();
+        let tool = serde_json::json!({"type":"message","timestamp":"2026-07-29T00:00:02Z","message":{"role":"toolResult","toolCallId":"tool-search","toolName":"bash","content":"TOOL_CONTENT_ONLY_NEEDLE","isError":false,"timestamp":2}});
+        std::fs::write(
+            &path,
+            format!(
+                "{header}\n{}\n{tool}\n",
+                lines.collect::<Vec<_>>().join("\n")
+            ),
+        )
+        .unwrap();
+        let mut session = PtySession::spawn_with_size_and_env(
+            &mock,
+            workdir.path(),
+            &["--model", "gpt-4o", "--api-key", "pty-e2e-key"],
+            &[],
+            columns,
+        );
+        session.wait_for_text("Mode: Act", READY_TIMEOUT);
+        session.send_bytes("draft é stays".as_bytes());
+        session.wait_for_text("draft é stays", TURN_TIMEOUT);
+        send_continuity_bytes_until(&mut session, b"\x1b\x12", "Sessions (2)");
+        session.send_bytes(b"TOOL_CONTENT_ONLY_NEEDLE");
+        session.wait_for_text("Sessions (1/2)", TURN_TIMEOUT);
+        let visible = session
+            .output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .current_text();
+        assert!(
+            visible.contains("Enter") && visible.contains("Esc") && visible.contains("Ctrl+F"),
+            "selection, cancellation, and branch controls must remain visible: {visible}"
+        );
+        save_continuity_frame(&session, &format!("content-search-{columns}"));
+        session.send_bytes(b"\r");
+        wait_continuity_frame(&session, "› You");
+        session.wait_for_text("PTY_FORK_SOURCE_READY", TURN_TIMEOUT);
+        assert_eq!(
+            mock.request_count(),
+            0,
+            "search and resume must not submit a model prompt"
+        );
+        session.wait_for_text("draft é stays", TURN_TIMEOUT);
+        send_continuity_bytes_until(&mut session, b"\x1b\x12", "Sessions (2)");
+        send_continuity_bytes_until(&mut session, b"\x06", "Session branches (2)");
+        save_continuity_frame(&session, &format!("fork-tree-{columns}"));
+        close_continuity_dialog(&mut session, b"\x1b", "Session branches");
+        submit_continuity_prompt(&mut session, "/fork", "Resume fork:");
+        save_continuity_frame(&session, &format!("fork-resume-{columns}"));
+        let forks: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let text = std::fs::read_to_string(entry.path()).ok()?;
+                let header: serde_json::Value = serde_json::from_str(text.lines().next()?).ok()?;
+                (header["parentSession"] == "search-child")
+                    .then(|| header["id"].as_str().unwrap().to_owned())
+            })
+            .collect();
+        assert_eq!(forks.len(), 1);
+        let mut resumed =
+            PtySession::spawn_with_args(&mock, workdir.path(), &["--resume-session", &forks[0]]);
+        resumed.wait_for_text("PTY_FORK_SOURCE_READY", READY_TIMEOUT);
+        assert_eq!(mock.request_count(), 0);
+        resumed.shutdown();
+        session.shutdown();
+    }
+}
+
+#[test]
+fn pty_confirmed_new_session_stops_tool_and_excludes_parent_history() {
+    let _serial = PTY_TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for columns in [40, 120] {
+        let mock = MockOpenAiServer::start(vec![
+            tool_call_turn("bash", &serde_json::json!({"command":"sleep 600"})),
+            text_turn("NEW_SESSION_READY"),
+        ]);
+        let workdir = tempfile::tempdir().unwrap();
+        let mut session = PtySession::spawn_with_size_and_env(
+            &mock,
+            workdir.path(),
+            &[
+                "--model",
+                "gpt-4o",
+                "--api-key",
+                "pty-e2e-key",
+                "PARENT_LONG_TOOL_PROMPT",
+            ],
+            &[],
+            columns,
+        );
+        let processes = approve_continuity_sleep(&mut session);
+        submit_continuity_prompt(&mut session, "/fork", "Resume fork:");
+        assert!(
+            session.has_running_tool("sleep 6"),
+            "fork must leave the parent running"
+        );
+        assert_eq!(mock.request_count(), 1, "fork must not submit a prompt");
+        save_continuity_frame(&session, &format!("busy-fork-{columns}"));
+        submit_continuity_prompt(&mut session, "/new", "Change conversation");
+        save_continuity_frame(&session, &format!("new-confirm-{columns}"));
+        let visible = session
+            .output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .current_text();
+        assert!(
+            visible.contains("Enter:") && visible.contains("Esc:"),
+            "confirmation controls must fit narrow terminals: {visible}"
+        );
+        close_continuity_dialog(&mut session, b"\x1b", "Change conversation");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            session.has_running_tool("sleep 6"),
+            "dismissal must leave the tool running"
+        );
+        submit_continuity_prompt(&mut session, "/new", "Change conversation");
+        session.send_bytes_until(b"\r", "New session started.", TURN_TIMEOUT);
+        assert!(
+            !session.has_running_tool("sleep 6"),
+            "switching must await process cleanup"
+        );
+        assert_continuity_processes_stopped(&processes);
+        submit_continuity_prompt(&mut session, "CHILD_NEW_PROMPT", "NEW_SESSION_READY");
+        let requests = mock.state.lock().unwrap_or_else(|error| error.into_inner());
+        assert_eq!(requests.requests.len(), 2);
+        assert!(!requests.requests[1].contains("PARENT_LONG_TOOL_PROMPT"));
+        assert!(!requests.requests[1].contains("sleep 600"));
+        drop(requests);
+        save_continuity_frame(&session, &format!("new-completed-{columns}"));
+        session.shutdown();
+    }
+}
+
+#[test]
+fn pty_confirmed_rewind_preserves_earlier_turn_and_persists_child_lineage() {
+    let _serial = PTY_TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mock = MockOpenAiServer::start(vec![
+        text_turn("EARLIER_REPLY_KEEP"),
+        tool_call_turn("bash", &serde_json::json!({"command":"sleep 600"})),
+        text_turn("REWIND_CHILD_READY"),
+    ]);
+    let workdir = tempfile::tempdir().unwrap();
+    let mut session = PtySession::spawn(&mock, workdir.path(), "EARLIER_PROMPT_KEEP");
+    session.wait_for_text("EARLIER_REPLY_KEEP", READY_TIMEOUT);
+    submit_continuity_prompt(
+        &mut session,
+        "REWIND_RUNNING_PROMPT_DROP",
+        "Action Approval Required",
+    );
+    let processes = approve_continuity_sleep(&mut session);
+    submit_continuity_prompt(&mut session, "/rewind 1", "Change conversation");
+    save_continuity_frame(&session, "rewind-confirm-120");
+    close_continuity_dialog(&mut session, b"\r", "Change conversation");
+    wait_continuity_frame(&session, "EARLIER_REPLY_KEEP");
+    assert!(!session.has_running_tool("sleep 6"));
+    assert_continuity_processes_stopped(&processes);
+    submit_continuity_prompt(&mut session, "REWIND_NEW_PROMPT", "REWIND_CHILD_READY");
+    let requests = mock.state.lock().unwrap_or_else(|error| error.into_inner());
+    assert_eq!(requests.requests.len(), 3);
+    assert!(requests.requests[2].contains("EARLIER_PROMPT_KEEP"));
+    assert!(requests.requests[2].contains("EARLIER_REPLY_KEEP"));
+    assert!(!requests.requests[2].contains("REWIND_RUNNING_PROMPT_DROP"));
+    drop(requests);
+    session.shutdown();
+    let root = workdir.path().join(".composer/agent/sessions");
+    let headers: Vec<serde_json::Value> = std::fs::read_dir(root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .flat_map(|entry| std::fs::read_dir(entry.path()).unwrap())
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .map(|entry| {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            serde_json::from_str(text.lines().next().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(headers.len(), 2);
+    let child = headers
+        .iter()
+        .find(|header| header["parentSession"].is_string())
+        .unwrap();
+    assert!(
+        headers
+            .iter()
+            .any(|parent| parent["id"] == child["parentSession"])
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Scenarios
 // ─────────────────────────────────────────────────────────────────────────────
@@ -754,7 +1102,7 @@ fn pty_startup_composer_edits_before_managed_setup_finishes() {
     let started = Instant::now();
     let mut session =
         PtySession::spawn_with_args(&mock, workdir.path(), &["--model", "openai/gpt-4o"]);
-    session.wait_for_text("You can type while setup finishes", Duration::from_secs(5));
+    session.wait_for_text("Starting…", Duration::from_secs(5));
     let first_frame = started.elapsed();
     session.send_bytes(b"startup draft survives");
     session.wait_for_text("startup draft survives", Duration::from_secs(2));
@@ -801,6 +1149,171 @@ fn pty_local_model_loads_when_identity_is_unreachable() {
         "opening a local shell must not call a model gateway"
     );
     eprintln!("offline local shell ready in {:?}", started.elapsed());
+    session.shutdown();
+}
+
+/// A cloud-default launch must expose the real model picker before managed
+/// setup completes. Selecting a discovered local route abandons the stale
+/// cloud preparation and opens the full local shell without releasing it.
+#[test]
+fn pty_cloud_startup_can_switch_to_discovered_local_model_before_identity() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (provider, base_url_env) in [
+        ("ollama", "OLLAMA_BASE_URL"),
+        ("lmstudio", "LM_STUDIO_BASE_URL"),
+        ("llamacpp", "LLAMA_CPP_BASE_URL"),
+    ] {
+        let (release, gate) = std::sync::mpsc::channel();
+        let mut mock = MockOpenAiServer::start(vec![text_turn("LOCAL_DRAFT_ACCEPTED")]);
+        mock.managed_setup_base_url = start_mock_managed_setup_server_with_gate(Some(gate));
+        let workdir = tempfile::tempdir().expect("temp workdir");
+        let mut session = PtySession::spawn_with_args_and_env(
+            &mock,
+            workdir.path(),
+            &["--model", "openai/gpt-4o"],
+            &[(base_url_env, mock.base_url.as_str())],
+        );
+        session.wait_for_text("local models available", Duration::from_secs(5));
+        session.send_bytes("draft é survives".as_bytes());
+        session.wait_for_text("draft é survives", Duration::from_secs(2));
+        session.send_bytes(b"\x10"); // configured default Ctrl+P
+        session.wait_for_text("Select Model", Duration::from_secs(2));
+        // A provider search also matches catalog recommendations. Select the
+        // exact discovered route so the assertion exercises this mock runtime.
+        session.send_bytes(format!("{provider}/gpt-4o").as_bytes());
+        session.wait_for_text(&format!("gpt-4o ({provider})"), Duration::from_secs(2));
+        session.send_bytes(b"\r");
+        session.wait_for_text("gpt-4o · Local", Duration::from_secs(5));
+        session.wait_for_text("draft é survives", Duration::from_secs(2));
+        assert_eq!(
+            mock.request_count(),
+            0,
+            "choosing a route must not submit the draft"
+        );
+        session.send_bytes_until(b"\r", "LOCAL_DRAFT_ACCEPTED", TURN_TIMEOUT);
+        assert_eq!(mock.request_count(), 1, "local draft submits exactly once");
+        release.send(()).unwrap();
+        session.shutdown();
+    }
+}
+
+/// Passive MCP initialization must wait for cloud or local agent admission.
+#[test]
+fn pty_cloud_without_admission_does_not_initialize_configured_mcp() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mock = MockOpenAiServer::start(Vec::new());
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let config = workdir.path().join("mcp.json");
+    std::fs::write(
+        &config,
+        serde_json::json!({
+            "mcpServers": {
+                "pre-admission-probe": {"url": format!("{}/mcp", mock.base_url), "timeout": 500}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut session = PtySession::spawn_with_args_and_env(
+        &mock,
+        workdir.path(),
+        &["--model", "openai/gpt-4o"],
+        &[
+            ("OPENAI_API_KEY", ""),
+            (maestro_tui::credential_mode::ACCESS_TOKEN_ENV, ""),
+            (maestro_tui::credential_mode::ORG_ID_ENV, ""),
+            (maestro_tui::credential_mode::WORKSPACE_ID_ENV, ""),
+            ("MAESTRO_USER_MCP_PATH", config.to_str().unwrap()),
+            ("OLLAMA_BASE_URL", "http://127.0.0.1:9"),
+            ("LM_STUDIO_BASE_URL", "http://127.0.0.1:9/v1"),
+            ("LLAMA_CPP_BASE_URL", "http://127.0.0.1:9/v1"),
+        ],
+    );
+    // The denied returning-user shell can suppress the setup error text;
+    // wait for its composer rather than a label in the dismissed walkthrough.
+    session.wait_for_text("> ", Duration::from_secs(5));
+    session.send_bytes("offline draft é stays".as_bytes());
+    session.wait_for_text("offline draft é stays", Duration::from_secs(2));
+    assert!(!session.screen_text().contains("Guided setup"));
+    session.send_bytes(b"\x0b"); // Ctrl+K, keeping the composer intact
+    session.wait_for_text("Search commands, files, sessions", Duration::from_secs(2));
+    session.send_bytes(b">model");
+    session.wait_for_text("/model", Duration::from_secs(2));
+    session.send_bytes(b"\r");
+    session.wait_for_text("Model and effort", Duration::from_secs(2));
+    session.send_bytes(b"\r");
+    session.wait_for_text("Select Model", Duration::from_secs(2));
+    session.send_bytes(b"\x1b");
+    session.wait_for_text("offline draft é stays", Duration::from_secs(2));
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(
+        mock.request_count(),
+        0,
+        "passive MCP initialization must wait for admission"
+    );
+    session.shutdown();
+}
+
+/// Browsing local history must remain possible while cloud setup is held.
+#[test]
+fn pty_startup_history_preserves_draft_and_stays_open_after_preparation() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut mock = MockOpenAiServer::start(Vec::new());
+    mock.managed_setup_base_url = start_mock_managed_setup_server_with_gate(Some(gate));
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let mut session =
+        PtySession::spawn_with_args(&mock, workdir.path(), &["--model", "openai/gpt-4o"]);
+    session.wait_for_text("Starting…", Duration::from_secs(5));
+    session.send_bytes(b"retained history draft");
+    session.wait_for_text("retained history draft", Duration::from_secs(2));
+    session.send_bytes(b"\x1b\x12"); // Ctrl+Alt+R, matching the normal shell
+    session.wait_for_text("Sessions (", Duration::from_secs(2));
+    release.send(()).unwrap();
+    session.send_bytes(b"nonexistent history");
+    session.wait_for_text("No matching sessions", Duration::from_secs(2));
+    assert!(session.screen_text().contains("Sessions ("));
+    session.send_bytes(b"\x1b");
+    session.wait_for_text("retained history draft", Duration::from_secs(5));
+    assert_eq!(mock.request_count(), 0);
+    session.shutdown();
+}
+
+#[test]
+fn pty_startup_resumes_local_history_without_cloud_preparation() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut mock = MockOpenAiServer::start(vec![text_turn("RESUMED_LOCAL_DRAFT")]);
+    mock.managed_setup_base_url = start_mock_managed_setup_server_with_gate(Some(gate));
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let path = write_fork_fixture(workdir.path(), "airplane-history");
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let mut lines = contents.lines();
+    let mut header: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    header["model"] = serde_json::json!("ollama/gpt-4o");
+    std::fs::write(
+        &path,
+        format!("{header}\n{}\n", lines.collect::<Vec<_>>().join("\n")),
+    )
+    .unwrap();
+    let mut session = PtySession::spawn_with_args_and_env(
+        &mock,
+        workdir.path(),
+        &["--model", "openai/gpt-4o"],
+        &[("OLLAMA_BASE_URL", mock.base_url.as_str())],
+    );
+    session.wait_for_text("Starting…", Duration::from_secs(5));
+    session.send_bytes(b"resume draft");
+    session.wait_for_text("resume draft", Duration::from_secs(2));
+    session.send_bytes(b"\x1b\x12");
+    session.wait_for_text("PTY_FORK_SOURCE_READY", Duration::from_secs(5));
+    session.send_bytes(b"\r");
+    session.wait_for_text("gpt-4o · Local", Duration::from_secs(5));
+    session.wait_for_text("resume draft", Duration::from_secs(2));
+    assert_eq!(mock.request_count(), 0);
+    session.send_bytes_until(b"\r", "RESUMED_LOCAL_DRAFT", TURN_TIMEOUT);
+    assert_eq!(mock.request_count(), 1);
+    release.send(()).unwrap();
     session.shutdown();
 }
 

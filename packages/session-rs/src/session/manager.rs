@@ -326,6 +326,9 @@ pub struct SessionInfo {
     /// Full session ID (typically a UUID).
     pub id: String,
 
+    /// Persisted parent session for fork navigation.
+    pub parent_session: Option<String>,
+
     /// Absolute path to the session JSONL file.
     pub path: PathBuf,
 
@@ -565,6 +568,7 @@ impl SessionManager {
                     Ok((header, stats, meta)) => {
                         let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
                         sessions.push(SessionInfo {
+                            parent_session: header.parent_session,
                             id: header.id,
                             path,
                             cwd: header.cwd,
@@ -1934,25 +1938,6 @@ mod tests {
         assert_eq!(session.id(), "abc123");
     }
 
-    #[test]
-    fn session_info_title() {
-        let info = SessionInfo {
-            id: "abc123".to_string(),
-            path: PathBuf::from("/tmp/test.jsonl"),
-            cwd: "/tmp".to_string(),
-            model: "anthropic/claude-3".to_string(),
-            thinking_level: ThinkingLevel::Medium,
-            timestamp: "2024-01-15T10:30:00Z".to_string(),
-            stats: SessionStats::default(),
-            meta: None,
-            preview: None,
-            modified: None,
-        };
-
-        assert!(info.title().contains("abc123"));
-        assert_eq!(info.short_id(), "abc123");
-    }
-
     // ============================================================
     // Session ID Validation Tests
     // ============================================================
@@ -2036,6 +2021,7 @@ mod tests {
     #[test]
     fn test_session_info_title_with_meta() {
         let info = SessionInfo {
+            parent_session: None,
             id: "abc123".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2064,6 +2050,7 @@ mod tests {
     #[test]
     fn test_session_info_title_from_summary() {
         let info = SessionInfo {
+            parent_session: None,
             id: "abc123".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2093,6 +2080,7 @@ mod tests {
     fn test_session_info_title_truncates_long_summary() {
         let long_summary = "a".repeat(100);
         let info = SessionInfo {
+            parent_session: None,
             id: "abc123".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2123,6 +2111,7 @@ mod tests {
     #[test]
     fn test_session_info_is_favorite() {
         let mut info = SessionInfo {
+            parent_session: None,
             id: "abc123".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2155,6 +2144,7 @@ mod tests {
     #[test]
     fn test_session_info_short_id_truncation() {
         let info = SessionInfo {
+            parent_session: None,
             id: "abcdefghijklmnop".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2174,6 +2164,7 @@ mod tests {
     #[test]
     fn test_session_info_short_id_short_string() {
         let info = SessionInfo {
+            parent_session: None,
             id: "abc".to_string(),
             path: PathBuf::from("/tmp/test.jsonl"),
             cwd: "/tmp".to_string(),
@@ -2455,49 +2446,6 @@ mod tests {
     }
 
     #[test]
-    fn test_session_info_clone() {
-        let info = SessionInfo {
-            id: "test".to_string(),
-            path: PathBuf::from("/test"),
-            cwd: "/cwd".to_string(),
-            model: "model".to_string(),
-            thinking_level: ThinkingLevel::Medium,
-            timestamp: "2024".to_string(),
-            stats: SessionStats::default(),
-            meta: None,
-            preview: None,
-            modified: None,
-        };
-
-        let cloned = info.clone();
-        assert_eq!(cloned.id, info.id);
-        assert_eq!(cloned.cwd, info.cwd);
-    }
-
-    #[test]
-    fn test_session_info_debug() {
-        let info = SessionInfo {
-            id: "test".to_string(),
-            path: PathBuf::from("/test"),
-            cwd: "/cwd".to_string(),
-            model: "model".to_string(),
-            thinking_level: ThinkingLevel::Medium,
-            timestamp: "2024".to_string(),
-            stats: SessionStats::default(),
-            meta: None,
-            preview: None,
-            modified: None,
-        };
-
-        let debug = format!("{:?}", info);
-        assert!(debug.contains("test"));
-    }
-
-    // ============================================================
-    // Prune Sessions Tests
-    // ============================================================
-
-    #[test]
     fn test_prune_sessions_noop_when_zero_limits() {
         let dir = TempDir::new().unwrap();
         create_test_session_file(dir.path(), "abc123");
@@ -2724,6 +2672,7 @@ mod tests {
             auxiliary_cleanup: noop_auxiliary_cleanup,
         };
         let session = SessionInfo {
+            parent_session: None,
             id: id.to_string(),
             path: session_path.clone(),
             cwd: "/tmp".to_string(),
@@ -2986,6 +2935,7 @@ mod tests {
             auxiliary_cleanup: noop_auxiliary_cleanup,
         };
         let session = SessionInfo {
+            parent_session: None,
             id: id.to_string(),
             path: session_path.clone(),
             cwd: "/tmp".to_string(),
@@ -3039,6 +2989,7 @@ mod tests {
             auxiliary_cleanup: noop_auxiliary_cleanup,
         };
         let session = SessionInfo {
+            parent_session: None,
             id: id.to_string(),
             path: session_path,
             cwd: "/tmp".to_string(),
@@ -3103,6 +3054,7 @@ mod tests {
             auxiliary_cleanup: noop_auxiliary_cleanup,
         };
         let victim = SessionInfo {
+            parent_session: None,
             id: "victim".to_string(),
             path: victim_path,
             cwd: "/tmp".to_string(),
@@ -3944,3 +3896,7 @@ mod tests {
         assert!(SessionWriter::open_existing(&child_path).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "manager/info_tests.rs"]
+mod info_tests;

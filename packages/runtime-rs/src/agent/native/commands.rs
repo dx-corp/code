@@ -413,6 +413,10 @@ impl NativeAgentRunner {
                 break;
             };
             match cmd {
+                AgentCommand::AwaitIdle { reply } => {
+                    // Active-turn command draining defers this until cleanup completes.
+                    let _ = reply.send(());
+                }
                 #[cfg(test)]
                 AgentCommand::InspectSession { capture, reply } => {
                     let _ = reply.send(tests::session_scenarios::inspect(&self, capture));

@@ -398,8 +398,13 @@ fn llm_evaluator(model: String) -> EvaluatorFn {
     Arc::new(move |context| {
         let model = model.clone();
         Box::pin(async move {
-            let client = create_client_for_model(&model)
-                .map_err(|error| GuardianError::Llm(error.to_string()))?;
+            let client = match crate::credential_mode::disconnected_client(&model)
+                .map_err(|error| GuardianError::Llm(error.to_string()))?
+            {
+                Some(client) => client,
+                None => create_client_for_model(&model)
+                    .map_err(|error| GuardianError::Llm(error.to_string()))?,
+            };
             let messages = vec![Message {
                 role: Role::User,
                 content: MessageContent::text(context.user_prompt()),

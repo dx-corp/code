@@ -60,6 +60,29 @@ impl OpenAiClient {
         Self::from_base(base, Some(base_url))
     }
 
+    /// Exact administrator-approved route, without proxy or redirect discovery.
+    pub fn with_disconnected_endpoint(
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+        provider: &str,
+    ) -> Result<Self> {
+        let api_key = api_key.into();
+        let endpoint = endpoint.into();
+        let base = openai_base::OpenAiClient::with_disconnected_endpoint(
+            api_key.clone(),
+            endpoint.clone(),
+            provider,
+        )?;
+        Ok(Self {
+            base,
+            kimi_k3: None,
+            api_key,
+            base_url: Some(endpoint),
+            route_provider: Some(provider.to_string()),
+            managed_gateway: false,
+        })
+    }
+
     pub(crate) fn with_route_provider(mut self, provider: &str) -> Self {
         self.base = self.base.with_route_provider(provider);
         let provider = provider.trim();

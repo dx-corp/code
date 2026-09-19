@@ -1168,7 +1168,8 @@ fn first_party_delivery_session() -> Option<FirstPartyDeliverySession> {
 }
 
 fn first_party_telemetry_disabled() -> bool {
-    true_flag("MAESTRO_INTERNAL_TELEMETRY_DISABLED")
+    crate::safety::vendor_network_disabled()
+        || true_flag("MAESTRO_INTERNAL_TELEMETRY_DISABLED")
         || true_flag("EVALOPS_INTERNAL_TELEMETRY_DISABLED")
         || telemetry_flag() == Some(false)
 }
@@ -1352,6 +1353,9 @@ pub fn test_record_visibility_with_session(
 /// only a restriction: collection still requires matching live Identity authority.
 /// An absent origin cannot be filled in by a later login.
 pub fn onboarding_identity_scope() -> Option<TelemetryIdentityScope> {
+    if first_party_telemetry_disabled() {
+        return None;
+    }
     let env = std::env::vars().collect();
     let snapshot = crate::init_cli::load_evalops_snapshot().ok().flatten();
     let session = crate::credential_mode::platform_session_from(snapshot.as_ref(), &env)?;

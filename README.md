@@ -68,12 +68,14 @@ deixic-code serve --port 3000       # HTTP runtime gateway
 deixic-code hosted-runner
 ```
 
-Sign in with `deixic-code evalops login` before starting a model turn.
+Sign in with `deixic-code evalops login` to use managed inference.
 The default model is GLM-5.3 through Deixic's LLM gateway. Your organization
 must have model access enabled; signing in alone does not grant paid inference.
 Provider credentials stay in the gateway. Explicit model settings and
-`--model` continue to select another model, and using your own provider key
-still requires Deixic login.
+`--model` continue to select another model. Direct provider credentials and
+explicit local model routes can run without Deixic login. Administrators can
+install a signed [disconnected profile](docs/disconnected-profile.md) to restrict
+models to customer endpoints and disable vendor connections.
 
 ## Build a local product reference
 

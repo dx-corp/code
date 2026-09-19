@@ -27,7 +27,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_REPO = "evalops/maestro";
+const DEFAULT_REPO = "dx-corp/code";
 const DEFAULT_SYNC_BRANCH = "sync/public-release-mirror";
 
 /**
@@ -75,6 +75,7 @@ export function ghJson(endpoint) {
 	const result = spawnSync("gh", ["api", endpoint], {
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
+		timeout: 30000,
 	});
 	if (result.error) {
 		throw new SyncPrBlindSpotError(`failed to run gh: ${result.error.message}`);
@@ -96,15 +97,16 @@ export function ghJson(endpoint) {
  *
  * The check-runs API returns every run, including superseded re-runs: a
  * cancelled attempt and its successful retry coexist under the same check
- * name (observed on evalops/maestro#1000). Only the latest run per name —
+ * name (observed on evalops/maestro#1000). Only the latest run per producer and name —
  * the one GitHub surfaces on the PR — decides.
  */
 export function classifyCheckRuns(checkRuns) {
 	const latestByName = new Map();
 	for (const run of checkRuns) {
-		const existing = latestByName.get(run.name);
+		const key = `${run.app?.id ?? "unknown"}:${run.name}`;
+		const existing = latestByName.get(key);
 		if (!existing || (run.id ?? 0) > (existing.id ?? 0)) {
-			latestByName.set(run.name, run);
+			latestByName.set(key, run);
 		}
 	}
 	const failing = [];
@@ -124,7 +126,8 @@ export function classifyCheckRuns(checkRuns) {
  * what makes the monitor fail closed.
  */
 export function evaluateSyncPrChecks({ openPrs, checkRuns }) {
-	const pr = Array.isArray(openPrs) ? openPrs[0] : null;
+	if (!Array.isArray(openPrs) || !Array.isArray(checkRuns)) throw new SyncPrBlindSpotError("Malformed sync PR/check data");
+	const pr = openPrs[0];
 	if (!pr) {
 		return { state: "no-open-pr", failing: [] };
 	}
@@ -135,53 +138,66 @@ export function evaluateSyncPrChecks({ openPrs, checkRuns }) {
 	return { state: "failing", pr, failing };
 }
 
+export function readSyncPrHealth(options, fetch = ghJson) {
+	const owner = options.repo.split("/")[0];
+	const openPrs = fetch(`repos/${options.repo}/pulls?state=open&base=${encodeURIComponent(options.base)}&head=${encodeURIComponent(`${owner}:${options.branch}`)}`);
+	if (!Array.isArray(openPrs) || openPrs.length > 1) throw new SyncPrBlindSpotError("Malformed or ambiguous sync PR list");
+	const pr = openPrs[0];
+	if (!pr) return { openPrs, checkRuns: [], failingStatuses: [] };
+	const headSha = pr.head?.sha;
+	if (!/^[0-9a-f]{40}$/u.test(headSha ?? "")) throw new SyncPrBlindSpotError("Sync PR reported no valid head SHA");
+	const checkRuns = [];
+	for (let page = 1; ; page++) {
+		if (page > 100) throw new SyncPrBlindSpotError("Check pagination limit exceeded");
+		const data = fetch(`repos/${options.repo}/commits/${headSha}/check-runs?per_page=100&page=${page}`);
+		if (!Array.isArray(data?.check_runs) || !Number.isInteger(data.total_count) || data.total_count < 0) throw new SyncPrBlindSpotError("Malformed check-runs payload");
+		for (const run of data.check_runs) {
+			if (!run.name || !Number.isInteger(run.id) || !["queued", "in_progress", "completed", "waiting", "pending", "requested"].includes(run.status)) throw new SyncPrBlindSpotError("Malformed check run");
+			if (run.status === "completed" && ![...FAILING_CONCLUSIONS, "success", "neutral", "skipped"].includes(run.conclusion)) throw new SyncPrBlindSpotError("Unknown completed check conclusion");
+		}
+		checkRuns.push(...data.check_runs);
+		if (checkRuns.length === data.total_count) break;
+		if (!data.check_runs.length || checkRuns.length > data.total_count) throw new SyncPrBlindSpotError("Incomplete check-runs pagination");
+	}
+	if (new Set(checkRuns.map(run => run.id)).size !== checkRuns.length) throw new SyncPrBlindSpotError("Duplicate check-run pages");
+	// Combined statuses cover non-Actions producers as well as check runs.
+	const latest = new Map();
+	for (let page = 1; ; page++) {
+		if (page > 100) throw new SyncPrBlindSpotError("Status pagination limit exceeded");
+		const statuses = fetch(`repos/${options.repo}/commits/${headSha}/statuses?per_page=100&page=${page}`);
+		if (!Array.isArray(statuses)) throw new SyncPrBlindSpotError("Malformed commit statuses");
+		for (const status of statuses) {
+			if (!status.context || !Number.isInteger(status.id) || !["success", "pending", "failure", "error"].includes(status.state)) throw new SyncPrBlindSpotError("Malformed commit status");
+			if (!latest.has(status.context) || latest.get(status.context).id < status.id) latest.set(status.context, status);
+		}
+		if (statuses.length < 100) break;
+	}
+	return { openPrs, checkRuns, failingStatuses: [...latest.values()].filter(s => ["failure", "error"].includes(s.state)) };
+}
+
 function main() {
 	const options = parseArgs(process.argv.slice(2));
-	const owner = options.repo.split("/")[0];
-	const openPrs = ghJson(
-		`repos/${options.repo}/pulls?state=open&base=${encodeURIComponent(options.base)}&head=${encodeURIComponent(`${owner}:${options.branch}`)}`,
-	);
-	const pr = Array.isArray(openPrs) ? openPrs[0] : null;
-
-	if (!pr) {
-		console.log(
-			`No open sync PR on ${options.repo} (head ${options.branch}); nothing to watch.`,
-		);
-		return;
-	}
-
-	const headSha = pr.head?.sha;
-	if (typeof headSha !== "string" || headSha.length === 0) {
-		throw new SyncPrBlindSpotError(
-			`sync PR ${options.repo}#${pr.number} reported no head SHA; cannot read its check runs`,
-		);
-	}
-
-	const data = ghJson(
-		`repos/${options.repo}/commits/${headSha}/check-runs?per_page=100`,
-	);
-	const checkRuns = Array.isArray(data?.check_runs) ? data.check_runs : null;
-	if (!checkRuns) {
-		throw new SyncPrBlindSpotError(
-			`check-runs payload for ${options.repo}@${headSha} had no check_runs array`,
-		);
-	}
+	const { openPrs, checkRuns, failingStatuses } = readSyncPrHealth(options);
+	const pr = openPrs[0];
+	if (!pr) { console.log(`No open sync PR on ${options.repo}; nothing to watch.`); return; }
+	const headSha = pr.head.sha;
 
 	const { failing } = evaluateSyncPrChecks({ openPrs, checkRuns });
 	const pending = checkRuns.filter((run) => run.status !== "completed");
 	console.log(
 		`Sync PR ${options.repo}#${pr.number} @ ${headSha}: ${checkRuns.length} check run(s), ${pending.length} still in flight, ${failing.length} failing.`,
 	);
-	if (failing.length === 0) {
+	if (failing.length === 0 && failingStatuses.length === 0) {
 		return;
 	}
+	for (const status of failingStatuses) console.error(`::error::sync PR status "${status.context}" is ${status.state}: ${status.target_url ?? "no url"}`);
 	for (const run of failing) {
 		console.error(
 			`::error::sync PR check "${run.name}" concluded ${run.conclusion}: ${run.html_url ?? "no url"}`,
 		);
 	}
 	console.error(
-		`::error::Open sync PR ${options.repo}#${pr.number} has ${failing.length} failing check run(s). This is the evalops/maestro#998 failure mode: the sync workflow run stays green while the PR it maintains is red. Do not merge the sync PR until these are resolved.`,
+		`::error::Open sync PR ${options.repo}#${pr.number} has ${failing.length} failing check run(s) and ${failingStatuses.length} failing commit status(es). This is the evalops/maestro#998 failure mode: the sync workflow run stays green while the PR it maintains is red. Do not merge the sync PR until these are resolved.`,
 	);
 	process.exitCode = 1;
 }

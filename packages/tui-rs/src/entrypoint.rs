@@ -712,6 +712,8 @@ fn provider_api_key_env(provider: &str) -> &'static str {
 ///   returns an error, return that error from this function; otherwise, unwrap
 ///   the Ok value and continue."
 pub async fn run_cli(raw_args: Vec<std::ffi::OsString>) -> Result<()> {
+    // Machine policy is checked before updates, Identity, configuration or command dispatch.
+    maestro_local_host::safety::disconnected_policy().map_err(anyhow::Error::msg)?;
     // maestro-tui remains a Cargo target for compatibility, but it is not a
     // public product name. Normalize argv[0] before Clap renders help or
     // diagnostics so both binaries expose the same Deixic Code surface.
@@ -738,6 +740,7 @@ pub async fn run_cli(raw_args: Vec<std::ffi::OsString>) -> Result<()> {
         .and_then(|arg| arg.to_str())
         .is_some_and(|arg| arg == "hosted-runner")
     {
+        maestro_local_host::safety::require_vendor_network()?;
         let mut hosted_args = vec![std::ffi::OsString::from("deixic-code hosted-runner")];
         hosted_args.extend(raw_args.into_iter().skip(2));
         run_hosted_runner_cli_from_env(hosted_args).await?;

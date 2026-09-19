@@ -248,6 +248,8 @@ pub struct ModelSelector {
     models: Vec<ModelInfo>,
     /// Latest applied local discovery generation.
     discovery_generation: u64,
+    local_runtimes: Vec<crate::local_models::LocalRuntimeDiscovery>,
+    local_refreshing: bool,
     /// Shared transient query, selection, and scrolling over ordered result rows.
     picker: ActionPicker<ModelRow>,
     /// Product-owned focused/search result ordering.
@@ -280,6 +282,8 @@ impl ModelSelector {
             catalog_models: models.clone(),
             models,
             discovery_generation: 0,
+            local_runtimes: Vec::new(),
+            local_refreshing: true,
             picker: ActionPicker::new(Vec::new())
                 .identified_by(|row: &ModelRow| row.id.as_str())
                 .expect("empty model rows are unique")
@@ -362,6 +366,44 @@ impl ModelSelector {
             base.verification = model.verification.clone();
         }
         true
+    }
+
+    /// Apply model rows and their availability evidence as one generation.
+    pub fn apply_discovery(&mut self, batch: &crate::local_models::LocalDiscoveryBatch) -> bool {
+        if !self.replace_discovered_models(batch.generation, batch.models.clone()) {
+            return false;
+        }
+        self.local_runtimes.clone_from(&batch.runtimes);
+        self.local_refreshing = false;
+        true
+    }
+
+    pub fn mark_local_refreshing(&mut self) {
+        self.local_refreshing = true;
+    }
+
+    fn local_runtime_lines(&self) -> Vec<Line<'static>> {
+        use crate::local_models::LocalRuntimeStatus;
+        use maestro_ui::localization::{format as translated, tr};
+        let mut lines = Vec::new();
+        if self.local_refreshing {
+            lines.push(Line::from(tr("Checking local runtimes…").to_owned()));
+        }
+        for runtime in &self.local_runtimes {
+            let status = match runtime.status {
+                LocalRuntimeStatus::Ready { models } => {
+                    translated("Models detected: {0}", &[models.to_string()])
+                }
+                LocalRuntimeStatus::Empty => tr("No models reported").to_owned(),
+                LocalRuntimeStatus::Unreachable => tr("Not responding").to_owned(),
+                LocalRuntimeStatus::TimedOut => tr("Timed out").to_owned(),
+                LocalRuntimeStatus::HttpError(code) => translated("HTTP {0}", &[code.to_string()]),
+                LocalRuntimeStatus::InvalidEndpoint => tr("Check the runtime URL").to_owned(),
+                LocalRuntimeStatus::InvalidResponse => tr("Invalid model list").to_owned(),
+            };
+            lines.push(Line::from(format!("{} · {}", runtime.display_name, status)));
+        }
+        lines
     }
 
     /// Replace the complete discovered-model snapshot. Older batches are
@@ -766,6 +808,30 @@ impl ModelSelector {
         .theme(theme)
         .render(frame, area);
 
+        // Reserve a small status area without hiding the search or key hints.
+        // At very short heights the picker itself takes priority.
+        let mut lines = self.local_runtime_lines();
+        lines.push(Line::from(vec![
+            Span::styled(maestro_ui::localization::tr("Ctrl+R"), theme.text_style()),
+            Span::raw(" "),
+            Span::raw(maestro_ui::localization::tr("refresh").to_owned()),
+        ]));
+        let status_height = (lines.len() as u16).min(inner.height.saturating_sub(6));
+        let list_area = Rect {
+            height: inner.height.saturating_sub(status_height),
+            ..inner
+        };
+        if status_height > 0 {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(lines).style(theme.muted_style()),
+                Rect::new(
+                    inner.x,
+                    inner.y + list_area.height,
+                    inner.width,
+                    status_height,
+                ),
+            );
+        }
         // Model list
         let canonical_current = self
             .current_model
@@ -780,7 +846,7 @@ impl ModelSelector {
             .count();
         self.picker.render(
             frame,
-            inner,
+            list_area,
             theme,
             PickerOptions {
                 placeholder: maestro_ui::localization::tr("Type to filter models..."),
@@ -910,6 +976,100 @@ fn capability_summary(model: &ModelInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_status_is_visible_at_supported_terminal_widths() {
+        use crate::local_models::{LocalDiscoveryBatch, LocalRuntimeDiscovery, LocalRuntimeStatus};
+        use ratatui::{Terminal, backend::TestBackend};
+        for width in [40, 60, 100] {
+            let mut selector = ModelSelector::with_models(vec![test_model("qwen", "ollama")]);
+            selector.set_current_model(Some("ollama/qwen".to_owned()));
+            let mut batch = LocalDiscoveryBatch {
+                generation: 1,
+                models: Vec::new(),
+                runtimes: vec![
+                    LocalRuntimeDiscovery {
+                        provider: "llamacpp",
+                        display_name: "llama.cpp",
+                        status: LocalRuntimeStatus::Empty,
+                    },
+                    LocalRuntimeDiscovery {
+                        provider: "lmstudio",
+                        display_name: "LM Studio",
+                        status: LocalRuntimeStatus::Unreachable,
+                    },
+                    LocalRuntimeDiscovery {
+                        provider: "ollama",
+                        display_name: "Ollama",
+                        status: LocalRuntimeStatus::Ready { models: 1 },
+                    },
+                ],
+            };
+            selector.apply_discovery(&batch);
+            selector.show();
+            let before = selector.selected_model_id();
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            terminal
+                .draw(|frame| selector.render(frame, frame.area()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("No models reported"), "{width}: {text}");
+            assert!(text.contains("Not responding"), "{width}: {text}");
+            assert!(text.contains("Models detected: 1"), "{width}: {text}");
+            assert_eq!(selector.selected_model_id(), before);
+            assert!(text.contains("Ctrl+R refresh"), "{width}: {text}");
+            batch.generation += 1;
+            batch.runtimes[0].status = LocalRuntimeStatus::HttpError(401);
+            assert!(selector.apply_discovery(&batch));
+            terminal
+                .draw(|frame| selector.render(frame, frame.area()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains("llama.cpp · HTTP 401"), "{width}: {text}");
+        }
+    }
+
+    #[test]
+    fn runtime_status_and_models_reject_stale_batches_together() {
+        use crate::local_models::{LocalDiscoveryBatch, LocalRuntimeDiscovery, LocalRuntimeStatus};
+        let mut selector = ModelSelector::with_models(Vec::new());
+        let mut batch = LocalDiscoveryBatch {
+            generation: 2,
+            models: Vec::new(),
+            runtimes: vec![LocalRuntimeDiscovery {
+                provider: "ollama",
+                display_name: "Ollama",
+                status: LocalRuntimeStatus::Empty,
+            }],
+        };
+        assert!(selector.apply_discovery(&batch));
+        assert!(!selector.local_refreshing);
+        selector.mark_local_refreshing();
+        batch.generation = 1;
+        batch.runtimes[0].status = LocalRuntimeStatus::Unreachable;
+        assert!(!selector.apply_discovery(&batch));
+        assert!(selector.local_refreshing);
+        assert_eq!(selector.local_runtimes[0].status, LocalRuntimeStatus::Empty);
+        batch.generation = 3;
+        assert!(selector.apply_discovery(&batch));
+        assert!(!selector.local_refreshing);
+        assert_eq!(
+            selector.local_runtimes[0].status,
+            LocalRuntimeStatus::Unreachable
+        );
+    }
 
     #[test]
     fn stealth_models_are_hidden_until_consent_and_keep_a_warning_badge() {

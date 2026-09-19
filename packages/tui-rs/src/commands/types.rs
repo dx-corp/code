@@ -546,6 +546,8 @@ pub enum SessionAction {
     New,
     /// Fork current conversation into a new session branch
     Fork,
+    /// Browse and resume persisted forks.
+    BrowseBranches,
     /// Rewind last N user turns (default 1)
     Rewind { turns: usize, dry_run: bool },
     /// Rewind saved conversation and corresponding file changes.

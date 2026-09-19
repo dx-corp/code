@@ -299,7 +299,18 @@ async fn dispatcher_completes_with_actual_terminal_producer_receipts_only_after_
             timeout_ms: 10000,
             max_tokens: 1000,
             isolation: SubagentIsolation::Worktree,
-            cwd: child_root.to_string_lossy().into_owned(),
+            // Production records encode path bytes. Exercise both that wire
+            // representation and legacy plain UTF-8 records through completion.
+            cwd: if name == "behavior" {
+                use std::fmt::Write as _;
+                let mut encoded = String::new();
+                for byte in child_root.to_string_lossy().as_bytes() {
+                    write!(&mut encoded, "{byte:02x}").unwrap();
+                }
+                format!("\0maestro-path-v1:{encoded}")
+            } else {
+                child_root.to_string_lossy().into_owned()
+            },
             worktree_path: Some(child_root.to_string_lossy().into_owned()),
             worktree_cleaned: false,
             initial_files: vec![],
@@ -348,11 +359,15 @@ async fn dispatcher_completes_with_actual_terminal_producer_receipts_only_after_
     assert!(fixture.executor.coding_completion().is_err());
     drop(unavailable);
 
-    let completed = fixture.action(json!({"action":"complete"})).await;
+    let completed = fixture.action(json!({"action":"complete", "outputs":[{"path":"forged.py","content":"model supplied bytes"}]})).await;
     assert!(completed.success, "completion failed: {completed:?}");
     assert_eq!(completed.details.unwrap()["accepted"], true);
     let (_, proof, children) = fixture.executor.coding_completion().unwrap().unwrap();
     assert_eq!(proof.revision, head);
+    assert!(
+        proof.outputs.is_empty(),
+        "model arguments cannot fabricate native captured outputs"
+    );
     assert_eq!(children.len(), 2);
     assert_ne!(children[0].session_id, children[1].session_id);
     let store = MissionStore::load(MISSION, MissionStoreConfig::default()).unwrap();

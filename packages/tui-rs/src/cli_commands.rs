@@ -30,6 +30,21 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
         );
     };
 
+    if matches!(
+        cmd,
+        "doctor"
+            | "setup"
+            | "login"
+            | "evalops"
+            | "openai"
+            | "codex"
+            | "remote"
+            | "computer"
+            | "orb"
+            | "operating-plane"
+    ) {
+        maestro_local_host::safety::require_vendor_network()?;
+    }
     match cmd {
         "sessions" => run_sessions(&args[1..]),
         "search" => crate::search_cli::run_search(&args[1..]),

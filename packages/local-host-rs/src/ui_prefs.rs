@@ -17,7 +17,7 @@ pub struct UiPrefs {
     /// Display locale; unknown future locales fall back without losing other preferences.
     #[serde(default)]
     pub display_language: Option<String>,
-    /// Suppresses the introductory walkthrough only; never proves runtime readiness.
+    /// Suppresses automatic first-run setup; never proves runtime readiness.
     #[serde(default)]
     pub onboarding_seen: bool,
     /// The user's choice for structured onboarding information collection.

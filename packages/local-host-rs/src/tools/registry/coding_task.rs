@@ -10,8 +10,10 @@ use crate::tools::details::BashDetails;
 use maestro_runtime::coding_acceptance::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::fmt::Write as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -33,8 +35,10 @@ pub(super) struct CodingTaskState {
     completed: Option<(CodingCompletionSubmission, Vec<CodingAcceptanceChildRecord>)>,
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+fn git_raw(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -42,7 +46,12 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     if !output.status.success() {
         return Err("Cannot establish coding repository identity".into());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(output.stdout)
+}
+fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&git_raw(cwd, args)?)
+        .trim()
+        .to_owned())
 }
 fn checkout(cwd: &Path) -> Result<(PathBuf, String), String> {
     Ok((
@@ -124,9 +133,288 @@ fn ensure_revision(state: &CodingTaskState) -> Result<(), String> {
     if root != state.root || revision != state.revision {
         return Err("Coding evidence is stale: run coding_task readiness at current HEAD, then rerun validation".into());
     }
-    if !git(
-        &root,
-        &["status", "--porcelain", "--untracked-files=normal"],
+    verify_physical_checkout(&root, &revision)?;
+    Ok(())
+}
+// Authenticate each object against its content address before trusting any links.
+// Git's ordinary object reads do not detect a loose object's contents replaced
+// under an unchanged filename. Replace refs must never rewrite this proof chain.
+fn verified_git_object(
+    root: &Path,
+    kind: &str,
+    oid: &str,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid coding Git object identity".into());
+    }
+    let size: usize = git(root, &["cat-file", "-s", oid])?
+        .parse()
+        .map_err(|_| "Invalid coding Git object size")?;
+    if size > limit {
+        return Err("Coding Git object exceeds verification bound".into());
+    }
+    let bytes = git_raw(root, &["cat-file", kind, oid])?;
+    if bytes.len() != size {
+        return Err("Coding Git object size changed".into());
+    }
+    let mut child = Command::new("git")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .args(["hash-object", "-t", kind, "--stdin"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or("Missing Git hash input")?
+        .write_all(&bytes)
+        .map_err(|e| e.to_string())?;
+    let hash = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !hash.status.success() || hash.stdout != format!("{oid}\n").as_bytes() {
+        return Err("Coding Git object content does not match its identity".into());
+    }
+    Ok(bytes)
+}
+
+fn verified_path_blob(root: &Path, revision: &str, path: &str) -> Result<Option<String>, String> {
+    let commit = verified_git_object(root, "commit", revision, 1_048_576)?;
+    let tree_line = commit
+        .split(|b| *b == b'\n')
+        .next()
+        .ok_or("Missing commit tree")?;
+    let mut tree = std::str::from_utf8(tree_line)
+        .map_err(|_| "Invalid commit tree")?
+        .strip_prefix("tree ")
+        .ok_or("Missing commit tree")?
+        .to_owned();
+    let parts = path.split('/').collect::<Vec<_>>();
+    for (index, part) in parts.iter().enumerate() {
+        let bytes = verified_git_object(root, "tree", &tree, 16_777_216)?;
+        let width = tree.len() / 2;
+        let mut remaining = bytes.as_slice();
+        let mut selected = None;
+        while !remaining.is_empty() {
+            let nul = remaining
+                .iter()
+                .position(|b| *b == 0)
+                .ok_or("Invalid Git tree entry")?;
+            let header = &remaining[..nul];
+            let space = header
+                .iter()
+                .position(|b| *b == b' ')
+                .ok_or("Invalid Git tree mode")?;
+            let raw_id = remaining
+                .get(nul + 1..nul + 1 + width)
+                .ok_or("Invalid Git tree object")?;
+            if &header[space + 1..] == part.as_bytes() {
+                if selected.is_some() {
+                    return Err("Duplicate Git tree path".into());
+                }
+                let mut oid = String::with_capacity(width * 2);
+                for byte in raw_id {
+                    write!(&mut oid, "{byte:02x}").map_err(|_| "Invalid Git object identity")?;
+                }
+                selected = Some((header[..space].to_vec(), oid));
+            }
+            remaining = &remaining[nul + 1 + width..];
+        }
+        let Some((mode, oid)) = selected else {
+            return Ok(None);
+        };
+        if index + 1 == parts.len() {
+            if mode != b"100644" && mode != b"100755" {
+                return Err("Coding output must be a regular Git blob".into());
+            }
+            return Ok(Some(oid));
+        }
+        if mode != b"40000" {
+            return Err("Coding output parent must be a Git tree".into());
+        }
+        tree = oid;
+    }
+    Err("Invalid coding output path".into())
+}
+
+// Validate the physical candidate independently of index stat hints, filters,
+// replace refs and promisor fetches. Bounds apply to the verification operation;
+// the smaller output publication limit is enforced separately.
+fn verify_physical_checkout(root: &Path, revision: &str) -> Result<(), String> {
+    let commit = verified_git_object(root, "commit", revision, 1_048_576)?;
+    let tree = std::str::from_utf8(
+        commit
+            .split(|b| *b == b'\n')
+            .next()
+            .ok_or("Missing commit tree")?,
+    )
+    .map_err(|_| "Invalid commit tree")?
+    .strip_prefix("tree ")
+    .ok_or("Missing commit tree")?;
+    let mut pending = vec![(tree.to_owned(), String::new(), 0usize)];
+    let mut expected = std::collections::BTreeMap::new();
+    let mut directories = std::collections::BTreeSet::from([String::new()]);
+    let mut symlinks = Vec::new();
+    let mut total = 0usize;
+    let mut trees = 0usize;
+    while let Some((tree, prefix, depth)) = pending.pop() {
+        trees += 1;
+        if depth > 256 || trees > 100_000 {
+            return Err("Coding tree verification bound exceeded".into());
+        }
+        let bytes = verified_git_object(root, "tree", &tree, 16_777_216)?;
+        let width = tree.len() / 2;
+        let mut remaining = bytes.as_slice();
+        let mut names = std::collections::BTreeSet::new();
+        while !remaining.is_empty() {
+            let nul = remaining
+                .iter()
+                .position(|b| *b == 0)
+                .ok_or("Invalid Git tree entry")?;
+            let header = &remaining[..nul];
+            let space = header
+                .iter()
+                .position(|b| *b == b' ')
+                .ok_or("Invalid Git tree mode")?;
+            let mode =
+                std::str::from_utf8(&header[..space]).map_err(|_| "Invalid Git tree mode")?;
+            let name = std::str::from_utf8(&header[space + 1..])
+                .map_err(|_| "Coding paths must be UTF-8")?;
+            if name.is_empty()
+                || matches!(name, "." | "..")
+                || name.eq_ignore_ascii_case(".git")
+                || name.contains('/')
+                || name.contains('\\')
+                || !names.insert(name.to_owned())
+            {
+                return Err("Invalid coding tree path".into());
+            }
+            let raw_id = remaining
+                .get(nul + 1..nul + 1 + width)
+                .ok_or("Invalid Git tree object")?;
+            let mut oid = String::with_capacity(width * 2);
+            for byte in raw_id {
+                write!(&mut oid, "{byte:02x}").map_err(|_| "Invalid Git object identity")?;
+            }
+            remaining = &remaining[nul + 1 + width..];
+            let path = if prefix.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let physical = root.join(&path);
+            let metadata = std::fs::symlink_metadata(&physical).map_err(|e| e.to_string())?;
+            match mode {
+                "40000" => {
+                    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                        return Err("Coding tree directory differs physically".into());
+                    }
+                    directories.insert(path.clone());
+                    pending.push((oid, path, depth + 1));
+                }
+                "100644" | "100755" | "120000" => {
+                    let blob = verified_git_object(root, "blob", &oid, 67_108_864)?;
+                    total = total
+                        .checked_add(blob.len())
+                        .ok_or("Coding verification size overflow")?;
+                    if total > 536_870_912 || expected.len() >= 100_000 {
+                        return Err("Coding checkout verification bound exceeded".into());
+                    }
+                    if mode == "120000" {
+                        if !metadata.file_type().is_symlink()
+                            || std::fs::read_link(&physical)
+                                .map_err(|e| e.to_string())?
+                                .as_os_str()
+                                .as_encoded_bytes()
+                                != blob
+                        {
+                            return Err("Coding symlink differs from committed target".into());
+                        }
+                        symlinks.push(physical.clone());
+                    } else {
+                        if !metadata.is_file()
+                            || metadata.file_type().is_symlink()
+                            || metadata.len() != blob.len() as u64
+                            || std::fs::read(&physical).map_err(|e| e.to_string())? != blob
+                        {
+                            return Err(
+                                "Coding tracked physical bytes differ from committed candidate"
+                                    .into(),
+                            );
+                        }
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if (metadata.permissions().mode() & 0o111 != 0) != (mode == "100755") {
+                                return Err("Coding tracked executable mode differs from committed candidate".into());
+                            }
+                        }
+                    }
+                    expected.insert(path, (mode.to_owned(), oid));
+                }
+                "160000" => return Err("Coding acceptance does not support submodules".into()),
+                _ => return Err("Unsupported coding Git tree mode".into()),
+            }
+        }
+    }
+    // A committed link may point only into this authenticated tracked tree.
+    // Dangling, external and ignored-file targets cannot stand in for source.
+    for link in symlinks {
+        let target = dunce::canonicalize(&link).map_err(|e| e.to_string())?;
+        let relative = target
+            .strip_prefix(root)
+            .map_err(|_| "Coding symlink leaves the candidate tree")?
+            .to_str()
+            .ok_or("Coding symlink target must be UTF-8")?;
+        if !expected.contains_key(relative) && !directories.contains(relative) {
+            return Err("Coding symlink target is not tracked source".into());
+        }
+    }
+    let index = git_raw(
+        root,
+        &["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z"],
+    )?;
+    let mut observed = std::collections::BTreeMap::new();
+    for entry in index.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let tab = entry
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or("Invalid coding index")?;
+        let header = std::str::from_utf8(&entry[..tab])
+            .map_err(|_| "Invalid coding index")?
+            .split(' ')
+            .collect::<Vec<_>>();
+        let path =
+            std::str::from_utf8(&entry[tab + 1..]).map_err(|_| "Invalid coding index path")?;
+        if header.len() != 3
+            || header[2] != "0"
+            || observed
+                .insert(
+                    path.to_owned(),
+                    (header[0].to_owned(), header[1].to_owned()),
+                )
+                .is_some()
+        {
+            return Err("Coding index contains unresolved entries".into());
+        }
+    }
+    if observed != expected {
+        return Err("Coding index differs from committed candidate".into());
+    }
+    if !git_raw(
+        root,
+        &[
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
     )?
     .is_empty()
     {
@@ -134,6 +422,56 @@ fn ensure_revision(state: &CodingTaskState) -> Result<(), String> {
     }
     Ok(())
 }
+
+// Capture only authenticated changed regular Git blobs. The complete tool has
+// no content argument; caller/model bytes cannot enter this path.
+fn capture_outputs(state: &CodingTaskState) -> Result<Vec<CodingOutputFile>, String> {
+    let mut outputs = Vec::new();
+    let mut total = 0usize;
+    for path in &state.contract.output_paths {
+        if !valid_output_path(path) {
+            return Err("Invalid coding output path".into());
+        }
+        let oid = verified_path_blob(&state.root, &state.revision, path)?
+            .ok_or("Coding output is absent from the accepted revision")?;
+        let previous = verified_path_blob(&state.root, &state.base_revision, path)?;
+        if previous.as_ref() == Some(&oid) {
+            return Err("Coding output content must differ from the baseline".into());
+        }
+        // The authenticated baseline tree binds its blob ID; no old content is
+        // consumed. Only newly published output bytes carry the 64 KiB bound.
+        let bytes = verified_git_object(&state.root, "blob", &oid, 65_536)?;
+        let mut physical = state.root.clone();
+        for component in path.split('/') {
+            physical.push(component);
+            let metadata = std::fs::symlink_metadata(&physical).map_err(|e| e.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err("Coding output physical path must not traverse symlinks".into());
+            }
+        }
+        let metadata = std::fs::symlink_metadata(&physical).map_err(|e| e.to_string())?;
+        if !metadata.is_file()
+            || metadata.len() != bytes.len() as u64
+            || std::fs::read(&physical).map_err(|e| e.to_string())? != bytes
+        {
+            return Err("Coding output physical bytes differ from the committed blob".into());
+        }
+
+        total = total
+            .checked_add(bytes.len())
+            .ok_or("Coding output size overflow")?;
+        if bytes.is_empty() || total > 65_536 {
+            return Err("Coding outputs exceed the 64 KiB bound or are empty".into());
+        }
+        outputs.push(CodingOutputFile {
+            path: path.clone(),
+            content: String::from_utf8(bytes).map_err(|_| "Coding output must be UTF-8")?,
+        });
+    }
+    ensure_revision(state)?;
+    Ok(outputs)
+}
+
 fn text_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -490,6 +828,7 @@ impl ToolExecutor {
                     review: Some(review),
                     behavior: Some(behavior),
                     handoff_items: state.handoffs.clone(),
+                    outputs: capture_outputs(state)?,
                 };
                 let children = vec![review_record, behavior_record];
                 let decision = evaluate_coding_acceptance(
@@ -669,7 +1008,9 @@ impl ToolExecutor {
                 "Validator profile, original attempt, or assigned revision mismatch".into(),
             );
         }
-        let (child_root, child_head) = checkout(Path::new(&record.cwd))?;
+        let child_directory =
+            crate::tools::subagents::SubagentManager::coding_validator_working_directory(&record);
+        let (child_root, child_head) = checkout(&child_directory)?;
         if child_head != state.revision
             || !git(
                 &child_root,
@@ -882,6 +1223,7 @@ mod tests {
                 readiness_requirements: vec!["test".into()],
                 authorized_skips: vec![],
                 authorized_dispositions: vec![],
+                output_paths: Vec::new(),
             },
             work_id: "work".into(),
             session_id: "implementation".into(),
@@ -898,6 +1240,295 @@ mod tests {
             completed: None,
         }
     }
+    #[test]
+    fn coding_revision_refuses_filters_and_hidden_dependency_edits_before_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        git(&root, &["init", "-q"]).unwrap();
+        std::fs::write(root.join("dependency.py"), "trusted\n").unwrap();
+        std::fs::write(root.join("output.py"), "new\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        let commit = || {
+            git(
+                &root,
+                &[
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+            )
+            .unwrap()
+        };
+        commit();
+        let mut current = state();
+        current.root = root.clone();
+        current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        current.contract.repository_id = root.to_string_lossy().into_owned();
+        assert!(ensure_revision(&current).is_ok());
+        for (set, unset) in [
+            ("--assume-unchanged", "--no-assume-unchanged"),
+            ("--skip-worktree", "--no-skip-worktree"),
+        ] {
+            git(&root, &["update-index", set, "dependency.py"]).unwrap();
+            std::fs::write(root.join("dependency.py"), "forged dependency\n").unwrap();
+            assert!(git(&root, &["status", "--porcelain"]).unwrap().is_empty());
+            assert!(ensure_revision(&current).is_err());
+            std::fs::write(root.join("dependency.py"), "trusted\n").unwrap();
+            git(&root, &["update-index", unset, "dependency.py"]).unwrap();
+        }
+        git(&root, &["config", "core.trustctime", "false"]).unwrap();
+        git(&root, &["config", "core.checkstat", "minimal"]).unwrap();
+        let dependency = root.join("dependency.py");
+        // Avoid Git's racily-clean timestamp window: the cached file time must
+        // precede the refreshed index, even on a fast or heavily loaded runner.
+        let cached_mtime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        std::fs::File::open(&dependency)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(cached_mtime))
+            .unwrap();
+        assert!(git(&root, &["status", "--porcelain"]).unwrap().is_empty());
+        let original_mtime = std::fs::metadata(&dependency).unwrap().modified().unwrap();
+        std::fs::write(&dependency, "forged!\n").unwrap();
+        std::fs::File::open(&dependency)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_mtime))
+            .unwrap();
+        assert!(git(&root, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(ensure_revision(&current).is_err());
+        std::fs::write(&dependency, "trusted\n").unwrap();
+        assert!(ensure_revision(&current).is_ok());
+        #[cfg(unix)]
+        {
+            let link = root.join("tracked-link");
+            std::os::unix::fs::symlink("dependency.py", &link).unwrap();
+            git(&root, &["add", "tracked-link"]).unwrap();
+            commit();
+            current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+            assert!(ensure_revision(&current).is_ok());
+            let external = tempfile::tempdir().unwrap();
+            let outside = external.path().join("outside.py");
+            std::fs::write(&outside, "outside\n").unwrap();
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            git(&root, &["add", "tracked-link"]).unwrap();
+            commit();
+            current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+            assert_eq!(
+                ensure_revision(&current).unwrap_err(),
+                "Coding symlink leaves the candidate tree"
+            );
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink("dependency.py", &link).unwrap();
+            git(&root, &["add", "tracked-link"]).unwrap();
+            commit();
+            current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        }
+        std::fs::write(
+            root.join(".gitattributes"),
+            "output.py filter=qualification\n",
+        )
+        .unwrap();
+        git(
+            &root,
+            &[
+                "config",
+                "filter.qualification.clean",
+                "cat >/dev/null; touch .git/filter-ran; printf 'new\n'",
+            ],
+        )
+        .unwrap();
+        git(&root, &["add", "."]).unwrap();
+        commit();
+        current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(root.join("output.py"), "bad\n").unwrap();
+        assert!(git(&root, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(root.join(".git/filter-ran").exists());
+        std::fs::remove_file(root.join(".git/filter-ran")).unwrap();
+        assert!(ensure_revision(&current).is_err());
+        assert!(!root.join(".git/filter-ran").exists());
+        std::fs::write(root.join("output.py"), "new\n").unwrap();
+        assert!(ensure_revision(&current).is_ok());
+        std::fs::create_dir(root.join("module")).unwrap();
+        git(
+            &root,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{},module", current.revision),
+            ],
+        )
+        .unwrap();
+        commit();
+        current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            ensure_revision(&current).unwrap_err(),
+            "Coding acceptance does not support submodules"
+        );
+    }
+
+    #[test]
+    fn coding_outputs_capture_exact_changed_regular_blobs_and_reject_unsafe_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let commit = |root: &Path| {
+            git(root, &["add", "."]).unwrap();
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+            )
+            .unwrap();
+            git(root, &["rev-parse", "HEAD"]).unwrap()
+        };
+        git(&root, &["init", "-q"]).unwrap();
+        // A large existing file may shrink to a bounded accepted output.
+        std::fs::write(root.join("output.py"), "x".repeat(65_537)).unwrap();
+        let base = commit(&root);
+        std::fs::write(root.join("output.py"), "new\n").unwrap();
+        let revision = commit(&root);
+        let mut current = state();
+        current.root = root.clone();
+        current.base_revision = base;
+        current.revision = revision;
+        current.contract.repository_id = root.to_string_lossy().into_owned();
+        current.contract.output_paths = vec!["output.py".into()];
+        assert_eq!(capture_outputs(&current).unwrap()[0].content, "new\n");
+        std::fs::write(root.join("output.py"), "bad\n").unwrap();
+        assert_eq!(
+            capture_outputs(&current).unwrap_err(),
+            "Coding output physical bytes differ from the committed blob"
+        );
+        std::fs::write(root.join("output.py"), "new\n").unwrap();
+
+        // Git ordinarily accepts corrupted loose objects under the original OID.
+        // Neither unchanged HEAD nor a clean physical checkout authenticates them.
+        let blob = git(&root, &["rev-parse", "HEAD:output.py"]).unwrap();
+        let tree = git(&root, &["rev-parse", "HEAD^{tree}"]).unwrap();
+        for (kind, oid) in [
+            ("blob", blob.clone()),
+            ("tree", tree),
+            ("commit", current.revision.clone()),
+        ] {
+            let original = git_raw(&root, &["cat-file", kind, &oid]).unwrap();
+            let mut forged = original.clone();
+            forged[0] ^= 1;
+            let input = root.join(".git/forged-object");
+            std::fs::write(&input, &forged).unwrap();
+            let forged_oid = git(
+                &root,
+                &[
+                    "hash-object",
+                    "-w",
+                    "--literally",
+                    "-t",
+                    kind,
+                    input.to_str().unwrap(),
+                ],
+            )
+            .unwrap();
+            let object_path = |id: &str| root.join(".git/objects").join(&id[..2]).join(&id[2..]);
+            let target = object_path(&oid);
+            let encoded = std::fs::read(&target).unwrap();
+            std::fs::remove_file(&target).unwrap();
+            std::fs::copy(object_path(&forged_oid), &target).unwrap();
+            assert_eq!(git_raw(&root, &["cat-file", kind, &oid]).unwrap(), forged);
+            assert!(
+                capture_outputs(&current).is_err(),
+                "accepted corrupted {kind}"
+            );
+            std::fs::remove_file(&target).unwrap();
+            std::fs::write(target, encoded).unwrap();
+        }
+        let missing = root.join(".git/objects").join(&blob[..2]).join(&blob[2..]);
+        let encoded = std::fs::read(&missing).unwrap();
+        std::fs::remove_file(&missing).unwrap();
+        assert!(verified_git_object(&root, "blob", &blob, 65_536).is_err());
+        std::fs::write(&missing, encoded).unwrap();
+        let replacement_file = root.join(".git/replacement");
+        std::fs::write(&replacement_file, "forged replacement\n").unwrap();
+        let replacement = git(
+            &root,
+            &["hash-object", "-w", replacement_file.to_str().unwrap()],
+        )
+        .unwrap();
+        git(&root, &["replace", &blob, &replacement]).unwrap();
+        assert_eq!(capture_outputs(&current).unwrap()[0].content, "new\n");
+        git(&root, &["replace", "-d", &blob]).unwrap();
+
+        current.base_revision = current.revision.clone();
+        git(&root, &["update-index", "--chmod=+x", "output.py"]).unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "mode only",
+            ],
+        )
+        .unwrap();
+        current.revision = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            capture_outputs(&current).unwrap_err(),
+            "Coding output content must differ from the baseline"
+        );
+        for path in [
+            "é.py",
+            " leading.py",
+            "trailing.py ",
+            ":literal[1]*.py",
+            "glob[1]*.py",
+        ] {
+            current.base_revision = current.revision.clone();
+            std::fs::write(root.join(path), "literal output\n").unwrap();
+            // A glob-shaped path must not accidentally select this neighbor.
+            std::fs::write(root.join("literal1neighbor.py"), "not selected\n").unwrap();
+            current.revision = commit(&root);
+            current.contract.output_paths = vec![path.into()];
+            let output = capture_outputs(&current).unwrap();
+            assert_eq!(output.len(), 1);
+            assert_eq!(output[0].path, path);
+            assert_eq!(output[0].content, "literal output\n");
+        }
+        current.contract.output_paths = vec!["output.py".into()];
+        current.base_revision = current.revision.clone();
+        assert!(capture_outputs(&current).is_err());
+        current.contract.output_paths = vec!["../outside".into()];
+        assert!(capture_outputs(&current).is_err());
+        current.contract.output_paths = vec!["big.py".into()];
+        std::fs::write(root.join("big.py"), vec![b'x'; 65_537]).unwrap();
+        current.revision = commit(&root);
+        assert!(capture_outputs(&current).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("output.py", root.join("link.py")).unwrap();
+            current.contract.output_paths = vec!["link.py".into()];
+            current.revision = commit(&root);
+            assert!(capture_outputs(&current).is_err());
+        }
+    }
+
     fn result(exit_code: i32) -> (ToolResult, BashDetails) {
         let details = BashDetails {
             command: "cargo test".into(),

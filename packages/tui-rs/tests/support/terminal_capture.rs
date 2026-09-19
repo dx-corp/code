@@ -35,6 +35,11 @@ impl TerminalCapture {
         screen_rows(self.parser.screen()).join("\n")
     }
 
+    /// Formatted current frame for image evidence, preserving actual cell colors.
+    pub(super) fn current_formatted(&self) -> Vec<u8> {
+        self.parser.screen().contents_formatted()
+    }
+
     pub(super) fn text(&self) -> String {
         let mut text = self
             .parser
