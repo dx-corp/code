@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt as _;
-use rand::Rng as _;
+use rand::RngExt as _;
 use rcgen::{CertificateParams, KeyPair};
 use rustls::{
     DigitallySignedStruct, DistinguishedName, Error as TlsError, SignatureScheme,

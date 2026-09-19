@@ -31,6 +31,13 @@ inputs:
     description: GCS bucket for the sccache compiler cache on ARC runners.
     required: false
     default: evalops-prod-ci-sccache
+  rust-toolchain:
+    description: >
+      Rust toolchain used to namespace compiler objects. Callers that install
+      a toolchain explicitly should pass the same value; repository
+      rust-toolchain.toml or mise.toml remains the fallback.
+    required: false
+    default: ""
   allow-gha-fallback:
     description: >
       Permit auto/local selection to fall back to GitHub Actions cache when
@@ -52,5 +59,6 @@ runs:
       env:
         SCCACHE_BACKEND: ${{ inputs.backend }}
         SCCACHE_GCS_BUCKET_NAME: ${{ inputs.gcs-bucket }}
+        SCCACHE_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
         SCCACHE_ALLOW_GHA_FALLBACK: ${{ inputs.allow-gha-fallback }}
       run: bash "${GITHUB_ACTION_PATH}/configure.sh"

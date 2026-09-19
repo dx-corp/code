@@ -2,13 +2,14 @@
 //!
 //! Run with: cargo bench --bench mcp_bench
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use maestro_tui::mcp::{
     McpClient, McpConfig, McpConfigScope, McpContent, McpRequest, McpResponse, McpServerConfig,
     McpTool, McpToolResult, McpTransport, load_mcp_config,
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::hint::black_box;
 
 /// Benchmark MCP client creation
 fn bench_mcp_client_creation(c: &mut Criterion) {

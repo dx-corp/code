@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use maestro_tui::files::{FileSearch, WorkspaceFile};
+use std::hint::black_box;
 
 fn workspace_files(count: usize) -> Vec<WorkspaceFile> {
     const NAMES: [&str; 8] = [

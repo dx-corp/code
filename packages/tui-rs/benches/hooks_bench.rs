@@ -2,10 +2,11 @@
 //!
 //! Run with: cargo bench --all-features
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use maestro_tui::hooks::{
     HookRegistry, HookResult, IntegratedHookSystem, PreToolUseHook, PreToolUseInput, SafetyHook,
 };
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// Benchmark hook registry creation

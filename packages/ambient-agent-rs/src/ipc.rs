@@ -7,7 +7,6 @@
 //! Security: Uses token-based authentication stored in a file with restricted permissions.
 
 use crate::daemon::DaemonStats;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
@@ -120,7 +119,7 @@ impl From<DaemonStats> for StatsResponse {
 /// Generate a random auth token
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
@@ -473,5 +472,15 @@ mod tests {
         // Invalid token
         assert!(!server.verify_token("invalid"));
         assert!(!server.verify_token(""));
+    }
+
+    #[test]
+    fn generated_tokens_are_random_hex() {
+        let first = generate_token();
+        let second = generate_token();
+
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
     }
 }

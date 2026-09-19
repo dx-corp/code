@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
-use rand::RngCore;
 use reqwest::header::WWW_AUTHENTICATE;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -421,7 +420,7 @@ async fn await_callback(listener: TcpListener, expected_state: &str) -> Result<S
 
 fn random_url_token(bytes: usize) -> String {
     let mut random = vec![0_u8; bytes];
-    rand::rng().fill_bytes(&mut random);
+    rand::fill(&mut random);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random)
 }
 

@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self as std_mpsc, SyncSender};
 use std::time::{Duration, Instant};
 
-use rand::Rng as _;
+use rand::RngExt as _;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 // Note: interval/timeout available for future health checking

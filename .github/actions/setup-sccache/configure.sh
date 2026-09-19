@@ -145,11 +145,17 @@ if [[ -n "${GITHUB_ACTION_PATH:-}" ]]; then
     cache_source_root="${action_source_root}"
   fi
 fi
-rust_toolchain=""
+rust_toolchain="${SCCACHE_RUST_TOOLCHAIN:-}"
+if [[ "${rust_toolchain}" == *$'\n'* || "${rust_toolchain}" == *$'\r'* ]]; then
+  echo "::error::explicit sccache Rust toolchain must be a single line" >&2
+  exit 1
+fi
 if [[ -f "${cache_source_root}/rust-toolchain.toml" ]]; then
-  rust_toolchain="$(
-    awk -F'"' '/^channel = / { print $2; exit }' "${cache_source_root}/rust-toolchain.toml"
-  )"
+  if [[ -z "${rust_toolchain}" ]]; then
+    rust_toolchain="$(
+      awk -F'"' '/^channel = / { print $2; exit }' "${cache_source_root}/rust-toolchain.toml"
+    )"
+  fi
 fi
 if [[ -z "${rust_toolchain}" && -f "${cache_source_root}/mise.toml" ]]; then
   rust_toolchain="$(

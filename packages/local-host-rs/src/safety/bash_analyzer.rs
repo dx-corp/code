@@ -3,7 +3,9 @@
 //! Analyzes shell commands with a bounded tree-sitter Bash parse and determines risk.
 
 use std::collections::HashSet;
-use tree_sitter::{Node, Parser};
+use std::ops::ControlFlow;
+use std::time::{Duration, Instant};
+use tree_sitter::{Node, ParseOptions, Parser};
 
 const MAX_BASH_SOURCE_BYTES: usize = 1_048_576;
 const MAX_BASH_NODES: usize = 50_000;
@@ -431,9 +433,23 @@ fn parse_commands(input: &str) -> Result<ParsedShell, ()> {
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
         .map_err(|_| ())?;
-    #[allow(deprecated)]
-    parser.set_timeout_micros(50_000);
-    let tree = parser.parse(input, None).ok_or(())?;
+    let started_at = Instant::now();
+    let timeout = Duration::from_millis(50);
+    let mut cancel_after_timeout = |_: &tree_sitter::ParseState| {
+        if started_at.elapsed() >= timeout {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let bytes = input.as_bytes();
+    let tree = parser
+        .parse_with_options(
+            &mut |offset, _| bytes.get(offset..).unwrap_or_default(),
+            None,
+            Some(ParseOptions::new().progress_callback(&mut cancel_after_timeout)),
+        )
+        .ok_or(())?;
     if tree.root_node().has_error() {
         return Err(());
     }

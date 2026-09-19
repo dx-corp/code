@@ -1,11 +1,13 @@
 //! Default-on publication guard for literal Git commit/push calls in BashTool.
 //! Scans stay local. Findings contain locations and kinds, never source excerpts.
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use tokio::io::AsyncReadExt;
+use tree_sitter::ParseOptions;
 use zeroize::Zeroizing;
 
 use crate::agent::credential_store::{publication_secret_kind, redact_credentials_in_json};
@@ -32,9 +34,23 @@ fn publication(command: &str, cwd: &Path) -> Result<Option<Publication>> {
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
         .context(HELP)?;
-    #[allow(deprecated)]
-    parser.set_timeout_micros(50_000);
-    let tree = parser.parse(command, None).context(HELP)?;
+    let started_at = Instant::now();
+    let timeout = Duration::from_millis(50);
+    let mut cancel_after_timeout = |_: &tree_sitter::ParseState| {
+        if started_at.elapsed() >= timeout {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let bytes = command.as_bytes();
+    let tree = parser
+        .parse_with_options(
+            &mut |offset, _| bytes.get(offset..).unwrap_or_default(),
+            None,
+            Some(ParseOptions::new().progress_callback(&mut cancel_after_timeout)),
+        )
+        .context(HELP)?;
     let root = tree.root_node();
     let mut stack = vec![root];
     let mut candidate = None;

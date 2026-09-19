@@ -1,9 +1,10 @@
 use std::time::SystemTime;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use maestro_tui::components::ChatView;
 use maestro_tui::state::{AppState, Message, MessageKind, MessageRole};
 use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+use std::hint::black_box;
 
 const MESSAGE_COUNT: usize = 1_000;
 const AREA: Rect = Rect::new(0, 0, 100, 40);
