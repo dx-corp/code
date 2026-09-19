@@ -15,7 +15,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: ghcr.io/evalops/maestro
+  # Every consumer (helm values, service registry, remote-runner chart)
+  # references ghcr.io/dx-corp/maestro. The evalops/maestro target matched no
+  # consumer and no package, and a dx-corp GITHUB_TOKEN cannot push
+  # cross-org ("The requested installation does not exist").
+  IMAGE_NAME: ghcr.io/dx-corp/maestro
 
 jobs:
   publish-image:
