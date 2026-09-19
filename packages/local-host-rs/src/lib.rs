@@ -53,6 +53,7 @@ pub mod path_utils;
 pub mod pending_decisions;
 pub mod plan_mode;
 pub mod plugins;
+mod private_code_authority;
 pub mod rlm;
 pub mod safety;
 pub mod sandbox_policy;

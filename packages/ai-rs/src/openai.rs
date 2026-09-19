@@ -1115,6 +1115,22 @@ impl OpenAiClient {
         })
     }
 
+    /// Customer-controlled route: redirects cannot escape the approved endpoint.
+    pub fn with_disconnected_endpoint(
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+        provider: &str,
+    ) -> Result<Self> {
+        let mut client = Self::with_base_url(api_key, endpoint)?.with_route_provider(provider);
+        client.client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_mins(5))
+            .build()
+            .context("Failed to create disconnected model client")?;
+        Ok(client)
+    }
+
     /// Create a new client with a custom base URL (for Mistral or other providers)
     pub fn with_base_url(api_key: impl Into<String>, base_url: impl Into<String>) -> Result<Self> {
         let client = reqwest::Client::builder()
@@ -3289,6 +3305,45 @@ struct ToolCallAccumulator {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn disconnected_endpoint_refuses_redirects() {
+        use std::io::{Read, Write};
+        let destination = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        destination.set_nonblocking(true).unwrap();
+        let origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin_url = format!("http://{}", origin.local_addr().unwrap());
+        let location = format!("http://{}", destination.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = origin.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0, "request ended before HTTP headers");
+                request.extend_from_slice(&buffer[..count]);
+                assert!(request.len() <= 16 * 1024, "request headers too large");
+            }
+            write!(stream, "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let client =
+            super::OpenAiClient::with_disconnected_endpoint("fixture", &origin_url, "ollama")
+                .unwrap();
+        let response = client.client.get(&origin_url).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            destination.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            client.request_model_name("ollama/customer-model"),
+            "customer-model"
+        );
+        server.join().unwrap();
+    }
+
     #[test]
     fn cached_prompt_buckets_do_not_inflate_native_context() {
         // Counts observed during the governed Fireworks tmux trial.

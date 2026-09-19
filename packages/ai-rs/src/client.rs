@@ -2500,6 +2500,7 @@ mod stream_idle_policy_tests {
             // unrelated connection-refused failure.
             let mut drain_deadline = None;
             let mut quiet_since = None;
+            let mut stalled_connections = Vec::new();
             loop {
                 if server_stop.load(Ordering::SeqCst) {
                     let now = std::time::Instant::now();
@@ -2525,9 +2526,10 @@ mod stream_idle_policy_tests {
                         let _ = stream.read(&mut request).expect("read gateway request");
                         server_requests.fetch_add(1, Ordering::SeqCst);
                         quiet_since = Some(std::time::Instant::now());
-                        // Accept the request but never open an HTTP response.
-                        // Keep the socket alive past the client-side boundary.
-                        std::thread::sleep(Duration::from_millis(50));
+                        // Never open a response or close the socket before the
+                        // client emits its terminal event. A fixed sleep can
+                        // expire before a timeout task runs on a loaded host.
+                        stalled_connections.push(stream);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(2));

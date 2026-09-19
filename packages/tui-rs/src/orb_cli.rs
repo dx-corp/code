@@ -13,6 +13,7 @@ use crate::tools::orb_delegation::OrbConsoleAction;
 
 /// Run `maestro computer ...` (`maestro orb` remains a compatibility alias).
 pub async fn run_orb(args: &[String]) -> Result<i32> {
+    maestro_local_host::safety::require_vendor_network()?;
     let mut args = args.iter().map(String::as_str).collect::<Vec<_>>();
     let json = args.contains(&"--json");
     args.retain(|arg| *arg != "--json");

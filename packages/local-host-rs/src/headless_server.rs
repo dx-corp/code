@@ -1509,6 +1509,7 @@ fn init_headless_tracing() -> Option<TelemetryGuard> {
 }
 
 pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> {
+    crate::safety::disconnected_policy().map_err(anyhow::Error::msg)?;
     let _telemetry = init_headless_tracing();
     let mut state = HeadlessState::new(model_override);
     prepare_headless_local_model_with(

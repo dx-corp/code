@@ -51,6 +51,20 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.91] - 2026-09-18
+
+### Added
+
+- Administrators can require a signed machine policy that permits only approved
+  customer model endpoints, retains local history, and skips first-party update,
+  sign-in, session-sync and telemetry workers during disconnected operation.
+- Enrolled machines can use a customer-hosted tool authority while retaining
+  hardware approval, tenant scope and revocation checks.
+
+The private distribution remains experimental. These changes do not establish
+an installed customer control plane, a qualified hosted coding workflow, an
+independent model-quality benchmark or air-gap certification.
+
 ## [0.10.90] - 2026-09-16
 
 ### Added

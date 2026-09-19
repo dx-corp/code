@@ -60,6 +60,9 @@ pub struct LimitsPolicy {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EnterprisePolicy {
+    /// Signed customer routes; never read from repository or local policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disconnected: Option<DisconnectedPolicy>,
     #[allow(dead_code)]
     pub org_id: Option<String>,
     pub tools: Option<PolicyList>,
@@ -68,6 +71,32 @@ pub struct EnterprisePolicy {
     pub paths: Option<PolicyList>,
     pub network: Option<NetworkPolicy>,
     pub limits: Option<LimitsPolicy>,
+}
+
+/// A disconnected installation admits only these exact OpenAI-compatible routes.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisconnectedPolicy {
+    pub routes: Vec<DisconnectedRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<DisconnectedAuthority>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisconnectedRoute {
+    pub model: String,
+    pub endpoint: String,
+    /// Optional process credential name. No credential helpers or cloud auth.
+    pub credential_env: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisconnectedAuthority {
+    pub endpoint: String,
+    pub credential_env: String,
+    pub ca_pem: Option<String>,
 }
 
 /// A v1 organization-managed policy bundle.
@@ -272,12 +301,290 @@ static PIP_INSTALL_PATTERN: std::sync::LazyLock<Regex> = std::sync::LazyLock::ne
         .expect("Invalid pip install regex")
 });
 
+#[cfg(test)]
+thread_local! {
+    static TEST_MACHINE_POLICY: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Machine installation is discovered independently of user environment and cwd.
+/// The directory itself is the enrollment marker, so deleting a policy fails closed.
+fn system_policy_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_MACHINE_POLICY.with(|value| value.borrow().clone()) {
+        return Some(path);
+    }
+
+    #[cfg(target_os = "macos")]
+    let directory = Path::new("/Library/Application Support/Deixic Code");
+    #[cfg(not(target_os = "macos"))]
+    let directory = Path::new("/etc/deixic-code");
+    static ENROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    machine_policy_path_at(directory, &ENROLLED)
+}
+
+fn machine_policy_path_at(
+    directory: &Path,
+    enrolled: &std::sync::atomic::AtomicBool,
+) -> Option<PathBuf> {
+    let absent = std::fs::symlink_metadata(directory)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    if !absent {
+        enrolled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    (!absent || enrolled.load(std::sync::atomic::Ordering::Relaxed))
+        .then(|| directory.join("managed-policy.json"))
+}
+
+fn validate_protected_file(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let anchor = PathBuf::from("/");
+        let owner = 0;
+        #[cfg(test)]
+        let (anchor, owner) = TEST_MACHINE_POLICY.with(|value| {
+            value
+                .borrow()
+                .as_ref()
+                .map(|fixture| {
+                    let anchor = fixture.parent().unwrap().to_path_buf();
+                    let owner = std::fs::metadata(&anchor).unwrap().uid();
+                    (anchor, owner)
+                })
+                .unwrap_or((anchor, owner))
+        });
+        for (index, component) in path.ancestors().enumerate() {
+            let metadata = std::fs::symlink_metadata(component).map_err(|_| {
+                format!(
+                    "Machine policy path is unavailable: {}",
+                    component.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink()
+                || metadata.uid() != owner
+                || metadata.mode() & 0o022 != 0
+                || (index == 0 && !metadata.is_file())
+                || (index > 0 && !metadata.is_dir())
+            {
+                return Err(format!(
+                    "Machine policy requires root-owned files and directories without symlinks or group/world writes: {}",
+                    component.display()
+                ));
+            }
+            if component == anchor {
+                break;
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err("Machine policy protection is supported only on Unix".into())
+    }
+}
+
+/// Returns errors for expired, missing or invalid enrolled policy before networking.
+pub fn disconnected_policy() -> Result<Option<DisconnectedPolicy>, String> {
+    Ok(disconnected_policy_verified()?.map(|(profile, _)| profile))
+}
+
+pub fn disconnected_authority()
+-> Result<Option<(DisconnectedAuthority, ManagedPolicyMetadata)>, String> {
+    Ok(disconnected_policy_verified()?
+        .and_then(|(profile, metadata)| profile.authority.map(|authority| (authority, metadata))))
+}
+
+fn disconnected_policy_verified()
+-> Result<Option<(DisconnectedPolicy, ManagedPolicyMetadata)>, String> {
+    let Some(managed) = load_managed_policy(false)? else {
+        return Ok(None);
+    };
+    let Some(profile) = managed.policy.disconnected else {
+        return Ok(None);
+    };
+    if system_policy_path().is_none() {
+        return Err("Disconnected policy requires protected machine installation".into());
+    }
+    if std::env::var("MAESTRO_HOSTED_RUNNER_MODE").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }) {
+        return Err("Disconnected Code cannot replace hosted Runner Host authority".into());
+    }
+    if profile.routes.is_empty() {
+        return Err("Disconnected policy requires approved model routes".into());
+    }
+    let mut models = std::collections::HashSet::new();
+    for route in &profile.routes {
+        validate_disconnected_route(route)?;
+        if !models.insert(&route.model) {
+            return Err("Disconnected model routes must be unique".into());
+        }
+    }
+    if let Some(authority) = &profile.authority {
+        validate_disconnected_authority(authority, &managed.metadata)?;
+    }
+    Ok(Some((profile, managed.metadata)))
+}
+
+fn validate_disconnected_authority(
+    authority: &DisconnectedAuthority,
+    metadata: &ManagedPolicyMetadata,
+) -> Result<(), String> {
+    let endpoint =
+        Url::parse(&authority.endpoint).map_err(|_| "Invalid disconnected authority endpoint")?;
+    let host = endpoint.host_str().unwrap_or("").trim_end_matches('.');
+    if endpoint.scheme() != "https"
+        || host.is_empty()
+        || !matches!(endpoint.path(), "" | "/")
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || ["evalops.dev", "deixic.com"]
+            .iter()
+            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    {
+        return Err("Disconnected authority requires a customer HTTPS origin".into());
+    }
+    let normalized_host = host.trim_end_matches('.');
+    if matches!(
+        normalized_host,
+        "metadata.google.internal" | "metadata.goog" | "instance-data" | "metadata.azure.internal"
+    ) || normalized_host
+        .trim_matches(['[', ']'])
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| match ip {
+            IpAddr::V4(ip) => {
+                ip.is_unspecified() || ip.is_multicast() || ip.is_link_local() || ip.is_broadcast()
+            }
+            IpAddr::V6(ip) => {
+                ip.is_unspecified() || ip.is_multicast() || ip.is_unicast_link_local()
+            }
+        })
+    {
+        return Err(
+            "Disconnected authority cannot use metadata or reserved network destinations".into(),
+        );
+    }
+    let name = &authority.credential_env;
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        || name.starts_with("MAESTRO_")
+        || name.starts_with("EVALOPS_")
+        || name.starts_with("DEIXIC_")
+    {
+        return Err(
+            "Disconnected authority requires a dedicated customer credential environment name"
+                .into(),
+        );
+    }
+    if metadata.org_id.trim().is_empty()
+        || metadata
+            .workspace_id
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(
+            "Disconnected authority requires explicit signed organization and workspace scope"
+                .into(),
+        );
+    }
+    if let Some(pem) = &authority.ca_pem {
+        if pem.len() > 64 * 1024 || pem.contains("PRIVATE KEY") {
+            return Err("Disconnected authority CA must be a public certificate bundle no larger than 64 KiB".into());
+        }
+        let certificates = reqwest::Certificate::from_pem_bundle(pem.as_bytes())
+            .map_err(|_| "Invalid disconnected authority CA certificate bundle")?;
+        if certificates.is_empty() {
+            return Err("Disconnected authority CA bundle must contain certificates".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_disconnected_route(route: &DisconnectedRoute) -> Result<(), String> {
+    let descriptor = crate::ai::ProviderRegistry::resolve_descriptor(&route.model)
+        .map_err(|_| "Disconnected model must name an explicit OpenAI-compatible provider")?;
+    if !route.model.starts_with(&format!("{}/", descriptor.id))
+        || !matches!(descriptor.id, "openai" | "ollama" | "llamacpp" | "lmstudio")
+    {
+        return Err(
+            "Disconnected models must use openai, ollama, llamacpp or lmstudio routes".into(),
+        );
+    }
+    let endpoint =
+        Url::parse(&route.endpoint).map_err(|_| "Invalid disconnected model endpoint")?;
+    if !matches!(endpoint.scheme(), "https" | "http")
+        || endpoint.host_str().is_none()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err("Disconnected endpoint must be an absolute HTTP(S) URL without credentials, query or fragment".into());
+    }
+    let loopback = endpoint.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    if route.credential_env.is_some() && endpoint.scheme() != "https" && !loopback {
+        return Err(
+            "Credential-bearing disconnected endpoints require HTTPS except on loopback".into(),
+        );
+    }
+    if route.credential_env.as_ref().is_some_and(|name| {
+        name.is_empty()
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+    }) {
+        return Err("Invalid disconnected credential environment name".into());
+    }
+    Ok(())
+}
+
+pub fn disconnected_route(model: &str) -> Result<Option<DisconnectedRoute>, String> {
+    let Some(profile) = disconnected_policy()? else {
+        return Ok(None);
+    };
+    profile
+        .routes
+        .into_iter()
+        .find(|route| route.model == model)
+        .map(Some)
+        .ok_or_else(|| format!("Model {model} is not approved by the disconnected policy"))
+}
+
+/// Background workers suppress requests on both disconnected and invalid policy.
+pub fn vendor_network_disabled() -> bool {
+    !matches!(disconnected_policy(), Ok(None))
+}
+
+pub fn require_vendor_network() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !vendor_network_disabled(),
+        "Vendor connections are disabled by machine policy"
+    );
+    Ok(())
+}
+
 fn managed_policy_path() -> Option<PathBuf> {
-    env_path("MAESTRO_MANAGED_POLICY_PATH")
+    system_policy_path().or_else(|| env_path("MAESTRO_MANAGED_POLICY_PATH"))
 }
 fn managed_policy_state_path(policy_path: &Path) -> PathBuf {
-    if let Some(path) = env_path("MAESTRO_MANAGED_POLICY_STATE_PATH") {
-        return path;
+    if system_policy_path().as_deref() != Some(policy_path) {
+        if let Some(path) = env_path("MAESTRO_MANAGED_POLICY_STATE_PATH") {
+            return path;
+        }
     }
     let mut state = policy_path.as_os_str().to_os_string();
     state.push(".state");
@@ -286,6 +593,9 @@ fn managed_policy_state_path(policy_path: &Path) -> PathBuf {
 
 fn managed_policy_trust_fingerprint(policy_path: &Path) -> String {
     let fingerprint = [
+        system_policy_path()
+            .and_then(|path| std::fs::read_to_string(path.with_extension("pub")).ok())
+            .unwrap_or_default(),
         std::env::var("MAESTRO_MANAGED_POLICY_PUBLIC_KEY").unwrap_or_default(),
         std::env::var("MAESTRO_MANAGED_POLICY_KEY_ID").unwrap_or_default(),
         std::env::var("MAESTRO_ORG_ID").unwrap_or_default(),
@@ -362,6 +672,13 @@ fn decode_encoded_bytes(value: &str, expected_len: usize, label: &str) -> Result
 }
 
 fn configured_managed_public_key() -> Result<Vec<u8>, String> {
+    if let Some(path) = system_policy_path() {
+        let key_path = path.with_extension("pub");
+        validate_protected_file(&key_path)?;
+        let key =
+            std::fs::read_to_string(key_path).map_err(|_| "Machine policy key is unreadable")?;
+        return decode_encoded_bytes(&key, 32, "public key");
+    }
     let value = std::env::var("MAESTRO_MANAGED_POLICY_PUBLIC_KEY")
         .map_err(|_| "Managed policy public key is not configured".to_string())?;
     decode_encoded_bytes(&value, 32, "public key")
@@ -453,6 +770,15 @@ fn verify_managed_policy(envelope: ManagedPolicyEnvelope) -> Result<VerifiedMana
         kill_switch: envelope.kill_switch,
     };
 
+    if let Some(authority) = envelope
+        .policy
+        .disconnected
+        .as_ref()
+        .and_then(|profile| profile.authority.as_ref())
+    {
+        validate_disconnected_authority(authority, &metadata)?;
+    }
+
     Ok(VerifiedManagedPolicy {
         policy: envelope.policy,
         metadata,
@@ -476,6 +802,19 @@ fn load_managed_policy_watermark(
     }
     Ok(Some(watermark))
 }
+fn write_policy_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o644);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
+}
+
 fn persist_managed_policy_watermark(
     policy_path: &Path,
     policy_version: u64,
@@ -493,7 +832,7 @@ fn persist_managed_policy_watermark(
     })
     .map_err(|_| "Managed policy rollback state could not be serialized".to_string())?;
     let temp_path = state_path.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::write(&temp_path, serialized)
+    write_policy_file(&temp_path, &serialized)
         .map_err(|error| format!("Managed policy rollback state could not be written: {error}"))?;
     if let Err(error) = std::fs::rename(&temp_path, &state_path) {
         let _ = std::fs::remove_file(&temp_path);
@@ -557,7 +896,7 @@ pub fn publish_managed_policy(
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let temp_path = path.with_extension(format!("publish-tmp-{}-{unique}", std::process::id()));
-    if let Err(error) = std::fs::write(&temp_path, serialized) {
+    if let Err(error) = write_policy_file(&temp_path, &serialized) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(format!(
             "Managed policy envelope could not be written: {error}"
@@ -651,6 +990,11 @@ fn load_managed_policy(force: bool) -> Result<Option<VerifiedManagedPolicy>, Str
         return Err("Managed policy file is missing or is not a regular file".to_string());
     }
 
+    if system_policy_path().as_ref() == Some(&path) {
+        validate_protected_file(&path)?;
+        validate_protected_file(&path.with_extension("pub"))?;
+        validate_protected_file(&managed_policy_state_path(&path))?;
+    }
     let mtime = std::fs::metadata(&path)
         .map_err(|_| "Managed policy file metadata is unavailable".to_string())?
         .modified()
@@ -698,6 +1042,17 @@ fn load_managed_policy(force: bool) -> Result<Option<VerifiedManagedPolicy>, Str
 
     if let Ok(cache) = MANAGED_POLICY_CACHE.read() {
         if cache.path.as_ref() == Some(&path) {
+            // Live clients pin their approved endpoint. Changing/removing the profile
+            // must not let an existing client keep using a now-unapproved route.
+            if cache.policy.as_ref().is_some_and(|previous| {
+                previous.policy.disconnected.is_some()
+                    && previous.policy.disconnected != verified.policy.disconnected
+            }) {
+                return Err(
+                    "Disconnected routes changed; restart Code to adopt the new signed policy"
+                        .into(),
+                );
+            }
             if let Some(previous_version) = cache.accepted_version {
                 if verified.metadata.policy_version < previous_version {
                     return Err("Managed policy rollback was rejected".to_string());
@@ -1661,6 +2016,9 @@ pub fn check_url_allowed(url: &str) -> Option<String> {
 }
 
 pub fn check_model_allowed(model_id: &str) -> Option<String> {
+    if let Err(error) = disconnected_route(model_id) {
+        return Some(error);
+    }
     if let Some(reason) = crate::stealth_models::check_model_allowed(model_id) {
         return Some(reason);
     }
@@ -1793,6 +2151,441 @@ mod tests {
             std::env::set_var(name, value);
         } else {
             std::env::remove_var(name);
+        }
+    }
+
+    struct MachineFixture {
+        directory: tempfile::TempDir,
+    }
+    impl MachineFixture {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+            let path = directory.path().join("managed-policy.json");
+            TEST_MACHINE_POLICY.with(|value| *value.borrow_mut() = Some(path));
+            Self { directory }
+        }
+        fn install(&self, profile: DisconnectedPolicy) {
+            let key = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
+            let mut envelope = signed_test_envelope(&key, 1, false);
+            envelope.policy.disconnected = Some(profile);
+            let payload = canonical_managed_policy_payload(&envelope);
+            envelope.policy_hash = sha256_hex(&payload);
+            envelope.signature = URL_SAFE_NO_PAD.encode(key.sign(&payload).as_ref());
+            let path = self.directory.path().join("managed-policy.json");
+            write_policy_file(
+                &path.with_extension("pub"),
+                URL_SAFE_NO_PAD.encode(key.public_key().as_ref()).as_bytes(),
+            )
+            .unwrap();
+            write_policy_file(&path, &serde_json::to_vec(&envelope).unwrap()).unwrap();
+            persist_managed_policy_watermark(&path, envelope.policy_version, &envelope.policy_hash)
+                .unwrap();
+        }
+    }
+    impl Drop for MachineFixture {
+        fn drop(&mut self) {
+            TEST_MACHINE_POLICY.with(|value| *value.borrow_mut() = None);
+        }
+    }
+    fn private_profile() -> DisconnectedPolicy {
+        DisconnectedPolicy {
+            authority: None,
+            routes: vec![DisconnectedRoute {
+                model: "ollama/customer-model".into(),
+                endpoint: "http://127.0.0.1:11434/v1".into(),
+                credential_env: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn disconnected_authority_requires_customer_origin_and_signed_tenant_scope() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        let mut profile = private_profile();
+        profile.authority = Some(DisconnectedAuthority {
+            endpoint: "https://identity.customer.example".into(),
+            credential_env: "CUSTOMER_CODE_ACCESS_TOKEN".into(),
+            ca_pem: None,
+        });
+        fixture.install(profile);
+        let mut metadata = load_managed_policy(false).unwrap().unwrap().metadata;
+        let mut authority = DisconnectedAuthority {
+            endpoint: "https://identity.customer.example".into(),
+            credential_env: "CUSTOMER_CODE_ACCESS_TOKEN".into(),
+            ca_pem: None,
+        };
+        assert!(validate_disconnected_authority(&authority, &metadata).is_ok());
+        let workspace = metadata.workspace_id.as_deref().unwrap();
+        assert!(
+            crate::private_code_authority::validate_request_target(
+                &authority.endpoint,
+                &metadata.org_id,
+                workspace
+            )
+            .is_ok()
+        );
+        assert!(
+            crate::private_code_authority::validate_request_target(
+                &authority.endpoint,
+                "other",
+                workspace
+            )
+            .is_err()
+        );
+        assert!(
+            crate::private_code_authority::validate_request_target(
+                "https://other.customer.example",
+                &metadata.org_id,
+                workspace
+            )
+            .is_err()
+        );
+        for endpoint in [
+            "http://10.0.0.1",
+            "https://identity.evalops.dev",
+            "https://identity.evalops.dev.",
+            "https://deixic.com",
+            "https://identity.customer.example/path",
+            "https://user@identity.customer.example",
+            "https://identity.customer.example?query",
+            "https://169.254.169.254",
+            "https://[fe80::1]",
+            "https://metadata.google.internal",
+        ] {
+            authority.endpoint = endpoint.into();
+            assert!(
+                validate_disconnected_authority(&authority, &metadata).is_err(),
+                "{endpoint}"
+            );
+        }
+        authority.endpoint = "https://identity.customer.example".into();
+        authority.credential_env = "MAESTRO_EVALOPS_ACCESS_TOKEN".into();
+        assert!(validate_disconnected_authority(&authority, &metadata).is_err());
+        authority.credential_env = "CUSTOMER_CODE_ACCESS_TOKEN".into();
+        let certificate =
+            rcgen::generate_simple_self_signed(vec!["customer.example".into()]).unwrap();
+        authority.ca_pem = Some(certificate.cert.pem());
+        assert!(validate_disconnected_authority(&authority, &metadata).is_ok());
+        for bundle in [
+            String::new(),
+            "x".repeat(64 * 1024 + 1),
+            format!(
+                "{}{}",
+                certificate.cert.pem(),
+                certificate.signing_key.serialize_pem()
+            ),
+        ] {
+            authority.ca_pem = Some(bundle);
+            assert!(validate_disconnected_authority(&authority, &metadata).is_err());
+        }
+        let path = fixture.directory.path().join("managed-policy.json");
+        let installed = std::fs::read(&path).unwrap();
+        let mut envelope: ManagedPolicyEnvelope = serde_json::from_slice(&installed).unwrap();
+        envelope.policy_version += 1;
+        envelope
+            .policy
+            .disconnected
+            .as_mut()
+            .unwrap()
+            .authority
+            .as_mut()
+            .unwrap()
+            .ca_pem = Some(format!(
+            "{}{}",
+            certificate.cert.pem(),
+            certificate.signing_key.serialize_pem()
+        ));
+        let key = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
+        let payload = canonical_managed_policy_payload(&envelope);
+        envelope.policy_hash = sha256_hex(&payload);
+        envelope.signature = URL_SAFE_NO_PAD.encode(key.sign(&payload).as_ref());
+        assert!(publish_managed_policy(envelope).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), installed);
+        authority.ca_pem = None;
+        metadata.workspace_id = None;
+        assert!(validate_disconnected_authority(&authority, &metadata).is_err());
+    }
+
+    #[test]
+    fn disconnected_credentials_require_encrypted_nonlocal_transport() {
+        let mut route = private_profile().routes.remove(0);
+        route.credential_env = Some("CUSTOMER_MODEL_API_KEY".into());
+        for endpoint in ["http://10.0.0.2/v1", "http://models.customer.example/v1"] {
+            route.endpoint = endpoint.into();
+            assert!(
+                validate_disconnected_route(&route)
+                    .unwrap_err()
+                    .contains("HTTPS")
+            );
+        }
+        for endpoint in [
+            "https://10.0.0.2/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            route.endpoint = endpoint.into();
+            assert!(validate_disconnected_route(&route).is_ok());
+        }
+    }
+
+    #[test]
+    fn disconnected_policy_uses_signed_machine_routes_and_rejects_tampering() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        assert!(vendor_network_disabled());
+        assert!(
+            disconnected_route("ollama/customer-model")
+                .unwrap()
+                .is_some()
+        );
+        assert!(disconnected_route("openai/gpt-5.5").is_err());
+        assert!(require_vendor_network().is_err());
+        let path = fixture.directory.path().join("managed-policy.json");
+        let mut envelope: ManagedPolicyEnvelope =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        envelope.policy.disconnected.as_mut().unwrap().routes[0].endpoint =
+            "https://api.openai.com/v1".into();
+        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        assert!(disconnected_policy().is_err());
+        assert!(vendor_network_disabled());
+        assert!(check_tool_allowed("read").is_some());
+    }
+
+    #[test]
+    fn disconnected_admission_never_verifies_stored_identity() {
+        let _env = crate::config::test_process_env_lock();
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let names = [
+            "MAESTRO_HOME",
+            "MAESTRO_IDENTITY_URL",
+            "OLLAMA_BASE_URL",
+            "MAESTRO_DISABLE_KEYCHAIN",
+            "MAESTRO_OAUTH_STORAGE_MODE",
+        ];
+        let previous: Vec<_> = names
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        std::env::set_var("MAESTRO_HOME", fixture.directory.path());
+        std::env::set_var("MAESTRO_IDENTITY_URL", &endpoint);
+        std::env::set_var("OLLAMA_BASE_URL", &endpoint);
+        std::env::set_var("MAESTRO_DISABLE_KEYCHAIN", "1");
+        std::env::set_var("MAESTRO_OAUTH_STORAGE_MODE", "file");
+        for expiry in [None, Some(1_i64), Some(i64::MAX)] {
+            if let Some(expires) = expiry {
+                std::fs::write(fixture.directory.path().join("oauth.json"), serde_json::to_vec(&serde_json::json!({
+                    "evalops": {"type":"oauth", "access":"stored-test-token", "refresh":"stored-test-refresh", "expires":expires,
+                        "metadata":{"identityBaseUrl": endpoint}}
+                })).unwrap()).unwrap();
+            }
+            let (mode, identity) =
+                crate::credential_mode::require_ready_with_identity("ollama/customer-model")
+                    .unwrap();
+            assert!(matches!(mode, crate::credential_mode::DetectedMode::Byok));
+            assert!(identity.is_none());
+            assert!(crate::credential_mode::verified_current_identity_session().is_err());
+            assert!(crate::init_cli::load_current_evalops_snapshot().is_err());
+        }
+        assert!(crate::credential_mode::require_ready_with_identity("evalops/default").is_err());
+        assert!(
+            crate::local_models::local_runtime_endpoints(&std::collections::HashMap::new())
+                .is_empty()
+        );
+        assert!(crate::telemetry::experiments_telemetry_disabled());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        for (name, value) in previous {
+            restore_env_var(name, value);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disconnected_enrolled_tool_authority_does_not_fall_back() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        let record = fixture.directory.path().join("code-device.json");
+        std::fs::write(&record, r#"{"key_id":"enrolled-device"}"#).unwrap();
+        let authority = crate::code_authority::CodeToolAuthority::configured_at(record)
+            .expect("enrollment remains authoritative despite unavailable Platform");
+        let error = authority
+            .authorize(serde_json::json!({"tool":"read"}))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Vendor connections are disabled")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disconnected_native_and_subagent_admission_preserve_policy() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        let config = crate::agent::NativeAgentConfig {
+            model: "ollama/customer-model".into(),
+            cwd: fixture.directory.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let (agent, _) =
+            crate::agent::NativeAgent::new(config.clone()).expect("private native agent");
+        let (child, _) = crate::agent::NativeAgent::new_with_credential_vault_and_subagent_scope(
+            config.clone(),
+            crate::agent::CredentialVault::new(),
+            "parent-scope".into(),
+        )
+        .expect("private child agent");
+        drop(child);
+        drop(agent);
+        let forbidden = crate::agent::NativeAgentConfig {
+            model: "evalops/default".into(),
+            ..config.clone()
+        };
+        assert!(crate::agent::NativeAgent::new(forbidden.clone()).is_err());
+        assert!(
+            crate::agent::NativeAgent::new_with_credential_vault_and_subagent_scope(
+                forbidden,
+                crate::agent::CredentialVault::new(),
+                "parent-scope".into()
+            )
+            .is_err()
+        );
+        let injected =
+            crate::ai::UnifiedClient::OpenAI(crate::ai::OpenAiClient::new("fixture").unwrap());
+        assert!(crate::agent::NativeAgent::new_with_client(config, injected).is_err());
+    }
+
+    #[test]
+    fn disconnected_managed_setup_never_fetches_or_reopens_enrolled_mcp() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        let session = crate::credential_mode::PlatformSession {
+            access_token: "expired-stored-token".into(),
+            organization_id: "customer".into(),
+            workspace_id: Some("workspace".into()),
+            provider_ref: serde_json::Value::Null,
+            email: None,
+            user_id: None,
+        };
+        let setup = crate::managed_setup::ManagedSetupClient::resolve_with(
+            Some(&session),
+            None,
+            0,
+            Duration::ZERO,
+            |_| panic!("disconnected setup must not fetch"),
+        );
+        assert_eq!(
+            setup.origin(),
+            crate::managed_setup::ManagedSetupOrigin::FailedClosed
+        );
+        assert_eq!(
+            setup.mcp_policy(),
+            &crate::managed_setup::McpPolicy::deny_all()
+        );
+        assert!(crate::managed_setup::fetch_managed_setup(&session).is_err());
+    }
+
+    #[test]
+    fn disconnected_route_update_requires_restart_for_pinned_clients() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        assert!(disconnected_policy().unwrap().is_some());
+        let path = fixture.directory.path().join("managed-policy.json");
+        let mut envelope: ManagedPolicyEnvelope =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        envelope.policy_version += 1;
+        envelope.policy.disconnected.as_mut().unwrap().routes[0].endpoint =
+            "http://127.0.0.1:1234/v1".into();
+        let key = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[17; 32]).unwrap();
+        let payload = canonical_managed_policy_payload(&envelope);
+        envelope.policy_hash = sha256_hex(&payload);
+        envelope.signature = URL_SAFE_NO_PAD.encode(key.sign(&payload).as_ref());
+        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        persist_managed_policy_watermark(&path, envelope.policy_version, &envelope.policy_hash)
+            .unwrap();
+        assert!(disconnected_policy().unwrap_err().contains("restart"));
+        assert!(vendor_network_disabled());
+        assert!(check_model_allowed("ollama/customer-model").is_some());
+    }
+
+    #[test]
+    fn disconnected_expired_policy_blocks_model_and_tool_admission() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        fixture.install(private_profile());
+        assert!(disconnected_policy().unwrap().is_some());
+        let path = fixture.directory.path().join("managed-policy.json");
+        let mut envelope: ManagedPolicyEnvelope =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        envelope.issued_at = 1;
+        envelope.expires_at = 2;
+        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        assert!(disconnected_policy().unwrap_err().contains("expired"));
+        assert!(vendor_network_disabled());
+        assert!(check_model_allowed("ollama/customer-model").is_some());
+        assert!(check_tool_allowed("read").is_some());
+        assert!(
+            crate::private_code_authority::validate_request_target(
+                "https://identity.customer.example",
+                "org-1",
+                "workspace-1"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn disconnected_machine_uninstall_requires_process_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_owned();
+        let enrolled = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(
+            machine_policy_path_at(&path, &enrolled),
+            Some(path.join("managed-policy.json"))
+        );
+        directory.close().unwrap();
+        assert_eq!(
+            machine_policy_path_at(&path, &enrolled),
+            Some(path.join("managed-policy.json"))
+        );
+        assert!(
+            machine_policy_path_at(&path, &std::sync::atomic::AtomicBool::new(false)).is_none()
+        );
+    }
+
+    #[test]
+    fn disconnected_missing_or_writable_machine_policy_fails_closed() {
+        let _lock = test_env_guard();
+        let fixture = MachineFixture::new();
+        assert!(disconnected_policy().is_err());
+        assert!(vendor_network_disabled());
+        fixture.install(private_profile());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = fixture.directory.path().join("managed-policy.json");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+            assert!(disconnected_policy().is_err());
+            assert!(vendor_network_disabled());
         }
     }
 
@@ -2028,6 +2821,7 @@ mod tests {
     }
     fn managed_test_policy() -> EnterprisePolicy {
         EnterprisePolicy {
+            disconnected: None,
             org_id: Some("org-1".to_string()),
             tools: Some(PolicyList {
                 allowed: Some(vec!["bash".to_string(), "read".to_string()]),

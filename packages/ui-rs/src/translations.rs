@@ -5521,6 +5521,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Browse and resume session branches",
+        [
+            "Explorar y reanudar ramas de sesión",
+            "Parcourir et reprendre les branches de session",
+            "Sitzungszweige durchsuchen und fortsetzen",
+            "セッションの分岐を表示して再開",
+            "세션 분기를 찾아 재개",
+            "浏览并恢复会话分支",
+        ],
+    ),
+    (
         "Browse saved conversations",
         [
             "Explore conversaciones guardadas",
@@ -5881,6 +5892,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Change conversation",
+        [
+            "Cambiar conversación",
+            "Changer de conversation",
+            "Unterhaltung wechseln",
+            "会話を変更",
+            "대화 변경",
+            "切换对话",
+        ],
+    ),
+    (
         "Change status-bar footer style (rich|solo|history|clear)",
         [
             "Cambiar el estilo de pie de barra de estado (rich habitsolo habithistory perpetuaclear)",
@@ -5966,6 +5988,28 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "ChatGPT/Codex サブスクリプション",
             "ChatGPT/Codex 구독",
             "ChatGPT/Codex 订阅",
+        ],
+    ),
+    (
+        "Check the runtime URL",
+        [
+            "Comprueba la URL del motor",
+            "Vérifiez l’URL du moteur",
+            "URL der Laufzeitumgebung prüfen",
+            "ランタイムの URL を確認してください",
+            "런타임 URL을 확인하세요",
+            "请检查运行时 URL",
+        ],
+    ),
+    (
+        "Checking local runtimes…",
+        [
+            "Comprobando motores locales…",
+            "Vérification des moteurs locaux…",
+            "Lokale Laufzeitumgebungen werden geprüft…",
+            "ローカルランタイムを確認中…",
+            "로컬 런타임 확인 중…",
+            "正在检查本地运行时…",
         ],
     ),
     (
@@ -7166,6 +7210,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Conversation search stopped. Try again.",
+        [
+            "La búsqueda de conversaciones se detuvo. Inténtalo de nuevo.",
+            "La recherche de conversations s’est arrêtée. Réessayez.",
+            "Die Unterhaltungssuche wurde beendet. Erneut versuchen.",
+            "会話の検索が停止しました。もう一度お試しください。",
+            "대화 검색이 중단되었습니다. 다시 시도하세요.",
+            "对话搜索已停止。请重试。",
+        ],
+    ),
+    (
         "Conversation too short to compact",
         [
             "Conversación demasiado corta para compactar",
@@ -7219,6 +7274,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "テーマを適用できませんでした: {0}",
             "테마를 적용 할 수 없습니다 : {0}",
             "无法应用主题 : {0}",
+        ],
+    ),
+    (
+        "Could not confirm that the response stopped. The current conversation was kept.",
+        [
+            "No se pudo confirmar que la respuesta se detuvo. Se conservó la conversación actual.",
+            "Impossible de confirmer l’arrêt de la réponse. La conversation actuelle a été conservée.",
+            "Das Ende der Antwort konnte nicht bestätigt werden. Die aktuelle Unterhaltung wurde beibehalten.",
+            "応答の停止を確認できませんでした。現在の会話を保持しました。",
+            "응답이 중단되었는지 확인할 수 없습니다. 현재 대화를 유지했습니다.",
+            "无法确认响应已停止。已保留当前对话。",
         ],
     ),
     (
@@ -7569,6 +7635,10 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "Ctrl+C 중단하고 지금 적용",
             "Ctrl+C 中断并立即应用",
         ],
+    ),
+    (
+        "Ctrl+R",
+        ["Ctrl+R", "Ctrl+R", "Ctrl+R", "Ctrl+R", "Ctrl+R", "Ctrl+R"],
     ),
     (
         "Current",
@@ -10202,6 +10272,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Fork of {0} · ",
+        [
+            "Rama de {0} · ",
+            "Branche de {0} · ",
+            "Zweig von {0} · ",
+            "{0} の分岐 · ",
+            "{0}의 분기 · ",
+            "{0} 的分支 · ",
+        ],
+    ),
+    (
         "Fork the conversation into a new session branch",
         [
             "Fork la conversación en una nueva rama de sesión",
@@ -10827,6 +10908,12 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "HTTP MCP URL は HTTPS (ループバック HTTP は許可されます) を使用しなければなりません",
             "HTTP MCP URL을 사용해야합니다 HTTPS (loopback HTTP 허용)",
             "HTTP MCP URL必须使用 HTTPS (允许回转 HTTP)",
+        ],
+    ),
+    (
+        "HTTP {0}",
+        [
+            "HTTP {0}", "HTTP {0}", "HTTP {0}", "HTTP {0}", "HTTP {0}", "HTTP {0}",
         ],
     ),
     (
@@ -11895,6 +11982,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "無効な間隔 '{0}' (棒数として30s、5m、1h、または分を試して下さい)",
             "잘못된 간격 '{0}' (try 30s, 5m, 1h, 또는 맨 위 번호로 분)",
             "无效的间隔 '{0}' (尝试 30s, 5m, 1h, 或分钟作为空数)",
+        ],
+    ),
+    (
+        "Invalid model list",
+        [
+            "Lista de modelos no válida",
+            "Liste de modèles invalide",
+            "Ungültige Modellliste",
+            "無効なモデル一覧",
+            "잘못된 모델 목록",
+            "模型列表无效",
         ],
     ),
     (
@@ -13326,6 +13424,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Models detected: {0}",
+        [
+            "Modelos detectados: {0}",
+            "Modèles détectés : {0}",
+            "Erkannte Modelle: {0}",
+            "検出されたモデル: {0}",
+            "감지된 모델: {0}",
+            "检测到的模型：{0}",
+        ],
+    ),
+    (
         "Moderate",
         ["Moderado", "Modéré", "Mittel", "中程度", "보통", "中等"],
     ),
@@ -13982,6 +14091,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "No models reported",
+        [
+            "No se informaron modelos",
+            "Aucun modèle signalé",
+            "Keine Modelle gemeldet",
+            "モデルの報告がありません",
+            "보고된 모델 없음",
+            "未报告任何模型",
+        ],
+    ),
+    (
         "No next step to suggest yet.",
         [
             "Todavía no hay próximo paso para sugerir.",
@@ -14453,6 +14573,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "最新のリフレッシュでローカルランタイムが報告されていない",
             "최근 새로 고침에 로컬 실행 시간에 의해보고되지 않음",
             "本地运行时间未在最新刷新时报告",
+        ],
+    ),
+    (
+        "Not responding",
+        [
+            "No responde",
+            "Ne répond pas",
+            "Keine Antwort",
+            "応答なし",
+            "응답 없음",
+            "无响应",
         ],
     ),
     (
@@ -17444,6 +17575,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Resume fork: deixic-code --resume-session {0}\nBrowse branches: /tree or /sessions, then Ctrl+F.",
+        [
+            "Reanudar rama: deixic-code --resume-session {0}\nExplorar ramas: /tree o /sessions y luego Ctrl+F.",
+            "Reprendre la branche : deixic-code --resume-session {0}\nParcourir les branches : /tree ou /sessions, puis Ctrl+F.",
+            "Zweig fortsetzen: deixic-code --resume-session {0}\nZweige durchsuchen: /tree oder /sessions, dann Ctrl+F.",
+            "分岐を再開: deixic-code --resume-session {0}\n分岐を表示: /tree または /sessions、その後 Ctrl+F。",
+            "분기 재개: deixic-code --resume-session {0}\n분기 탐색: /tree 또는 /sessions 다음 Ctrl+F.",
+            "恢复分支：deixic-code --resume-session {0}\n浏览分支：/tree 或 /sessions，然后按 Ctrl+F。",
+        ],
+    ),
+    (
         "Resumed session: {0}",
         [
             "Continuación del período de sesiones: {0}",
@@ -18440,6 +18582,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Search names, messages, and tool results...",
+        [
+            "Buscar nombres, mensajes y resultados de herramientas...",
+            "Rechercher des noms, messages et résultats d’outils...",
+            "Namen, Nachrichten und Werkzeugergebnisse suchen...",
+            "名前、メッセージ、ツールの結果を検索...",
+            "이름, 메시지 및 도구 결과 검색...",
+            "搜索名称、消息和工具结果...",
+        ],
+    ),
+    (
         "Search previous prompts",
         [
             "Buscar avisos anteriores",
@@ -18525,6 +18678,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "ウェブを検索しました",
             "웹 검색 완료",
             "已搜索网页",
+        ],
+    ),
+    (
+        "Searching conversations...",
+        [
+            "Buscando conversaciones...",
+            "Recherche de conversations...",
+            "Unterhaltungen werden durchsucht...",
+            "会話を検索中...",
+            "대화 검색 중...",
+            "正在搜索对话...",
         ],
     ),
     (
@@ -18763,6 +18927,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Server returned HTTP {0}",
+        [
+            "El servidor devolvió HTTP {0}",
+            "Le serveur a renvoyé HTTP {0}",
+            "Server meldete HTTP {0}",
+            "サーバーが HTTP {0} を返しました",
+            "서버가 HTTP {0}을 반환했습니다",
+            "服务器返回 HTTP {0}",
+        ],
+    ),
+    (
         "Session",
         ["Sesión", "Session", "Sitzung", "セッション", "세션", "会话"],
     ),
@@ -18786,6 +18961,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "このセッションの承認ポリシー",
             "세션 승인 정책",
             "会话审批策略",
+        ],
+    ),
+    (
+        "Session branches ({0})",
+        [
+            "Ramas de sesión ({0})",
+            "Branches de session ({0})",
+            "Sitzungszweige ({0})",
+            "セッションの分岐 ({0})",
+            "세션 분기 ({0})",
+            "会话分支 ({0})",
         ],
     ),
     (
@@ -18885,6 +19071,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "セッション負荷障害",
             "세션로드 실패",
             "会话加载失败",
+        ],
+    ),
+    (
+        "Session loading stopped. Try again.",
+        [
+            "La carga de sesiones se detuvo. Inténtalo de nuevo.",
+            "Le chargement des sessions s’est arrêté. Réessayez.",
+            "Das Laden der Sitzungen wurde beendet. Erneut versuchen.",
+            "セッションの読み込みが停止しました。もう一度お試しください。",
+            "세션 로드가 중지되었습니다. 다시 시도하세요.",
+            "会话加载已停止。请重试。",
         ],
     ),
     (
@@ -19793,6 +19990,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Starting… {0} · {1} · {2} or /model to choose",
+        [
+            "Iniciando… {0} · {1} · {2} o /model para elegir",
+            "Démarrage… {0} · {1} · {2} ou /model pour choisir",
+            "Start… {0} · {1} · {2} oder /model zum Auswählen",
+            "起動中… {0} · {1} · {2} または /model で選択",
+            "시작 중… {0} · {1} · {2} 또는 /model 로 선택",
+            "正在启动… {0} · {1} · 按 {2} 或用 /model 选择",
+        ],
+    ),
+    (
         "Stash / restore / swap draft",
         [
             "Stash / restaurar / swap borrador",
@@ -19888,6 +20096,50 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "ワークスペース拡張機能の受け入れを停止",
             "작업 공간 확장 기능 허용 중지",
             "停止允许工作区扩展",
+        ],
+    ),
+    (
+        "Stop the response and rewind the last {0} turn(s), including their file changes? The original conversation stays available.",
+        [
+            "¿Detener la respuesta y retroceder los últimos {0} turnos, incluidos los cambios de archivos? La conversación original seguirá disponible.",
+            "Arrêter la réponse et revenir sur les {0} derniers tours, y compris leurs modifications de fichiers ? La conversation originale reste disponible.",
+            "Antwort stoppen und die letzten {0} Schritte samt Dateiänderungen zurückgehen? Die ursprüngliche Unterhaltung bleibt verfügbar.",
+            "応答を停止し、ファイル変更を含めて最後の {0} ターンを巻き戻しますか？元の会話は保持されます。",
+            "응답을 중단하고 파일 변경을 포함한 마지막 {0}개 턴을 되돌릴까요? 원래 대화는 유지됩니다.",
+            "停止响应并回退最后 {0} 轮，包括文件更改？原对话仍可使用。",
+        ],
+    ),
+    (
+        "Stop the response and rewind the last {0} turn(s)? The original conversation stays available. Files stay unchanged.",
+        [
+            "¿Detener la respuesta y retroceder los últimos {0} turnos? La conversación original seguirá disponible. Los archivos no cambian.",
+            "Arrêter la réponse et revenir sur les {0} derniers tours ? La conversation originale reste disponible. Les fichiers ne changent pas.",
+            "Antwort stoppen und die letzten {0} Schritte zurückgehen? Die ursprüngliche Unterhaltung bleibt verfügbar. Dateien bleiben unverändert.",
+            "応答を停止し、最後の {0} ターンを巻き戻しますか？元の会話は保持されます。ファイルは変更されません。",
+            "응답을 중단하고 마지막 {0}개 턴을 되돌릴까요? 원래 대화는 유지됩니다. 파일은 변경되지 않습니다.",
+            "停止响应并回退最后 {0} 轮？原对话仍可使用。文件保持不变。",
+        ],
+    ),
+    (
+        "Stop the response and start a new conversation? The saved conversation stays available.",
+        [
+            "¿Detener la respuesta e iniciar una conversación nueva? La conversación guardada seguirá disponible.",
+            "Arrêter la réponse et commencer une nouvelle conversation ? La conversation enregistrée reste disponible.",
+            "Antwort stoppen und eine neue Unterhaltung starten? Die gespeicherte Unterhaltung bleibt verfügbar.",
+            "応答を停止して新しい会話を始めますか？保存済みの会話は引き続き利用できます。",
+            "응답을 중단하고 새 대화를 시작할까요? 저장된 대화는 계속 사용할 수 있습니다.",
+            "停止响应并开始新对话？已保存的对话仍可使用。",
+        ],
+    ),
+    (
+        "Stopping the response and finishing tool cleanup… Esc keeps this conversation.",
+        [
+            "Deteniendo la respuesta y finalizando la limpieza de herramientas… Esc conserva esta conversación.",
+            "Arrêt de la réponse et nettoyage des outils… Esc conserve cette conversation.",
+            "Antwort wird gestoppt und Werkzeuge werden bereinigt… Esc behält diese Unterhaltung.",
+            "応答を停止してツールを終了処理中… Esc で現在の会話を保持します。",
+            "응답을 중단하고 도구를 정리하는 중… Esc를 누르면 이 대화를 유지합니다.",
+            "正在停止响应并完成工具清理… Esc 保留当前对话。",
         ],
     ),
     (
@@ -20525,6 +20777,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "時間とタイムゾーンの変換",
             "시간과 timezone 변환",
             "时间和时区转换",
+        ],
+    ),
+    (
+        "Timed out",
+        [
+            "Tiempo de espera agotado",
+            "Délai dépassé",
+            "Zeitüberschreitung",
+            "タイムアウト",
+            "시간 초과",
+            "已超时",
         ],
     ),
     (
@@ -24324,6 +24587,10 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "branches",
+        ["ramas", "branches", "Zweige", "分岐", "분기", "分支"],
+    ),
+    (
         "built-in specialist profiles have no writable directory",
         [
             "Los perfiles especializados incorporados no tienen directorios",
@@ -24387,6 +24654,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "サブエージェントのライフサイクルアプリケーションをチェック",
             "subagent 수명주기 적용",
             "检查子剂生命周期应用程序",
+        ],
+    ),
+    (
+        "checking local runtimes",
+        [
+            "comprobando motores locales",
+            "vérification des moteurs locaux",
+            "lokale Laufzeitumgebungen werden geprüft",
+            "ローカルランタイムを確認中",
+            "로컬 런타임 확인 중",
+            "正在检查本地运行时",
         ],
     ),
     (
@@ -25910,6 +26188,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "no local models detected",
+        [
+            "no se detectaron modelos locales",
+            "aucun modèle local détecté",
+            "keine lokalen Modelle erkannt",
+            "ローカルモデルが見つかりません",
+            "로컬 모델이 감지되지 않음",
+            "未检测到本地模型",
+        ],
+    ),
+    (
         "no summary",
         [
             "no resumen",
@@ -26133,6 +26422,28 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "preparing a local session",
+        [
+            "preparando una sesión local",
+            "préparation d’une session locale",
+            "lokale Sitzung wird vorbereitet",
+            "ローカルセッションを準備中",
+            "로컬 세션 준비 중",
+            "正在准备本地会话",
+        ],
+    ),
+    (
+        "preparing secure access",
+        [
+            "preparando acceso seguro",
+            "préparation de l’accès sécurisé",
+            "sicherer Zugriff wird vorbereitet",
+            "安全なアクセスを準備中",
+            "보안 액세스 준비 중",
+            "正在准备安全访问",
+        ],
+    ),
+    (
         "profile name must be 1-64 lowercase letters, numbers, or hyphens",
         [
             "nombre de perfil debe ser 1-64 letras minúsculas, números o hyphens",
@@ -26213,6 +26524,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
     (
         "ready",
         ["Listo", "Prêt", "Bereit", "準備完了", "준비됨", "就绪"],
+    ),
+    (
+        "refresh",
+        [
+            "actualizar",
+            "actualiser",
+            "aktualisieren",
+            "更新",
+            "새로 고침",
+            "刷新",
+        ],
     ),
     (
         "refresh the existing Platform heartbeat without requiring a public A2A URL",
@@ -27394,6 +27716,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "{0}\n\nQueued prompts return to the composer.\nEnter: stop and continue · Esc: keep working",
+        [
+            "{0}\n\nLos mensajes en cola vuelven al campo de entrada.\nEnter: detener y continuar · Esc: seguir trabajando",
+            "{0}\n\nLes messages en attente reviennent dans la zone de saisie.\nEnter : arrêter et continuer · Esc : continuer à travailler",
+            "{0}\n\nWartende Eingaben kehren ins Eingabefeld zurück.\nEnter: stoppen und fortfahren · Esc: weiterarbeiten",
+            "{0}\n\n待機中の入力は入力欄に戻ります。\nEnter: 停止して続行 · Esc: 作業を継続",
+            "{0}\n\n대기 중인 입력은 입력창으로 돌아갑니다.\nEnter: 중단하고 계속 · Esc: 작업 유지",
+            "{0}\n\n排队的输入将返回输入框。\nEnter：停止并继续 · Esc：继续工作",
+        ],
+    ),
+    (
         "{0}\n\nSide question failed: {1}",
         [
             "{0}\n\nFalló la pregunta: {1}",
@@ -27633,6 +27966,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "{0} をプロバイダーの既定の接続に設定しました。",
             "{0}가 해당 제공업체의 기본 연결로 설정되었습니다.",
             "{0} 现已成为其提供商的默认连接。",
+        ],
+    ),
+    (
+        "{0} local models available",
+        [
+            "{0} modelos locales disponibles",
+            "{0} modèles locaux disponibles",
+            "{0} lokale Modelle verfügbar",
+            "{0} 個のローカルモデルが利用可能",
+            "로컬 모델 {0}개 사용 가능",
+            "{0} 个本地模型可用",
         ],
     ),
     (

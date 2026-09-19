@@ -2164,6 +2164,9 @@ fn startup_update_enabled() -> bool {
 /// state, and install failures fail open so an unavailable update service can
 /// never prevent Maestro from starting.
 pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> {
+    if maestro_local_host::safety::vendor_network_disabled() {
+        return None;
+    }
     if !startup_update_enabled() {
         return None;
     }
@@ -2782,6 +2785,7 @@ fn write_update_success(output: &mut impl Write, latest: &str) -> io::Result<()>
 }
 
 pub async fn run_update(args: &[String]) -> Result<i32> {
+    maestro_local_host::safety::require_vendor_network()?;
     let parsed = match parse_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {

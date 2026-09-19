@@ -933,6 +933,11 @@ impl App {
             SessionAction::Fork => {
                 self.fork_session();
             }
+            SessionAction::BrowseBranches => {
+                self.session_switcher
+                    .show_branches(self.state.session_id.as_deref());
+                self.active_modal = ActiveModal::SessionSwitcher;
+            }
             SessionAction::Rewind { turns, dry_run } => {
                 self.rewind_turns(turns, dry_run);
             }
@@ -1258,6 +1263,12 @@ impl App {
     /// Prepare and read the selected transcript once, while retaining the
     /// current writer until in-memory adoption succeeds.
     pub(crate) fn resume_session_path(&mut self, path: &std::path::Path, target_session_id: &str) {
+        if self.session_cleanup_pending() {
+            self.state.error = Some(self.state.locale.translate(
+                "Could not confirm that the response stopped. The current conversation was kept.",
+            ).to_owned());
+            return;
+        }
         let same_active_session = self
             .session_manager
             .current_session_path()
@@ -1500,181 +1511,6 @@ impl App {
         }
         self.state.add_system_message(text);
         self.state.mark_alerts_seen();
-    }
-
-    fn start_new_session(&mut self, status: &str) {
-        if self.state.busy {
-            self.state.status = Some(
-                self.state
-                    .locale
-                    .translate(
-                        "Wait for the active response to finish before starting a new session.",
-                    )
-                    .to_string(),
-            );
-            return;
-        }
-        self.last_esc_at = None;
-        self.credential_vault.clear();
-        // A child still running under the previous conversation must not report
-        // into this one. The scope rotates now; the session id does not exist
-        // until the first message creates the session file, which rotates it
-        // again to the id-derived scope.
-        self.adopt_session_context(None, "new");
-        self.dex_terminal = None;
-        self.dex_delight = Default::default();
-        self.state.messages.clear();
-        self.state.clear_focus_turn_state();
-        self.plan_review_comments.clear();
-        self.state.scroll_offset = 0;
-        self.state.alerts.clear();
-        self.state.unseen_alerts = 0;
-        // Drop any lingering error surface and force a full viewport repaint
-        // so the previous session's frames cannot linger on screen.
-        self.reset_rendered_viewport();
-        self.session_manager.reset_session();
-        self.state.session_id = None;
-        self.pending_agent_tool_notes.clear();
-        self.pending_agent_note_applications.clear();
-        self.pending_agent_note_consumptions.clear();
-        self.pending_consumed_agent_tool_notes.clear();
-        self.ready_consumed_agent_tool_notes.clear();
-        self.active_turn_assistant_messages_persisted = true;
-        self.ephemeral_lifecycle_applications.clear();
-        crate::plan_mode::set_active_session_id(None);
-        crate::tools::tool_call_contract::clear_pending_contracts();
-        self.session_started_at = SystemTime::now();
-        self.session_resume_failed = false;
-        self.usage_tracker = crate::usage::UsageTracker::new();
-        if !self.current_model.is_empty() {
-            self.usage_tracker.set_model(self.current_model.clone());
-        }
-        self.clear_active_skills();
-        if let Some(agent) = &self.native_agent {
-            agent.clear_history();
-        }
-        self.state.status = Some(status.to_string());
-        self.state.add_system_message(status.to_string());
-    }
-
-    pub(super) fn fork_session(&mut self) {
-        use crate::session::BranchPoint;
-
-        let fork_index = self.state.messages.len().saturating_sub(1);
-        let fork_id = self
-            .state
-            .messages
-            .last()
-            .map(|m| m.id.clone())
-            .unwrap_or_else(|| "start".to_string());
-        let branch = BranchPoint::new(fork_id, fork_index)
-            .with_description(self.state.locale.translate("Forked via /fork"));
-        if let Err(error) = self.ensure_session_started() {
-            self.state.error = Some(self.state.locale.format(
-                "Failed to start session before fork: {0}",
-                &[(error).to_string()],
-            ));
-            return;
-        }
-        match self.session_manager.fork_session_snapshot() {
-            Ok((fork_session_id, path)) => {
-                let activity = if self.state.busy {
-                    self.state
-                        .locale
-                        .translate(" The parent remains active and its current response continues.")
-                } else {
-                    self.state.locale.translate(" The parent remains selected.")
-                };
-                self.state.status = Some(self.state.locale.format(
-                    "Fork {0} created without switching sessions.",
-                    &[fork_session_id[..8.min(fork_session_id.len())].to_string()],
-                ));
-                self.state.add_system_message(self.state.locale.format(
-                    "Forked at message {0} (branch {1}) into session {2} at {3}.{4}",
-                    &[
-                        (branch.fork_index + 1).to_string(),
-                        branch.id[..8.min(branch.id.len())].to_string(),
-                        (fork_session_id).clone(),
-                        (path.display()).to_string(),
-                        (activity).to_string(),
-                    ],
-                ));
-            }
-            Err(error) => {
-                self.state.error = Some(
-                    self.state
-                        .locale
-                        .format("Failed to fork session: {0}", &[(error).to_string()]),
-                );
-            }
-        }
-    }
-
-    pub(super) fn rewind_turns(&mut self, turns: usize, dry_run: bool) {
-        self.rewind_saved_turns(turns, dry_run, false);
-    }
-
-    pub(super) fn rewind_saved_turns(&mut self, turns: usize, dry_run: bool, files: bool) {
-        if self.state.busy {
-            self.state.status = Some(
-                self.state
-                    .locale
-                    .translate("Wait for the active response to finish before rewinding.")
-                    .to_string(),
-            );
-            return;
-        }
-        let result = (|| -> anyhow::Result<()> {
-            self.session_manager.flush()?;
-            let source = self
-                .session_manager
-                .current_session_path()
-                .ok_or_else(|| anyhow::anyhow!("No saved session to rewind."))?;
-            let (boundary, saved_turns) =
-                crate::session::rewind_boundary_with_turn_count(&source, turns)?;
-            let kept_turns = saved_turns.saturating_sub(turns);
-            if dry_run {
-                self.state.add_system_message(self.state.locale.format("Rewind before the last {0} user turn(s) into a new saved session. The original remains available.", &[(turns).to_string()]));
-                if files {
-                    self.preview_rewind_files(kept_turns)?;
-                }
-                return Ok(());
-            }
-            if files {
-                self.preview_rewind_files(kept_turns)?;
-            }
-            // Publish the branch before changing active history or files.
-            let fork = crate::session::fork_session_prefix(&source, Some(boundary))?;
-            let source_id = self.state.session_id.clone();
-            if let Some(source_id) = source_id.as_deref() {
-                let sessions = self.session_manager.sessions_dir();
-                crate::checkpoints::fork_before_turn(
-                    &crate::checkpoints::CheckpointStore::new(sessions, source_id),
-                    &crate::checkpoints::CheckpointStore::new(sessions, &fork.id),
-                    kept_turns,
-                )?;
-            }
-
-            self.resume_session_path(&fork.path, &fork.id);
-            if self.session_manager.current_session_id() != Some(fork.id.as_str()) {
-                anyhow::bail!("The saved branch could not be opened.");
-            }
-            self.state.status = Some(self.state.locale.format(
-                "Rewound into saved session {0}.",
-                std::slice::from_ref(&(fork.id)),
-            ));
-            if files {
-                self.restore_rewind_files(source_id.as_deref(), kept_turns)?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            self.state.error = Some(
-                self.state
-                    .locale
-                    .format("Rewind failed: {0}", &[(error).to_string()]),
-            );
-        }
     }
 
     pub(super) fn cycle_interaction_mode(&mut self) {

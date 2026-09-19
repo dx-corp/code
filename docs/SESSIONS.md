@@ -3,14 +3,14 @@
 Audience: users/operators managing session persistence.  
 Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md) · [Safety](SAFETY.md) · [Features](FEATURES.md)
 
-Maestro persists conversation history in JSONL files under
-`~/.maestro/agent/sessions/--<cwd>--`. Understanding the format helps when you
+Deixic Code persists conversation history in JSONL files under
+`~/.composer/agent/sessions/--<cwd>--`. Understanding the format helps when you
 want to inspect, back up, or clean up sessions.
 
 ## Directory Layout
 
 ```
-~/.maestro/agent/
+~/.composer/agent/
 └─ sessions/
    └─ --Users-me-project--/
       ├─ 2025-01-15T18-05-23.982Z_<uuid>.jsonl
@@ -45,9 +45,46 @@ Important types:
 | Flag            | Effect                                       |
 | --------------- | --------------------------------------------- |
 | `--continue`    | Load the most recent session for the cwd     |
-| `--resume`      | Interactive picker of existing sessions      |
+| `--resume-session <id>` | Resume a saved session by ID |
 | `--session path`| Use a specific JSONL file (absolute or relative) |
 | `--no-session`  | Disable persistence entirely for this run    |
+
+## Find and resume saved conversations
+
+Open `/sessions`, or press Ctrl+Alt+R, and type a phrase from a saved
+conversation. Search includes names, IDs, working directories, user messages,
+assistant replies, and tool results. Matching conversations show an excerpt.
+Search runs locally in the background; opening the picker does not send a
+model request. Enter resumes the selected conversation. Escape closes the
+picker and keeps your draft.
+For very large messages, search covers the first 50,000 characters.
+
+## Forks and session changes
+
+Run `/fork` to save a branch of the current conversation. The parent stays
+selected, and an active response keeps running. The result includes a command
+you can copy to resume the fork:
+
+```sh
+deixic-code --resume-session <fork-id>
+```
+
+Run `/tree` to browse the current conversation's saved branches. In `/sessions`,
+Ctrl+F switches between all conversations and the selected conversation's
+branches. Each fork shows its parent's ID. Enter resumes the selection; Escape
+returns to your draft. Branches remain available after restarting Deixic Code.
+
+During an active response, `/new` and `/rewind <turns>` ask before stopping it.
+Escape on the confirmation keeps the response running. Enter stops the response, waits for tool
+cleanup, saves its final events, and then opens the new conversation or saved
+rewind branch. Queued prompts return to the composer. If cleanup cannot be
+confirmed, the current conversation stays selected and an error is shown.
+Keeping the current conversation during cleanup does not undo cancellation.
+Session changes remain blocked until cleanup is acknowledged, including on a retry.
+
+`/rewind <turns>` keeps the original conversation and leaves files unchanged.
+`/rewind <turns> --files` also restores the affected file checkpoints. Use
+`--dry-run` to preview a rewind without changing the conversation or files.
 
 ## Secure Transfer
 
@@ -137,4 +174,4 @@ these without touching the JSONL by using:
 - Use `--no-session` in CI or ephemeral workspaces to avoid clutter.
 
 Future enhancements (continuous context, shared KBs) will reuse this directory,
-so keep it tidy but don’t remove unrelated files under `~/.maestro/agent/`.
+so keep it tidy but don’t remove unrelated files under `~/.composer/agent/`.

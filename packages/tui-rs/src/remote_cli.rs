@@ -190,6 +190,7 @@ struct Minted {
 }
 
 pub async fn run_remote(args: &[String]) -> Result<i32> {
+    maestro_local_host::safety::require_vendor_network()?;
     let (cmd, rest) = match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
             println!("{USAGE}");

@@ -365,7 +365,12 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         .or_else(|| specialist.as_ref().and_then(|p| p.model.clone()))
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(crate::codex_auth::resolve_default_model);
-    if crate::local_models::is_local_model_route(&model) {
+    // A signed exact route is administrator-supplied metadata, not a discovered
+    // user override; do not probe ordinary local-runtime environment URLs.
+    let disconnected = maestro_local_host::safety::disconnected_route(&model)
+        .map_err(anyhow::Error::msg)?
+        .is_some();
+    if crate::local_models::is_local_model_route(&model) && !disconnected {
         let discovered = crate::local_models::discover_local_model(&model)
             .await?
             .with_context(|| {

@@ -127,6 +127,9 @@ impl MaestroSessionHistoryHook {
         transcript_path: Option<&str>,
         transcript_size_before: Option<u64>,
     ) {
+        if crate::safety::vendor_network_disabled() {
+            return;
+        }
         let Some(session_id) = session_id else {
             return;
         };
@@ -1533,6 +1536,9 @@ impl IntegratedHookSystem {
         endpoint: Option<String>,
         state_dir: PathBuf,
     ) {
+        if crate::safety::vendor_network_disabled() {
+            return;
+        }
         self.set_identity_context(Some(organization_id.clone()), Some(workspace_id.clone()));
         let hook = Arc::new(MaestroSessionHistoryHook {
             organization_id,

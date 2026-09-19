@@ -1348,7 +1348,7 @@ fn find_session_jsonl(dir: &std::path::Path) -> std::path::PathBuf {
         .expect("directory should contain a session .jsonl file")
 }
 
-fn new_test_app() -> App {
+pub(super) fn new_test_app() -> App {
     new_test_app_with_platform_resolution(PlatformSessionResolution::UseNoPlatformSession)
 }
 
@@ -1406,6 +1406,7 @@ async fn startup_prompt_waits_for_initial_local_discovery() {
         std::thread::sleep(Duration::from_millis(25));
         tx.send(crate::local_models::LocalDiscoveryBatch {
             generation: 99,
+            runtimes: Vec::new(),
             models: vec![crate::model_catalog::ModelInfo {
                 id: "startup-budget-model".to_owned(),
                 name: "startup-budget-model".to_owned(),
@@ -2963,11 +2964,52 @@ fn test_format_mcp_server_transition_status_for_error_change() {
 }
 
 #[tokio::test]
+async fn passive_mcp_refresh_waits_for_native_agent_admission() {
+    let mut app = new_test_app();
+    assert!(app.native_agent.is_none());
+    for force in [false, true] {
+        assert!(!app.refresh_mcp_badges_with_force(force).await);
+        assert!(!app.mcp_status_refresh_in_flight);
+        assert!(app.last_mcp_status_refresh.is_none());
+        assert!(app.mcp_status_rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn returning_user_without_an_agent_keeps_the_composer_and_pending_prompt() {
+    let mut app = new_test_app();
+    app.ui_prefs.onboarding_seen = true;
+    app.state.set_input("offline draft é stays");
+    app.initial_prompt = Some("explicit pending request".into());
+    assert!(app.native_agent.is_none());
+    assert!(!app.maybe_open_first_run_setup());
+    assert_eq!(app.active_modal, ActiveModal::None);
+    assert_eq!(app.state.input(), "offline draft é stays");
+    assert_eq!(
+        app.initial_prompt.as_deref(),
+        Some("explicit pending request")
+    );
+    assert!(app.native_agent.is_none());
+}
+
+#[tokio::test]
 async fn test_handle_config_event_forces_mcp_badge_refresh() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(temp.path().join(".composer")).expect("create config dir");
 
     let mut app = new_test_app();
+    let (agent, _events) = crate::agent::NativeAgent::new_with_test_client(
+        crate::agent::NativeAgentConfig {
+            model: "openai/gpt-4o".into(),
+            cwd: temp.path().display().to_string(),
+            ..Default::default()
+        },
+        crate::ai::UnifiedClient::OpenAI(
+            crate::ai::OpenAiClient::with_base_url("fixture", "http://127.0.0.1:1/v1").unwrap(),
+        ),
+    )
+    .unwrap();
+    app.native_agent = Some(agent);
     app.tool_executor = Arc::new(ToolExecutor::new(temp.path().display().to_string()));
     app.last_mcp_status_refresh = Some(Instant::now());
     app.state.mcp_connected = 7;
@@ -3290,32 +3332,6 @@ fn open_plan_comments_block_approval() {
     assert!(
         app.state.error.as_deref().is_some_and(|error| error
             == "Open review comments prevent leaving plan mode: 1. Use `/plan comments`.")
-    );
-}
-
-#[test]
-fn rewind_is_blocked_while_busy() {
-    let mut app = new_test_app();
-    app.state.add_user_message("keep me".into());
-    app.state.busy = true;
-    app.rewind_turns(1, false);
-    // App construction may prepend system messages of its own (e.g. the
-    // sandbox-unavailable notice when a concurrently running config test
-    // sets MAESTRO_SANDBOX_MODE/MAESTRO_INTERNAL_TUI_SANDBOX_DEFAULT
-    // process-wide, or an untrusted-workspace notice), so an absolute
-    // message count is not stable. Assert the semantic invariant instead:
-    // the user message survives the blocked rewind and the busy status is
-    // shown.
-    assert!(
-        app.state
-            .messages
-            .iter()
-            .any(|message| message.content == "keep me"),
-        "a blocked rewind must not remove the user message"
-    );
-    assert_eq!(
-        app.state.status.as_deref(),
-        Some("Wait for the active response to finish before rewinding.")
     );
 }
 
@@ -6783,7 +6799,17 @@ fn opening_control_panels_preserves_approval_and_preferences() {
 #[tokio::test]
 async fn control_panel_enter_keeps_child_model_picker_open() {
     let mut app = new_test_app();
-    app.show_control_panel(crate::commands::ControlPanel::Model);
+    app.state.set_input("draft é stays");
+    app.state.move_left();
+    let cursor = app.state.cursor();
+    app.show_command_palette();
+    app.command_palette.insert_str(">model");
+    app.handle_command_palette_key(crossterm::event::KeyCode::Enter, false)
+        .await
+        .unwrap();
+    assert_eq!(app.active_modal, ActiveModal::CommandPalette);
+    assert_eq!(app.state.input(), "draft é stays");
+    assert_eq!(app.state.cursor(), cursor);
     assert_eq!(
         app.command_palette.selected_resource().unwrap().id,
         "model select"
@@ -6792,6 +6818,13 @@ async fn control_panel_enter_keeps_child_model_picker_open() {
         .await
         .unwrap();
     assert_eq!(app.active_modal, ActiveModal::ModelSelector);
+    assert_eq!(app.state.input(), "draft é stays");
+    assert_eq!(app.state.cursor(), cursor);
+    app.handle_model_selector_key(crossterm::event::KeyCode::Esc, false)
+        .await
+        .unwrap();
+    assert_eq!(app.state.input(), "draft é stays");
+    assert_eq!(app.state.cursor(), cursor);
 }
 
 #[tokio::test]

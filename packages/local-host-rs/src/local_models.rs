@@ -25,6 +25,9 @@ pub struct LocalRuntimeEndpoint {
 /// discovery, setup, and request routing share the same override precedence.
 #[must_use]
 pub fn local_runtime_endpoints(env: &HashMap<String, String>) -> Vec<LocalRuntimeEndpoint> {
+    if crate::safety::vendor_network_disabled() {
+        return Vec::new();
+    }
     LOCAL_RUNTIME_IDS
         .into_iter()
         .filter_map(|provider| {
@@ -48,6 +51,10 @@ pub fn local_runtime_endpoints(env: &HashMap<String, String>) -> Vec<LocalRuntim
 /// Append the OpenAI-compatible model metadata path to a runtime base URL.
 pub fn local_metadata_url(base_url: &str) -> anyhow::Result<String> {
     let mut parsed = url::Url::parse(base_url)?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some(),
+        "runtime URL must use HTTP or HTTPS with a host"
+    );
     let base_path = parsed.path().trim_end_matches('/');
     parsed.set_path(&format!("{base_path}/models"));
     Ok(parsed.to_string())
@@ -57,6 +64,31 @@ pub fn local_metadata_url(base_url: &str) -> anyhow::Result<String> {
 pub struct LocalDiscoveryBatch {
     pub generation: u64,
     pub models: Vec<ModelInfo>,
+    pub runtimes: Vec<LocalRuntimeDiscovery>,
+}
+
+/// Discovery evidence only; this never grants inference or tool permission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRuntimeDiscovery {
+    pub provider: &'static str,
+    pub display_name: &'static str,
+    pub status: LocalRuntimeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalRuntimeStatus {
+    Ready { models: usize },
+    Empty,
+    Unreachable,
+    TimedOut,
+    HttpError(u16),
+    InvalidEndpoint,
+    InvalidResponse,
+}
+
+struct EndpointDiscovery {
+    models: Vec<ModelInfo>,
+    runtime: LocalRuntimeDiscovery,
 }
 
 /// Replace the runtime model metadata available to agent-side model resolution.
@@ -148,6 +180,7 @@ pub async fn discover_local_model(route: &str) -> anyhow::Result<Option<ModelInf
     tokio::task::spawn_blocking(move || {
         let client = discovery_client();
         discover_endpoint(&client, &endpoint)
+            .models
             .into_iter()
             .find(|model| model.id == model_id)
     })
@@ -235,13 +268,17 @@ fn spawn_local_model_discovery_with_client_factory(
             let client = make_client();
             let mut generation = 0_u64;
             while rx.recv().is_ok() {
-                let models = discover_endpoints_with_client(&client, &endpoints);
+                let (models, runtimes) = discover_endpoints_with_client(&client, &endpoints);
                 generation = generation.saturating_add(1);
                 if let Ok(mut state) = worker_state.lock() {
                     state.in_flight = false;
                 }
                 if event_tx
-                    .send(LocalDiscoveryBatch { generation, models })
+                    .send(LocalDiscoveryBatch {
+                        generation,
+                        models,
+                        runtimes,
+                    })
                     .is_err()
                 {
                     break;
@@ -263,49 +300,123 @@ fn discovery_client() -> reqwest::blocking::Client {
 fn discover_endpoints_with_client(
     client: &reqwest::blocking::Client,
     endpoints: &[LocalRuntimeEndpoint],
-) -> Vec<ModelInfo> {
+) -> (Vec<ModelInfo>, Vec<LocalRuntimeDiscovery>) {
     let results = std::thread::scope(|scope| {
         endpoints
             .iter()
-            .map(|endpoint| scope.spawn(|| discover_endpoint(client, endpoint)))
+            .map(|endpoint| {
+                (
+                    endpoint,
+                    scope.spawn(|| discover_endpoint(client, endpoint)),
+                )
+            })
             .collect::<Vec<_>>()
             .into_iter()
-            .flat_map(|handle| handle.join().unwrap_or_default())
+            .map(|(endpoint, handle)| {
+                handle.join().unwrap_or_else(|_| {
+                    endpoint_failure(endpoint, LocalRuntimeStatus::InvalidResponse)
+                })
+            })
             .collect::<Vec<_>>()
     });
     let mut seen = HashSet::new();
-    results
-        .into_iter()
-        .filter(|model| seen.insert((model.provider.clone(), model.id.clone())))
-        .collect()
+    let mut models = Vec::new();
+    let mut runtimes = Vec::new();
+    for result in results {
+        models.extend(
+            result
+                .models
+                .into_iter()
+                .filter(|model| seen.insert((model.provider.clone(), model.id.clone()))),
+        );
+        runtimes.push(result.runtime);
+    }
+    (models, runtimes)
+}
+
+fn endpoint_failure(
+    endpoint: &LocalRuntimeEndpoint,
+    status: LocalRuntimeStatus,
+) -> EndpointDiscovery {
+    EndpointDiscovery {
+        models: Vec::new(),
+        runtime: LocalRuntimeDiscovery {
+            provider: endpoint.provider,
+            display_name: endpoint.display_name,
+            status,
+        },
+    }
 }
 
 fn discover_endpoint(
     client: &reqwest::blocking::Client,
     endpoint: &LocalRuntimeEndpoint,
-) -> Vec<ModelInfo> {
+) -> EndpointDiscovery {
     let started = Instant::now();
     let Ok(url) = local_metadata_url(&endpoint.base_url) else {
-        return Vec::new();
+        return endpoint_failure(endpoint, LocalRuntimeStatus::InvalidEndpoint);
     };
-    let Ok(response) = client.get(url).send() else {
-        return Vec::new();
+    let response = match client.get(url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            return endpoint_failure(
+                endpoint,
+                if error.is_timeout() {
+                    LocalRuntimeStatus::TimedOut
+                } else {
+                    LocalRuntimeStatus::Unreachable
+                },
+            );
+        }
     };
-    let Ok(response) = response.error_for_status() else {
-        return Vec::new();
+    if !response.status().is_success() {
+        return endpoint_failure(
+            endpoint,
+            LocalRuntimeStatus::HttpError(response.status().as_u16()),
+        );
+    }
+    let payload: serde_json::Value = match response.json() {
+        Ok(payload) => payload,
+        Err(error) => {
+            return endpoint_failure(
+                endpoint,
+                if error.is_timeout() {
+                    LocalRuntimeStatus::TimedOut
+                } else {
+                    LocalRuntimeStatus::InvalidResponse
+                },
+            );
+        }
     };
-    let Ok(payload) = response.json() else {
-        return Vec::new();
+    let Some(entries) = payload.get("data").and_then(serde_json::Value::as_array) else {
+        return endpoint_failure(endpoint, LocalRuntimeStatus::InvalidResponse);
     };
     let mut models = parse_models_response(endpoint.provider, &payload);
-    if endpoint.provider == "ollama" {
+    if !entries.is_empty() && models.is_empty() {
+        return endpoint_failure(endpoint, LocalRuntimeStatus::InvalidResponse);
+    }
+    if endpoint.provider == "ollama" && !models.is_empty() {
         let remaining = DISCOVERY_TOTAL_TIMEOUT.saturating_sub(started.elapsed());
         if !remaining.is_zero() {
             let running = ollama_running_contexts(client, &endpoint.base_url, remaining);
             apply_ollama_running_contexts(&mut models, &running);
         }
     }
-    models
+    let status = if models.is_empty() {
+        LocalRuntimeStatus::Empty
+    } else {
+        LocalRuntimeStatus::Ready {
+            models: models.len(),
+        }
+    };
+    EndpointDiscovery {
+        models,
+        runtime: LocalRuntimeDiscovery {
+            provider: endpoint.provider,
+            display_name: endpoint.display_name,
+            status,
+        },
+    }
 }
 
 fn ollama_running_contexts(
@@ -821,7 +932,8 @@ mod tests {
             *released.lock().unwrap() = true;
             wake.notify_all();
         }
-        let models = discovery.join().unwrap();
+        let (models, runtimes) = discovery.join().unwrap();
+        assert_eq!(runtimes[2].status, LocalRuntimeStatus::InvalidResponse);
         slow_a_server.join().unwrap();
         slow_b_server.join().unwrap();
 
@@ -841,12 +953,100 @@ mod tests {
     }
 
     #[test]
-    fn discovery_actor_coalesces_refreshes_and_increments_completed_generations() {
-        let first = serve_models_after_requests(
-            Duration::from_millis(25),
-            r#"{"data":[{"id":"model-a"}]}"#,
-            2,
+    fn discovery_distinguishes_empty_invalid_and_unreachable_runtimes() {
+        let client = discovery_client();
+        for (body, expected) in [
+            (r#"{"data":[]}"#, LocalRuntimeStatus::Empty),
+            (
+                r#"{"data":[{"id":"qwen"}]}"#,
+                LocalRuntimeStatus::Ready { models: 1 },
+            ),
+            (
+                r#"{"error":"unavailable"}"#,
+                LocalRuntimeStatus::InvalidResponse,
+            ),
+            (r#"{"data":[{}]}"#, LocalRuntimeStatus::InvalidResponse),
+            ("not-json", LocalRuntimeStatus::InvalidResponse),
+        ] {
+            let endpoint = LocalRuntimeEndpoint {
+                provider: "llamacpp",
+                display_name: "llama.cpp",
+                base_url: serve_models_after(Duration::ZERO, body),
+            };
+            let result = discover_endpoint(&client, &endpoint);
+            assert_eq!(result.runtime.status, expected);
+            assert_eq!(result.runtime.provider, "llamacpp");
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let mut endpoint = LocalRuntimeEndpoint {
+            provider: "lmstudio",
+            display_name: "LM Studio",
+            base_url,
+        };
+        assert_eq!(
+            discover_endpoint(&client, &endpoint).runtime.status,
+            LocalRuntimeStatus::Unreachable
         );
+        endpoint.base_url = "invalid URL".to_owned();
+        assert_eq!(
+            discover_endpoint(&client, &endpoint).runtime.status,
+            LocalRuntimeStatus::InvalidEndpoint
+        );
+    }
+
+    #[test]
+    fn discovery_timeout_is_distinct_from_an_empty_model_list() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (release, gate) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            gate.recv().unwrap();
+        });
+        let endpoint = LocalRuntimeEndpoint {
+            provider: "llamacpp",
+            display_name: "llama.cpp",
+            base_url,
+        };
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let result = discover_endpoint(&client, &endpoint);
+        release.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(result.runtime.status, LocalRuntimeStatus::TimedOut);
+        assert!(result.models.is_empty());
+    }
+
+    #[test]
+    fn discovery_reports_http_error_without_server_body_or_credentials() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret").unwrap();
+        });
+        let endpoint = LocalRuntimeEndpoint {
+            provider: "llamacpp",
+            display_name: "llama.cpp",
+            base_url,
+        };
+        let result = discover_endpoint(&discovery_client(), &endpoint);
+        assert_eq!(result.runtime.status, LocalRuntimeStatus::HttpError(401));
+        assert!(result.models.is_empty());
+        assert!(!format!("{:?}", result.runtime).contains("secret"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn discovery_actor_coalesces_refreshes_and_increments_completed_generations() {
+        let first =
+            serve_models_after_requests(Duration::ZERO, r#"{"data":[{"id":"model-a"}]}"#, 2);
         let endpoints = vec![LocalRuntimeEndpoint {
             provider: "llamacpp",
             display_name: "llama.cpp",
@@ -856,11 +1056,18 @@ mod tests {
         // loading during HTTP client construction. Production still builds its
         // client asynchronously inside the actor.
         let client = discovery_client();
+        // Hold actor startup until both refreshes have been submitted, so
+        // coalescing does not depend on the HTTP server's scheduling or a sleep.
+        let (release, startup) = std::sync::mpsc::channel();
         let (handle, events) =
-            spawn_local_model_discovery_with_client_factory(endpoints, move || client);
+            spawn_local_model_discovery_with_client_factory(endpoints, move || {
+                startup.recv().expect("release discovery actor startup");
+                client
+            });
 
         handle.refresh();
         handle.refresh();
+        release.send(()).expect("start queued discovery");
         let first = events.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(first.generation, 1);
         assert_eq!(first.models[0].id, "model-a");

@@ -201,11 +201,14 @@ fn local_runtime_ignores_expired_stored_identity_but_managed_route_does_not() {
     .expect("write stored OAuth fixture");
     crate::init_cli::invalidate_evalops_credentials_cache();
 
-    let (resolved, telemetry_scope) = super::resolve_native_client("ollama/qwen3", None)
-        .expect("local runtime must remain available offline");
-    assert_eq!(resolved.provider_name, "ollama");
-    assert!(resolved.client.is_some());
-    assert!(telemetry_scope.is_none());
+    for provider in ["ollama", "lmstudio", "llamacpp"] {
+        let (resolved, telemetry_scope) =
+            super::resolve_native_client(&format!("{provider}/qwen3"), None)
+                .expect("local runtime must remain available offline");
+        assert_eq!(resolved.provider_name, provider);
+        assert!(resolved.client.is_some());
+        assert!(telemetry_scope.is_none());
+    }
 
     let managed = match super::resolve_native_client("evalops/gpt-5.5", None) {
         Ok(_) => panic!("managed inference must not use an expired offline session"),

@@ -284,6 +284,9 @@ async fn managed_policy_check(model: &str, cwd: &Path) -> OnboardingCheck {
 }
 
 async fn model_probe(model: &str) -> anyhow::Result<()> {
+    if let Some(client) = crate::credential_mode::disconnected_client(model)? {
+        return probe_client(&client, model, PROBE_TIMEOUT).await;
+    }
     let source_env: HashMap<String, String> = std::env::vars().collect();
     let mode = crate::credential_mode::require_ready(model)?;
     let (route, mut env) = match mode {

@@ -260,6 +260,7 @@ struct InitResult {
 }
 
 pub async fn run_init(args: &[String]) -> Result<i32> {
+    crate::safety::require_vendor_network()?;
     if args
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
@@ -2304,6 +2305,7 @@ async fn load_current_evalops_snapshot_async() -> Result<Option<EvalOpsCredentia
 /// An invalid or revoked refresh token fails closed and asks the user to log in
 /// again instead of unexpectedly launching an interactive OAuth flow.
 pub(crate) fn load_current_evalops_snapshot() -> Result<Option<EvalOpsCredentialSnapshot>> {
+    crate::safety::require_vendor_network()?;
     std::thread::spawn(|| -> Result<Option<EvalOpsCredentialSnapshot>> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2431,6 +2433,7 @@ pub(crate) async fn perform_code_authority_login() -> Result<()> {
 }
 
 pub async fn perform_evalops_login() -> Result<()> {
+    crate::safety::require_vendor_network()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .build()

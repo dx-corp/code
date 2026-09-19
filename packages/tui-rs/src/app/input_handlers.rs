@@ -36,6 +36,10 @@ impl App {
         code: KeyCode,
         modifiers: CrosstermModifiers,
     ) -> Result<()> {
+        // A late tool approval cannot take the confirmation dialog's keystrokes.
+        if self.session_transition.is_some() {
+            self.active_modal = ActiveModal::SessionTransition;
+        }
         if code != KeyCode::Esc
             || self.active_modal != ActiveModal::None
             || self.history_search.is_some()
@@ -112,6 +116,9 @@ impl App {
             }
             ActiveModal::DexAppearance => return self.handle_dex_appearance_key(code),
             ActiveModal::FileSearch => return self.handle_file_search_key(code, ctrl).await,
+            ActiveModal::SessionTransition => {
+                return self.handle_session_transition_key(code, ctrl).await;
+            }
             ActiveModal::SessionSwitcher => {
                 return self.handle_session_switcher_key(code, ctrl).await;
             }
@@ -730,6 +737,7 @@ impl App {
                     self.state.error = Some(e);
                 }
             }
+            KeyCode::Char('f') if ctrl => self.session_switcher.toggle_branches(),
             KeyCode::Char(c) if !ctrl => {
                 self.session_switcher.insert_char(c);
             }
@@ -1039,6 +1047,26 @@ impl App {
                 self.active_modal = ActiveModal::None;
                 if let Some(resource) = self.command_palette.confirm() {
                     match resource.kind {
+                        PaletteResourceKind::Command
+                            if matches!(resource.id.as_str(), "model" | "model select") =>
+                        {
+                            // Browsing models must preserve the composer, including
+                            // its Unicode cursor and folded paste state.
+                            let cwd = self.state.cwd.as_deref().unwrap_or(".");
+                            let output =
+                                crate::localization::with_locale(self.state.locale, || {
+                                    self.command_registry.execute(
+                                        &format!("/{}", resource.id),
+                                        cwd,
+                                        self.state.session_id.as_deref(),
+                                        self.state.model.as_deref(),
+                                    )
+                                });
+                            match output {
+                                Ok(output) => self.handle_command_output(output).await,
+                                Err(error) => self.state.error = Some(error.to_string()),
+                            }
+                        }
                         PaletteResourceKind::Command => {
                             self.state.set_input(&format!("/{}", resource.id));
                             self.execute_slash_command().await?;
@@ -1438,6 +1466,10 @@ impl App {
         ctrl: bool,
     ) -> Result<()> {
         match code {
+            KeyCode::Char('r') if ctrl => {
+                self.local_model_discovery.refresh();
+                self.model_selector.mark_local_refreshing();
+            }
             KeyCode::Esc => {
                 self.model_selector.hide();
                 self.active_modal = ActiveModal::None;

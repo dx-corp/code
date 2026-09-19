@@ -504,6 +504,20 @@ fn resolve_native_client(
     NativeResolvedClient,
     Option<crate::telemetry::TelemetryIdentityScope>,
 )> {
+    if let Some(client) = crate::credential_mode::disconnected_client(model)? {
+        anyhow::ensure!(
+            client_override.is_none(),
+            "Disconnected policy does not allow client overrides"
+        );
+        return Ok((
+            NativeResolvedClient {
+                provider_name: client.provider_name().to_owned(),
+                client: Some(client),
+                model_route: NativeModelRoute::DirectProvider,
+            },
+            None,
+        ));
+    }
     let route = crate::codex_auth::resolve_model_route(model);
     if let Some(override_client) = client_override {
         let identity_scope = if override_client.skips_identity_verification() {

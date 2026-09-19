@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::entries::SessionEntry;
 use super::reader::SessionReader;
 
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum characters kept for the first-user-message preview.
 const MAX_PREVIEW_CHARS: usize = 160;
@@ -30,6 +30,9 @@ const MAX_PREVIEW_CHARS: usize = 160;
 pub struct SessionIndexEntry {
     /// Session id from the file header.
     pub id: String,
+    /// Persisted fork lineage from the session header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session: Option<String>,
     /// Working directory the session was started in.
     pub cwd: String,
     /// RFC 3339 session start timestamp from the file header.
@@ -231,6 +234,7 @@ fn entry_from_file(path: &Path) -> Option<SessionIndexEntry> {
     let (header, stats, meta) = SessionReader::read_header(path).ok()?;
     Some(SessionIndexEntry {
         id: header.id,
+        parent_session: header.parent_session,
         cwd: header.cwd,
         started_at: header.timestamp,
         preview: first_user_message_preview(path),
@@ -354,6 +358,35 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].entry.message_count, 3);
         assert_eq!(second[0].entry.preview.as_deref(), Some("first prompt"));
+    }
+
+    #[test]
+    fn fork_parent_survives_cache_reload_and_legacy_cache_upgrade() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("sessions");
+        let path = write_session(&root.join("project"), "child.jsonl", "child", "opening");
+        let text = fs::read_to_string(&path).unwrap().replace(
+            "\"id\":\"child\"",
+            "\"id\":\"child\",\"parentSession\":\"parent\"",
+        );
+        fs::write(&path, text).unwrap();
+        let cache = temp.path().join("session-index.json");
+        let first = collect_sessions(&root, Some(&cache));
+        assert_eq!(first[0].entry.parent_session.as_deref(), Some("parent"));
+        let again = collect_sessions(&root, Some(&cache));
+        assert_eq!(again[0].entry.parent_session.as_deref(), Some("parent"));
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cache).unwrap()).unwrap();
+        legacy["version"] = 1.into();
+        for file in legacy["files"].as_object_mut().unwrap().values_mut() {
+            file["entry"]
+                .as_object_mut()
+                .unwrap()
+                .remove("parentSession");
+        }
+        fs::write(&cache, serde_json::to_string(&legacy).unwrap()).unwrap();
+        let upgraded = collect_sessions(&root, Some(&cache));
+        assert_eq!(upgraded[0].entry.parent_session.as_deref(), Some("parent"));
     }
 
     #[test]

@@ -140,6 +140,8 @@ pub enum ActiveModal {
     FileSearch,
     /// Session history browser
     SessionSwitcher,
+    /// Confirm a session transition, then await runtime cleanup.
+    SessionTransition,
     /// Read-only persisted tool execution browser
     Operations,
     /// Interactive MCP server lifecycle manager
@@ -693,6 +695,8 @@ pub struct App {
 
     /// Session history browser modal.
     session_switcher: SessionSwitcher,
+    session_transition: Option<session_transition::TransitionDialog>,
+    session_cleanup: session_transition::SessionCleanupState,
 
     /// Recent persisted tool executions.
     operations: OperationsModal,
@@ -1147,7 +1151,7 @@ impl App {
             } else {
                 None
             };
-        let (prepared, draft) = match startup::prepare_with_composer(
+        let startup = match startup::prepare_with_composer(
             &mut terminal,
             &mut capabilities,
             &mut terminal_events,
@@ -1158,9 +1162,38 @@ impl App {
                 return Err(error);
             }
         };
+        let mut prepared = startup.prepared;
+        prepared.local_discovery =
+            Some((startup.local_discovery_handle, startup.local_discovery_rx));
         let mut app =
             Self::new_with_prepared_startup(terminal, capabilities, initial_prompt, true, prepared);
-        app.state.textarea = draft;
+        app.state.model = Some(startup.model.clone());
+        app.model_selector
+            .set_current_model(Some(startup.model.clone()));
+        if startup.model_changed {
+            app.current_model = startup.model.clone();
+            app.current_model_user_set = true;
+            let thinking = crate::model_dynamics::normalize_thinking(
+                &startup.model,
+                app.current_thinking_level,
+            );
+            app.current_thinking_level = thinking;
+            app.state.thinking_level = thinking;
+        }
+        if let Some(batch) = startup.local_discovery_batch {
+            if app.model_selector.apply_discovery(&batch) {
+                crate::local_models::replace_discovered_models(
+                    batch.generation,
+                    &batch.models,
+                    Some(&startup.model),
+                );
+            }
+        }
+        if let Some(session) = &startup.resume_session {
+            app.initial_prompt = None;
+            app.resume_session_path(&session.path, &session.id);
+        }
+        app.state.textarea = startup.textarea;
         // Keep the reader and its buffered input across the startup handoff.
         app.terminal_events = terminal_events;
         app.initialize_terminal_events();
@@ -1450,6 +1483,7 @@ impl App {
         prepared: startup::PreparedStartup,
     ) -> Self {
         let startup::PreparedStartup {
+            local_discovery,
             config: app_config,
             plugin_registry,
             loaded_skills,
@@ -1512,8 +1546,11 @@ impl App {
         }
         let (model_monitor, model_verification_rx) = crate::model_monitor::spawn_model_monitor();
         let (local_model_discovery, local_model_discovery_rx) =
-            crate::local_models::spawn_local_model_discovery();
-        local_model_discovery.refresh();
+            local_discovery.unwrap_or_else(|| {
+                let (handle, rx) = crate::local_models::spawn_local_model_discovery();
+                handle.refresh();
+                (handle, rx)
+            });
 
         let initial_thinking = crate::model_dynamics::configured_thinking(
             &app_config,
@@ -1682,6 +1719,8 @@ impl App {
             workspace_scan_rx: None,
             workspace_refresh_pending: false,
             session_switcher: SessionSwitcher::new(&cwd),
+            session_transition: None,
+            session_cleanup: session_transition::SessionCleanupState::Ready,
             operations: OperationsModal::new(&cwd),
             mcp_manager: McpManager::new(),
             approval_controller: ApprovalController::new(),
@@ -2246,6 +2285,14 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 needs_redraw = true;
             }
 
+            if self.poll_session_transition().await? {
+                needs_redraw = true;
+            }
+
+            if self.session_switcher.poll_refresh() {
+                needs_redraw = true;
+            }
+
             if self.poll_local_model_discovery() {
                 needs_redraw = true;
             }
@@ -2381,7 +2428,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
 
             // Fire a due /loop prompt. Loops never interrupt a running turn:
             // a due prompt waits for idle and then submits.
-            let loop_prompt = if self.state.busy {
+            let loop_prompt = if self.state.busy || self.session_cleanup_pending() {
                 None
             } else {
                 self.loop_schedule.as_mut().and_then(|schedule| {
@@ -2407,7 +2454,8 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             // active (worker did not call update_goal complete|blocked), inject
             // a continuation prompt. No second model. Do not burn the safety
             // counter or spin when no agent is available (e.g. missing API key).
-            let queue_or_loop_busy = self.loop_schedule.is_some()
+            let queue_or_loop_busy = self.session_cleanup_pending()
+                || self.loop_schedule.is_some()
                 || !self.queued_prompts.is_empty()
                 || self.queued_prompt_inflight.is_some()
                 || self.queued_prompt_active.is_some();
@@ -3133,82 +3181,6 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         }
     }
 
-    /// Point the subagent scope at `session_id`'s conversation.
-    ///
-    /// Call this wherever the active conversation changes. The tool executor
-    /// lives behind an `Arc` for the whole process, so without a rotation a
-    /// child started by an earlier conversation reported its completion into
-    /// whichever conversation happened to be active when it finished, and that
-    /// summary went on to the next model request.
-    ///
-    /// The scope is derived from the session id rather than random, so resuming
-    /// a session re-adopts the scope its own children were stamped with and
-    /// their parked completions surface then. `None` means no session id exists
-    /// yet; the placeholder is unique so it can never collide with another
-    /// conversation, and it is replaced when the session file is created.
-    /// Point both the subagent scope and the hook system at `session_id`.
-    ///
-    /// `reason` is published to `SessionStart` / `SessionEnd` hooks as their
-    /// `source` / `reason` field. The hook system lives in the runner, so the
-    /// session id and the lifecycle dispatch both travel as a command; the
-    /// runner compares against the session it holds and fires the transition.
-    pub(super) fn adopt_session_context(&mut self, session_id: Option<&str>, reason: &str) {
-        self.adopt_session_context_inner(session_id, reason, false);
-    }
-
-    pub(super) fn adopt_compacted_session_context(&mut self, session_id: &str) {
-        self.adopt_session_context_inner(Some(session_id), "summarize", true);
-    }
-
-    fn adopt_session_context_inner(
-        &mut self,
-        session_id: Option<&str>,
-        reason: &str,
-        preserve_compacted_checkpoint: bool,
-    ) {
-        let scope = subagent_scope_for_session(session_id);
-        self.tool_executor.set_subagent_parent_scope(scope.clone());
-        let Some(agent) = &self.native_agent else {
-            return;
-        };
-        if let Err(e) = agent.set_subagent_parent_scope(scope) {
-            self.state.error = Some(
-                self.state
-                    .locale
-                    .format("Failed to rotate subagent scope: {0}", &[(e).to_string()]),
-            );
-        }
-        let owns_persistent_tool_spills =
-            session_id.is_some() && self.session_manager.writer().is_some();
-        let transcript_path = session_id.and_then(|_| {
-            self.session_manager
-                .current_session_path()
-                .map(|path| path.to_string_lossy().into_owned())
-        });
-        let transition =
-            if let Some(session_id) = session_id.filter(|_| preserve_compacted_checkpoint) {
-                agent.set_compacted_session_context_with_transcript(
-                    session_id.to_owned(),
-                    transcript_path,
-                    owns_persistent_tool_spills,
-                )
-            } else {
-                agent.set_session_context_with_transcript(
-                    session_id.map(str::to_owned),
-                    transcript_path,
-                    reason,
-                    owns_persistent_tool_spills,
-                )
-            };
-        if let Err(e) = transition {
-            self.state.error = Some(
-                self.state
-                    .locale
-                    .format("Failed to update session context: {0}", &[e.to_string()]),
-            );
-        }
-    }
-
     fn clear_active_skills(&mut self) {
         let active_ids: Vec<String> = self
             .skill_registry
@@ -3244,6 +3216,11 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     }
 
     fn maybe_open_first_run_setup(&mut self) -> bool {
+        // Returning users keep the composer when cloud admission fails. Setup
+        // remains available explicitly and this preference grants no readiness.
+        if self.ui_prefs.onboarding_seen {
+            return false;
+        }
         let credentials_missing = should_open_first_run_setup(
             self.native_agent.is_some(),
             default_model_credentials_ready(),
@@ -3372,9 +3349,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     fn poll_local_model_discovery(&mut self) -> bool {
         let mut changed = false;
         while let Ok(batch) = self.local_model_discovery_rx.try_recv() {
-            let accepted = self
-                .model_selector
-                .replace_discovered_models(batch.generation, batch.models.clone());
+            let accepted = self.model_selector.apply_discovery(&batch);
             if accepted {
                 crate::local_models::replace_discovered_models(
                     batch.generation,
@@ -3564,6 +3539,11 @@ Always use tools when they would be helpful. Be concise and direct in your respo
 
     /// Returns true if badge counts or status text changed.
     async fn refresh_mcp_badges_with_force(&mut self, force: bool) -> bool {
+        // mcp_status initializes configured transports. Passive UI polling
+        // must not start MCP work before the selected agent is admitted.
+        if self.native_agent.is_none() {
+            return false;
+        }
         let now = Instant::now();
         if !force
             && self
@@ -4388,6 +4368,14 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                     args.clone(),
                     *requires_approval,
                 );
+                if self.session_cleanup_pending() && *requires_approval {
+                    // Cancellation is already authorized; late requests must not
+                    // start a fresh guardian review or acquire UI input focus.
+                    self.state.handle_agent_message(msg.clone());
+                    self.handle_tool_approval(call_id.clone(), tool.clone(), args.clone(), false)
+                        .await?;
+                    return Ok(());
+                }
                 // Unknown tool name -> deny immediately
                 if !self.tool_executor.has_tool(tool) && approval_inline_env.is_none() {
                     let note = self.state.locale.format("Skipped unknown tool '{0}' (not in registry); denied call. Retry with a supported tool (bash/read/write/glob/grep) and valid args.", std::slice::from_ref(tool));
@@ -4601,7 +4589,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             }
         }
 
-        if needs_post_interrupt_queue && allow_post_interrupt_queue {
+        if needs_post_interrupt_queue
+            && allow_post_interrupt_queue
+            && !self.session_cleanup_pending()
+        {
             let _ = self.maybe_handle_post_interrupt_queue().await?;
         }
         Ok(())
@@ -4863,6 +4854,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         let slash_state = &mut self.slash_state;
         let file_search = &mut self.file_search;
         let session_switcher = &mut self.session_switcher;
+        let session_transition = &self.session_transition;
         let operations = &mut self.operations;
         let mcp_manager = &self.mcp_manager;
         self.command_palette.set_locale(state.locale);
@@ -4988,6 +4980,11 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                         }
                         ActiveModal::SessionSwitcher => {
                             session_switcher.render(frame, area);
+                        }
+                        ActiveModal::SessionTransition => {
+                            if let Some(dialog) = session_transition {
+                                dialog.render(frame, area);
+                            }
                         }
                         ActiveModal::Operations => {
                             operations.render(frame, area);
@@ -5649,7 +5646,9 @@ mod exec_commands;
 mod input_handlers;
 mod prompt_audit;
 mod prompt_queue;
+mod session_commands;
 mod session_recording;
+mod session_transition;
 mod startup;
 
 #[cfg(test)]

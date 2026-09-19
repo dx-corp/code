@@ -1,4 +1,6 @@
 use super::*;
+
+mod streaming_order;
 use std::path::Path;
 
 use crate::agent::{
@@ -2913,37 +2915,6 @@ async fn typed_bash_streaming_caps_live_output() {
             .concat()
             .contains("[Showing last ")
     );
-}
-
-#[tokio::test]
-async fn typed_bash_streaming_releases_low_volume_output_before_completion() {
-    let dir = tempfile::tempdir().unwrap();
-    let executor = ToolExecutor::new(dir.path().to_str().unwrap());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let args = serde_json::json!({
-        "command": "printf 'server ready'; sleep 1; printf ' done'"
-    });
-    let execution = executor.execute_with_receipt("bash", &args, Some(&tx), "stream-low-volume");
-    tokio::pin!(execution);
-    let deadline = tokio::time::sleep(std::time::Duration::from_millis(500));
-    tokio::pin!(deadline);
-
-    let first_output = loop {
-        tokio::select! {
-            result = &mut execution => panic!("Bash completed before streaming output: {result:?}"),
-            Some(event) = rx.recv() => {
-                if let FromAgent::ToolOutput { content, .. } = event {
-                    break content;
-                }
-            }
-            () = &mut deadline => panic!("low-volume Bash output was buffered until completion"),
-        }
-    };
-    assert!(
-        first_output.contains("server ready"),
-        "first output: {first_output:?}"
-    );
-    let _ = execution.await;
 }
 
 #[test]

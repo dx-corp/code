@@ -499,6 +499,9 @@ impl ManagedSetupClient {
     where
         F: FnOnce(&PlatformSession) -> Result<ManagedSetup, ManagedSetupError>,
     {
+        if crate::safety::vendor_network_disabled() {
+            return Self::offline_local(session);
+        }
         let Some(session) = session else {
             return Self::unmanaged();
         };
@@ -905,6 +908,8 @@ pub fn platform_base_url() -> Option<String> {
 /// token. The workspace the session is bound to selects the document; an
 /// organization-only session reads the organization document.
 pub fn fetch_managed_setup(session: &PlatformSession) -> Result<ManagedSetup, ManagedSetupError> {
+    crate::safety::require_vendor_network()
+        .map_err(|error| ManagedSetupError::Request(error.to_string()))?;
     let base_url = platform_base_url().ok_or(ManagedSetupError::NotConfigured)?;
     fetch_managed_setup_from(session, &base_url)
 }
