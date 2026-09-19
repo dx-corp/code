@@ -10,8 +10,8 @@ pub fn conversation() -> UiTheme {
     use crate::shimmer::{DEIXIC_ACCENT, DEIXIC_BORDER, DEIXIC_MUTED, DEIXIC_SURFACE, DEIXIC_TEXT};
     let color = |(r, g, b)| Color::Rgb(r, g, b);
     UiTheme {
-        panel: Some(Color::Rgb(0x21, 0x1f, 0x30)),
-        selection: Some(Color::Rgb(0x35, 0x2c, 0x50)),
+        panel: Some(Color::Rgb(0x22, 0x22, 0x26)),
+        selection: Some(Color::Rgb(0x32, 0x2e, 0x40)),
         surface: color(DEIXIC_SURFACE),
         text: color(DEIXIC_TEXT),
         muted: color(DEIXIC_MUTED),
@@ -31,7 +31,7 @@ mod tests {
     fn command_controls_and_conversation_share_the_brand_palette() {
         let controls = default_controls();
         assert_eq!(controls, conversation());
-        assert_eq!(controls.surface, Color::Rgb(0x17, 0x16, 0x24));
+        assert_eq!(controls.surface, Color::Rgb(0x19, 0x19, 0x1b));
         assert_eq!(controls.focus, Color::Rgb(0x9c, 0x92, 0xfc));
     }
 }

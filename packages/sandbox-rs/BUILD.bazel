@@ -13,10 +13,10 @@ cargo_toml_env_vars(
 rust_library(
     name = "maestro_sandbox",
     deps = [
-        "@crates//:dirs-6.0.0",
+        "@crates//:dirs-7.0.0",
         "@crates//:dunce-1.0.5",
         "@crates//:libc-0.2.186",
-        "@crates//:rand-0.9.4",
+        "@crates//:rand-0.10.1",
         "@crates//:regex-1.13.0",
         "@crates//:serde-1.0.228",
         "@crates//:serde_json-1.0.150",

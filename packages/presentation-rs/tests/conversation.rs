@@ -133,7 +133,7 @@ fn empty_editor_suggestion_preserves_prompt_spacing() {
 }
 
 #[test]
-fn composer_frames_context_without_changing_editor_geometry() {
+fn composer_places_context_below_the_editor_frame() {
     let mut editor = TextArea::new();
     editor.set_text("Review the changes");
     for busy in [false, true] {
@@ -146,15 +146,17 @@ fn composer_frames_context_without_changing_editor_geometry() {
             completion: None,
             theme: UiTheme::default(),
         };
-        assert_eq!(view.editor_area(area), Rect::new(5, 2, 56, 2));
+        assert_eq!(view.editor_area(area), Rect::new(5, 2, 56, 1));
         let mut buf = Buffer::empty(Rect::new(0, 0, 64, 6));
         view.render(area, &mut buf);
         assert_eq!(buf[(2, 1)].symbol(), "╭");
         assert_eq!(buf[(61, 1)].symbol(), "╮");
-        assert_eq!(buf[(2, 4)].symbol(), "╰");
-        assert_eq!(buf[(61, 4)].symbol(), "╯");
+        assert_eq!(buf[(2, 3)].symbol(), "╰");
+        assert_eq!(buf[(61, 3)].symbol(), "╯");
         let top: String = (2..62).map(|x| buf[(x, 1)].symbol()).collect();
-        assert!(top.contains(" Mode: Plan · Claude "));
+        assert!(!top.contains("Mode:"));
+        let footer: String = (2..62).map(|x| buf[(x, 4)].symbol()).collect();
+        assert!(footer.contains("Mode: Plan · Claude"));
         assert!(text(&buf).contains("> Review the changes"));
         assert_eq!(buf[(3, 2)].fg, UiTheme::default().focus);
     }
@@ -184,8 +186,59 @@ fn composer_context_and_unicode_stay_inside_tiny_frames() {
             assert_eq!(buf[(area.right(), 2)].symbol(), "x");
             if width >= 2 && height >= 2 {
                 assert_eq!(buf[(area.right() - 1, 2)].symbol(), "╮");
-                assert_eq!(buf[(2, area.bottom() - 1)].symbol(), "╰");
+                let frame_bottom = area.bottom() - if height >= 4 { 2 } else { 1 };
+                assert_eq!(buf[(2, frame_bottom)].symbol(), "╰");
             }
         }
     }
+}
+
+#[test]
+fn completed_results_disclose_details_without_hiding_truncation() {
+    let mut view = ToolResult {
+        phase: ToolPhase::Completed,
+        summary: "Read README.md",
+        arguments: "README.md",
+        output: "first\nlast",
+        expanded: false,
+        detail: "read #read-1",
+        truncation: None,
+        theme: UiTheme::default(),
+    };
+    assert_eq!(view.height(60), 1);
+    view.expanded = true;
+    assert!(
+        view.lines(60)
+            .iter()
+            .any(|line| line.to_string().contains("last"))
+    );
+    view.expanded = false;
+    view.truncation = Some("Output limited by caller");
+    assert!(
+        view.lines(60)
+            .iter()
+            .any(|line| line.to_string().contains("Output limited"))
+    );
+}
+
+#[test]
+fn footer_and_wrapped_cursor_use_the_same_viewport() {
+    let mut editor = TextArea::new();
+    editor.set_text("one two three four five six seven");
+    editor.set_cursor(editor.text().len());
+    let view = Composer {
+        editor: &editor,
+        queued: &[],
+        busy: false,
+        footer: Some("Mode: Act"),
+        completion: None,
+        theme: UiTheme::default(),
+    };
+    let area = Rect::new(0, 0, 16, 4);
+    assert_eq!(view.editor_area(area).height, 1);
+    assert_eq!(view.cursor_pos(area).unwrap().1, 1);
+    let mut buf = Buffer::empty(area);
+    view.render(area, &mut buf);
+    assert!(text(&buf).contains("seven"));
+    assert!(text(&buf).contains("Mode: Act"));
 }

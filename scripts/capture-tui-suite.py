@@ -33,6 +33,7 @@ CASES = [
         "idle",
         "typing",
         "conversation",
+        "markdown",
         "command-palette",
         "streaming",
         "approval",
@@ -59,6 +60,7 @@ CASES = [
     for name in (
         "idle",
         "conversation",
+        "markdown",
         "command-palette",
         "long-conversation",
         "details",
@@ -105,6 +107,9 @@ def appearance_scenes(binary):
             "name": identifier,
             "steps": [
                 {"wait": "(?s)Dex Code.*GPT-6 Astra.*release-planner"},
+                {"text": "/dex standard"},
+                {"key": "Enter"},
+                {"wait": "Dex: standard"},
                 {"text": "/dex " + identifier},
                 {"key": "Enter"},
                 {"wait": re.escape(label) + ".*saved"},

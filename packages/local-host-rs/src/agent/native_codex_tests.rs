@@ -1902,6 +1902,17 @@ else if(x.method==='turn/start'){
             .env("MAESTRO_CODEX_FAILURE_MARKER", marker)
             .env("MAESTRO_HOME", &maestro_home)
             .env("CODEX_HOME", &codex_home)
+            // This child owns a standalone fixture configuration. Managed
+            // policy tests in the parent process publish temporary paths, and
+            // inheriting one after its fixture is removed can block startup
+            // before the Codex retry behavior under test is reached.
+            .env_remove("MAESTRO_MANAGED_POLICY_PATH")
+            .env_remove("MAESTRO_MANAGED_POLICY_STATE_PATH")
+            .env_remove("MAESTRO_MANAGED_POLICY_PUBLIC_KEY")
+            .env_remove("MAESTRO_MANAGED_POLICY_KEY_ID")
+            .env_remove("MAESTRO_MANAGED_POLICY_AUDIT_PATH")
+            .env_remove("MAESTRO_ENTERPRISE_POLICY_PATH")
+            .env_remove("MAESTRO_POLICY_PATH")
             .env("MAESTRO_OAUTH_STORAGE_MODE", "file")
             .env("MAESTRO_DISABLE_KEYCHAIN", "1")
             .env("MAESTRO_CODEX_APP_SERVER_COMMAND", "node")

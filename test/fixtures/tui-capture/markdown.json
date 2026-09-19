@@ -1,0 +1,23 @@
+{
+  "name": "markdown",
+  "steps": [
+    {
+      "wait": "(?s)Dex.*GPT-6 Astra.*release-planner"
+    },
+    {
+      "text": "Read the README and show the checklist, a table, and a code sample."
+    },
+    {
+      "key": "Enter"
+    },
+    {
+      "wait": "Final row visible"
+    },
+    {
+      "absent": "Working|Thinking"
+    },
+    {
+      "wait": "Dex \u00b7 finished"
+    }
+  ]
+}

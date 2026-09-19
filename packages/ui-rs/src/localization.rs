@@ -418,6 +418,24 @@ fn interpolate(template: &str, values: &[String]) -> String {
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
+
+    #[test]
+    fn hook_metrics_translate_labels_and_preserve_runtime_counts() {
+        let source = "Hook metrics\nPreToolUse: {0}\nPostToolUse: {1}\nOverflow: {2}\nBlocks: {3}\nTotal duration: {4}ms\n";
+        let values = ["12", "34", "56", "78", "90"].map(String::from);
+        for locale in Locale::ALL {
+            let rendered = locale.format(source, &values);
+            assert!(rendered.contains("PreToolUse: 12\nPostToolUse: 34\n"));
+            for count in ["56", "78", "90ms"] {
+                assert!(rendered.contains(count), "{locale:?}: {rendered}");
+            }
+            assert!(!rendered.contains('{'));
+            if locale != Locale::English {
+                assert!(!rendered.starts_with("Hook metrics\n"));
+            }
+        }
+    }
+
     fn fields(text: &str) -> Vec<usize> {
         let mut result = Vec::new();
         for tail in text.split('{').skip(1) {

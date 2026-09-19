@@ -206,9 +206,9 @@ impl Default for ThemeColors {
             tool_success_bg: "#14532d20".to_string(),
             tool_error_bg: "#7f1d1d20".to_string(),
 
-            md_heading: hex(controls.focus),
+            md_heading: hex(controls.text),
             md_link: hex(controls.focus),
-            md_code: "#fde047".to_string(),
+            md_code: "#c2b6e8".to_string(),
             md_code_block: hex(controls.surface),
             md_code_block_border: hex(controls.border),
             md_quote: hex(controls.muted),

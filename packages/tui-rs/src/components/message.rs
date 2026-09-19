@@ -27,7 +27,7 @@
 //! - Code blocks: triple-backtick fenced blocks with syntax highlighting hints
 //! - Links: `[text](url)` rendered with underline styling
 //!
-//! Markdown parsing is implemented in `parse_markdown_lines()` and `parse_markdown_line()`.
+//! Markdown parsing uses the shared block renderer for both measurement and painting.
 //!
 //! ## Scrolling and Viewport Management
 //!
@@ -51,8 +51,7 @@
 //!
 //! Assistant messages may include "thinking" content (Claude's internal reasoning):
 //! - Rendered in a collapsible section with gutter (│)
-//! - Shows character count badge
-//! - Collapsed: shows first 2 lines as preview
+//! - Collapsed: shows only the disclosure header
 //! - Expanded: shows full thinking content with italic dim styling
 //! - Toggle indicator: `[+]` / `[-]`
 //!
@@ -186,167 +185,9 @@ fn brand_text() -> Color {
     themed_chrome("text", DEIXIC_TEXT)
 }
 
-/// Parse markdown text into styled lines
-/// Supports: **bold**, `code`, ```code blocks```, [links](url)
-fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let mut in_code_block = false;
-
-    for line_text in text.lines() {
-        if line_text.starts_with("```") {
-            in_code_block = !in_code_block;
-            if in_code_block {
-                // Code block start with language hint
-                let lang = line_text.trim_start_matches("```").trim();
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "```",
-                        Style::default().fg(semantic_color("muted", Color::DarkGray)),
-                    ),
-                    Span::styled(
-                        lang.to_string(),
-                        Style::default().fg(semantic_color("warning", Color::Yellow)),
-                    ),
-                ]));
-            } else {
-                lines.push(Line::from(Span::styled(
-                    "```",
-                    Style::default().fg(semantic_color("muted", Color::DarkGray)),
-                )));
-            }
-            continue;
-        }
-
-        if in_code_block {
-            // Inside code block - render with dim style
-            lines.push(Line::from(Span::styled(
-                format!("  {line_text}"),
-                Style::default()
-                    .fg(semantic_color("success", Color::Green))
-                    .add_modifier(Modifier::DIM),
-            )));
-        } else {
-            // Parse inline markdown
-            lines.push(parse_markdown_line(line_text));
-        }
-    }
-
-    lines
-}
-
-/// Parse a single line of markdown into styled spans
-fn parse_markdown_line(text: &str) -> Line<'static> {
-    parse_markdown_line_with_theme(text, &crate::themes::current_theme())
-}
-
-fn parse_markdown_line_with_theme(text: &str, theme: &crate::themes::Theme) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        // Check for bold (**text**)
-        if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-            // Flush current
-            if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
-            }
-            i += 2;
-            let start = i;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*') {
-                i += 1;
-            }
-            let bold_text: String = chars[start..i].iter().collect();
-            spans.push(Span::styled(
-                bold_text,
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-            if i + 1 < chars.len() {
-                i += 2; // skip closing **
-            }
-            continue;
-        }
-
-        // Check for inline code (`code`)
-        if chars[i] == '`' {
-            // Flush current
-            if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
-            }
-            i += 1;
-            let start = i;
-            while i < chars.len() && chars[i] != '`' {
-                i += 1;
-            }
-            let code_text: String = chars[start..i].iter().collect();
-            spans.push(Span::styled(
-                code_text,
-                if theme.name != "dark" || theme.canvas_style().bg.is_some() {
-                    Style::default().fg(semantic_color_for_theme(theme, "md_code", Color::Cyan))
-                } else {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)
-                },
-            ));
-            if i < chars.len() {
-                i += 1; // skip closing `
-            }
-            continue;
-        }
-
-        // Check for link [text](url)
-        if chars[i] == '[' {
-            // Flush current
-            if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
-            }
-            i += 1;
-            let text_start = i;
-            while i < chars.len() && chars[i] != ']' {
-                i += 1;
-            }
-            let link_text: String = chars[text_start..i].iter().collect();
-            i += 1; // skip ]
-
-            if i < chars.len() && chars[i] == '(' {
-                i += 1;
-                let url_start = i;
-                while i < chars.len() && chars[i] != ')' {
-                    i += 1;
-                }
-                let _url: String = chars[url_start..i].iter().collect();
-                spans.push(Span::styled(
-                    link_text,
-                    Style::default()
-                        .fg(semantic_color_for_theme(theme, "md_link", Color::Blue))
-                        .add_modifier(Modifier::UNDERLINED),
-                ));
-                if i < chars.len() {
-                    i += 1; // skip )
-                }
-            } else {
-                // Not a valid link, render as plain text
-                current.push('[');
-                current.push_str(&link_text);
-                current.push(']');
-            }
-            continue;
-        }
-
-        current.push(chars[i]);
-        i += 1;
-    }
-
-    // Flush remaining
-    if !current.is_empty() {
-        spans.push(Span::raw(current));
-    }
-
-    if spans.is_empty() {
-        Line::default()
-    } else {
-        Line::from(spans)
-    }
+/// Shared block layout for both message measurement and painting.
+fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    crate::markdown::render_markdown_with_width(text, Some(width.saturating_sub(2).max(1))).lines
 }
 
 /// Format a timestamp for display (HH:MM)
@@ -382,7 +223,6 @@ fn tool_result_lines(
     } else {
         crate::tool_summary::summarize_tool_intent(&tc.tool, &tc.args)
     };
-    let summary = format!("{summary} · {}", tc.tool);
     let arguments = get_tool_args_preview(&tc.tool, &tc.args, width.saturating_sub(20) as usize);
     let clamp = clamp_tool_output(&tc.output, tool_output_limits());
     let banner = format_tool_output_truncation(&clamp);
@@ -546,7 +386,7 @@ pub fn calculate_message_height(
     if message.is_compaction_boundary() {
         height += 1;
         if !message.content.is_empty() {
-            let md_lines = parse_markdown_lines(&message.content);
+            let md_lines = parse_markdown_lines(&message.content, content_width);
             let wrap_opts = RtOptions::new(content_width)
                 .initial_indent(Line::from("  "))
                 .subsequent_indent(Line::from("  "));
@@ -562,16 +402,12 @@ pub fn calculate_message_height(
     // Thinking previews occupy one terminal row per source line.
     if !message.thinking.is_empty() {
         let count = message.thinking.lines().count();
-        height += 1 + if message.thinking_expanded {
-            count
-        } else {
-            count.min(2)
-        } as u16;
+        height += 1 + if message.thinking_expanded { count } else { 0 } as u16;
     }
 
     // Content lines (with word wrapping)
     if !message.content.is_empty() {
-        let md_lines = parse_markdown_lines(&message.content);
+        let md_lines = parse_markdown_lines(&message.content, content_width);
         let wrap_opts = RtOptions::new(content_width)
             .initial_indent(Line::from("  "))
             .subsequent_indent(Line::from("  "));
@@ -741,7 +577,8 @@ impl Widget for MessageWidget<'_> {
             y += 1;
 
             if y < max_y && !self.message.content.is_empty() {
-                let md_lines = parse_markdown_lines(&self.message.content);
+                let content_width = area.width.saturating_sub(4).max(1) as usize;
+                let md_lines = parse_markdown_lines(&self.message.content, content_width);
                 let wrap_opts = RtOptions::new(area.width.saturating_sub(4).max(1) as usize)
                     .initial_indent(Line::from("  "))
                     .subsequent_indent(Line::from("  "));
@@ -846,13 +683,7 @@ impl Widget for MessageWidget<'_> {
                     maestro_ui::localization::tr("Thinking"),
                     Style::default().fg(brand_violet()),
                 ),
-                Span::styled(
-                    maestro_ui::localization::format(
-                        " ({0} chars) ",
-                        &[(self.message.thinking.len()).to_string()],
-                    ),
-                    Style::default().fg(semantic_color("muted", Color::DarkGray)),
-                ),
+                Span::raw(" "),
                 Span::styled(
                     toggle_hint,
                     Style::default()
@@ -902,38 +733,6 @@ impl Widget for MessageWidget<'_> {
                     );
                     y += 1;
                 }
-            } else {
-                // Show first 2 lines of thinking as preview
-                let preview_lines: Vec<&str> = self.message.thinking.lines().take(2).collect();
-                for line in preview_lines {
-                    if y >= max_y {
-                        break;
-                    }
-                    let max_len = area.width.saturating_sub(6) as usize;
-                    let truncated = truncate_location(line, max_len);
-                    let preview = Line::from(vec![
-                        Span::styled(
-                            "  │ ",
-                            Style::default().fg(semantic_color("muted", Color::DarkGray)),
-                        ),
-                        Span::styled(
-                            truncated,
-                            Style::default()
-                                .fg(semantic_color("muted", Color::DarkGray))
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]);
-                    Paragraph::new(preview).render(
-                        Rect {
-                            x: area.x,
-                            y,
-                            width: area.width,
-                            height: 1,
-                        },
-                        buf,
-                    );
-                    y += 1;
-                }
             }
         }
 
@@ -942,7 +741,7 @@ impl Widget for MessageWidget<'_> {
             let content_width = area.width.saturating_sub(4).max(1) as usize;
 
             // Parse markdown into styled lines
-            let md_lines = parse_markdown_lines(&self.message.content);
+            let md_lines = parse_markdown_lines(&self.message.content, content_width);
 
             // Word wrap all lines with indent
             let wrap_opts = RtOptions::new(content_width)
@@ -1505,14 +1304,6 @@ impl<'a> ChatInputWidget<'a> {
                 footer = candidate;
             }
         }
-        let hint = match mode {
-            InteractionMode::Plan => maestro_ui::localization::tr(" · /plan off to act"),
-            InteractionMode::Normal => maestro_ui::localization::tr(" · /plan to plan"),
-            InteractionMode::AlwaysApprove => "",
-        };
-        if footer.width() + hint.width() <= available {
-            footer.push_str(hint);
-        }
         Some(footer)
     }
 
@@ -1535,7 +1326,9 @@ impl<'a> ChatInputWidget<'a> {
             .map_or_else(Vec::new, |preview| {
                 preview.build_lines(input_area.width.saturating_sub(2))
             });
-        self.shared(&queued, None).cursor_pos(input_area)
+        let footer = self.footer_for_width(input_area.width);
+        self.shared(&queued, footer.as_deref())
+            .cursor_pos(input_area)
     }
 
     fn shared<'b>(&'b self, queued: &'b [Line<'static>], footer: Option<&'b str>) -> Composer<'b> {
@@ -1563,7 +1356,7 @@ impl Widget for ChatInputWidget<'_> {
     }
 }
 
-const MIN_TOTAL_INPUT_HEIGHT: u16 = 3;
+const MIN_TOTAL_INPUT_HEIGHT: u16 = 4;
 const MAX_VISIBLE_INPUT_LINES: u16 = 6;
 const MIN_MESSAGES_HEIGHT: u16 = 3;
 
@@ -1593,7 +1386,7 @@ pub(crate) fn calculate_input_height(state: &crate::state::AppState, area: Rect)
     let max_total_for_input = available_after_status
         .saturating_sub(MIN_MESSAGES_HEIGHT)
         .max(MIN_TOTAL_INPUT_HEIGHT);
-    let max_inner_for_input = max_total_for_input.saturating_sub(2).max(1);
+    let max_inner_for_input = max_total_for_input.saturating_sub(3).max(1);
 
     let visible_inner = desired_inner_lines
         .min(MAX_VISIBLE_INPUT_LINES)
@@ -1601,7 +1394,7 @@ pub(crate) fn calculate_input_height(state: &crate::state::AppState, area: Rect)
         .max(1);
 
     visible_inner
-        .saturating_add(2)
+        .saturating_add(3)
         .max(MIN_TOTAL_INPUT_HEIGHT)
         .min(available_after_status)
 }
@@ -2854,14 +2647,18 @@ impl ChatView<'_> {
             return;
         }
 
+        let content_area = Rect {
+            width: area.width.saturating_sub(1),
+            ..area
+        };
         let layout = self.state.prepare_message_layout(
-            area.width,
+            content_area.width,
             self.message_layout_settings_key(),
             &renderable_messages,
             |index| {
                 usize::from(calculate_message_height(
                     renderable_messages[index],
-                    area.width,
+                    content_area.width,
                     &self.state.expanded_tool_calls,
                     self.state.compact_tool_outputs,
                     self.state.focus_view,
@@ -2904,7 +2701,7 @@ impl ChatView<'_> {
             let msg_height = usize::from(full_height)
                 .saturating_sub(skip)
                 .min(usize::from(max_y.saturating_sub(y))) as u16;
-            let msg_area = Rect::new(0, 0, area.width, full_height);
+            let msg_area = Rect::new(0, 0, content_area.width, full_height);
             let mut message_buffer = Buffer::empty(msg_area);
             message_buffer.set_style(msg_area, canvas);
 
@@ -2920,7 +2717,7 @@ impl ChatView<'_> {
                 .with_selected_focus_turn(self.state.focus_selected_turn.as_deref());
             widget.render(msg_area, &mut message_buffer);
             for row in 0..msg_height {
-                for col in 0..area.width {
+                for col in 0..content_area.width {
                     if let (Some(source), Some(target)) = (
                         message_buffer.cell((col, skip as u16 + row)),
                         buf.cell_mut((area.x + col, y + row)),
@@ -3034,59 +2831,6 @@ mod tests {
             .find(|cell| cell.symbol() == "S")
             .unwrap();
         assert_eq!(label.fg, crate::themes::current_ui_theme().attention);
-    }
-
-    #[test]
-    fn inline_code_uses_readable_theme_ink_without_terminal_dimming() {
-        for name in [
-            "light",
-            "green",
-            "pink",
-            "blue",
-            "green-dark",
-            "pink-dark",
-            "blue-dark",
-        ] {
-            let theme = crate::themes::load_theme(name).unwrap();
-            let line = parse_markdown_line_with_theme("Run `cargo test`.", &theme);
-            let code = line
-                .spans
-                .iter()
-                .find(|span| span.content == "cargo test")
-                .unwrap();
-            assert_eq!(code.style.fg, theme.get_color("md_code"));
-            assert!(!code.style.add_modifier.contains(Modifier::DIM));
-        }
-        let dark = crate::themes::dark_theme();
-        let code = parse_markdown_line_with_theme("`cargo test`", &dark);
-        assert_eq!(code.spans[0].style.fg, dark.get_color("md_code"));
-        assert!(!code.spans[0].style.add_modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
-    fn markdown_links_respect_distinct_theme_link_colors() {
-        let mut custom = crate::themes::light_theme();
-        custom.colors.md_heading = "#ff0000".into();
-        custom.colors.md_link = "#00ff00".into();
-        assert_ne!(custom.get_color("md_link"), custom.get_color("md_heading"));
-        for theme in [crate::themes::light_theme(), custom] {
-            let line = parse_markdown_line_with_theme("See [guide](https://example.com).", &theme);
-            let link = line
-                .spans
-                .iter()
-                .find(|span| span.content == "guide")
-                .unwrap();
-            assert_eq!(link.style.fg, theme.get_color("md_link"));
-            assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
-        }
-        let line = parse_markdown_line_with_theme(
-            "[guide](https://example.com)",
-            &crate::themes::dark_theme(),
-        );
-        assert_eq!(
-            line.spans[0].style.fg,
-            crate::themes::dark_theme().get_color("md_link")
-        );
     }
 
     fn polish_message(id: &str, content: &str) -> Message {
@@ -3298,7 +3042,7 @@ mod tests {
         use std::fmt::Write as _;
         let mut content = String::new();
         for i in 1..=40 {
-            writeln!(content, "Line {i:02}").unwrap();
+            writeln!(content, "Line {i:02}  ").unwrap();
         }
         state.messages = vec![polish_message("long", &content)];
         for (width, height) in [(80, 10), (40, 11), (100, 13)] {
@@ -3338,7 +3082,7 @@ mod tests {
                 .render(area, &mut buf);
             let text = buffer_lines(&buf, 100, 10).join("\n");
             assert!(text.contains("Read README.md"));
-            assert!(text.contains("Useful preview"));
+            assert_eq!(text.contains("Useful preview"), expanded);
             assert_eq!(text.contains("read-private-id"), expanded);
             assert_eq!(
                 text.contains(&format_timestamp(message.timestamp)),
@@ -3589,7 +3333,7 @@ mod tests {
         let catalog_hits = rendered.matches("GPT-5.6").count();
         assert_eq!(catalog_hits, 1, "model must appear once:\n{rendered}");
         assert!(rendered.contains("Mode: Act"));
-        assert!(rendered.contains("/plan to plan"));
+        assert!(!rendered.contains("/plan to plan"));
         assert!(!rendered.contains("via openai-codex"));
         assert!(!rendered.contains("openai-codex/gpt-5.6"));
         assert!(!rendered.contains("Describe what you want to build..."));
@@ -3622,7 +3366,7 @@ mod tests {
                         "mode missing: {lines:?}"
                     );
                     if width == 100 && mode == InteractionMode::Plan {
-                        assert!(lines.iter().any(|line| line.contains("/plan off to act")));
+                        assert!(!lines.iter().any(|line| line.contains("/plan off to act")));
                     }
                 }
             }
@@ -3826,9 +3570,10 @@ mod tests {
                 .render(buf.area, &mut buf);
             let rendered = buffer_lines(&buf, width, height).join("\n");
             assert!(rendered.contains("Read package.json"));
-            assert!(rendered.contains("· read"));
-            assert!(
-                rendered.contains("/Users/jonathanhaas/Documents/Projects/maestro/package.json")
+            assert_eq!(rendered.contains("· read"), !compact);
+            assert_eq!(
+                rendered.contains("/Users/jonathanhaas/Documents/Projects/maestro/package.json"),
+                !compact
             );
         }
     }
@@ -3922,7 +3667,8 @@ mod tests {
 
         let rendered = buffer_lines(&buf, width, height).join("\n");
         assert!(rendered.contains("Ran cargo test"));
-        assert!(rendered.contains("finished"));
+        assert!(!rendered.contains("finished"));
+        assert!(rendered.contains("not found"));
         assert!(rendered.contains("Failed · Search for \"needle\""));
     }
 
@@ -4114,7 +3860,7 @@ mod dex_notice_layout_tests {
     use super::*;
 
     #[test]
-    fn quiet_notice_does_not_overwrite_centered_welcome_status() {
+    fn quiet_notice_does_not_overwrite_welcome_identity() {
         let state = crate::state::AppState::new();
         let area = Rect::new(0, 0, 60, 20);
         let mut buffer = Buffer::empty(area);
@@ -4139,7 +3885,7 @@ mod dex_notice_layout_tests {
             .unwrap();
         let status = lines
             .iter()
-            .position(|line| line.contains("Dex · ready"))
+            .position(|line| line.contains(super::super::deixic_logo::PRODUCT_TITLE))
             .unwrap();
         assert_ne!(notice, status);
     }

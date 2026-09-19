@@ -1636,6 +1636,17 @@ async fn remote_transport_classifies_stream_404_as_retryable() {
                     return;
                 }
 
+                if path.starts_with("/api/headless/sessions/") && path.ends_with("/messages") {
+                    write_http_response(
+                        &mut socket,
+                        "HTTP/1.1 200 OK",
+                        "application/json",
+                        r#"{"success":true}"#,
+                    )
+                    .await;
+                    return;
+                }
+
                 if path.starts_with("/api/headless/sessions/") && path.ends_with("/disconnect") {
                     write_http_response(
                         &mut socket,
@@ -1680,15 +1691,18 @@ async fn remote_transport_classifies_stream_404_as_retryable() {
         .recv_incoming()
         .await
         .expect_err("stream 404 should fail");
-    assert!(matches!(
-        error,
-        AsyncTransportError::RemoteStatus {
-            status: 404,
-            retryable: true,
-            kind: RemoteErrorKind::StaleSubscriber,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            &error,
+            AsyncTransportError::RemoteStatus {
+                status: 404,
+                retryable: true,
+                kind: RemoteErrorKind::StaleSubscriber,
+                ..
+            }
+        ),
+        "unexpected stream error: {error:?}"
+    );
 
     transport.shutdown().expect("shutdown");
 }

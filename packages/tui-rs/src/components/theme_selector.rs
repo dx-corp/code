@@ -4,8 +4,8 @@ use crossterm::event::KeyCode;
 use maestro_ui::{ActionPicker, KeyHint, Modal, ModalSize, PickerOptions, PickerOutcome};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    layout::Rect,
+    style::Style,
     text::{Line, Span},
     widgets::ListItem,
 };
@@ -85,22 +85,10 @@ impl ThemeSelector {
         )
         .theme(theme)
         .render(frame, area);
-        let (picker_area, preview_area) = if inner.height >= 12 {
-            let chunks = Layout::vertical([Constraint::Min(5), Constraint::Length(7)]).split(inner);
-            (chunks[0], Some(chunks[1]))
-        } else {
-            (inner, None)
-        };
-        if let Some(area) = preview_area {
-            frame.render_widget(
-                maestro_presentation::components::theme_preview::ThemePreview(theme),
-                area,
-            );
-        }
         let current = &self.current_theme;
         self.picker.render(
             frame,
-            picker_area,
+            inner,
             theme,
             PickerOptions {
                 placeholder: maestro_ui::localization::tr("Type to filter themes..."),
@@ -113,10 +101,7 @@ impl ThemeSelector {
                 ..PickerOptions::default()
             },
             |name| {
-                let mut spans = vec![Span::styled(
-                    name.as_str(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )];
+                let mut spans = vec![Span::styled(name.as_str(), Style::default())];
                 if current.as_ref().is_some_and(|c| c == name) {
                     spans.push(Span::styled(
                         maestro_ui::localization::tr(" (current)"),
@@ -154,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_renders_the_same_sample_at_wide_and_narrow_sizes() {
+    fn picker_keeps_filter_and_choices_without_a_nested_sample() {
         use ratatui::{Terminal, backend::TestBackend};
         for (width, height) in [(100, 30), (60, 20)] {
             let mut selector = ThemeSelector::new();
@@ -169,9 +154,9 @@ mod tests {
                 .iter()
                 .map(|c| c.symbol())
                 .collect();
-            assert!(text.contains("Dex · ready"));
-            assert!(text.contains("Let's make something useful."));
-            assert!(text.contains("Ask Dex"));
+            assert!(text.contains("Select Theme"));
+            assert!(text.contains("Type to filter themes"));
+            assert!(!text.contains("Ask Dex"));
             assert_eq!(selector.original_theme().unwrap().name, original);
         }
     }

@@ -15,14 +15,14 @@
 //!
 //! # Supported Features
 //!
-//! - **Headings** (H1-H6): Different styles with # prefix preserved
+//! - **Headings** (H1-H6): Bold semantic headings without source markers
 //! - **Code blocks**: Fenced code with language-specific syntax highlighting
 //! - **Inline code**: Backtick-delimited code with distinct styling
 //! - **Lists**: Both ordered and unordered, with proper indentation
 //! - **Emphasis**: Italic (*text*), bold (**text**), strikethrough (~~text~~)
 //! - **Links**: Displayed as styled text with URL appended in parentheses
 //! - **Blockquotes**: Rendered with vertical bar prefix
-//! - **Tables**: Parsed but basic rendering support
+//! - **Tables**: Width-aware columns with stacked fields on narrow terminals
 //! - **Horizontal rules**: Rendered as separator lines
 //!
 //! # External Crates
@@ -46,8 +46,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
 use crate::hyperlink;
-use crate::palette::theme;
 use crate::syntax;
+use maestro_ui::wrapping::{RtOptions, word_wrap_lines};
 
 /// Style configuration for markdown elements.
 ///
@@ -76,23 +76,29 @@ pub struct MarkdownStyles {
 
 impl Default for MarkdownStyles {
     fn default() -> Self {
+        Self::for_theme(&crate::themes::current_theme())
+    }
+}
+
+impl MarkdownStyles {
+    fn for_theme(theme: &crate::themes::Theme) -> Self {
+        let foreground = |name| Style::default().fg(theme.get_color(name).unwrap_or(Color::Reset));
+        let heading = foreground("md_heading").add_modifier(Modifier::BOLD);
         Self {
-            h1: Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            h2: Style::default().add_modifier(Modifier::BOLD),
-            h3: Style::default().add_modifier(Modifier::BOLD | Modifier::ITALIC),
-            h4: Style::default().add_modifier(Modifier::ITALIC),
-            h5: Style::default().add_modifier(Modifier::ITALIC),
-            h6: Style::default().add_modifier(Modifier::ITALIC | Modifier::DIM),
-            code: Style::default().fg(Color::Cyan),
-            code_block: Style::default().fg(theme::syntax_string()),
+            h1: heading,
+            h2: heading,
+            h3: heading,
+            h4: heading,
+            h5: heading,
+            h6: heading,
+            code: foreground("md_code"),
+            code_block: foreground("text"),
             emphasis: Style::default().add_modifier(Modifier::ITALIC),
             strong: Style::default().add_modifier(Modifier::BOLD),
             strikethrough: Style::default().add_modifier(Modifier::CROSSED_OUT),
-            link: Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::UNDERLINED),
-            blockquote: Style::default().fg(Color::Green),
-            list_marker: Style::default().fg(Color::Blue),
+            link: foreground("md_link").add_modifier(Modifier::UNDERLINED),
+            blockquote: foreground("muted"),
+            list_marker: foreground("muted"),
         }
     }
 }
@@ -126,20 +132,109 @@ pub fn render_markdown(input: &str) -> Text<'static> {
 /// Render markdown with optional width limit for wrapping.
 ///
 /// This function provides the same functionality as `render_markdown` but with
-/// an optional width parameter for future word-wrapping support.
-///
-/// Note: The width parameter is currently unused but reserved for future implementation
-/// of automatic line wrapping at the markdown rendering level.
+/// an optional cell width for table layout. The caller owns outer paragraph wrapping.
 #[must_use]
-pub fn render_markdown_with_width(input: &str, _width: Option<usize>) -> Text<'static> {
+pub fn render_markdown_with_width(input: &str, width: Option<usize>) -> Text<'static> {
+    render_with_styles(input, width, MarkdownStyles::default())
+}
+
+fn render_with_styles(input: &str, width: Option<usize>, styles: MarkdownStyles) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
 
     let parser = Parser::new_ext(input, options);
-    let mut renderer = MarkdownRenderer::new();
+    let mut renderer = MarkdownRenderer::new(styles, width.unwrap_or(80).max(1));
     renderer.render(parser);
     renderer.into_text()
+}
+
+/// Table cells keep their styled text and fit the same width used by the transcript.
+#[derive(Default)]
+struct TableLayout {
+    rows: Vec<Vec<Line<'static>>>,
+    row: Vec<Line<'static>>,
+}
+
+impl TableLayout {
+    fn render(self, width: usize, muted: Style) -> Vec<Line<'static>> {
+        let columns = self.rows.iter().map(Vec::len).max().unwrap_or(0);
+        if columns == 0 {
+            return Vec::new();
+        }
+        let mut widths = vec![1; columns];
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.width());
+            }
+        }
+        let gaps = columns.saturating_sub(1) * 2;
+        // At small widths, stacked labeled fields retain every cell instead of clipping.
+        if width < columns * 8 + gaps {
+            let mut lines = Vec::new();
+            let headers = &self.rows[0];
+            if self.rows.len() == 1 {
+                return headers
+                    .iter()
+                    .flat_map(|cell| {
+                        word_wrap_lines(std::slice::from_ref(cell), RtOptions::new(width))
+                    })
+                    .collect();
+            }
+            for row in self.rows.iter().skip(1) {
+                for (i, cell) in row.iter().enumerate() {
+                    let mut spans = headers.get(i).map_or_else(Vec::new, |h| h.spans.clone());
+                    spans.push(Span::styled(": ", muted));
+                    spans.extend(cell.spans.clone());
+                    lines.extend(word_wrap_lines(&[Line::from(spans)], RtOptions::new(width)));
+                }
+                lines.push(Line::from(""));
+            }
+            return lines;
+        }
+        while widths.iter().sum::<usize>() + gaps > width {
+            let Some((i, longest)) = widths.iter().enumerate().max_by_key(|(_, n)| *n) else {
+                break;
+            };
+            if *longest <= 1 {
+                break;
+            }
+            widths[i] -= 1;
+        }
+        let mut lines = Vec::new();
+        for (row_index, row) in self.rows.into_iter().enumerate() {
+            let cells: Vec<Vec<Line<'static>>> = (0..columns)
+                .map(|i| {
+                    let cell = row.get(i).cloned().unwrap_or_default();
+                    word_wrap_lines(&[cell], RtOptions::new(widths[i]))
+                })
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+            for y in 0..height {
+                let mut spans = Vec::new();
+                for (i, cell) in cells.iter().enumerate() {
+                    let line = cell.get(y).cloned().unwrap_or_default();
+                    let used = line.width();
+                    spans.extend(line.spans);
+                    if i + 1 < columns {
+                        spans.push(Span::raw(" ".repeat(widths[i].saturating_sub(used) + 2)));
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+            if row_index == 0 {
+                lines.push(Line::styled(
+                    widths
+                        .iter()
+                        .map(|w| "─".repeat(*w))
+                        .collect::<Vec<_>>()
+                        .join("  "),
+                    muted,
+                ));
+            }
+        }
+        lines
+    }
 }
 
 /// Internal renderer state for processing markdown events.
@@ -180,12 +275,14 @@ struct MarkdownRenderer {
     blockquote_depth: usize,
     /// Current link target and visible label while parsing `[label](url)`.
     current_link: Option<LinkState>,
+    width: usize,
+    table: Option<TableLayout>,
 }
 
 impl MarkdownRenderer {
-    fn new() -> Self {
+    fn new(styles: MarkdownStyles, width: usize) -> Self {
         Self {
-            styles: MarkdownStyles::default(),
+            styles,
             lines: Vec::new(),
             current_spans: Vec::new(),
             style_stack: vec![Style::default()],
@@ -195,6 +292,8 @@ impl MarkdownRenderer {
             code_block_lang: None,
             blockquote_depth: 0,
             current_link: None,
+            width,
+            table: None,
         }
     }
 
@@ -222,12 +321,6 @@ impl MarkdownRenderer {
                 spans.push(Span::styled("│ ", self.styles.blockquote));
             }
 
-            // Add list prefix if needed
-            if !self.list_stack.is_empty() {
-                let indent = "  ".repeat(self.list_stack.len() - 1);
-                spans.push(Span::raw(indent));
-            }
-
             spans.append(&mut self.current_spans);
             self.lines.push(Line::from(spans));
         }
@@ -249,13 +342,13 @@ impl MarkdownRenderer {
 
     fn add_inline_code(&mut self, code: &str) {
         if let Some(link) = self.current_link.as_mut() {
-            let code_label = format!("`{code}`");
-            link.label.push_str(&code_label);
-            link.spans.push(Span::styled(code_label, self.styles.code));
+            link.label.push_str(code);
+            link.spans
+                .push(Span::styled(code.to_owned(), self.styles.code));
             return;
         }
         self.current_spans
-            .push(Span::styled(format!("`{code}`"), self.styles.code));
+            .push(Span::styled(code.to_owned(), self.styles.code));
     }
 
     fn add_soft_break(&mut self) {
@@ -325,8 +418,8 @@ impl MarkdownRenderer {
                 Event::Rule => {
                     self.flush_line();
                     self.lines.push(Line::from(Span::styled(
-                        "─".repeat(40),
-                        Style::default().fg(Color::DarkGray),
+                        "─".repeat(self.width.min(40)),
+                        self.styles.blockquote,
                     )));
                 }
                 _ => {}
@@ -348,22 +441,15 @@ impl MarkdownRenderer {
                     HeadingLevel::H6 => self.styles.h6,
                 };
                 self.push_style(style);
-
-                // Add heading prefix
-                let prefix = match level {
-                    HeadingLevel::H1 => "# ",
-                    HeadingLevel::H2 => "## ",
-                    HeadingLevel::H3 => "### ",
-                    HeadingLevel::H4 => "#### ",
-                    HeadingLevel::H5 => "##### ",
-                    HeadingLevel::H6 => "###### ",
-                };
-                self.current_spans
-                    .push(Span::styled(prefix.to_string(), style));
             }
-            Tag::Paragraph => {
+            Tag::Paragraph if self.list_stack.is_empty() => {
                 self.flush_line();
             }
+            Tag::Table(_) => {
+                self.flush_line();
+                self.table = Some(TableLayout::default());
+            }
+            Tag::TableHead => self.push_style(self.styles.strong),
             Tag::BlockQuote(_) => {
                 self.flush_line();
                 self.blockquote_depth += 1;
@@ -389,7 +475,7 @@ impl MarkdownRenderer {
                     *n += 1;
                     marker
                 } else {
-                    "* ".to_string()
+                    "• ".to_string()
                 };
                 let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
                 self.current_spans.push(Span::styled(
@@ -428,7 +514,31 @@ impl MarkdownRenderer {
             }
             TagEnd::Paragraph => {
                 self.flush_line();
-                self.lines.push(Line::from("")); // blank line after paragraph
+                if self.list_stack.is_empty() {
+                    self.lines.push(Line::from(""));
+                }
+            }
+            TagEnd::TableCell => {
+                if let Some(table) = &mut self.table {
+                    table
+                        .row
+                        .push(Line::from(std::mem::take(&mut self.current_spans)));
+                }
+            }
+            TagEnd::TableHead | TagEnd::TableRow => {
+                if matches!(tag, TagEnd::TableHead) {
+                    self.pop_style();
+                }
+                if let Some(table) = &mut self.table {
+                    table.rows.push(std::mem::take(&mut table.row));
+                }
+            }
+            TagEnd::Table => {
+                if let Some(table) = self.table.take() {
+                    self.lines
+                        .extend(table.render(self.width, self.styles.blockquote));
+                    self.lines.push(Line::from(""));
+                }
             }
             TagEnd::BlockQuote(_) => {
                 self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
@@ -436,32 +546,14 @@ impl MarkdownRenderer {
             }
             TagEnd::CodeBlock => {
                 self.in_code_block = false;
-                // Render code block with border and syntax highlighting
                 let lang = self.code_block_lang.as_deref();
-                let lang_label = lang.unwrap_or("code");
-
-                // Header
-                self.lines.push(Line::from(vec![
-                    Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(lang_label.to_string(), Style::default().fg(Color::DarkGray)),
-                    Span::styled(" ─", Style::default().fg(Color::DarkGray)),
-                ]));
-
-                // Syntax-highlighted content
-                let highlighted_lines = syntax::highlight_code(&self.code_block_content, lang);
-                for mut line in highlighted_lines {
-                    // Prepend the border
-                    let mut spans = vec![Span::styled("│ ", Style::default().fg(Color::DarkGray))];
-                    spans.append(&mut line.spans);
-                    self.lines.push(Line::from(spans));
+                if let Some(label) = lang {
+                    self.lines
+                        .push(Line::styled(label.to_owned(), self.styles.blockquote));
                 }
-
-                // Footer
-                self.lines.push(Line::from(Span::styled(
-                    "└──────",
-                    Style::default().fg(Color::DarkGray),
-                )));
-                self.lines.push(Line::from("")); // blank line after code block
+                self.lines
+                    .extend(syntax::highlight_code(&self.code_block_content, lang));
+                self.lines.push(Line::from(""));
 
                 self.code_block_content.clear();
                 self.code_block_lang = None;
@@ -492,7 +584,7 @@ impl MarkdownRenderer {
                         if !link.url.starts_with("file://") {
                             self.current_spans.push(Span::styled(
                                 format!(" ({})", link.url),
-                                Style::default().fg(Color::DarkGray),
+                                self.styles.blockquote,
                             ));
                         }
                         return;
@@ -506,7 +598,7 @@ impl MarkdownRenderer {
                     if !link.url.starts_with("file://") {
                         self.current_spans.push(Span::styled(
                             format!(" ({})", link.url),
-                            Style::default().fg(Color::DarkGray),
+                            self.styles.blockquote,
                         ));
                     }
                 }
@@ -527,6 +619,143 @@ impl MarkdownRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_markdown_line_with_theme(text: &str, theme: &crate::themes::Theme) -> Line<'static> {
+        render_with_styles(text, None, MarkdownStyles::for_theme(theme))
+            .lines
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn inline_code_uses_readable_theme_ink_without_terminal_dimming() {
+        for name in [
+            "light",
+            "green",
+            "pink",
+            "blue",
+            "green-dark",
+            "pink-dark",
+            "blue-dark",
+        ] {
+            let theme = crate::themes::load_theme(name).unwrap();
+            let line = parse_markdown_line_with_theme("Run `cargo test`.", &theme);
+            let code = line
+                .spans
+                .iter()
+                .find(|span| span.content.trim_matches('`') == "cargo test")
+                .unwrap();
+            assert_eq!(code.style.fg, theme.get_color("md_code"));
+            assert!(!code.style.add_modifier.contains(Modifier::DIM));
+        }
+        let dark = crate::themes::dark_theme();
+        let code = parse_markdown_line_with_theme("`cargo test`", &dark);
+        assert_eq!(code.spans[0].style.fg, dark.get_color("md_code"));
+        assert!(!code.spans[0].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn markdown_links_respect_distinct_theme_link_colors() {
+        let mut custom = crate::themes::light_theme();
+        custom.colors.md_heading = "#ff0000".into();
+        custom.colors.md_link = "#00ff00".into();
+        assert_ne!(custom.get_color("md_link"), custom.get_color("md_heading"));
+        for theme in [crate::themes::light_theme(), custom] {
+            let line = parse_markdown_line_with_theme("See [guide](https://example.com).", &theme);
+            let link = line
+                .spans
+                .iter()
+                .find(|span| span.content == "guide")
+                .unwrap();
+            assert_eq!(link.style.fg, theme.get_color("md_link"));
+            assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
+        }
+        let line = parse_markdown_line_with_theme(
+            "[guide](https://example.com)",
+            &crate::themes::dark_theme(),
+        );
+        assert_eq!(
+            line.spans[0].style.fg,
+            crate::themes::dark_theme().get_color("md_link")
+        );
+    }
+
+    fn visible(text: &Text<'_>) -> Vec<String> {
+        text.lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn headings_and_code_use_visual_hierarchy_without_source_fences() {
+        let text = render_markdown("## Result\n\n```rust\nfn main() {}\n```");
+        let lines = visible(&text);
+        assert_eq!(lines[0], "Result");
+        assert!(
+            text.lines[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(lines.iter().any(|line| line == "rust"));
+        assert!(lines.iter().any(|line| line == "fn main() {}"));
+        assert!(!lines.iter().any(|line| line.contains("```")));
+    }
+
+    #[test]
+    fn tables_preserve_cells_at_wide_and_narrow_widths() {
+        let input = "| Item | Status |\n| --- | --- |\n| 世界 | Ready |\n| Build | Passed |";
+        for width in [12, 24, 60, 100] {
+            let text = render_markdown_with_width(input, Some(width));
+            assert!(text.lines.iter().all(|line| line.width() <= width));
+            let rendered = visible(&text).join("\n");
+            for cell in ["Item", "Status", "世界", "Ready", "Build", "Passed"] {
+                assert!(
+                    rendered.contains(cell),
+                    "missing {cell} at {width}: {rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_and_loose_lists_keep_their_markers() {
+        let text = render_markdown("- First\n\n- Second\n  - Nested");
+        let lines = visible(&text);
+        assert!(lines.iter().any(|line| line == "• First"));
+        assert!(lines.iter().any(|line| line == "• Second"));
+        assert!(lines.iter().any(|line| line == "  • Nested"));
+    }
+
+    #[test]
+    fn incomplete_streamed_code_remains_visible() {
+        let text = render_markdown("```rust\nlet answer = 42;");
+        assert!(visible(&text).iter().any(|line| line == "let answer = 42;"));
+    }
+
+    #[test]
+    fn inline_code_removes_only_markdown_delimiters() {
+        let text = render_markdown("Run `cargo test`, then `` echo `date` ``.");
+        assert_eq!(visible(&text), ["Run cargo test, then echo `date`."]);
+        let link = render_markdown("[`src/main.rs`](file:///tmp/src/main.rs)");
+        assert_eq!(
+            crate::hyperlink::strip_hyperlinks(&visible(&link).join("\n")),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn horizontal_rules_fit_the_viewport_and_use_theme_ink() {
+        let styles = MarkdownStyles::for_theme(&crate::themes::light_theme());
+        for width in [1, 12, 24, 60] {
+            let text = render_with_styles("---", Some(width), styles.clone());
+            assert_eq!(text.lines.len(), 1);
+            assert_eq!(text.lines[0].width(), width.min(40));
+            assert_eq!(text.lines[0].spans[0].style, styles.blockquote);
+        }
+    }
 
     #[test]
     fn renders_plain_text() {

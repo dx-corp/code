@@ -126,6 +126,16 @@ class CaptureFixture:
                             delta["content"] = (
                                 "I couldn’t read missing-checklist.md because it does not exist. Check the filename or choose README.md to continue."
                             )
+                        if fixture.scene == "markdown":
+                            delta["content"] = (
+                                "## Release checklist\n\n"
+                                "The project tracks **owners**, review steps, and shipped work.\n\n"
+                                "| Step | Owner | Status |\n| --- | --- | --- |\n"
+                                "| Review | Maya | Ready |\n| Publish | Alex | Pending |\n\n"
+                                "```rust\nfn ready(approved: bool) -> bool {\n    approved\n}\n```\n\n"
+                                "- Review the changes.\n- Publish after approval.\n\n"
+                                "Final row visible."
+                            )
                         finish = "stop"
                     elif fixture.scene in {"summary-review", "summary-save"} and fixture.turn == 3:
                         request = json.loads(request_body)

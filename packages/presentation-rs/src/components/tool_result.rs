@@ -86,6 +86,12 @@ impl ToolResult<'_> {
             header.push(Span::styled(hint.to_owned(), Style::default().fg(t.muted)));
         }
         let mut lines = vec![Line::from(header)];
+        // Successful routine output stays available through expansion. Failed,
+        // blocked and pending operations retain their actionable preview.
+        if !self.expanded && matches!(self.phase, ToolPhase::Completed) && self.truncation.is_none()
+        {
+            return lines;
+        }
         let row = |text: String, color| {
             Line::from(vec![
                 Span::styled("  │ ", Style::default().fg(t.border)),

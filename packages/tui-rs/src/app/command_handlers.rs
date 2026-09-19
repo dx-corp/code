@@ -2615,13 +2615,15 @@ impl App {
             },
             HooksAction::Metrics => match &self.native_agent {
                 Some(agent) => match agent.inspect_hooks().await {
-                    Ok(runtime) => self.state.add_system_message(format!(
-                        "Hook metrics\nPreToolUse: {}\nPostToolUse: {}\nOverflow: {}\nBlocks: {}\nTotal duration: {}ms\n",
-                        runtime.pre_tool_use_count,
-                        runtime.post_tool_use_count,
-                        runtime.overflow_count,
-                        runtime.blocks,
-                        runtime.total_duration_ms,
+                    Ok(runtime) => self.state.add_system_message(self.state.locale.format(
+                        "Hook metrics\nPreToolUse: {0}\nPostToolUse: {1}\nOverflow: {2}\nBlocks: {3}\nTotal duration: {4}ms\n",
+                        &[
+                            runtime.pre_tool_use_count.to_string(),
+                            runtime.post_tool_use_count.to_string(),
+                            runtime.overflow_count.to_string(),
+                            runtime.blocks.to_string(),
+                            runtime.total_duration_ms.to_string(),
+                        ],
                     )),
                     Err(error) => self.state.error = Some(error.to_string()),
                 },

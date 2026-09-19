@@ -1482,7 +1482,7 @@ fn validate_config() -> Result<JsonValue> {
         if toml_path.exists() {
             config_files.push(toml_path.display().to_string());
             if let Err(error) = fs::read_to_string(&toml_path).and_then(|raw| {
-                raw.parse::<TomlValue>()
+                toml::from_str::<TomlValue>(&raw)
                     .map(|_| ())
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
             }) {
@@ -1498,7 +1498,7 @@ fn validate_config() -> Result<JsonValue> {
             }
             config_files.push(path.display().to_string());
             if let Err(error) = fs::read_to_string(&path).and_then(|raw| {
-                raw.parse::<TomlValue>()
+                toml::from_str::<TomlValue>(&raw)
                     .map(|_| ())
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
             }) {
@@ -1744,14 +1744,14 @@ fn load_toml_for_update(path: &Path) -> Result<TomlValue> {
         }
     };
     // Parser diagnostics can contain config values. Keep those out of the TUI.
-    raw.parse::<TomlValue>()
+    toml::from_str::<TomlValue>(&raw)
         .map_err(|_| anyhow::anyhow!("invalid TOML in {}; file left unchanged", path.display()))
 }
 
 fn load_toml(path: &Path) -> Option<TomlValue> {
     fs::read_to_string(path)
         .ok()
-        .and_then(|raw| raw.parse::<TomlValue>().ok())
+        .and_then(|raw| toml::from_str::<TomlValue>(&raw).ok())
 }
 
 fn flatten_keys(prefix: &str, value: &TomlValue, out: &mut Vec<String>) {
@@ -2456,6 +2456,28 @@ mod tests {
             keys,
             vec!["history.persistence".to_owned(), "model".to_owned()]
         );
+    }
+
+    #[test]
+    fn config_file_loaders_parse_documents_without_process_state() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("config.toml");
+        for document in [
+            "",
+            "theme = \"dark\"\n",
+            "[history]\npersistence = \"save-all\"\n",
+        ] {
+            fs::write(&path, document).unwrap();
+            let expected: TomlValue = toml::from_str(document).unwrap();
+            assert_eq!(load_toml(&path), Some(expected.clone()));
+            assert_eq!(load_toml_for_update(&path).unwrap(), expected);
+        }
+        let invalid = "secret_fixture = \"do-not-echo\"\n[broken\n";
+        fs::write(&path, invalid).unwrap();
+        assert!(load_toml(&path).is_none());
+        let error = load_toml_for_update(&path).unwrap_err();
+        assert!(!format!("{error:#}").contains("do-not-echo"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
     }
 
     #[test]

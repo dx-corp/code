@@ -154,7 +154,7 @@ fn long_unicode_search_keeps_the_edited_suffix_and_cursor_visible() {
         "the edited end of the query must be visible"
     );
     let end = terminal.get_cursor_position().unwrap();
-    assert_eq!(end.y, 1);
+    assert_eq!(end.y, 0);
     // Use a query that fits to distinguish caret movement from viewport scrolling.
     picker.open();
     picker.insert_str("日本TAIL");

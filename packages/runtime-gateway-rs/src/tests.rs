@@ -4814,6 +4814,8 @@ fn capsule_deadline_cannot_leave_an_ambient_validator_process_running() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a2a_subagent_request_rejects_invalid_task_capsule_before_claim() {
+    // Authentication reads the hosted-profile environment changed by sibling tests.
+    let _guard = ENV_LOCK.lock().await;
     for return_immediately in [false, true] {
         let mut subagent_request = valid_code_writer_capsule();
         subagent_request["capsule"]["mutationBoundary"]["paths"] = serde_json::json!(["../deploy"]);
@@ -4847,7 +4849,7 @@ async fn a2a_subagent_request_rejects_invalid_task_capsule_before_claim() {
         let response =
             response_json(handle_a2a_endpoint(&mut server, &mut initial, head, &state).await);
 
-        assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["code"], "INVALID_REQUEST", "{response}");
         assert_eq!(
             state.a2a_tasks.lock().await.len(),
             0,
