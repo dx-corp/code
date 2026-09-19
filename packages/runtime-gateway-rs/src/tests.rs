@@ -148,6 +148,37 @@ fn clear_env(names: &[&str]) {
 }
 
 #[test]
+fn daemon_ownership_requires_one_valid_external_owner() {
+    assert_eq!(parse_ownership_watch(None, None).unwrap(), None);
+    assert_eq!(
+        parse_ownership_watch(Some("42"), None).unwrap(),
+        Some(OwnershipWatch::ParentPid(42))
+    );
+    assert_eq!(
+        parse_ownership_watch(None, Some("7")).unwrap(),
+        Some(OwnershipWatch::LivenessFd(7))
+    );
+    assert!(parse_ownership_watch(Some("42"), Some("7")).is_err());
+    assert!(parse_ownership_watch(Some("0"), None).is_err());
+    assert!(parse_ownership_watch(None, Some("-1")).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn daemon_liveness_pipe_detects_supervisor_disconnect() {
+    let mut fds = [0_i32; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { libc::close(fds[1]) }, 0);
+    let reason = tokio::time::timeout(
+        Duration::from_secs(1),
+        wait_for_owner_loss(OwnershipWatch::LivenessFd(fds[0])),
+    )
+    .await
+    .expect("liveness monitor should observe EOF");
+    assert_eq!(reason, format!("liveness_pipe_closed:{}", fds[0]));
+}
+
+#[test]
 fn control_plane_defaults_to_loopback_bind() {
     let _guard = ENV_LOCK.blocking_lock();
     let snapshot = snapshot_env(RUNTIME_GATEWAY_ENV_NAMES);
@@ -2665,6 +2696,7 @@ fn test_session_record(id: &str) -> SessionRecord {
         message_count: 0,
         favorite: None,
         tags: Vec::new(),
+        log_group_id: None,
         messages: Vec::new(),
     }
 }
@@ -4782,6 +4814,8 @@ fn capsule_deadline_cannot_leave_an_ambient_validator_process_running() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a2a_subagent_request_rejects_invalid_task_capsule_before_claim() {
+    // Authentication reads the hosted-profile environment changed by sibling tests.
+    let _guard = ENV_LOCK.lock().await;
     for return_immediately in [false, true] {
         let mut subagent_request = valid_code_writer_capsule();
         subagent_request["capsule"]["mutationBoundary"]["paths"] = serde_json::json!(["../deploy"]);
@@ -4815,7 +4849,7 @@ async fn a2a_subagent_request_rejects_invalid_task_capsule_before_claim() {
         let response =
             response_json(handle_a2a_endpoint(&mut server, &mut initial, head, &state).await);
 
-        assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["code"], "INVALID_REQUEST", "{response}");
         assert_eq!(
             state.a2a_tasks.lock().await.len(),
             0,
@@ -13178,6 +13212,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         message_count: 0,
         favorite: None,
         tags: Vec::new(),
+        log_group_id: None,
         messages: Vec::new(),
     };
     let state = AppState {

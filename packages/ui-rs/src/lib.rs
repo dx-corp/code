@@ -115,6 +115,7 @@ impl<'a> Modal<'a> {
             margin: 2,
             block: Block::default()
                 .title(title)
+                .border_type(ratatui::widgets::BorderType::Rounded)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
                 .style(Style::default().bg(Color::Black)),

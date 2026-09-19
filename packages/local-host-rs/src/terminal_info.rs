@@ -141,8 +141,13 @@ fn detect_terminal_name_version() -> (String, Option<String>) {
     }
 
     // Fallback to TERM
-    let term = std::env::var("TERM").unwrap_or_else(|_| "unknown".to_string());
+    let term = fallback_terminal_name(std::env::var("TERM").ok());
     (term, None)
+}
+
+fn fallback_terminal_name(term: Option<String>) -> String {
+    term.filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Sanitize a string for use in HTTP header values.
@@ -389,6 +394,17 @@ mod tests {
         // Just ensure it doesn't panic
         let info = TerminalInfo::get();
         assert!(!info.name.is_empty());
+    }
+
+    #[test]
+    fn empty_term_falls_back_to_unknown() {
+        assert_eq!(fallback_terminal_name(None), "unknown");
+        assert_eq!(fallback_terminal_name(Some(String::new())), "unknown");
+        assert_eq!(fallback_terminal_name(Some("  ".into())), "unknown");
+        assert_eq!(
+            fallback_terminal_name(Some("xterm-256color".into())),
+            "xterm-256color"
+        );
     }
 
     #[test]

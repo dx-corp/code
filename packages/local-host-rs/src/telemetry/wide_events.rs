@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use chrono::Utc;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

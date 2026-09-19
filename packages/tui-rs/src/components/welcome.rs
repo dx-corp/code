@@ -117,6 +117,31 @@ impl WelcomeScreen {
 
     /// Build the content lines
     fn build_content(&self, area: Rect) -> Vec<Line<'static>> {
+        if self.personality == super::dex_companion::DexPersonality::Quiet {
+            let theme = crate::themes::current_ui_theme();
+            let mut lines = vec![Line::styled(
+                self.welcome_message
+                    .as_deref()
+                    .unwrap_or(super::deixic_logo::PRODUCT_TITLE)
+                    .to_owned(),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            )];
+            for (label, value) in [("version", &self.version), ("model", &self.model)] {
+                if let Some(value) = value {
+                    lines.push(Line::styled(
+                        format!("{label} {value}"),
+                        Style::default().fg(theme.muted),
+                    ));
+                }
+            }
+            if let Some((runtime, location)) = &self.summary {
+                lines.push(Line::styled(
+                    format!("{runtime} · {location}"),
+                    Style::default().fg(theme.muted),
+                ));
+            }
+            return lines;
+        }
         // Brand block: Dex mark + Dex Code title.
         // Custom welcome_message replaces only the product title line.
         // Reserve rows for optional onboarding metadata before selecting the
@@ -127,23 +152,7 @@ impl WelcomeScreen {
             + u16::from(self.session_id.is_some())
             + 1;
         let brand_height = area.height.saturating_sub(reserved_rows);
-        let mut lines = if self.personality == super::dex_companion::DexPersonality::Quiet {
-            vec![
-                if crate::themes::current_theme().canvas_style().bg.is_some() {
-                    Line::styled(
-                        super::deixic_logo::PRODUCT_TITLE,
-                        Style::default()
-                            .fg(crate::themes::current_ui_theme().text)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    super::deixic_logo::product_title_line(false)
-                },
-                Line::from(super::deixic_logo::COMPOSER_HINT),
-            ]
-        } else {
-            super::deixic_logo::welcome_content_lines(brand_height, false)
-        };
+        let mut lines = super::deixic_logo::welcome_content_lines(brand_height, false);
         // An empty session is ready, even when decorative motion is enabled.
         lines.push(
             super::dex_companion::DexCompanion::new(super::dex_companion::DexCompanionState::Ready)
@@ -215,22 +224,28 @@ impl Widget for WelcomeScreen {
         Clear.render(area, buf);
         buf.set_style(area, crate::themes::current_theme().canvas_style());
 
-        let content = crate::wrapping::word_wrap_lines(
-            &self.build_content(area),
-            usize::from(area.width.max(1)),
-        );
+        let quiet = self.personality == super::dex_companion::DexPersonality::Quiet;
+        let width = area.width.saturating_sub(if quiet { 2 } else { 0 });
+        let content =
+            crate::wrapping::word_wrap_lines(&self.build_content(area), usize::from(width.max(1)));
         let content_height = content.len().min(usize::from(area.height)) as u16;
-        let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-        let y_offset = if area.height > content_height {
+        let paragraph = Paragraph::new(content).alignment(if quiet {
+            Alignment::Left
+        } else {
+            Alignment::Center
+        });
+        let y_offset = if quiet {
+            1.min(area.height.saturating_sub(content_height))
+        } else if area.height > content_height {
             (area.height - content_height) / 2
         } else {
             0
         };
 
         let content_area = Rect::new(
-            area.x,
+            area.x + if quiet { 2.min(area.width) } else { 0 },
             area.y + y_offset,
-            area.width,
+            area.width.saturating_sub(if quiet { 2 } else { 0 }),
             content_height.min(area.height),
         );
 
@@ -539,17 +554,17 @@ mod tests {
     }
 
     #[test]
-    fn quiet_welcome_keeps_identity_and_ready_text_without_art() {
+    fn quiet_welcome_keeps_identity_without_art_or_redundant_status() {
         let lines = WelcomeScreen::new()
             .personality(super::super::dex_companion::DexPersonality::Quiet)
             .animations(true)
             .build_content(Rect::new(0, 0, 80, 24));
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].to_string(),
             super::super::deixic_logo::PRODUCT_TITLE
         );
-        assert_eq!(lines[2].to_string(), "Dex · ready");
+        assert!(!lines.iter().any(|line| line.to_string().contains("ready")));
     }
 
     fn rendered_welcome(welcome: WelcomeScreen, area: Rect) -> String {
@@ -566,14 +581,18 @@ mod tests {
     }
 
     #[test]
-    fn quiet_narrow_welcome_preserves_ready_after_wrapped_hint() {
+    fn quiet_narrow_welcome_preserves_wrapped_project_context() {
         let rendered = rendered_welcome(
-            WelcomeScreen::new().personality(super::super::dex_companion::DexPersonality::Quiet),
+            WelcomeScreen::new()
+                .personality(super::super::dex_companion::DexPersonality::Quiet)
+                .with_summary("GPT-6 Astra".into(), "a-long-project-directory".into()),
             Rect::new(0, 0, 32, 12),
         );
         let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(normalized.contains(super::super::deixic_logo::COMPOSER_HINT));
-        assert!(rendered.contains("Dex · ready"));
+        assert!(normalized.contains("GPT-6 Astra"));
+        let compact: String = rendered.chars().filter(|ch| !ch.is_whitespace()).collect();
+        assert!(compact.contains("a-long-project-directory"), "{rendered}");
+        assert!(!rendered.contains("Dex · ready"));
     }
 
     #[test]
@@ -586,11 +605,11 @@ mod tests {
                 .with_model("a-long-model-name-that-needs-a-second-row"),
             Rect::new(0, 0, 32, 16),
         );
-        assert!(rendered.contains("Dex · ready"));
+        assert!(!rendered.contains("Dex · ready"));
         assert!(rendered.contains("version 1.0.0"));
         let compact: String = rendered.chars().filter(|ch| !ch.is_whitespace()).collect();
         assert!(compact.contains("modela-long-model-name-that-needs-a-second-row"));
-        assert!(rendered.contains("terminal rows"));
+        assert!(compact.contains("terminalrows"), "{rendered}");
     }
 
     #[test]

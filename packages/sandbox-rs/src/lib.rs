@@ -367,7 +367,7 @@ const SANDBOX_CACHE_PROCESS_MARKER: &str = ".maestro-process";
 pub fn sandbox_cache_session_id() -> &'static str {
     static SESSION_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SESSION_ID.get_or_init(|| {
-        use rand::Rng;
+        use rand::RngExt;
         use std::fmt::Write as _;
         let bytes: [u8; 16] = rand::rng().random();
         bytes

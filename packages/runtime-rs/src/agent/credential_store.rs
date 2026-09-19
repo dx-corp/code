@@ -52,7 +52,7 @@
 //! - References are opaque and don't reveal credential content
 //! - Store is cleared when dropped
 
-use rand::Rng;
+use rand::RngExt;
 use regex::{Captures, Regex};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};

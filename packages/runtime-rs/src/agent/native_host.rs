@@ -51,6 +51,20 @@ pub enum QueueMode {
 /// Boxed future used by asynchronous operations in the host seam.
 pub type NativeHostFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Live hook state exposed without leaking hook implementations or secrets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeHookRuntimeSnapshot {
+    pub native_hooks: usize,
+    pub lua_scripts: usize,
+    pub wasm_plugins: usize,
+    pub enabled: bool,
+    pub pre_tool_use_count: u64,
+    pub post_tool_use_count: u64,
+    pub overflow_count: u64,
+    pub blocks: u64,
+    pub total_duration_ms: u64,
+}
+
 /// Catalog-reported model support, supplied by the composing host without
 /// coupling the runtime to a catalog implementation. None means unknown, not
 /// unsupported. These facts do not grant tool access or model-change authority.
@@ -420,6 +434,15 @@ pub trait NativeExecutionHost: Send + Sync {
     fn hook_increment_turn<'a>(&'a self) -> NativeHostFuture<'a, ()>;
     fn hook_set_model<'a>(&'a self, model: &'a str) -> NativeHostFuture<'a, ()>;
     fn hook_set_log_file<'a>(&'a self, path: Option<String>) -> NativeHostFuture<'a, ()>;
+    fn hook_set_enabled<'a>(&'a self, _enabled: bool) -> NativeHostFuture<'a, ()> {
+        Box::pin(async {})
+    }
+    fn hook_reload<'a>(&'a self) -> NativeHostFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn hook_runtime_snapshot<'a>(&'a self) -> NativeHostFuture<'a, NativeHookRuntimeSnapshot> {
+        Box::pin(async { NativeHookRuntimeSnapshot::default() })
+    }
     fn render_hook_context(&self, event: NativeHookEvent, context: &str) -> Result<String, String>;
 
     // Host-resolved support callbacks.  These keep auth/config/catalog and
@@ -867,6 +890,18 @@ impl NativeExecutionHostHandle {
 
     pub fn hook_set_log_file<'a>(&'a self, path: Option<String>) -> NativeHostFuture<'a, ()> {
         self.0.hook_set_log_file(path)
+    }
+
+    pub fn hook_set_enabled<'a>(&'a self, enabled: bool) -> NativeHostFuture<'a, ()> {
+        self.0.hook_set_enabled(enabled)
+    }
+
+    pub fn hook_reload<'a>(&'a self) -> NativeHostFuture<'a, Result<(), String>> {
+        self.0.hook_reload()
+    }
+
+    pub fn hook_runtime_snapshot<'a>(&'a self) -> NativeHostFuture<'a, NativeHookRuntimeSnapshot> {
+        self.0.hook_runtime_snapshot()
     }
 
     pub fn render_hook_context(

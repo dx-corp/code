@@ -11176,6 +11176,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Hook metrics\nPreToolUse: {0}\nPostToolUse: {1}\nOverflow: {2}\nBlocks: {3}\nTotal duration: {4}ms\n",
+        [
+            "Métricas de hooks\nPreToolUse: {0}\nPostToolUse: {1}\nDesbordamientos: {2}\nBloqueos: {3}\nDuración total: {4}ms\n",
+            "Métriques des hooks\nPreToolUse: {0}\nPostToolUse: {1}\nDépassements: {2}\nBlocages: {3}\nDurée totale: {4}ms\n",
+            "Hook-Metriken\nPreToolUse: {0}\nPostToolUse: {1}\nÜberläufe: {2}\nBlockierungen: {3}\nGesamtdauer: {4}ms\n",
+            "フックのメトリクス\nPreToolUse: {0}\nPostToolUse: {1}\nオーバーフロー: {2}\nブロック: {3}\n合計時間: {4}ms\n",
+            "훅 지표\nPreToolUse: {0}\nPostToolUse: {1}\n오버플로: {2}\n차단: {3}\n총 소요 시간: {4}ms\n",
+            "钩子指标\nPreToolUse: {0}\nPostToolUse: {1}\n溢出: {2}\n阻止: {3}\n总耗时: {4}ms\n",
+        ],
+    ),
+    (
         "Hook status (native summary)",
         [
             "Estado de los hooks (resumen nativo)",

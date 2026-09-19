@@ -62,7 +62,7 @@
 //! 4. Using vertical layout to split content into sections:
 //!    - Reason (if provided)
 //!    - Tool name with shell indicator
-//!    - Command display (bordered, scrollable)
+//!    - Command display (inset, scrollable)
 //!    - Queue status
 //!    - Keyboard hints
 //!
@@ -977,10 +977,11 @@ impl Widget for ApprovalModal<'_> {
         }) + self.request.command_source.as_deref().map_or(0, |source| {
             estimate_wrapped_rows("Source: ", source, modal_width.saturating_sub(4))
         });
+        let minimum_reason_rows = if source_rows == 0 { 0 } else { 2 };
         // Outer border (2) + reason/source + tool (2) + command + queue (1)
         // + hints (2).
         let wanted_height = 7_u16
-            .saturating_add(source_rows.max(2))
+            .saturating_add(source_rows.max(minimum_reason_rows))
             .saturating_add(command_rows);
         let modal_height = wanted_height.max(10).min(area.height);
 
@@ -1042,18 +1043,17 @@ impl Widget for ApprovalModal<'_> {
         // clipping its dangerous suffix. On terminals too short for every
         // computed row, preserve as much command space as possible after
         // the source minimum and fixed sections.
-        const MIN_REASON_ROWS: u16 = 2;
         const FIXED_SECTION_ROWS: u16 = 2 + 1 + 2; // Tool + queue + hints.
         let max_command_rows = inner
             .height
-            .saturating_sub(FIXED_SECTION_ROWS + MIN_REASON_ROWS)
+            .saturating_sub(FIXED_SECTION_ROWS + minimum_reason_rows)
             .max(4);
         let command_section_rows = command_rows.min(max_command_rows);
         let max_reason_rows = inner
             .height
             .saturating_sub(FIXED_SECTION_ROWS + command_section_rows)
-            .max(MIN_REASON_ROWS);
-        let reason_section_rows = reason_section_rows.clamp(2, max_reason_rows);
+            .max(minimum_reason_rows);
+        let reason_section_rows = reason_section_rows.clamp(minimum_reason_rows, max_reason_rows);
 
         // Layout the content
         let chunks = Layout::default()
@@ -1108,7 +1108,7 @@ impl Widget for ApprovalModal<'_> {
             .collect();
 
         let command_block = Block::default()
-            .borders(Borders::ALL)
+            .borders(Borders::LEFT)
             .border_style(Style::default().fg(palette.muted))
             .title(maestro_ui::localization::tr(" Command "));
 
@@ -1147,7 +1147,7 @@ impl Widget for ApprovalModal<'_> {
                 KeyHint::new("w", maestro_ui::localization::tr("always")),
             ]);
         }
-        let hints = key_hints(&bindings, palette);
+        let hints = key_hints(&bindings, palette.on_panel());
         Paragraph::new(hints)
             .wrap(Wrap { trim: true })
             .alignment(Alignment::Center)

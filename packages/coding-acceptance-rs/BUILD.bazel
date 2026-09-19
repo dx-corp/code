@@ -5,7 +5,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["src/lib.rs", "src/computer.rs"])
+exports_files(["src/lib.rs", "src/computer.rs", "src/computer_evidence.rs", "src/hosted.rs"])
 
 cargo_toml_env_vars(
     name = "cargo_toml_env_vars",

@@ -26,9 +26,8 @@
 //!
 //! # Theme
 //!
-//! Uses the "base16-eighties.dark" theme which provides good contrast and readability
-//! in terminal environments. The theme uses base16 color palette which maps well to
-//! terminal RGB colors.
+//! Selects a light or dark syntax palette from the current canvas and adapts
+//! foreground colors to the terminal capabilities, including NO_COLOR.
 //!
 //! # Example
 //!
@@ -40,7 +39,7 @@
 //! // `lines` contains styled ratatui Line instances ready for rendering
 //! ```
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
@@ -121,8 +120,8 @@ pub fn highlight_code(code: &str, language: Option<&str>) -> Vec<Line<'static>> 
         })
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
-    // Use base16-eighties as a dark theme that works well in terminals
-    let theme = &THEME_SET.themes["base16-eighties.dark"];
+    let ui_theme = crate::themes::current_theme();
+    let theme = &THEME_SET.themes[syntax_theme_name(&ui_theme)];
     let mut highlighter = HighlightLines::new(syntax, theme);
 
     let mut result = Vec::new();
@@ -135,8 +134,11 @@ pub fn highlight_code(code: &str, language: Option<&str>) -> Vec<Line<'static>> 
                 let spans: Vec<Span<'static>> = ranges
                     .iter()
                     .map(|(style, text)| {
-                        let fg =
-                            Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                        let fg = crate::palette::best_color(
+                            style.foreground.r,
+                            style.foreground.g,
+                            style.foreground.b,
+                        );
                         let modifier = font_style_to_modifier(style.font_style);
                         Span::styled(
                             (*text).to_string(),
@@ -154,6 +156,22 @@ pub fn highlight_code(code: &str, language: Option<&str>) -> Vec<Line<'static>> 
     }
 
     result
+}
+
+// Choose contrast from the source palette, before terminal color quantization.
+fn syntax_theme_name(theme: &crate::themes::Theme) -> &'static str {
+    let rgb = theme.colors.assistant_message_bg.trim_start_matches('#');
+    let light = rgb
+        .get(..6)
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .is_some_and(|rgb| {
+            crate::color_utils::is_light(((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
+        });
+    if light {
+        "InspiredGitHub"
+    } else {
+        "base16-eighties.dark"
+    }
 }
 
 /// Check if syntax highlighting is available for a language.
@@ -193,6 +211,18 @@ pub fn supported_languages() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syntax_contrast_follows_palette_before_terminal_quantization() {
+        assert_eq!(
+            syntax_theme_name(&crate::themes::light_theme()),
+            "InspiredGitHub"
+        );
+        assert_eq!(
+            syntax_theme_name(&crate::themes::dark_theme()),
+            "base16-eighties.dark"
+        );
+    }
 
     #[test]
     fn test_highlight_rust() {

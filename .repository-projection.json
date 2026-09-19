@@ -3,11 +3,11 @@
   "projection": "deixic-code",
   "projectionSchemaVersion": 1,
   "sourceRepository": "dx-corp/mono",
-  "sourceSha": "6878323651fdb771b8cbf76b08597b930938ce36",
+  "sourceSha": "3fcbaa13c7fe99ae16f2328afbc5c7131ef7a9b4",
   "destinationRepository": "dx-corp/code",
-  "priorProjectedBase": "4c484fec884560fda66a55a5a61722edf1a2d71e",
-  "definitionDigest": "07c1b987e17ae0398b4af8817192627b95c45168c305069446594fdaa3414682",
-  "toolDigest": "16fcaea2f0e7e35de09bcd8e515d915f65cdf1eb13033eaf2845f60eaa9e0a4f",
-  "contentDigest": "325d36d4b27c054e6edd55e71460299cdf56f8dc3ed887ae92ac326b531e60bc",
+  "priorProjectedBase": "56ee3b6a474fbc2f81ac3325a8e424b82d582d36",
+  "definitionDigest": "064b6b9745d392dde277afd7dfdf028cff32b6178a8b9c99c518343219bab429",
+  "toolDigest": "9f3ee17d06ac34337873740d0109c3274bff8315d312227eb55383c5d169116d",
+  "contentDigest": "b9b7fdb3ace95244a69c465cb0c16c40e5890a2dc1ef59c9a6d92e504e6bbfb0",
   "publicationEligible": true
 }

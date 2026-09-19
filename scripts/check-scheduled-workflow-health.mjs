@@ -235,21 +235,34 @@ function resolveWorkflow(repo, workflow) {
  * default branch", which means the same thing for a schedule and for a push.
  */
 const IGNORED_RUN_EVENTS = new Set(["workflow_dispatch"]);
-const RUN_PAGE_OVERFETCH = 3;
-const MAX_RUN_PAGE = 100;
+const RUN_PAGE_SIZE = 100;
+const MAX_RUN_PAGES = 10;
 
-function recentRuns(repo, workflowId, count, branch) {
-	// Over-fetch: the dispatch/incomplete filtering below happens client-side,
-	// so a page of exactly `count` can shrink to fewer than `count` runs.
-	const perPage = Math.min(count * RUN_PAGE_OVERFETCH, MAX_RUN_PAGE);
-	const data = ghJson([
-		`repos/${repo}/actions/workflows/${workflowId}/runs?branch=${encodeURIComponent(branch)}&exclude_pull_requests=true&per_page=${perPage}`,
-	]);
-	return (Array.isArray(data.workflow_runs) ? data.workflow_runs : [])
+export function selectAutomaticRuns(pageRuns, count) {
+	return (Array.isArray(pageRuns) ? pageRuns : [])
 		.filter(
 			(run) => run.status === "completed" && !IGNORED_RUN_EVENTS.has(run.event),
 		)
 		.slice(0, count);
+}
+
+function recentRuns(repo, workflowId, count, branch) {
+	// Manual dispatches share the run list with automatic runs, so one page
+	// can be entirely dispatches even when the workflow fires on its own
+	// cadence. Keep paging (bounded) until `count` automatic runs are
+	// collected: a burst of manual re-runs must not manufacture a blind spot.
+	const collected = [];
+	for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
+		const data = ghJson([
+			`repos/${repo}/actions/workflows/${workflowId}/runs?branch=${encodeURIComponent(branch)}&exclude_pull_requests=true&per_page=${RUN_PAGE_SIZE}&page=${page}`,
+		]);
+		const pageRuns = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+		collected.push(...selectAutomaticRuns(pageRuns, count - collected.length));
+		if (collected.length >= count || pageRuns.length < RUN_PAGE_SIZE) {
+			break;
+		}
+	}
+	return collected.slice(0, count);
 }
 
 function countConsecutiveFailures(runs) {

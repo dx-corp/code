@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rand::RngCore;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -390,8 +389,8 @@ async fn exchange_id_token_for_api_key(client: &Client, id_token: &str) -> Resul
 fn login_request() -> Result<LoginRequest> {
     let mut verifier_bytes = [0_u8; 32];
     let mut state_bytes = [0_u8; 32];
-    rand::rng().fill_bytes(&mut verifier_bytes);
-    rand::rng().fill_bytes(&mut state_bytes);
+    rand::fill(&mut verifier_bytes);
+    rand::fill(&mut state_bytes);
     let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = URL_SAFE_NO_PAD.encode(state_bytes);

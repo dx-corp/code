@@ -1,0 +1,64 @@
+name: Setup sccache
+description: >
+  Install sccache and select a backend. GCS on ARC when GCE metadata
+  identity is present and an objects.list probe of evalops-prod-ci-sccache
+  succeeds. Else local disk when the runner service exports
+  SCCACHE_LOCAL_DIR to an absolute writable path (WSL:
+  /var/cache/evalops-sccache, SCCACHE_CACHE_SIZE default 40G). GitHub
+  Actions cache is an opt-out fallback for callers that still require it.
+  Callers compile with RUSTC_WRAPPER=sccache.
+
+inputs:
+  version:
+    description: sccache release tag consumed by mozilla-actions/sccache-action.
+    required: false
+    default: v0.15.0
+  backend:
+    description: >
+      sccache storage backend. `auto` (default) probes the GCE metadata
+      server and uses `gcs` when the runner identity answers and an
+      objects.list probe of the sccache prefix returns HTTP 200; else
+      `local` when SCCACHE_LOCAL_DIR is an absolute writable directory;
+      else `gha`. The GCS probe is GET .../b/<bucket>/o?maxResults=1&prefix=...
+      (storage.objects.list), not buckets.get, because the runner GSA
+      is roles/storage.objectUser. A 404 or 403 warns and falls back to
+      local disk if configured, else `gha`. `gcs`, `local`, and `gha`
+      force a backend, but `gcs` still falls back if the prefix is
+      unusable and `local` still falls back if the dir is missing.
+    required: false
+    default: auto
+  gcs-bucket:
+    description: GCS bucket for the sccache compiler cache on ARC runners.
+    required: false
+    default: evalops-prod-ci-sccache
+  rust-toolchain:
+    description: >
+      Rust toolchain used to namespace compiler objects. Callers that install
+      a toolchain explicitly should pass the same value; repository
+      rust-toolchain.toml or mise.toml remains the fallback.
+    required: false
+    default: ""
+  allow-gha-fallback:
+    description: >
+      Permit auto/local selection to fall back to GitHub Actions cache when
+      neither GCS nor persistent local disk is available. When false, use an
+      ephemeral local cache instead and reject an explicit gha backend.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache
+      uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      with:
+        version: ${{ inputs.version }}
+        disable_annotations: true
+    - name: Configure sccache backend
+      shell: bash
+      env:
+        SCCACHE_BACKEND: ${{ inputs.backend }}
+        SCCACHE_GCS_BUCKET_NAME: ${{ inputs.gcs-bucket }}
+        SCCACHE_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
+        SCCACHE_ALLOW_GHA_FALLBACK: ${{ inputs.allow-gha-fallback }}
+      run: bash "${GITHUB_ACTION_PATH}/configure.sh"

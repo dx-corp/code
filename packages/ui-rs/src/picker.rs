@@ -73,7 +73,7 @@ impl<'a> Picker<'a> {
     /// Render inside a surface and return the search rectangle for cursor placement.
     pub fn render(self, frame: &mut Frame, area: Rect, state: &mut ListState) -> Rect {
         let chunks = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(0),
             Constraint::Length(u16::from(self.help.is_some())),
         ])
@@ -81,7 +81,7 @@ impl<'a> Picker<'a> {
         let mut search = SearchField::new(self.query, self.placeholder)
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
+                    .borders(Borders::BOTTOM)
                     .border_style(Style::default().fg(self.theme.border)),
             )
             .theme(self.theme);
@@ -191,9 +191,9 @@ mod tests {
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 3)].symbol(), "›");
+        assert_eq!(buffer[(0, 2)].symbol(), "›");
         for x in 2..13 {
-            let cell = &buffer[(x, 3)];
+            let cell = &buffer[(x, 2)];
             assert_eq!(cell.fg, palette.focus);
             assert_eq!(cell.bg, palette.surface);
             assert_ne!(cell.fg, cell.bg);

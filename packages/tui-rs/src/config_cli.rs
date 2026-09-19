@@ -68,6 +68,7 @@ pub async fn run_config(args: &[String]) -> Result<i32> {
             println!("{}", config_help());
             Ok(0)
         }
+        "deployment" => run_deployment(&args[1..]),
         "path" | "paths" => run_path(&args[1..]),
         "list" | "ls" => run_list(&args[1..]),
         "get" => run_get(&args[1..]),
@@ -103,6 +104,7 @@ Commands:
   set <key> <value> [--scope ...]
                                Write a dotted TOML key
   show | status                Inspect sources and print a secret-safe generation digest
+  deployment --json            Inspect the signed disconnected profile without network requests
   validate                     Validate provider JSON + TOML config files
   init [--preset <id>] [--force]
                                Create project .maestro/config.json
@@ -112,6 +114,17 @@ Commands:
 Options:
   --json                       Machine-readable output where supported
   --help, -h                   Show this help"
+}
+
+fn run_deployment(args: &[String]) -> Result<i32> {
+    anyhow::ensure!(
+        args == ["--json"],
+        "Usage: deixic-code config deployment --json"
+    );
+    let contract = maestro_local_host::safety::disconnected_deployment_contract()
+        .map_err(anyhow::Error::msg)?;
+    println!("{}", serde_json::to_string_pretty(&contract)?);
+    Ok(0)
 }
 
 fn run_path(args: &[String]) -> Result<i32> {
@@ -1469,7 +1482,7 @@ fn validate_config() -> Result<JsonValue> {
         if toml_path.exists() {
             config_files.push(toml_path.display().to_string());
             if let Err(error) = fs::read_to_string(&toml_path).and_then(|raw| {
-                raw.parse::<TomlValue>()
+                toml::from_str::<TomlValue>(&raw)
                     .map(|_| ())
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
             }) {
@@ -1485,7 +1498,7 @@ fn validate_config() -> Result<JsonValue> {
             }
             config_files.push(path.display().to_string());
             if let Err(error) = fs::read_to_string(&path).and_then(|raw| {
-                raw.parse::<TomlValue>()
+                toml::from_str::<TomlValue>(&raw)
                     .map(|_| ())
                     .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
             }) {
@@ -1731,14 +1744,14 @@ fn load_toml_for_update(path: &Path) -> Result<TomlValue> {
         }
     };
     // Parser diagnostics can contain config values. Keep those out of the TUI.
-    raw.parse::<TomlValue>()
+    toml::from_str::<TomlValue>(&raw)
         .map_err(|_| anyhow::anyhow!("invalid TOML in {}; file left unchanged", path.display()))
 }
 
 fn load_toml(path: &Path) -> Option<TomlValue> {
     fs::read_to_string(path)
         .ok()
-        .and_then(|raw| raw.parse::<TomlValue>().ok())
+        .and_then(|raw| toml::from_str::<TomlValue>(&raw).ok())
 }
 
 fn flatten_keys(prefix: &str, value: &TomlValue, out: &mut Vec<String>) {
@@ -2390,6 +2403,24 @@ mod tests {
     }
 
     #[test]
+    fn deployment_inspection_rejects_mutation_and_probe_flags() {
+        for args in [
+            vec![],
+            vec!["--live"],
+            vec!["--json", "--live"],
+            vec!["--json", "--set"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(
+                run_deployment(&args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Usage:")
+            );
+        }
+    }
+
+    #[test]
     fn parse_cli_value_handles_scalars_and_strings() {
         assert_eq!(parse_cli_value("true"), TomlValue::Boolean(true));
         assert_eq!(parse_cli_value("42"), TomlValue::Integer(42));
@@ -2425,6 +2456,28 @@ mod tests {
             keys,
             vec!["history.persistence".to_owned(), "model".to_owned()]
         );
+    }
+
+    #[test]
+    fn config_file_loaders_parse_documents_without_process_state() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("config.toml");
+        for document in [
+            "",
+            "theme = \"dark\"\n",
+            "[history]\npersistence = \"save-all\"\n",
+        ] {
+            fs::write(&path, document).unwrap();
+            let expected: TomlValue = toml::from_str(document).unwrap();
+            assert_eq!(load_toml(&path), Some(expected.clone()));
+            assert_eq!(load_toml_for_update(&path).unwrap(), expected);
+        }
+        let invalid = "secret_fixture = \"do-not-echo\"\n[broken\n";
+        fs::write(&path, invalid).unwrap();
+        assert!(load_toml(&path).is_none());
+        let error = load_toml_for_update(&path).unwrap_err();
+        assert!(!format!("{error:#}").contains("do-not-echo"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
     }
 
     #[test]

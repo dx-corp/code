@@ -510,7 +510,7 @@ impl App {
                 self.handle_a2a_action(action);
             }
             CommandAction::HooksManage(hooks_action) => {
-                self.handle_hooks_action(hooks_action);
+                self.handle_hooks_action(hooks_action).await;
             }
             CommandAction::ShowUsage(usage_action) => {
                 self.handle_usage_action(usage_action);
@@ -2580,74 +2580,96 @@ impl App {
     }
 
     /// Handle hooks management actions
-    pub(super) fn handle_hooks_action(&mut self, action: crate::commands::HooksAction) {
+    pub(super) async fn handle_hooks_action(&mut self, action: crate::commands::HooksAction) {
         use crate::commands::HooksAction;
 
-        // For now, display messages since hooks aren't wired into App yet
-        // In a full implementation, we'd access self.hooks: IntegratedHookSystem
+        let cwd = self.state.cwd.as_deref().unwrap_or(".");
+        let snapshot = || crate::cli_commands::effective_hooks_snapshot(std::path::Path::new(cwd));
+        let set_enabled = |enabled| {
+            self.native_agent
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("The native agent is not running"))?
+                .set_hooks_enabled(enabled)
+        };
         match action {
-            HooksAction::List => {
-                let mut msg = String::new();
-                msg.push_str(self.state.locale.translate("## Hook System\n\n"));
-                msg.push_str("| Type | Count | Status |\n");
-                msg.push_str("|------|-------|--------|\n");
-                msg.push_str("| Native | 1 | SafetyHook |\n");
-                msg.push_str("| Lua | 0 | - |\n");
-                msg.push_str("| WASM | 0 | - |\n");
-                msg.push_str("| TypeScript | 0 | - |\n\n");
-                msg.push_str(self.state.locale.translate(
-                    "*Configure hooks in `~/.composer/hooks.toml` or `.composer/hooks.toml`*\n",
-                ));
-                self.state.add_system_message(msg);
-            }
+            HooksAction::List => match snapshot() {
+                Ok(snapshot) => {
+                    let mut message = crate::cli_commands::format_effective_hooks(&snapshot);
+                    if let Some(agent) = &self.native_agent {
+                        match agent.inspect_hooks().await {
+                            Ok(runtime) => message.push_str(&format!(
+                                "Runtime: {} (native={}, lua={}, wasm={})\n",
+                                if runtime.enabled { "enabled" } else { "disabled" },
+                                runtime.native_hooks,
+                                runtime.lua_scripts,
+                                runtime.wasm_plugins,
+                            )),
+                            Err(error) => {
+                                message.push_str(&format!("Runtime: unavailable ({error})\n"));
+                            }
+                        }
+                    }
+                    self.state.add_system_message(message);
+                }
+                Err(error) => self.state.error = Some(format!("Failed to load hooks: {error}")),
+            },
+            HooksAction::Metrics => match &self.native_agent {
+                Some(agent) => match agent.inspect_hooks().await {
+                    Ok(runtime) => self.state.add_system_message(self.state.locale.format(
+                        "Hook metrics\nPreToolUse: {0}\nPostToolUse: {1}\nOverflow: {2}\nBlocks: {3}\nTotal duration: {4}ms\n",
+                        &[
+                            runtime.pre_tool_use_count.to_string(),
+                            runtime.post_tool_use_count.to_string(),
+                            runtime.overflow_count.to_string(),
+                            runtime.blocks.to_string(),
+                            runtime.total_duration_ms.to_string(),
+                        ],
+                    )),
+                    Err(error) => self.state.error = Some(error.to_string()),
+                },
+                None => self.state.error = Some("The native agent is not running".to_string()),
+            },
             HooksAction::Toggle => {
-                self.state.status = Some(self.state.locale.translate("Hooks toggled").to_string());
-                self.state.add_system_message(
-                    self.state
-                        .locale
-                        .translate("Hooks have been toggled. Use `/hooks` to see current status.")
-                        .to_string(),
-                );
+                let enabled = match &self.native_agent {
+                    Some(agent) => agent.inspect_hooks().await.map(|runtime| runtime.enabled),
+                    None => Err(anyhow::anyhow!("The native agent is not running")),
+                };
+                let enabled = match enabled {
+                    Ok(enabled) => enabled,
+                    Err(error) => {
+                        self.state.error = Some(error.to_string());
+                        return;
+                    }
+                };
+                match set_enabled(!enabled) {
+                    Ok(()) => {
+                        self.state.status = Some(format!(
+                            "Hooks {}",
+                            if enabled { "disabled" } else { "enabled" }
+                        ));
+                    }
+                    Err(error) => self.state.error = Some(error.to_string()),
+                }
             }
             HooksAction::Reload => {
-                self.state.status = Some(self.state.locale.translate("Hooks reloaded").to_string());
-                self.state.add_system_message(
-                    self.state
-                        .locale
-                        .translate("Hook configuration reloaded from disk.")
-                        .to_string(),
-                );
+                match self
+                    .native_agent
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("The native agent is not running"))
+                    .and_then(|agent| agent.reload_hooks())
+                {
+                    Ok(()) => self.state.status = Some("Hook reload queued".to_string()),
+                    Err(error) => self.state.error = Some(error.to_string()),
+                }
             }
-            HooksAction::Metrics => {
-                let mut msg = String::new();
-                msg.push_str(self.state.locale.translate("## Hook Metrics\n\n"));
-                msg.push_str("| Metric | Value |\n");
-                msg.push_str("|--------|-------|\n");
-                msg.push_str(self.state.locale.translate("| PreToolUse calls | 0 |\n"));
-                msg.push_str(self.state.locale.translate("| PostToolUse calls | 0 |\n"));
-                msg.push_str("| Blocks | 0 |\n");
-                msg.push_str(self.state.locale.translate("| Total duration | 0ms |\n"));
-                msg.push_str(self.state.locale.translate("| Avg duration | 0ms |\n"));
-                self.state.add_system_message(msg);
-            }
-            HooksAction::Enable => {
-                self.state.status = Some(self.state.locale.translate("Hooks enabled").to_string());
-                self.state.add_system_message(
-                    self.state
-                        .locale
-                        .translate("Hook system enabled.")
-                        .to_string(),
-                );
-            }
-            HooksAction::Disable => {
-                self.state.status = Some(self.state.locale.translate("Hooks disabled").to_string());
-                self.state.add_system_message(
-                    self.state
-                        .locale
-                        .translate("Hook system disabled.")
-                        .to_string(),
-                );
-            }
+            HooksAction::Enable => match set_enabled(true) {
+                Ok(()) => self.state.status = Some("Hooks enabled".to_string()),
+                Err(error) => self.state.error = Some(error.to_string()),
+            },
+            HooksAction::Disable => match set_enabled(false) {
+                Ok(()) => self.state.status = Some("Hooks disabled".to_string()),
+                Err(error) => self.state.error = Some(error.to_string()),
+            },
         }
     }
 

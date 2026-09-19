@@ -1022,6 +1022,15 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
             loop {
                 attempt += 1;
                 if attempt > 1 {
+                    // Fast 502s must not burn the entire recovery budget in a
+                    // single burst. Keep the existing attempt limit and owner;
+                    // never replay content or tools already sent downstream.
+                    let delay = std::time::Duration::from_secs(1u64 << (attempt - 2).min(3));
+                    tokio::select! {
+                        biased;
+                        () = tx.closed() => return,
+                        () = tokio::time::sleep(delay) => {}
+                    }
                     observe(StreamObservation::Retry);
                 }
                 let Some(begin_attempt_fn) = begin_attempt.as_mut() else {
@@ -2310,8 +2319,9 @@ mod stream_idle_policy_tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn transient_provider_error_is_retried_only_by_stream_owner() {
+        let started = tokio::time::Instant::now();
         let attempts = Attempts::new(AtomicU32::new(0));
         let (first_tx, first_rx) = mpsc::unbounded_channel();
         first_tx
@@ -2344,6 +2354,7 @@ mod stream_idle_policy_tests {
         .await;
 
         assert_eq!(attempts.load(Ordering::SeqCst), RETRIES);
+        assert_eq!(started.elapsed(), Duration::from_secs(3));
         let events = drain(&mut rx);
         assert!(matches!(
             events.as_slice(),
@@ -2354,8 +2365,73 @@ mod stream_idle_policy_tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
+    async fn transient_502_recovers_after_backoff_without_forwarding_failed_attempts() {
+        let started = tokio::time::Instant::now();
+        let mut attempts = Vec::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        forward_stream_with_idle_policy(
+            None::<AttemptRx>,
+            || {
+                attempts.push(started.elapsed());
+                let (attempt_tx, attempt_rx) = mpsc::unbounded_channel();
+                let event = if started.elapsed() < Duration::from_secs(3) {
+                    StreamEvent::ProviderError {
+                        kind: ProviderStreamErrorKind::TransientProtocol,
+                        message: "API error 502 Bad Gateway: error code: 502".into(),
+                    }
+                } else {
+                    StreamEvent::MessageStop { stop_reason: None }
+                };
+                attempt_tx.send(event).unwrap();
+                async move { Ok(attempt_rx) }
+            },
+            IDLE,
+            RETRIES,
+            tx,
+        )
+        .await;
+        assert_eq!(
+            attempts,
+            [
+                Duration::ZERO,
+                Duration::from_secs(1),
+                Duration::from_secs(3)
+            ]
+        );
+        assert!(matches!(
+            drain(&mut rx).as_slice(),
+            [StreamEvent::MessageStop { .. }]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn consumer_cancellation_interrupts_retry_backoff_before_new_request() {
+        let (first_tx, first_rx) = mpsc::unbounded_channel();
+        first_tx
+            .send(StreamEvent::ProviderError {
+                kind: ProviderStreamErrorKind::TransientProtocol,
+                message: "API error 502 Bad Gateway: error code: 502".into(),
+            })
+            .unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let started = tokio::time::Instant::now();
+        let forwarder = tokio::spawn(forward_stream_with_idle_policy(
+            Some(first_rx),
+            || async { unreachable!("cancelled backoff must not open another request") },
+            IDLE,
+            RETRIES,
+            tx,
+        ));
+        first_tx.closed().await;
+        drop(rx);
+        forwarder.await.unwrap();
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn retry_open_failures_exhaust_one_stream_budget_with_one_typed_terminal() {
+        let started = tokio::time::Instant::now();
         let retry_starts = Attempts::new(AtomicU32::new(0));
         let (first_tx, first_rx) = mpsc::unbounded_channel();
         first_tx
@@ -2384,6 +2460,7 @@ mod stream_idle_policy_tests {
             RETRIES,
             "the initial request plus retry starts must equal the bounded attempt budget"
         );
+        assert_eq!(started.elapsed(), Duration::from_secs(3));
         let events = drain(&mut rx);
         assert!(matches!(
             events.as_slice(),

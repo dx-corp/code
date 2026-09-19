@@ -296,6 +296,9 @@ mod tests {
                     Err(error) => panic!("fixture accept: {error}"),
                 }
             };
+            // Accepted sockets inherit O_NONBLOCK from this listener on macOS.
+            // Rustls expects a blocking stream in this fixture.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(TIMEOUT)).unwrap();
             let connection = rustls::ServerConnection::new(Arc::new(tls)).unwrap();
             let mut stream = rustls::StreamOwned::new(connection, stream);
@@ -303,8 +306,12 @@ mod tests {
             let mut buffer = [0; 4096];
             loop {
                 match stream.read(&mut buffer) {
-                    Ok(0) | Err(_) => {
+                    Ok(0) => {
                         assert!(!trusted);
+                        return;
+                    }
+                    Err(error) => {
+                        assert!(!trusted, "trusted fixture TLS read failed: {error:?}");
                         return;
                     }
                     Ok(count) => request.extend_from_slice(&buffer[..count]),
@@ -344,7 +351,8 @@ mod tests {
         }
         for (response, expected) in cases {
             let (config, server) = fixture(response.to_string(), "200 OK", true);
-            assert_eq!(verify(&config, &metadata(), &env).is_ok(), expected);
+            let result = verify(&config, &metadata(), &env);
+            assert_eq!(result.is_ok(), expected, "{result:?}");
             server.join().unwrap();
         }
         for (status, trusted, body) in [

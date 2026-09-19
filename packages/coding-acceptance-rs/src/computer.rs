@@ -230,10 +230,10 @@ impl CodingWorkspaceResponse {
         self.validate()?;
         let valid = match request {
             CodingWorkspaceRequest::Baseline { .. } => {
-                self.clean
-                    && self.base_revision == self.revision
-                    && self.outputs.is_empty()
-                    && self.readiness.is_none()
+                // A fresh owner can observe committed progress without
+                // resetting it. The Computer adapter authenticates ancestry
+                // and the accepted root; this DTO does not prove Git ancestry.
+                self.clean && self.outputs.is_empty() && self.readiness.is_none()
             }
             CodingWorkspaceRequest::Inspect {
                 expected_base_revision,
@@ -301,6 +301,21 @@ mod tests {
             outputs: vec![],
         }
     }
+    #[test]
+    fn baseline_can_reobserve_clean_committed_progress() {
+        let request = CodingWorkspaceRequest::Baseline {
+            idempotency_key: "fresh-owner-execution".into(),
+        };
+        let mut result = response();
+        assert_ne!(result.base_revision, result.revision);
+        assert!(result.validate_for(&request).is_ok());
+        result.clean = false;
+        assert!(result.validate_for(&request).is_err());
+        result.clean = true;
+        result.owner_lease_epoch = 0;
+        assert!(result.validate_for(&request).is_err());
+    }
+
     #[test]
     fn coding_workspace_result_rejects_wrong_revision_content_and_shape() {
         let mut no_lease = response();

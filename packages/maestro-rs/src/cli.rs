@@ -13,7 +13,11 @@ use std::ffi::OsString;
 /// variant removes that dead computation and the duplicated table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Serve { port: Option<u16> },
+    Serve {
+        port: Option<u16>,
+        parent_pid: Option<u32>,
+        liveness_fd: Option<i32>,
+    },
     Forward,
     Help,
     Version,
@@ -45,6 +49,8 @@ where
     }
     if first == Some("serve") {
         let mut port = None;
+        let mut parent_pid = None;
+        let mut liveness_fd = None;
         let mut index = 1;
         while index < strings.len() {
             let argument = strings[index].as_ref();
@@ -62,6 +68,34 @@ where
                         .parse::<u16>()
                         .map_err(|_| format!("invalid serve port: {value}"))?,
                 );
+            } else if argument == "--parent-pid" {
+                index += 1;
+                let value = strings.get(index).ok_or("--parent-pid requires a value")?;
+                parent_pid = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid parent pid: {value}"))?,
+                );
+            } else if let Some(value) = argument.strip_prefix("--parent-pid=") {
+                parent_pid = Some(
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("invalid parent pid: {value}"))?,
+                );
+            } else if argument == "--liveness-fd" {
+                index += 1;
+                let value = strings.get(index).ok_or("--liveness-fd requires a value")?;
+                liveness_fd = Some(
+                    value
+                        .parse::<i32>()
+                        .map_err(|_| format!("invalid liveness fd: {value}"))?,
+                );
+            } else if let Some(value) = argument.strip_prefix("--liveness-fd=") {
+                liveness_fd = Some(
+                    value
+                        .parse::<i32>()
+                        .map_err(|_| format!("invalid liveness fd: {value}"))?,
+                );
             } else {
                 return Err(format!(
                     "`maestro serve` does not accept prompt arguments or option `{argument}`"
@@ -69,7 +103,20 @@ where
             }
             index += 1;
         }
-        return Ok(Command::Serve { port });
+        if parent_pid.is_some() && liveness_fd.is_some() {
+            return Err("--parent-pid and --liveness-fd are mutually exclusive".to_owned());
+        }
+        if parent_pid == Some(0) {
+            return Err("--parent-pid must be a positive process id".to_owned());
+        }
+        if liveness_fd.is_some_and(|fd| fd < 0) {
+            return Err("--liveness-fd must be a non-negative file descriptor".to_owned());
+        }
+        return Ok(Command::Serve {
+            port,
+            parent_pid,
+            liveness_fd,
+        });
     }
 
     // Every other invocation (interactive TUI, `exec`/`print`/`-p`,

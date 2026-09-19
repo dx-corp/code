@@ -2,9 +2,10 @@
 //!
 //! Run with: cargo bench --bench batch_bench
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use maestro_tui::tools::{BatchConfig, BatchExecutor, BatchToolCall};
 use serde_json::json;
+use std::hint::black_box;
 
 /// Benchmark batch executor creation
 fn bench_batch_executor_creation(c: &mut Criterion) {

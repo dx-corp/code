@@ -1424,32 +1424,26 @@ impl IntegratedHookSystem {
 
     /// Reload all hooks from config files
     pub fn reload(&mut self) -> Result<ReloadResult> {
-        let lua_reloaded = self
-            .lua_executor
-            .as_mut()
-            .map(super::lua::LuaHookExecutor::reload)
-            .transpose()?
-            .unwrap_or(0);
-        let wasm_reloaded = self
-            .wasm_executor
-            .as_mut()
-            .map(super::wasm::WasmHookExecutor::reload)
-            .transpose()?
-            .unwrap_or(0);
+        let config = load_hook_config(Path::new(&self.cwd))?;
+        let mut reloaded = Self::from_config_result(&self.cwd, Ok(config));
 
-        // Reload config
-        if let Ok(config) = load_hook_config(Path::new(&self.cwd)) {
-            self.enabled = config.settings.enabled;
-            self.timeout = Duration::from_millis(config.settings.timeout_ms);
-            self.log_file = config.settings.log_file.clone();
-            if let Some(wasm) = self.wasm_executor.as_mut() {
-                wasm.set_timeout(self.timeout);
-            }
-        }
+        // Runtime context belongs to the active session, not the files being
+        // reloaded. Preserve it while replacing every configured hook backend.
+        reloaded.session_id.clone_from(&self.session_id);
+        reloaded.transcript_path.clone_from(&self.transcript_path);
+        reloaded.transcript_checkpoint_size = self.transcript_checkpoint_size;
+        reloaded.organization_id.clone_from(&self.organization_id);
+        reloaded.workspace_id.clone_from(&self.workspace_id);
+        reloaded.session_history.clone_from(&self.session_history);
+        reloaded.session_start = self.session_start;
+        reloaded.turn_count = self.turn_count;
+        reloaded.metrics.clone_from(&self.metrics);
 
+        let stats = reloaded.stats();
+        *self = reloaded;
         Ok(ReloadResult {
-            lua_scripts: lua_reloaded,
-            wasm_plugins: wasm_reloaded,
+            lua_scripts: stats.lua_scripts,
+            wasm_plugins: stats.wasm_plugins,
         })
     }
 

@@ -203,25 +203,24 @@ runs:
         safe_abi="${descriptor//[^A-Za-z0-9_.-]/-}"
         printf 'value=%s\n' "${safe_abi:0:80}" >> "$GITHUB_OUTPUT"
 
-    - name: Install sccache
+    - name: Configure Google-backed sccache
       if: ${{ inputs.use-sccache == 'true' }}
-      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      uses: ./.github/actions/setup-sccache
       with:
         version: v0.17.0
-
-    - name: Configure sccache
-      if: ${{ inputs.use-sccache == 'true' }}
-      shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        backend: auto
+        rust-toolchain: ${{ inputs.toolchain }}
+        allow-gha-fallback: "false"
 
     - name: Cache Cargo
       uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
       with:
         workspaces: ${{ steps.rust-paths.outputs.cache-workspaces }}
-        shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.host-abi.outputs.value }}-target-path-v2-${{ inputs.cache-group }}
+        shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.host-abi.outputs.value }}-cargo-inputs-v3-${{ inputs.cache-group }}
         add-job-id-key: "false"
+        # Compiler outputs belong in the Google-backed sccache bucket. Keep the
+        # GitHub cache limited to Cargo inputs/tooling rather than duplicating target/.
+        cache-targets: "false"
         # The action always hashes Cargo/Rust variables. The home paths above are
         # normalized, and these prefixes add the remaining build-affecting inputs.
         env-vars: "CARGO_BUILD_TARGET CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL CARGO_PROFILE RUSTC_WRAPPER RUSTFLAGS CC CFLAGS CXX CMAKE"

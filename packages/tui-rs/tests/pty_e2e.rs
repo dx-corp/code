@@ -40,6 +40,7 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(30);
 /// One scripted streaming response: the raw SSE body to serve for a single
 /// `POST /v1/chat/completions` request.
 struct ScriptedTurn {
+    status: &'static str,
     sse_body: String,
 }
 
@@ -69,6 +70,7 @@ fn chunk(delta: serde_json::Value, finish_reason: Option<&str>) -> serde_json::V
 /// A streamed assistant text answer.
 fn text_turn(text: &str) -> ScriptedTurn {
     ScriptedTurn {
+        status: "200 OK",
         sse_body: sse_body(&[
             chunk(
                 serde_json::json!({"role": "assistant", "content": text}),
@@ -82,6 +84,7 @@ fn text_turn(text: &str) -> ScriptedTurn {
 /// A streamed assistant tool call (Chat Completions `tool_calls` deltas).
 fn tool_call_turn(name: &str, arguments: &serde_json::Value) -> ScriptedTurn {
     ScriptedTurn {
+        status: "200 OK",
         sse_body: sse_body(&[
             chunk(
                 serde_json::json!({
@@ -166,7 +169,7 @@ impl MockOpenAiServer {
             state.script.pop_front()
         };
         let (status, content_type, payload) = match next {
-            Some(turn) => ("200 OK", "text/event-stream", turn.sse_body),
+            Some(turn) => (turn.status, "text/event-stream", turn.sse_body),
             None => (
                 "500 Internal Server Error",
                 "text/plain",
@@ -1071,6 +1074,57 @@ fn pty_confirmed_rewind_preserves_earlier_turn_and_persists_child_lineage() {
 /// thread, stretching the probe-reply window until keystrokes get eaten by
 /// the app's position reads.
 static PTY_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+fn bad_gateway_turn() -> ScriptedTurn {
+    ScriptedTurn {
+        status: "502 Bad Gateway",
+        sse_body: "error code: 502".into(),
+    }
+}
+
+#[test]
+fn pty_502_after_tool_recovers_without_reexecuting_tool() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mock = MockOpenAiServer::start(vec![
+        tool_call_turn(
+            "bash",
+            &serde_json::json!({"command": "printf x >> once.txt"}),
+        ),
+        bad_gateway_turn(),
+        text_turn("PTY_502_RECOVERED"),
+    ]);
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let mut session = PtySession::spawn(&mock, workdir.path(), "write one x to once.txt");
+    session.wait_for_text("Action Approval Required", READY_TIMEOUT);
+    session.send_bytes_until(b"y", "PTY_502_RECOVERED", TURN_TIMEOUT);
+    assert_eq!(mock.request_count(), 3);
+    assert_eq!(
+        std::fs::read_to_string(workdir.path().join("once.txt")).unwrap(),
+        "x"
+    );
+    assert!(session.child.try_wait().unwrap().is_none());
+    session.shutdown();
+}
+
+#[test]
+fn pty_exhausted_502_keeps_session_alive_for_next_prompt() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mock = MockOpenAiServer::start(vec![
+        bad_gateway_turn(),
+        bad_gateway_turn(),
+        bad_gateway_turn(),
+        text_turn("PTY_502_NEXT_PROMPT_OK"),
+    ]);
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let mut session = PtySession::spawn(&mock, workdir.path(), "first prompt");
+    session.wait_for_text("API error 502 Bad Gateway", READY_TIMEOUT);
+    assert_eq!(mock.request_count(), 3);
+    assert!(session.child.try_wait().unwrap().is_none());
+    session.submit_prompt("try again");
+    session.wait_for_text("PTY_502_NEXT_PROMPT_OK", TURN_TIMEOUT);
+    assert_eq!(mock.request_count(), 4);
+    session.shutdown();
+}
 
 /// prompt → streamed answer renders on screen.
 #[test]

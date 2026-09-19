@@ -85,7 +85,8 @@ impl UiPrefs {
         match self.dex_personality.as_deref() {
             Some("quiet") => DexPersonality::Quiet,
             Some("expressive") => DexPersonality::Expressive,
-            _ => DexPersonality::Standard,
+            Some("standard") => DexPersonality::Standard,
+            _ => DexPersonality::Quiet,
         }
     }
 
@@ -215,7 +216,7 @@ mod tests {
             assert_eq!(loaded.footer_style(), FooterStyle::Solo);
         }
         let legacy: UiPrefs = serde_json::from_str(r#"{"footerStyle":"solo"}"#).unwrap();
-        assert_eq!(legacy.dex_personality(), DexPersonality::Standard);
+        assert_eq!(legacy.dex_personality(), DexPersonality::Quiet);
         assert_eq!(legacy.animations, None);
     }
     #[test]

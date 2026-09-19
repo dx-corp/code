@@ -5,7 +5,7 @@ use maestro_ui::{
 };
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::Style,
     text::Line,
     widgets::{Block, BorderType, Borders, Paragraph, Widget},
@@ -24,7 +24,8 @@ pub struct Composer<'a> {
 }
 
 impl Composer<'_> {
-    fn inner(area: Rect) -> Rect {
+    fn inner(&self, area: Rect) -> Rect {
+        let area = self.frame_area(area);
         Rect::new(
             area.x.saturating_add(1),
             area.y.saturating_add(1),
@@ -33,14 +34,23 @@ impl Composer<'_> {
         )
     }
 
+    fn frame_area(&self, area: Rect) -> Rect {
+        Rect {
+            height: area
+                .height
+                .saturating_sub(u16::from(self.footer.is_some() && area.height >= 4)),
+            ..area
+        }
+    }
+
     fn queue_height(&self, area: Rect) -> u16 {
         (self.queued.len().min(u16::MAX as usize) as u16)
-            .min(Self::inner(area).height.saturating_sub(1))
+            .min(self.inner(area).height.saturating_sub(1))
     }
 
     /// The exact viewport used by rendering and terminal cursor placement.
     pub fn editor_area(&self, area: Rect) -> Rect {
-        let inner = Self::inner(area);
+        let inner = self.inner(area);
         let queued = self.queue_height(area);
         Rect::new(
             inner.x.saturating_add(PROMPT_WIDTH),
@@ -56,7 +66,7 @@ impl Composer<'_> {
         }
         let editor = self.editor_area(area);
         if self.editor.is_empty() {
-            let inner = Self::inner(area);
+            let inner = self.inner(area);
             return Some((
                 inner
                     .x
@@ -86,24 +96,32 @@ impl Widget for Composer<'_> {
             return;
         }
         let theme = self.theme.on_panel();
-        let mut frame = Block::default()
+        let frame = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(if self.busy { theme.muted } else { theme.border }))
             .style(Style::default().bg(theme.surface));
-        // Keep runtime context beside the place where input is committed. The
-        // block clips the title inside its corners, including on narrow views.
-        if let Some(footer) = self.footer.filter(|text| !text.is_empty()) {
-            frame = frame.title(
-                Line::styled(format!(" {footer} "), Style::default().fg(theme.muted))
-                    .alignment(Alignment::Right),
-            );
+        let frame_area = self.frame_area(area);
+        frame.render(frame_area, buf);
+        if frame_area.height < area.height {
+            if let Some(footer) = self.footer {
+                Paragraph::new(footer)
+                    .style(Style::default().fg(theme.muted))
+                    .render(
+                        Rect::new(
+                            area.x + 1,
+                            area.bottom() - 1,
+                            area.width.saturating_sub(2),
+                            1,
+                        ),
+                        buf,
+                    );
+            }
         }
-        frame.render(area, buf);
         if area.height < 3 || area.width < 3 {
             return;
         }
-        let inner = Self::inner(area);
+        let inner = self.inner(area);
         let queued = self.queue_height(area);
         if queued > 0 {
             let mut lines = self.queued[..usize::from(queued)].to_vec();

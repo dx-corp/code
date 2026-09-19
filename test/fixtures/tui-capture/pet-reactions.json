@@ -5,6 +5,15 @@
       "wait": "(?s)Dex Code.*GPT-6 Astra.*release-planner"
     },
     {
+      "text": "/dex standard"
+    },
+    {
+      "key": "Enter"
+    },
+    {
+      "wait": "Dex: standard"
+    },
+    {
       "text": "/dex pet"
     },
     {

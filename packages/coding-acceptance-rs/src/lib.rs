@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 
 pub mod computer;
+pub mod computer_evidence;
+pub mod hosted;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -160,6 +162,8 @@ pub struct CodingCompletionSubmission {
     pub handoff_items: Vec<CodingHandoffItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<CodingOutputFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_proof: Option<Box<computer::ComputerCodingProof>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -462,7 +466,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (
+    pub(super) fn fixture() -> (
         CodingAcceptanceContract,
         CodingCompletionSubmission,
         Vec<CodingAcceptanceChildRecord>,
@@ -513,6 +517,7 @@ mod tests {
         })
         .collect();
         let submission = CodingCompletionSubmission {
+            computer_proof: None,
             task_id: contract.task_id.clone(),
             work_id: "work-1".into(),
             repository_id: contract.repository_id.clone(),
