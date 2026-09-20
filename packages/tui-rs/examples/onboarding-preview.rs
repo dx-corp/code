@@ -10,6 +10,7 @@ use maestro_tui::{
 };
 use maestro_ui_preview::{
     Scene,
+    authoring::{MenuRecipe, menu_recipe_fixtures, menu_studio},
     review::{self, Capture},
 };
 
@@ -178,6 +179,8 @@ fn run() -> Result<(), String> {
             "{}",
             serde_json::to_string(&serde_json::json!({
                 "fixtures": support::theme_selector_story::fixture_requests(),
+                "menu_starter": MenuRecipe::starter(),
+                "menu_fixtures": menu_recipe_fixtures(),
                 "presets": support::theme_selector_story::presets()
                     .into_iter()
                     .zip([
@@ -193,6 +196,23 @@ fn run() -> Result<(), String> {
                     .collect::<Vec<_>>(),
             }))
             .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if args == ["--studio-stdin"] {
+        use std::io::Read;
+        let mut body = String::new();
+        std::io::stdin()
+            .take(16_385)
+            .read_to_string(&mut body)
+            .map_err(|error| error.to_string())?;
+        if body.len() > 16_384 {
+            return Err("menu recipe exceeds 16384 bytes".into());
+        }
+        let recipe: MenuRecipe = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        println!(
+            "{}",
+            serde_json::to_string(&menu_studio(recipe)?).map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -215,7 +235,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() > 1 || args.first().is_some_and(|a| a != "--html" && a != "--json") {
-        return Err("usage: onboarding-preview [--html|--json|--sequences|--replay-stdin]".into());
+        return Err(
+            "usage: onboarding-preview [--html|--json|--sequences|--replay-stdin|--studio-stdin]"
+                .into(),
+        );
     }
     let captures = captures()?;
     let output = if args.first().is_some_and(|a| a == "--html") {
@@ -259,5 +282,18 @@ mod tests {
         };
         assert_ne!(text("onboarding-ready"), text("onboarding-failed"));
         assert!(text("onboarding-failed").contains("Model request failed"));
+    }
+
+    #[test]
+    fn menu_authoring_fixtures_render_through_the_shared_recipe() {
+        for recipe in menu_recipe_fixtures() {
+            let response = menu_studio(recipe).unwrap();
+            assert!(!response.transcript.is_empty());
+            assert!(
+                response
+                    .effect_policy
+                    .contains("external actions and settings are untouched")
+            );
+        }
     }
 }

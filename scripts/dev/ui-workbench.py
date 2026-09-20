@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
 import time
@@ -31,10 +32,11 @@ def fingerprint(workspace):
 
 
 class Preview:
-    def __init__(self, command, env, build_command=None, replay_command=None, sequences_command=None):
+    def __init__(self, command, env, build_command=None, replay_command=None, studio_command=None, sequences_command=None):
         self.command, self.env = command, env
         self.build_command = build_command
         self.replay_command = replay_command
+        self.studio_command = studio_command
         self.sequences_command = sequences_command
         self.html = b''
         self.sequences = b''
@@ -95,6 +97,28 @@ class Preview:
         finally:
             self.lock.release()
 
+    def studio(self, body):
+        if not self.studio_command:
+            raise LookupError('Scene authoring is unavailable for this preview')
+        validate_studio(body)
+        if not self.lock.acquire(blocking=False):
+            raise BlockingIOError('Renderer is busy; retry this edit')
+        try:
+            result = subprocess.run(
+                self.studio_command,
+                cwd=WORKSPACE,
+                env=self.env,
+                input=body,
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode:
+                raise ValueError(result.stderr.decode(errors='replace')[-2000:])
+            json.loads(result.stdout)
+            return result.stdout
+        finally:
+            self.lock.release()
+
 
 def validate_replay(body):
     if len(body) > 16_384:
@@ -109,19 +133,72 @@ def validate_replay(body):
         raise ValueError('Replay dimensions are out of bounds')
     text_bytes = 0
     for event in request['inputs']:
-        if not isinstance(event, dict) or event.get('type') not in {'key', 'text', 'resize', 'retry'}:
+        event_type = event.get('type') if isinstance(event, dict) else None
+        if not isinstance(event_type, str) or event_type not in {'key', 'text', 'resize', 'retry'}:
             raise ValueError('Replay input is invalid')
-        if event.get('type') == 'text':
+        if event_type == 'text':
             text = event.get('text')
             if not isinstance(text, str) or any(ord(char) < 32 or ord(char) == 127 for char in text):
                 raise ValueError('Replay text is invalid')
             text_bytes += len(text.encode())
-        if event.get('type') == 'resize':
+        if event_type == 'resize':
             event_width, event_height = event.get('width'), event.get('height')
             if type(event_width) is not int or type(event_height) is not int or not 8 <= event_width <= 240 or not 3 <= event_height <= 100:
                 raise ValueError('Replay resize is out of bounds')
     if text_bytes > 4_096:
         raise ValueError('Replay text exceeds 4096 bytes')
+
+
+def validate_studio(body):
+    if len(body) > 16_384:
+        raise ValueError('Menu recipe exceeds 16384 bytes')
+    request = json.loads(body)
+    required = {
+        'version', 'id', 'label', 'title', 'placeholder', 'empty', 'items',
+        'state', 'status_message', 'width', 'height', 'inputs',
+    }
+    if not isinstance(request, dict) or set(request) != required:
+        raise ValueError('Menu recipe fields are invalid')
+    state = request['state']
+    if request['version'] != 1 or not isinstance(state, str) or state not in {'ready', 'empty', 'loading', 'error'}:
+        raise ValueError('Menu recipe version or state is invalid')
+    if not isinstance(request['id'], str) or not re.fullmatch(r'[a-z0-9-]{1,64}', request['id']):
+        raise ValueError('Menu recipe ID is invalid')
+    text_bytes = 0
+    for field, maximum, allow_empty in (
+        ('label', 160, False), ('title', 160, False),
+        ('placeholder', 160, False), ('empty', 240, False),
+        ('status_message', 240, True),
+    ):
+        value = request[field]
+        if not isinstance(value, str) or (not allow_empty and not value) or len(value.encode()) > maximum:
+            raise ValueError(f'Menu recipe {field} is invalid')
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError(f'Menu recipe {field} contains control characters')
+        text_bytes += len(value.encode())
+    items = request['items']
+    if not isinstance(items, list) or len(items) > 64:
+        raise ValueError('Menu recipe items are invalid')
+    ids = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {'id', 'label'}:
+            raise ValueError('Menu recipe item fields are invalid')
+        item_id, label = item['id'], item['label']
+        if not isinstance(item_id, str) or not re.fullmatch(r'[a-z0-9-]{1,64}', item_id) or item_id in ids:
+            raise ValueError('Menu recipe item ID is invalid or duplicated')
+        if not isinstance(label, str) or not label or len(label.encode()) > 160:
+            raise ValueError('Menu recipe item label is invalid')
+        if any(ord(char) < 32 or ord(char) == 127 for char in label):
+            raise ValueError('Menu recipe item label contains control characters')
+        ids.add(item_id)
+        text_bytes += len(item_id.encode()) + len(label.encode())
+    if text_bytes > 8_192:
+        raise ValueError('Menu recipe text exceeds 8192 bytes')
+    validate_replay(json.dumps({
+        'width': request['width'],
+        'height': request['height'],
+        'inputs': request['inputs'],
+    }).encode())
 
 
 def valid_host(value, port):
@@ -165,7 +242,8 @@ def handler(preview):
         def do_POST(self):
             if not self.trusted_host():
                 return
-            if self.path.split('?', 1)[0] != '/__replay':
+            path = self.path.split('?', 1)[0]
+            if path not in {'/__replay', '/__studio'}:
                 self.send_error(404, 'Not found')
                 return
             if not valid_origin(self.headers.get('Origin', ''), self.server.server_port):
@@ -179,7 +257,7 @@ def handler(preview):
                 if not 0 < length <= 16_384:
                     raise ValueError('Invalid Content-Length')
                 body = self.rfile.read(length)
-                rendered = preview.replay(body)
+                rendered = preview.replay(body) if path == '/__replay' else preview.studio(body)
                 status = 200
             except BlockingIOError as exc:
                 rendered, status = json.dumps({'error': str(exc)}).encode(), 429
@@ -221,6 +299,7 @@ def main():
             env,
             build_command=build_command,
             replay_command=[str(binary), '--replay-stdin'],
+            studio_command=[str(binary), '--studio-stdin'],
             sequences_command=[str(binary), '--sequences'],
         )
     # Bind before building, so a busy port fails without starting an unused build.
