@@ -105,6 +105,31 @@
       color: #b0a8c6;
       padding: 0 28px;
     }
+    #interaction {
+      margin: 0 18px 14px;
+      padding: 14px;
+      border: 1px solid #4e4764;
+      background: #1d1b2a;
+    }
+    #interaction .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+    }
+    #interaction input[type="number"] {
+      width: 76px;
+    }
+    #interaction p {
+      margin: 12px 0 0;
+      color: #b0a8c6;
+      font-size: 11px;
+    }
+    #screen.live {
+      cursor: text;
+      outline: 1px dashed #4e4764;
+      outline-offset: 8px;
+    }
     a {
       color: #aba0ff;
     }
@@ -286,19 +311,36 @@
     </aside>
     <section class="workbench">
       <nav aria-label="Preview controls">
-        <label class="scene-select">Scene<select id="scene"></select></label>
-        <label>Terminal size<select id="size"></select></label>
-        <label>Frame<select id="time"></select></label>
-        <button id="play" type="button">Play</button>
-        <button id="pin" type="button">Pin comparison</button>
-        <button id="unpin" type="button" hidden>Clear comparison</button>
-        <button id="link" type="button">Copy link</button>
+        <label class="scene-select" data-gallery-control>Scene<select id="scene"></select></label>
+        <label data-gallery-control>Terminal size<select id="size"></select></label>
+        <label data-gallery-control>Frame<select id="time"></select></label>
+        <button id="play" type="button" data-gallery-control>Play</button>
+        <button id="pin" type="button" data-gallery-control>Pin comparison</button>
+        <button id="unpin" type="button" data-gallery-control hidden>Clear comparison</button>
+        <button id="link" type="button" data-gallery-control>Copy link</button>
+        <button id="live-toggle" type="button" hidden>Interact with theme menu</button>
       </nav>
+      <section id="interaction" aria-label="Interactive Rust replay" hidden>
+        <div class="controls">
+          <label>Fixture<select id="live-fixture"></select></label>
+          <label>Sequence<select id="live-preset"><option value="">Custom</option></select></label>
+          <label>Columns<input id="live-width" type="number" min="8" max="240" /></label>
+          <label>Rows<input id="live-height" type="number" min="3" max="100" /></label>
+          <button id="live-retry" type="button">Retry</button>
+          <button id="live-cancel" type="button">Cancel</button>
+          <button id="live-reset" type="button">Reset</button>
+          <button id="live-export" type="button">Export sequence</button>
+          <button id="live-import" type="button">Replay file</button>
+          <input id="live-file" type="file" accept="application/json" hidden />
+        </div>
+        <p id="live-help">Focus the preview, then type or use ↑ ↓ ← → Enter Backspace Esc. Every frame comes from the production Rust controller. Effects are simulated.</p>
+        <p id="live-effects" role="status"></p>
+      </section>
       <p id="status" role="status"></p>
       <main>
         <section class="pane">
           <h2>SELECTED STATE</h2>
-          <pre id="screen" aria-label="Native terminal preview"></pre>
+          <pre id="screen" tabindex="0" aria-label="Native terminal preview"></pre>
         </section>
         <section id="comparison" class="pane" hidden>
           <h2 id="comparison-label"></h2>
@@ -328,7 +370,8 @@
     let timer = null,
       current,
       pinned = null,
-      restoring = false;
+      restoring = false,
+      exitInteractive = () => {};
     const colors = [
       "#000000",
       "#800000",
@@ -483,13 +526,23 @@
         screen.append(document.createTextNode("\n"));
       }
     }
-    scene.onchange = selectSizes;
-    size.onchange = selectTimes;
+    scene.onchange = () => {
+      exitInteractive();
+      selectSizes();
+    };
+    size.onchange = () => {
+      exitInteractive();
+      selectTimes();
+    };
     time.onchange = () => {
+      exitInteractive();
       stop();
       paint();
     };
-    $("#search").oninput = selectScenes;
+    $("#search").oninput = () => {
+      exitInteractive();
+      selectScenes();
+    };
     $("#play").onclick = () => {
       if (timer) {
         stop();
@@ -536,7 +589,7 @@
       if (id.startsWith("first-boot")) return "First launch";
       if (id.startsWith("onboarding-")) return "Onboarding";
       if (id.startsWith("conversation-")) return "Conversation";
-      if (id.startsWith("menu-") || id.startsWith("picker")) return "Menus";
+      if (id.startsWith("menu-") || id.startsWith("picker") || id.startsWith("theme-selector")) return "Menus";
       return "Appearance";
     }
     function sidebar(entries) {
@@ -578,6 +631,7 @@
           }
           button.append(canvas, document.createTextNode(c.scene.label));
           button.onclick = () => {
+            exitInteractive(false);
             scene.value = id;
             selectSizes();
           };
@@ -623,6 +677,7 @@
     }
     function restoreRoute() {
       stop();
+      exitInteractive(false);
       restoring = true;
       const p = new URLSearchParams(location.hash.slice(1));
       $("#search").value = "";
@@ -676,6 +731,213 @@
     };
     window.addEventListener("hashchange", restoreRoute);
     restoreRoute();
+
+    async function enableInteraction() {
+      if (!new URLSearchParams(location.search).has("interactive")) return;
+      let catalog;
+      try {
+        const response = await fetch("/__sequences", { cache: "no-store" });
+        if (!response.ok) return;
+        catalog = await response.json();
+      } catch {
+        return;
+      }
+      if (!Array.isArray(catalog.fixtures) || !Array.isArray(catalog.presets)) return;
+      const panel = $("#interaction"), fixture = $("#live-fixture"), preset = $("#live-preset"), screen = $("#screen");
+      $("#live-toggle").hidden = false;
+      options(fixture, catalog.fixtures.map((request, index) => [String(index), request.fixture]));
+      options(preset, [["", "Custom"], ...catalog.presets.map((item, index) => [String(index), item.label])]);
+      let request = structuredClone(catalog.fixtures[0]), rendering = false, pending = false, interactive = false, galleryState = null, generation = 0;
+      function activate() {
+        if (!interactive) {
+          galleryState = { scene: scene.value, size: size.value, time: time.value };
+        }
+        interactive = true;
+        panel.hidden = false;
+        screen.classList.add("live");
+        document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = true; });
+        $("#live-toggle").textContent = "Back to preview";
+        const fixtureId = `theme-selector-${request.fixture}`;
+        if ([...scene.options].some((option) => option.value === fixtureId)) scene.value = fixtureId;
+        document.querySelectorAll(".story").forEach((button) => button.setAttribute("aria-current", String(button.dataset.scene === fixtureId)));
+        $("#status").textContent = "Theme menu / interactive";
+      }
+      exitInteractive = (restoreGallery = true) => {
+        if (!interactive) return;
+        interactive = false;
+        pending = false;
+        generation++;
+        panel.hidden = true;
+        screen.classList.remove("live");
+        document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = false; });
+        $("#unpin").hidden = !pinned;
+        $("#live-toggle").textContent = "Interact with theme menu";
+        if (restoreGallery && galleryState) {
+          scene.value = galleryState.scene;
+          selectSizes();
+          if ([...size.options].some((option) => option.value === galleryState.size)) size.value = galleryState.size;
+          selectTimes();
+          if ([...time.options].some((option) => option.value === galleryState.time)) time.value = galleryState.time;
+          paint();
+        }
+      };
+      function syncDimensions() {
+        const latest = request.inputs.filter((input) => input.type === "resize").at(-1);
+        $("#live-width").value = latest?.width ?? request.width;
+        $("#live-height").value = latest?.height ?? request.height;
+      }
+      async function replay() {
+        activate();
+        pending = true;
+        if (rendering) return;
+        rendering = true;
+        try {
+          while (pending) {
+            pending = false;
+            const submitted = structuredClone(request);
+            const submittedGeneration = generation;
+            $("#live-effects").textContent = "Rendering in Rust…";
+            try {
+              const result = await renderSequence(submitted, () => interactive && submittedGeneration === generation);
+              if (!interactive || submittedGeneration !== generation) continue;
+              if (pending) continue;
+              paintReplay(result, submitted);
+            } catch (error) {
+              if (interactive && submittedGeneration === generation && !pending) $("#live-effects").textContent = error.message;
+            }
+          }
+        } finally {
+          rendering = false;
+        }
+      }
+      async function renderSequence(sequence, active = () => true) {
+        while (true) {
+          if (!active()) throw new Error("Replay superseded");
+          const response = await fetch("/__replay", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(sequence),
+          });
+          const result = await response.json();
+          if (response.status === 429) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            continue;
+          }
+          if (!response.ok) throw new Error(result.error || `Replay failed (${response.status})`);
+          return result;
+        }
+      }
+      function paintReplay(result, sequence) {
+        current = result.capture;
+        draw(screen, result.capture);
+        $("#status").textContent = `Theme menu / interactive · step ${sequence.inputs.length}`;
+        $("#details").textContent = `${result.capture.scene.width} × ${result.capture.scene.height} · ${sequence.inputs.length} inputs`;
+        $("#live-effects").textContent = result.effects.length
+          ? `Simulated effects: ${result.effects.map((effect) => effect.theme ? `${effect.type}(${effect.theme})` : effect.type).join(", ")}`
+          : "No simulated effects. Nothing was persisted or executed.";
+        const source = $("#source");
+        source.hidden = !result.capture.source;
+        source.href = "https://github.com/dx-corp/mono/blob/main/" + (result.capture.source || "").split("/").map(encodeURIComponent).join("/");
+      }
+      function add(input) {
+        if (request.inputs.length >= 64) {
+          $("#live-effects").textContent = "Sequence limit reached (64 inputs). Export or reset it.";
+          return;
+        }
+        request.inputs.push(input);
+        preset.value = "";
+        replay();
+      }
+      fixture.onchange = () => {
+        request = structuredClone(catalog.fixtures[Number(fixture.value)]);
+        preset.value = "";
+        syncDimensions();
+        replay();
+      };
+      preset.onchange = () => {
+        if (preset.value === "") return;
+        request = structuredClone(catalog.presets[Number(preset.value)].request);
+        const index = catalog.fixtures.findIndex((item) => item.fixture === request.fixture);
+        if (index >= 0) fixture.value = String(index);
+        syncDimensions();
+        replay();
+      };
+      function resize() {
+        const width = Number($("#live-width").value), height = Number($("#live-height").value);
+        if (!Number.isInteger(width) || !Number.isInteger(height)) return;
+        add({ type: "resize", width, height });
+      }
+      $("#live-width").onchange = resize;
+      $("#live-height").onchange = resize;
+      $("#live-retry").onclick = () => add({ type: "retry" });
+      $("#live-cancel").onclick = () => add({ type: "key", key: "escape", ctrl: false });
+      $("#live-reset").onclick = () => {
+        request = structuredClone(catalog.fixtures[Number(fixture.value)]);
+        preset.value = "";
+        syncDimensions();
+        replay();
+      };
+      screen.onkeydown = (event) => {
+        if (!interactive) return;
+        const keys = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "enter", Backspace: "backspace", Escape: "escape" };
+        if (keys[event.key]) {
+          event.preventDefault();
+          add({ type: "key", key: keys[event.key], ctrl: event.ctrlKey });
+        } else if (event.key.length === 1 && !event.metaKey && !event.altKey && !event.ctrlKey) {
+          event.preventDefault();
+          add({ type: "text", text: event.key });
+        }
+      };
+      screen.onpaste = (event) => {
+        if (!interactive) return;
+        event.preventDefault();
+        add({ type: "text", text: event.clipboardData.getData("text") });
+      };
+      $("#live-export").onclick = () => {
+        const blob = new Blob([JSON.stringify(request, null, 2)], { type: "application/json" }), url = URL.createObjectURL(blob), anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `theme-selector-${request.fixture}-sequence.json`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      };
+      $("#live-import").onclick = () => $("#live-file").click();
+      $("#live-file").onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file || file.size > 16384) {
+          $("#live-effects").textContent = "Replay files must be 16 KiB or smaller.";
+          return;
+        }
+        try {
+          const candidate = JSON.parse(await file.text());
+          const wasInteractive = interactive;
+          interactive = false;
+          pending = false;
+          generation++;
+          const importGeneration = generation;
+          while (rendering) await new Promise((resolve) => setTimeout(resolve, 10));
+          const result = await renderSequence(candidate, () => importGeneration === generation);
+          request = candidate;
+          interactive = wasInteractive;
+          activate();
+          const index = catalog.fixtures.findIndex((item) => item.fixture === request.fixture);
+          if (index >= 0) fixture.value = String(index);
+          preset.value = "";
+          syncDimensions();
+          paintReplay(result, request);
+        } catch {
+          interactive = true;
+          $("#live-effects").textContent = "Replay file is not a valid bounded sequence.";
+        }
+        event.target.value = "";
+      };
+      $("#live-toggle").onclick = () => {
+        if (interactive) exitInteractive(true);
+        else replay();
+      };
+      syncDimensions();
+      replay();
+    }
+    enableInteraction();
     // The optional local watcher exposes only a revision; static files need no server.
     if (
       location.protocol.startsWith("http") &&

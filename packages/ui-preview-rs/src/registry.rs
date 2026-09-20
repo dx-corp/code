@@ -1,6 +1,7 @@
 //! Register a renderer once; derive catalog, captures, and source links from it.
 use crate::{
     Scene,
+    authoring::{REPLAY_STEP_MS, StoryInput, StorySequence, validate_dimensions, validate_id},
     review::{self, Capture},
 };
 use ratatui::{Frame, Terminal, backend::TestBackend, buffer::Buffer};
@@ -14,6 +15,7 @@ pub struct Story {
     source: String,
     cases: Vec<(u16, u16, u64)>,
     renderer: Renderer,
+    sequence: Option<StorySequence>,
 }
 impl Story {
     pub fn new(
@@ -43,7 +45,40 @@ impl Story {
             source: source.into(),
             cases: vec![(60, 24, 0)],
             renderer: Box::new(render),
+            sequence: None,
         }
+    }
+    /// Build deterministic frames by replaying each prefix through the same
+    /// controller and renderer used by the host application.
+    pub fn replay(
+        sequence: StorySequence,
+        source: &str,
+        render: impl Fn(&Scene, &[StoryInput]) -> Result<Buffer, String> + 'static,
+    ) -> Result<Self, String> {
+        let cases = sequence.cases()?;
+        let replay = sequence.clone();
+        Ok(Self {
+            id: sequence.id.clone(),
+            label: sequence.label.clone(),
+            source: source.into(),
+            cases,
+            renderer: Box::new(move |scene| {
+                if scene.time_ms % REPLAY_STEP_MS != 0 {
+                    return Err("replay time is not an interaction step".into());
+                }
+                let step = usize::try_from(scene.time_ms / REPLAY_STEP_MS)
+                    .map_err(|_| "invalid replay step")?;
+                if step > replay.inputs.len() {
+                    return Err("replay step exceeds input sequence".into());
+                }
+                let expected = replay.cases()?[step];
+                if (scene.width, scene.height, scene.time_ms) != expected {
+                    return Err("scene does not match replay dimensions".into());
+                }
+                render(scene, &replay.inputs[..step])
+            }),
+            sequence: Some(sequence),
+        })
     }
     /// Cross product of sizes and fixed timestamps; no wall clock or sleeps.
     pub fn matrix(mut self, sizes: &[(u16, u16)], times: &[u64]) -> Self {
@@ -60,21 +95,20 @@ pub struct Registry {
 }
 impl Registry {
     pub fn add(&mut self, story: Story) -> Result<(), String> {
-        if story.id.is_empty()
-            || !story
-                .id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            return Err("story ID must contain letters, digits or hyphens".into());
+        validate_id(&story.id)?;
+        if let Some(sequence) = &story.sequence {
+            if sequence.cases()? != story.cases {
+                return Err("replay cases must be derived from its interaction sequence".into());
+            }
         }
         if self.stories.contains_key(&story.id) {
             return Err(format!("duplicate story: {}", story.id));
         }
         if story.cases.is_empty()
-            || story.cases.iter().any(|&(w, h, t)| {
-                !(8..=240).contains(&w) || !(3..=100).contains(&h) || t > 86_400_000
-            })
+            || story
+                .cases
+                .iter()
+                .any(|&(w, h, t)| validate_dimensions(w, h).is_err() || t > 86_400_000)
         {
             return Err("story needs bounded dimensions and timestamps".into());
         }
@@ -86,6 +120,12 @@ impl Registry {
         }
         self.stories.insert(story.id.clone(), story);
         Ok(())
+    }
+    pub fn sequences(&self) -> Vec<StorySequence> {
+        self.stories
+            .values()
+            .filter_map(|story| story.sequence.clone())
+            .collect()
     }
     /// Bridge existing catalogs without changing their IDs or capture matrix.
     pub fn import(
@@ -164,5 +204,54 @@ mod tests {
             review::json(&captures).unwrap(),
             review::json(&registry.captures().unwrap()).unwrap()
         );
+    }
+
+    #[test]
+    fn replay_uses_prefixes_and_rejects_mismatched_dimensions() {
+        let sequence = StorySequence::new("menu-replay", "Menu replay", 40, 10).inputs([
+            StoryInput::Text { text: "猫".into() },
+            StoryInput::Resize {
+                width: 20,
+                height: 8,
+            },
+        ]);
+        let story = Story::replay(sequence.clone(), "example.rs", |scene, inputs| {
+            let mut buffer =
+                Buffer::empty(ratatui::layout::Rect::new(0, 0, scene.width, scene.height));
+            buffer.set_string(
+                0,
+                0,
+                inputs.len().to_string(),
+                ratatui::style::Style::default(),
+            );
+            Ok(buffer)
+        })
+        .unwrap();
+        let mut registry = Registry::default();
+        registry.add(story).unwrap();
+        assert_eq!(registry.sequences(), vec![sequence]);
+        let captures = registry.captures().unwrap();
+        assert_eq!(captures.len(), 3);
+        assert_eq!(captures[0].cells[0].text, "0");
+        assert_eq!(captures[2].scene.width, 20);
+        let mut invalid = captures[2].scene.clone();
+        invalid.width = 21;
+        assert!(registry.render(&invalid).is_err());
+    }
+
+    #[test]
+    fn replay_matrix_cannot_replace_sequence_derived_cases() {
+        let sequence = StorySequence::new("matrix-replay", "Matrix replay", 40, 10);
+        let story = Story::replay(sequence, "example.rs", |scene, _| {
+            Ok(Buffer::empty(ratatui::layout::Rect::new(
+                0,
+                0,
+                scene.width,
+                scene.height,
+            )))
+        })
+        .unwrap()
+        .matrix(&[(80, 20)], &[0]);
+        assert!(Registry::default().add(story).is_err());
     }
 }

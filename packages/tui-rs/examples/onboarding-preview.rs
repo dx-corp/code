@@ -1,5 +1,7 @@
 //! Full-TUI-linked fixtures; never starts App, authentication or checks.
 //! COLORTERM=truecolor cargo run --locked -p maestro-tui --example onboarding-preview -- --html > review.html
+mod support;
+
 use maestro_tui::{
     components::{SetupModal, SetupPage, SetupPresentation, startup::render_startup},
     doctor::CheckStatus,
@@ -165,13 +167,55 @@ fn captures() -> Result<Vec<Capture>, String> {
     for capture in &mut captures {
         capture.source = "products/maestro/packages/tui-rs/examples/onboarding-preview.rs".into();
     }
+    captures.extend(support::theme_selector_story::captures()?);
     captures.extend(maestro_ui_preview::registry()?.captures()?);
     Ok(captures)
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args == ["--sequences"] {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "fixtures": support::theme_selector_story::fixture_requests(),
+                "presets": support::theme_selector_story::presets()
+                    .into_iter()
+                    .zip([
+                        "Navigate and select",
+                        "Filter and cancel",
+                        "Unicode and resize",
+                        "Retry and select",
+                    ])
+                    .map(|(request, label)| serde_json::json!({
+                        "label": label,
+                        "request": request,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+            .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if args == ["--replay-stdin"] {
+        use std::io::Read;
+        let mut body = String::new();
+        std::io::stdin()
+            .take(16_385)
+            .read_to_string(&mut body)
+            .map_err(|error| error.to_string())?;
+        if body.len() > 16_384 {
+            return Err("replay request exceeds 16384 bytes".into());
+        }
+        let request = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let response = support::theme_selector_story::replay(request)?;
+        println!(
+            "{}",
+            serde_json::to_string(&response).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() > 1 || args.first().is_some_and(|a| a != "--html" && a != "--json") {
-        return Err("usage: onboarding-preview [--html|--json]".into());
+        return Err("usage: onboarding-preview [--html|--json|--sequences|--replay-stdin]".into());
     }
     let captures = captures()?;
     let output = if args.first().is_some_and(|a| a == "--html") {

@@ -31,37 +31,124 @@ def fingerprint(workspace):
 
 
 class Preview:
-    def __init__(self, command, env):
+    def __init__(self, command, env, build_command=None, replay_command=None, sequences_command=None):
         self.command, self.env = command, env
+        self.build_command = build_command
+        self.replay_command = replay_command
+        self.sequences_command = sequences_command
         self.html = b''
+        self.sequences = b''
         self.revision = ''
         self.error = ''
+        self.lock = threading.Lock()
 
     def build(self):
         try:
-            mono = WORKSPACE.parent.parent
-            if (mono / 'scripts/dev/local_build_capacity.py').exists():
-                subprocess.run(['make', 'local-build-capacity-check'], cwd=mono, env=self.env, check=True, timeout=60)
-            result = subprocess.run(self.command, cwd=WORKSPACE, env=self.env, capture_output=True, timeout=600)
-            if result.returncode:
-                raise RuntimeError(result.stderr.decode(errors='replace')[-4000:])
-            if b'<html' not in result.stdout[:200].lower():
-                raise RuntimeError('Renderer did not return an HTML document')
-            self.html = result.stdout
-            self.revision = hashlib.sha256(self.html).hexdigest()
-            self.error = ''
-            print('Preview updated', flush=True)
-        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            with self.lock:
+                mono = WORKSPACE.parent.parent
+                if (mono / 'scripts/dev/local_build_capacity.py').exists():
+                    subprocess.run(['make', 'local-build-capacity-check'], cwd=mono, env=self.env, check=True, timeout=60)
+                if self.build_command:
+                    built = subprocess.run(self.build_command, cwd=WORKSPACE, env=self.env, capture_output=True, timeout=600)
+                    if built.returncode:
+                        raise RuntimeError(built.stderr.decode(errors='replace')[-4000:])
+                result = subprocess.run(self.command, cwd=WORKSPACE, env=self.env, capture_output=True, timeout=60)
+                if result.returncode:
+                    raise RuntimeError(result.stderr.decode(errors='replace')[-4000:])
+                if b'<html' not in result.stdout[:200].lower():
+                    raise RuntimeError('Renderer did not return an HTML document')
+                sequences = b''
+                if self.sequences_command:
+                    listed = subprocess.run(self.sequences_command, cwd=WORKSPACE, env=self.env, capture_output=True, timeout=5)
+                    if listed.returncode:
+                        raise RuntimeError(listed.stderr.decode(errors='replace')[-4000:])
+                    json.loads(listed.stdout)
+                    sequences = listed.stdout
+                self.html = result.stdout
+                self.sequences = sequences
+                self.revision = hashlib.sha256(self.html + self.sequences).hexdigest()
+                self.error = ''
+                print('Preview updated', flush=True)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             self.error = str(exc)
             print('Preview rebuild failed: ' + self.error, flush=True)
+
+    def replay(self, body):
+        if not self.replay_command:
+            raise LookupError('Interactive replay is unavailable for this preview')
+        validate_replay(body)
+        if not self.lock.acquire(blocking=False):
+            raise BlockingIOError('Renderer is busy; retry this input')
+        try:
+            result = subprocess.run(
+                self.replay_command,
+                cwd=WORKSPACE,
+                env=self.env,
+                input=body,
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode:
+                raise ValueError(result.stderr.decode(errors='replace')[-2000:])
+            json.loads(result.stdout)
+            return result.stdout
+        finally:
+            self.lock.release()
+
+
+def validate_replay(body):
+    if len(body) > 16_384:
+        raise ValueError('Replay request exceeds 16384 bytes')
+    request = json.loads(body)
+    if not isinstance(request, dict) or not isinstance(request.get('inputs'), list):
+        raise ValueError('Replay request must contain an input list')
+    if len(request['inputs']) > 64:
+        raise ValueError('Replay request exceeds 64 inputs')
+    width, height = request.get('width'), request.get('height')
+    if type(width) is not int or type(height) is not int or not 8 <= width <= 240 or not 3 <= height <= 100:
+        raise ValueError('Replay dimensions are out of bounds')
+    text_bytes = 0
+    for event in request['inputs']:
+        if not isinstance(event, dict) or event.get('type') not in {'key', 'text', 'resize', 'retry'}:
+            raise ValueError('Replay input is invalid')
+        if event.get('type') == 'text':
+            text = event.get('text')
+            if not isinstance(text, str) or any(ord(char) < 32 or ord(char) == 127 for char in text):
+                raise ValueError('Replay text is invalid')
+            text_bytes += len(text.encode())
+        if event.get('type') == 'resize':
+            event_width, event_height = event.get('width'), event.get('height')
+            if type(event_width) is not int or type(event_height) is not int or not 8 <= event_width <= 240 or not 3 <= event_height <= 100:
+                raise ValueError('Replay resize is out of bounds')
+    if text_bytes > 4_096:
+        raise ValueError('Replay text exceeds 4096 bytes')
+
+
+def valid_host(value, port):
+    return value in {f'127.0.0.1:{port}', f'localhost:{port}'}
+
+
+def valid_origin(value, port):
+    return value in {f'http://127.0.0.1:{port}', f'http://localhost:{port}'}
 
 
 def handler(preview):
     class Handler(BaseHTTPRequestHandler):
+        def trusted_host(self):
+            if valid_host(self.headers.get('Host', ''), self.server.server_port):
+                return True
+            self.send_error(403, 'Untrusted Host')
+            return False
+
         def do_GET(self):
+            if not self.trusted_host():
+                return
             path = self.path.split('?', 1)[0]
             if path == '/__revision':
                 body = json.dumps({'revision': preview.revision, 'error': preview.error}).encode()
+                content_type, status = 'application/json', 200
+            elif path == '/__sequences' and preview.sequences:
+                body = preview.sequences
                 content_type, status = 'application/json', 200
             elif path in {'/', '/index.html'}:
                 body = preview.html or b'<html><body>Preview has not built. See the terminal for the build error.</body></html>'
@@ -75,6 +162,39 @@ def handler(preview):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_POST(self):
+            if not self.trusted_host():
+                return
+            if self.path.split('?', 1)[0] != '/__replay':
+                self.send_error(404, 'Not found')
+                return
+            if not valid_origin(self.headers.get('Origin', ''), self.server.server_port):
+                self.send_error(403, 'Untrusted Origin')
+                return
+            if self.headers.get_content_type() != 'application/json':
+                self.send_error(415, 'Expected application/json')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', ''))
+                if not 0 < length <= 16_384:
+                    raise ValueError('Invalid Content-Length')
+                body = self.rfile.read(length)
+                rendered = preview.replay(body)
+                status = 200
+            except BlockingIOError as exc:
+                rendered, status = json.dumps({'error': str(exc)}).encode(), 429
+            except (LookupError, ValueError, json.JSONDecodeError) as exc:
+                rendered, status = json.dumps({'error': str(exc)}).encode(), 400
+            except (OSError, subprocess.SubprocessError) as exc:
+                rendered, status = json.dumps({'error': str(exc)}).encode(), 500
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(rendered)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.wfile.write(rendered)
+
         def log_message(self, *_):
             pass
     return Handler
@@ -87,10 +207,22 @@ def main():
     args = parser.parse_args()
     env = dict(os.environ, COLORTERM='truecolor')
     env.setdefault('CARGO_TARGET_DIR', str(Path.home() / '.cache' / 'maestro-ui-target'))
-    command = ['cargo', 'run', '--locked', '-p']
-    command += ['maestro-ui-preview'] if args.components_only else ['maestro-tui', '--example', 'onboarding-preview']
-    command += ['--', '--html']
-    preview = Preview(command, env)
+    target = Path(env['CARGO_TARGET_DIR']) / 'debug'
+    executable_suffix = '.exe' if os.name == 'nt' else ''
+    if args.components_only:
+        binary = target / f'maestro-ui-preview{executable_suffix}'
+        build_command = ['cargo', 'build', '--locked', '-p', 'maestro-ui-preview']
+        preview = Preview([str(binary), '--html'], env, build_command=build_command)
+    else:
+        binary = target / 'examples' / f'onboarding-preview{executable_suffix}'
+        build_command = ['cargo', 'build', '--locked', '-p', 'maestro-tui', '--example', 'onboarding-preview']
+        preview = Preview(
+            [str(binary), '--html'],
+            env,
+            build_command=build_command,
+            replay_command=[str(binary), '--replay-stdin'],
+            sequences_command=[str(binary), '--sequences'],
+        )
     # Bind before building, so a busy port fails without starting an unused build.
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler(preview))
     previous = fingerprint(WORKSPACE)
@@ -107,7 +239,7 @@ def main():
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
-    print(f'UI workbench: http://127.0.0.1:{args.port}/?watch=1', flush=True)
+    print(f'UI workbench: http://127.0.0.1:{args.port}/?watch=1&interactive=1', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

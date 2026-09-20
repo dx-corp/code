@@ -1,7 +1,9 @@
 //! Theme selection uses the shared picker; applying a theme remains with the app.
 use crate::themes;
 use crossterm::event::KeyCode;
-use maestro_ui::{ActionPicker, KeyHint, Menu, PickerOptions, PickerOutcome};
+use maestro_ui::{
+    ActionPicker, KeyHint, Menu, PickerError, PickerOptions, PickerOutcome, PickerStatus,
+};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -23,14 +25,27 @@ impl Default for ThemeSelector {
 impl ThemeSelector {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            picker: ActionPicker::new(themes::available_themes())
-                .identified_by(String::as_str)
-                .expect("theme names are unique")
+        Self::with_themes(themes::available_themes()).expect("theme names are unique")
+    }
+    /// Construct from caller-owned theme names. This keeps fixtures and future
+    /// discovery flows on the production picker without applying a theme.
+    pub fn with_themes(names: Vec<String>) -> Result<Self, PickerError> {
+        Ok(Self {
+            picker: ActionPicker::new(names)
+                .identified_by(String::as_str)?
                 .searchable(String::as_str),
             current_theme: None,
             original_theme: None,
-        }
+        })
+    }
+    pub fn replace_themes(
+        &mut self,
+        names: Vec<String>,
+    ) -> Result<PickerOutcome<String>, PickerError> {
+        self.picker.replace_items(names)
+    }
+    pub fn set_status(&mut self, status: PickerStatus) {
+        self.picker.set_status(status);
     }
     pub fn set_current_theme(&mut self, name: Option<String>) {
         self.current_theme = name;
@@ -80,6 +95,15 @@ impl ThemeSelector {
         }
         let theme = themes::current_ui_theme();
         let current = &self.current_theme;
+        let compact_hints = [
+            KeyHint::new("↵", ""),
+            KeyHint::new("Esc", maestro_ui::localization::tr("cancel")),
+        ];
+        let full_hints = [
+            KeyHint::new("Enter", maestro_ui::localization::tr("select")),
+            KeyHint::new("Esc", maestro_ui::localization::tr("cancel")),
+            KeyHint::new("↑↓", maestro_ui::localization::tr("navigate")),
+        ];
         Menu::new(
             maestro_ui::localization::tr("Select Theme"),
             &mut self.picker,
@@ -87,11 +111,13 @@ impl ThemeSelector {
         .options(PickerOptions {
             placeholder: maestro_ui::localization::tr("Type to filter themes..."),
             empty: maestro_ui::localization::tr("No matching themes"),
-            hints: Some(&[
-                KeyHint::new("Enter", maestro_ui::localization::tr("select")),
-                KeyHint::new("Esc", maestro_ui::localization::tr("cancel")),
-                KeyHint::new("↑↓", maestro_ui::localization::tr("navigate")),
-            ]),
+            // The full English line is 39 columns; modal margins, border and
+            // padding consume eight more. Keep one spare column at the edge.
+            hints: Some(if area.width < 48 {
+                &compact_hints
+            } else {
+                &full_hints
+            }),
             ..PickerOptions::default()
         })
         .render_items(frame, area, theme, |name| {
@@ -152,6 +178,35 @@ mod tests {
             assert!(!text.contains("Ask Dex"));
             assert_eq!(selector.original_theme().unwrap().name, original);
         }
+    }
+
+    #[test]
+    fn narrow_picker_keeps_the_cancel_binding_visible() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let render = |width| {
+            let mut selector = ThemeSelector::new();
+            selector.show();
+            let mut terminal = Terminal::new(TestBackend::new(width, 14)).unwrap();
+            terminal
+                .draw(|frame| selector.render(frame, frame.area()))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let narrow = render(28);
+        assert!(narrow.contains('↵'));
+        assert!(narrow.contains("Esc cancel"));
+        let compact = render(40);
+        assert!(compact.contains("Esc cancel"));
+        assert!(!compact.contains("↑↓ navigate"));
+        let normal = render(60);
+        assert!(normal.contains("Enter select"));
+        assert!(normal.contains("↑↓ navigate"));
     }
 
     #[test]
