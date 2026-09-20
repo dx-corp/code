@@ -41,8 +41,10 @@
 mod customer_export;
 mod onboarding;
 mod operation;
+mod relay;
 mod staged_rollout;
 mod tracker;
+pub(crate) use relay::TurnTelemetryRelay;
 pub(crate) use staged_rollout::TurnJournal;
 mod visibility;
 mod wide_events;
