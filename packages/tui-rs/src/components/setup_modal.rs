@@ -6,10 +6,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::components::dex_companion::{DexCompanion, DexCompanionState, DexPersonality};
+use crate::components::dex_companion::{DexCompanionState, DexPersonality};
 use crate::dex_delight::DexLook;
 use crate::onboarding_checks::OnboardingReadiness;
 use crate::telemetry::{
@@ -470,12 +470,6 @@ impl SetupModal {
         theme: maestro_ui::UiTheme,
         presentation: SetupPresentation,
     ) {
-        let SetupPresentation {
-            animations,
-            personality,
-            look,
-            animation_frame,
-        } = presentation;
         if !self.visible {
             return;
         }
@@ -483,10 +477,11 @@ impl SetupModal {
         frame.render_widget(Clear, area);
         frame.render_widget(Block::default().style(theme.text_style()), area);
         let inset = if area.width >= 40 { 2 } else { 0 };
+        let content_width = area.width.saturating_sub(inset * 2).min(76);
         let inner = Rect::new(
-            area.x + inset,
+            area.x + (area.width.saturating_sub(content_width) / 2),
             area.y + u16::from(area.height > 8),
-            area.width.saturating_sub(inset * 2),
+            content_width,
             area.height
                 .saturating_sub(if area.height > 8 { 2 } else { 0 }),
         );
@@ -495,13 +490,14 @@ impl SetupModal {
             inner.width as usize,
         )
         .min(inner.height.saturating_sub(1) as usize) as u16;
-        let scene_height = if personality == DexPersonality::Quiet || inner.height < 22 {
-            0
-        } else if self.page == SetupPage::Welcome {
-            (inner.height / 2).min(17)
-        } else {
-            5
-        };
+        let scene_height =
+            if self.page == SetupPage::Welcome && inner.height >= 34 && inner.width >= 48 {
+                18
+            } else if self.page == SetupPage::Welcome && inner.height >= 28 && inner.width >= 40 {
+                12
+            } else {
+                0
+            };
         let chunks = Layout::vertical([
             Constraint::Length(u16::from(inner.height > 5) * 2),
             Constraint::Length(scene_height),
@@ -512,41 +508,29 @@ impl SetupModal {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    if self.page == SetupPage::Welcome {
-                        maestro_ui::localization::tr("Welcome to Deixic Code")
-                    } else {
-                        maestro_ui::localization::tr("Deixic Code")
-                    },
+                    maestro_ui::localization::tr("Deixic Code"),
                     Style::default()
                         .fg(theme.focus)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    maestro_ui::localization::tr("  /  Guided setup"),
-                    Style::default().fg(theme.muted),
-                ),
-            ])),
+                Span::styled(self.stage_label(), Style::default().fg(theme.muted)),
+            ]))
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(theme.border)),
+            ),
             chunks[0],
         );
         if scene_height > 0 {
-            if self.page == SetupPage::Welcome {
-                render_welcome_scene(frame, chunks[1], theme, presentation);
-            } else {
-                let dex = DexCompanion::new(self.dex_state())
-                    .animations(animations)
-                    .personality(personality)
-                    .look(look)
-                    .frame(animation_frame)
-                    .theme(Some(theme));
-                dex.render_face(
-                    Rect::new(chunks[1].x, chunks[1].y, 7.min(chunks[1].width), 2),
-                    frame.buffer_mut(),
-                );
-                frame.render_widget(
-                    Paragraph::new(dex.status_line()),
-                    Rect::new(chunks[1].x, chunks[1].y + 2, chunks[1].width, 1),
-                );
-            }
+            super::startup::render_aperture(
+                frame,
+                chunks[1],
+                theme,
+                presentation
+                    .animations
+                    .then_some(presentation.animation_frame),
+            );
         }
         let body = match self.page {
             SetupPage::Mode => self.mode_lines(theme),
@@ -594,6 +578,21 @@ impl SetupModal {
         );
     }
 
+    fn stage_label(&self) -> &'static str {
+        match self.page {
+            SetupPage::Welcome => maestro_ui::localization::tr("  /  01  SETUP"),
+            SetupPage::Role | SetupPage::UseCase | SetupPage::Workflow => {
+                maestro_ui::localization::tr("  /  02  PREFERENCES")
+            }
+            SetupPage::Mode | SetupPage::Provider | SetupPage::Key | SetupPage::WaitingEvalops => {
+                maestro_ui::localization::tr("  /  03  CONNECT")
+            }
+            SetupPage::Verify | SetupPage::Checking | SetupPage::Results => {
+                maestro_ui::localization::tr("  /  04  VERIFY")
+            }
+        }
+    }
+
     fn profile_choices(&self) -> &'static [&'static str] {
         match self.page {
             SetupPage::Role => &[
@@ -623,18 +622,10 @@ impl SetupModal {
         let mut lines: Vec<Line<'static>> = match self.page {
             SetupPage::Welcome => vec![
                 Line::styled(
-                    maestro_ui::localization::tr("Let's get Deixic Code ready for your first run."),
+                    maestro_ui::localization::tr("Connect your account. Choose your model."),
                     Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 ),
                 Line::from(""),
-                Line::from(maestro_ui::localization::tr(
-                    "Dex will help you connect and check that your model and tools work.",
-                )),
-                Line::from(""),
-                Line::styled(
-                    maestro_ui::localization::tr("Make it yours"),
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                ),
                 Line::from(maestro_ui::localization::tr(
                     "Optional answers help our product team understand your needs.",
                 )),
@@ -694,7 +685,7 @@ impl SetupModal {
                     "Checking your actual configuration and runtime…",
                 )),
                 Line::from(maestro_ui::localization::tr(
-                    "Dex will report results when the checks finish.",
+                    "Results appear here when the checks finish.",
                 )),
             ],
             SetupPage::Results => {
@@ -949,85 +940,6 @@ impl SetupModal {
             SetupPage::Key => maestro_ui::localization::tr("enter save   esc back"),
             SetupPage::WaitingEvalops => maestro_ui::localization::tr("esc close"),
         }
-    }
-}
-
-/// A terminal-native landscape: Dex's asymmetric sheet silhouette, a distant
-/// crescent, and a few stars. Motion changes the eyes only; layout stays still.
-fn render_welcome_scene(
-    frame: &mut Frame,
-    area: Rect,
-    theme: maestro_ui::UiTheme,
-    presentation: SetupPresentation,
-) {
-    if area.width < 32 || area.height < 9 {
-        return;
-    }
-    let mut draw = |x: u16, y: u16, text: &str, color| {
-        if x < area.width && y < area.height {
-            frame.render_widget(
-                Paragraph::new(text.to_owned()).style(Style::default().fg(color)),
-                Rect::new(area.x + x, area.y + y, area.width - x, 1),
-            );
-        }
-    };
-    draw(0, 0, &"─".repeat(area.width as usize), theme.border);
-    draw(
-        0,
-        area.height - 2,
-        &"─".repeat(area.width as usize),
-        theme.border,
-    );
-    for (x, y) in [
-        (7, 2),
-        (area.width / 2, 3),
-        (area.width / 3, area.height - 4),
-        (area.width - 5, area.height - 5),
-    ] {
-        draw(x, y, "✦", theme.muted);
-    }
-    if area.width >= 64 {
-        for (row, line) in [
-            "     ░██████░",
-            "   ░████░",
-            "  ░███░",
-            "   ░████░",
-            "     ░██████░",
-        ]
-        .iter()
-        .enumerate()
-        {
-            draw(area.width - 23, 2 + row as u16, line, theme.muted);
-        }
-        draw(
-            area.width / 2,
-            area.height - 6,
-            "       ░░░░░░",
-            theme.border,
-        );
-        draw(
-            area.width / 2,
-            area.height - 5,
-            "  ░░░░░░░░░░░░░░░░",
-            theme.border,
-        );
-    }
-    let blink = presentation.animations && presentation.animation_frame % 64 >= 61;
-    let sprite = [
-        "      ████████████        ",
-        "  ████████████████████    ",
-        if blink {
-            "████████──████──██████  "
-        } else {
-            "████████  ████  ██████  "
-        },
-        "████████████████████████",
-        "██████████    ██████████",
-        "████████████████████████",
-        "  ████  ████  ████  ████",
-    ];
-    for (row, line) in sprite.iter().enumerate() {
-        draw(3, area.height - 8 + row as u16, line, theme.focus);
     }
 }
 

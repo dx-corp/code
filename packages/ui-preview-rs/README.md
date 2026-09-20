@@ -44,3 +44,96 @@ done
 
 These commands render individual scenes, not complete screenshot baselines.
 Native before/after checks in Mono still use `capture-tui-suite.py`.
+
+## Interactive state library
+
+Generate a portable page from the same Rust buffers:
+
+```sh
+cargo run --locked -p maestro-ui-preview -- --html > ui-library.html
+cargo run --locked -p maestro-ui-preview -- --json > ui-library.json
+```
+
+For first boot and all onboarding pages alongside the component catalog:
+
+```sh
+COLORTERM=truecolor cargo run --locked -p maestro-tui --example onboarding-preview -- --html > ui-library.html
+cargo test --locked -p maestro-tui --example onboarding-preview
+```
+
+Open the HTML file directly. Search named scenes, select terminal dimensions,
+step through supplied timestamps, play animation, and export a frame as JSON.
+Nothing is fetched from a server. The fixtures do not sign in, call a model,
+execute tools, or persist configuration. Playback starts only when requested.
+RGB, indexed/default colors, style flags and Unicode column widths are retained;
+blink flags remain static for inspection. Native cursor behavior and keyboard
+interaction remain covered by the PTY suite rather than this cell-only gallery.
+
+`review::capture(scene, |frame| ...)` accepts a production rendering closure.
+`review::from_buffer` adapts existing buffer-based widgets. `review::html` and
+`review::json` export the same captures. Add fixtures beside the owning adapter,
+using its public state transitions and explicit typed mock reports. Assert the
+expected page before rendering; never dispatch effects returned by those
+transitions. Use a fixed `Scene::time_ms` instead of sleeping or reading a clock.
+
+The lightweight component executable retains its existing dependency boundary.
+Only the onboarding example links the full TUI; its preview dependency is
+**development-only**. Production code never imports this library. Browser fonts
+are an inspection convenience, not a pixel baseline: continue to use the existing
+`make maestro-ui-review` / `maestro-ui-accept` workflow for pinned-font PNG
+comparisons and the native terminal suite for interaction regressions.
+
+## Author a menu or a scene
+
+Use `maestro_ui::Menu` for menu chrome, empty/loading/error presentation and help.
+Keep one caller-owned `ActionPicker<T>` for query, selection and keyboard input:
+
+```rust
+let mut state = ActionPicker::new(items).searchable(String::as_str);
+state.open();
+// Render:
+Menu::new("Choose workspace", &mut state).render(frame, area, theme);
+// Input: route state.handle_key(...) to the application; dispatch no effects here.
+```
+
+`render_items` accepts custom descriptions or current-item markers. The production
+ThemeSelector uses this same menu. It retains its existing preview/cancel/commit
+behavior. This is a composition of existing primitives, not another controller.
+
+Register new scene families once in `registry()`:
+
+```rust
+registry.add(Story::new("my-menu", "My menu", file!(), |scene, frame| {
+    // Construct typed fixture state and call the production renderer here.
+}).matrix(&[(40, 20), (60, 24), (100, 30)], &[0, 80, 160]))?;
+```
+
+The registry derives the CLI catalog, rendering dispatch, capture matrix and
+source links. Duplicate IDs/cases and unbounded dimensions fail at registration.
+`src/menus.rs` is a complete example with ready, filtered, empty, loading and
+error fixtures. Older scene families enter through `Registry::import` while
+retaining their stable IDs; new stories do not need a second rendering switch.
+Use repository-relative source paths for links to GitHub; `file!()` is useful
+for local source identification but may need a repository path prefix.
+
+The browser has grouped thumbnails, scene/size/frame URLs, renderer links and a
+pinned comparison. Comparison follows the selected timestamp using the nearest
+available earlier frame. Existing baseline acceptance remains explicit and is
+never performed by the workbench.
+
+## Watch while designing
+
+From the Maestro workspace:
+
+```sh
+python3 scripts/dev/ui-workbench.py
+# Faster, shared components only:
+python3 scripts/dev/ui-workbench.py --components-only --port 8771
+```
+
+The command builds the real Rust renderer, watches source changes, and serves
+only the generated page and rebuild status on loopback. It preserves URL state
+and scroll across successful refreshes. Failed builds retain the previous page
+and show an error; they never update accepted baselines. It uses the configured
+`CARGO_TARGET_DIR` or a user cache outside the checkout. In Mono it runs the
+existing build-capacity check before each build. Ctrl+C stops serving.

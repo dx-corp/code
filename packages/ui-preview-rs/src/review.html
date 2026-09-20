@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Deixic — UI library</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      background: #171624;
+      color: #efebff;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+    }
+    header {
+      padding: 24px 28px;
+      border-bottom: 1px solid #4e4764;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    h1 {
+      font-size: 15px;
+      letter-spacing: 0.12em;
+      margin: 0;
+    }
+    header p {
+      font-size: 11px;
+      color: #b0a8c6;
+      margin: 0;
+    }
+    nav {
+      padding: 20px 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      border-bottom: 1px solid #4e4764;
+    }
+    label {
+      font-size: 11px;
+      display: grid;
+      gap: 8px;
+      color: #b0a8c6;
+    }
+    select,
+    button,
+    input {
+      font: inherit;
+      color: #efebff;
+      background: #232132;
+      border: 1px solid #4e4764;
+      border-radius: 0;
+      padding: 8px;
+    }
+    button {
+      font-size: 11px;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+    :focus-visible {
+      outline: 2px solid #aba0ff;
+      outline-offset: 3px;
+    }
+    main {
+      padding: 32px 24px;
+      overflow: auto;
+      min-height: 60vh;
+    }
+    #screen {
+      margin: 0 auto;
+      font:
+        13px/1.4 ui-monospace,
+        SFMono-Regular,
+        Consolas,
+        monospace;
+      width: max-content;
+      white-space: pre;
+      background: #171624;
+      color: #efebff;
+    }
+    footer {
+      border-top: 1px solid #4e4764;
+      padding: 18px 28px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: #b0a8c6;
+    }
+    #details {
+      flex: 1;
+    }
+    #status {
+      font-size: 12px;
+      color: #b0a8c6;
+      padding: 0 28px;
+    }
+    a {
+      color: #aba0ff;
+    }
+    .cell {
+      display: inline-block;
+      vertical-align: top;
+    }
+    @media (max-width: 600px) {
+      header {
+        display: block;
+      }
+      header p {
+        margin-top: 12px;
+      }
+      nav {
+        padding: 16px;
+      }
+      main {
+        padding: 16px;
+      }
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      height: calc(100vh - 70px);
+    }
+    aside {
+      border-right: 1px solid #4e4764;
+      overflow: auto;
+      padding: 14px 10px;
+    }
+    aside label {
+      position: sticky;
+      top: 0;
+      background: #171624;
+      padding-bottom: 12px;
+    }
+    aside input {
+      width: 100%;
+      min-width: 0;
+    }
+    #stories h2 {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #b0a8c6;
+      letter-spacing: 0.1em;
+      margin: 22px 4px 10px;
+    }
+    .story {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border-color: transparent;
+      background: transparent;
+      font-size: 11px;
+      margin: 4px 0;
+      padding: 8px;
+    }
+    .story[aria-current="true"] {
+      background: #232132;
+      border-color: #aba0ff;
+    }
+    .story canvas {
+      display: block;
+      width: 148px;
+      height: 42px;
+      opacity: 0.65;
+      margin-bottom: 8px;
+    }
+    .workbench {
+      min-width: 0;
+      overflow: auto;
+    }
+    nav {
+      padding: 12px 18px;
+      gap: 10px;
+      align-items: end;
+    }
+    nav label {
+      min-width: 0;
+    }
+    nav select {
+      max-width: 100%;
+    }
+    .scene-select {
+      display: none;
+    }
+    #status {
+      padding: 0 18px;
+    }
+    main {
+      padding: 20px 18px;
+      min-height: 0;
+      display: flex;
+      gap: 28px;
+      align-items: start;
+    }
+    .pane {
+      min-width: 0;
+      flex: 1;
+      overflow: auto;
+    }
+    .pane h2 {
+      font-size: 10px;
+      font-weight: normal;
+      color: #b0a8c6;
+      margin: 0 0 16px;
+    }
+    .pane pre {
+      margin: 0;
+      font:
+        13px/1.4 ui-monospace,
+        SFMono-Regular,
+        Consolas,
+        monospace;
+      width: max-content;
+      white-space: pre;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    footer {
+      padding: 14px 18px;
+    }
+    #source {
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 600px) {
+      .workspace {
+        display: block;
+        height: auto;
+      }
+      aside {
+        max-height: 220px;
+        border-bottom: 1px solid #4e4764;
+      }
+      #stories {
+        display: flex;
+        gap: 8px;
+        overflow: auto;
+      }
+      #stories h2 {
+        display: none;
+      }
+      .story {
+        min-width: 160px;
+      }
+      .story canvas {
+        display: none;
+      }
+      header {
+        padding: 18px;
+      }
+      .pane {
+        flex: none;
+      }
+      main {
+        display: block;
+      }
+      .pane + .pane {
+        margin-top: 24px;
+      }
+    }
+  </style>
+  <header>
+    <h1>DEIXIC / UI LIBRARY</h1>
+    <p>Production widgets · supplied fixture state</p>
+  </header>
+  <div class="workspace">
+    <aside aria-label="Scene library">
+      <label
+        >Find a scene<input
+          id="search"
+          type="search"
+          placeholder="Search scenes…"
+      /></label>
+      <div id="stories"></div>
+    </aside>
+    <section class="workbench">
+      <nav aria-label="Preview controls">
+        <label class="scene-select">Scene<select id="scene"></select></label>
+        <label>Terminal size<select id="size"></select></label>
+        <label>Frame<select id="time"></select></label>
+        <button id="play" type="button">Play</button>
+        <button id="pin" type="button">Pin comparison</button>
+        <button id="unpin" type="button" hidden>Clear comparison</button>
+        <button id="link" type="button">Copy link</button>
+      </nav>
+      <p id="status" role="status"></p>
+      <main>
+        <section class="pane">
+          <h2>SELECTED STATE</h2>
+          <pre id="screen" aria-label="Native terminal preview"></pre>
+        </section>
+        <section id="comparison" class="pane" hidden>
+          <h2 id="comparison-label"></h2>
+          <pre id="reference" aria-label="Comparison terminal preview"></pre>
+        </section>
+      </main>
+      <footer>
+        <span id="details"></span
+        ><button id="download" type="button">Export frame JSON</button
+        ><a id="source" target="_blank" rel="noopener">Renderer source</a
+        ><span>Fixture data · no runtime effects</span>
+      </footer>
+    </section>
+  </div>
+  <script id="fixtures" type="application/json">
+    __CAPTURES__
+  </script>
+  <script>
+    "use strict";
+    const captures = JSON.parse(
+        document.querySelector("#fixtures").textContent,
+      ),
+      $ = (s) => document.querySelector(s),
+      scene = $("#scene"),
+      size = $("#size"),
+      time = $("#time");
+    let timer = null,
+      current,
+      pinned = null,
+      restoring = false;
+    const colors = [
+      "#000000",
+      "#800000",
+      "#008000",
+      "#808000",
+      "#000080",
+      "#800080",
+      "#008080",
+      "#c0c0c0",
+      "#808080",
+      "#ff0000",
+      "#00ff00",
+      "#ffff00",
+      "#0000ff",
+      "#ff00ff",
+      "#00ffff",
+      "#ffffff",
+    ];
+    function color(c, fallback) {
+      if (c === "reset") return fallback;
+      if (!c.startsWith("indexed:")) return c;
+      let n = Number(c.slice(8));
+      if (n < 16) return colors[n];
+      if (n >= 232) {
+        let v = 8 + (n - 232) * 10;
+        return `rgb(${v},${v},${v})`;
+      }
+      n -= 16;
+      const ramp = [0, 95, 135, 175, 215, 255];
+      return `rgb(${ramp[Math.floor(n / 36)]},${ramp[Math.floor(n / 6) % 6]},${ramp[n % 6]})`;
+    }
+    function options(el, entries) {
+      const prior = el.value;
+      el.replaceChildren(
+        ...entries.map(([value, label]) => {
+          const o = document.createElement("option");
+          o.value = value;
+          o.textContent = label;
+          return o;
+        }),
+      );
+      if (entries.some((e) => e[0] === prior)) el.value = prior;
+    }
+    function stop() {
+      clearTimeout(timer);
+      timer = null;
+      $("#play").textContent = "Play";
+    }
+    function selectScenes() {
+      stop();
+      const query = $("#search").value.toLowerCase();
+      const map = new Map();
+      captures.forEach((c) => {
+        if ((c.scene.id + " " + c.scene.label).toLowerCase().includes(query))
+          map.set(c.scene.id, c.scene.label + " / " + c.scene.id);
+      });
+      options(scene, [...map]);
+      sidebar([...map]);
+      selectSizes();
+    }
+    function selectSizes() {
+      stop();
+      const map = new Map();
+      captures
+        .filter((c) => c.scene.id === scene.value)
+        .forEach((c) =>
+          map.set(
+            `${c.scene.width}x${c.scene.height}`,
+            `${c.scene.width} × ${c.scene.height}`,
+          ),
+        );
+      options(size, [...map]);
+      selectTimes();
+    }
+    function selected() {
+      return captures
+        .filter(
+          (c) =>
+            c.scene.id === scene.value &&
+            `${c.scene.width}x${c.scene.height}` === size.value,
+        )
+        .sort((a, b) => a.scene.time_ms - b.scene.time_ms);
+    }
+    function selectTimes() {
+      stop();
+      options(
+        time,
+        selected().map((c) => [
+          String(c.scene.time_ms),
+          c.scene.time_ms + " ms",
+        ]),
+      );
+      $("#play").disabled = time.options.length < 2;
+      paint();
+    }
+    function paint() {
+      current = selected().find((c) => String(c.scene.time_ms) === time.value);
+      const screen = $("#screen");
+      screen.replaceChildren();
+      if (!current) {
+        $("#status").textContent = "No matching scenes";
+        $("#details").textContent = "";
+        $("#download").disabled = true;
+        $("#pin").disabled = true;
+        $("#source").hidden = true;
+        $("#comparison").hidden = true;
+        return;
+      }
+      $("#download").disabled = false;
+      $("#status").textContent = current.scene.label;
+      $("#details").textContent =
+        `${current.scene.id} / ${size.value} / ${time.value} ms`;
+      draw(screen, current);
+      document
+        .querySelectorAll(".story")
+        .forEach((b) =>
+          b.setAttribute(
+            "aria-current",
+            String(b.dataset.scene === scene.value),
+          ),
+        );
+      const source = $("#source");
+      source.hidden = !current.source;
+      source.href =
+        "https://github.com/dx-corp/mono/blob/main/" +
+        (current.source || "").split("/").map(encodeURIComponent).join("/");
+      $("#pin").disabled = false;
+      paintComparison();
+      if (!restoring) saveRoute();
+    }
+    function draw(screen, current) {
+      screen.replaceChildren();
+      const { width, height } = current.scene;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; ) {
+          const c = current.cells[y * width + x],
+            span = document.createElement("span"),
+            m = c.modifiers;
+          let fg = color(c.foreground, "#efebff"),
+            bg = color(c.background, "#171624");
+          if (m & 64) [fg, bg] = [bg, fg];
+          span.className = "cell";
+          const glyph = document.createElement("span");
+          glyph.textContent = c.text;
+          glyph.style.opacity = m & 2 ? ".55" : "1";
+          glyph.style.visibility = m & 128 ? "hidden" : "visible";
+          span.append(glyph);
+          span.style.cssText = `width:${c.columns}ch;color:${fg};background:${bg};font-weight:${m & 1 ? "700" : "400"};font-style:${m & 4 ? "italic" : "normal"};text-decoration:${[m & 8 ? "underline" : "", m & 256 ? "line-through" : ""].filter(Boolean).join(" ") || "none"}`;
+          screen.append(span);
+          x += c.columns;
+        }
+        screen.append(document.createTextNode("\n"));
+      }
+    }
+    scene.onchange = selectSizes;
+    size.onchange = selectTimes;
+    time.onchange = () => {
+      stop();
+      paint();
+    };
+    $("#search").oninput = selectScenes;
+    $("#play").onclick = () => {
+      if (timer) {
+        stop();
+        return;
+      }
+      $("#play").textContent = "Pause";
+      function next() {
+        const frames = selected(),
+          i = time.selectedIndex,
+          delay =
+            i + 1 < frames.length
+              ? frames[i + 1].scene.time_ms - frames[i].scene.time_ms
+              : frames.length > 1
+                ? frames[1].scene.time_ms - frames[0].scene.time_ms
+                : 80;
+        timer = setTimeout(
+          () => {
+            time.selectedIndex = (time.selectedIndex + 1) % time.options.length;
+            paint();
+            next();
+          },
+          Math.max(16, delay),
+        );
+      }
+      next();
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stop();
+    });
+    $("#download").onclick = () => {
+      if (!current) return;
+      const blob = new Blob([JSON.stringify(current, null, 2)], {
+          type: "application/json",
+        }),
+        url = URL.createObjectURL(blob),
+        a = document.createElement("a");
+      a.href = url;
+      a.download = current.scene.id.replace(/[^a-z0-9-]/gi, "_") + ".json";
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    function group(id) {
+      if (id.startsWith("first-boot")) return "First launch";
+      if (id.startsWith("onboarding-")) return "Onboarding";
+      if (id.startsWith("conversation-")) return "Conversation";
+      if (id.startsWith("menu-") || id.startsWith("picker")) return "Menus";
+      return "Appearance";
+    }
+    function sidebar(entries) {
+      const root = $("#stories");
+      root.replaceChildren();
+      const groups = new Map();
+      for (const [id] of entries) {
+        const key = group(id);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(id);
+      }
+      for (const [label, ids] of groups) {
+        const heading = document.createElement("h2");
+        heading.textContent = label;
+        root.append(heading);
+        for (const id of ids) {
+          const c = captures.find((c) => c.scene.id === id),
+            button = document.createElement("button");
+          button.type = "button";
+          button.className = "story";
+          button.dataset.scene = id;
+          button.setAttribute("aria-label", c.scene.label);
+          const canvas = document.createElement("canvas");
+          canvas.width = 296;
+          canvas.height = 84;
+          canvas.setAttribute("aria-hidden", "true");
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#aba0ff";
+          ctx.font = `${Math.min(6, 280 / c.scene.width)}px monospace`;
+          const step = Math.min(7, 80 / c.scene.height);
+          for (let y = 0; y < c.scene.height; y++) {
+            let line = "";
+            for (let x = 0; x < c.scene.width; ) {
+              const cell = c.cells[y * c.scene.width + x];
+              line += cell.text;
+              x += cell.columns;
+            }
+            ctx.fillText(line, 4, step * (y + 1));
+          }
+          button.append(canvas, document.createTextNode(c.scene.label));
+          button.onclick = () => {
+            scene.value = id;
+            selectSizes();
+          };
+          root.append(button);
+        }
+      }
+    }
+    function paintComparison() {
+      $("#comparison").hidden = !pinned;
+      $("#unpin").hidden = !pinned;
+      if (!pinned) return;
+      const frames = captures
+        .filter(
+          (c) =>
+            c.scene.id === pinned.id &&
+            c.scene.width === pinned.width &&
+            c.scene.height === pinned.height,
+        )
+        .sort((a, b) => a.scene.time_ms - b.scene.time_ms);
+      const c =
+        frames.filter((c) => c.scene.time_ms <= Number(time.value)).at(-1) ||
+        frames[0];
+      if (!c) {
+        pinned = null;
+        $("#comparison").hidden = true;
+        return;
+      }
+      $("#comparison-label").textContent =
+        `${c.scene.label} / ${c.scene.width} × ${c.scene.height} / ${c.scene.time_ms} ms`;
+      draw($("#reference"), c);
+    }
+    function saveRoute() {
+      const p = new URLSearchParams({
+        scene: scene.value,
+        size: size.value,
+        time: time.value,
+      });
+      if (pinned) {
+        p.set("compare", pinned.id);
+        p.set("compareSize", `${pinned.width}x${pinned.height}`);
+      }
+      history.replaceState(null, "", "#" + p.toString());
+    }
+    function restoreRoute() {
+      stop();
+      restoring = true;
+      const p = new URLSearchParams(location.hash.slice(1));
+      $("#search").value = "";
+      selectScenes();
+      if ([...scene.options].some((o) => o.value === p.get("scene")))
+        scene.value = p.get("scene");
+      selectSizes();
+      if ([...size.options].some((o) => o.value === p.get("size")))
+        size.value = p.get("size");
+      selectTimes();
+      if ([...time.options].some((o) => o.value === p.get("time")))
+        time.value = p.get("time");
+      pinned = null;
+      const c = captures.find(
+        (c) =>
+          c.scene.id === p.get("compare") &&
+          `${c.scene.width}x${c.scene.height}` === p.get("compareSize"),
+      );
+      if (c)
+        pinned = {
+          id: c.scene.id,
+          width: c.scene.width,
+          height: c.scene.height,
+        };
+      paint();
+      restoring = false;
+      saveRoute();
+    }
+    $("#pin").onclick = () => {
+      if (current) {
+        pinned = {
+          id: current.scene.id,
+          width: current.scene.width,
+          height: current.scene.height,
+        };
+        paint();
+      }
+    };
+    $("#unpin").onclick = () => {
+      pinned = null;
+      paint();
+    };
+    $("#link").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(location.href);
+        $("#status").textContent = "Link copied";
+      } catch {
+        $("#status").textContent =
+          "Copy the address from your browser to share this view.";
+      }
+    };
+    window.addEventListener("hashchange", restoreRoute);
+    restoreRoute();
+    // The optional local watcher exposes only a revision; static files need no server.
+    if (
+      location.protocol.startsWith("http") &&
+      new URLSearchParams(location.search).has("watch")
+    ) {
+      let revision,
+        hadError = false;
+      setInterval(async () => {
+        try {
+          const response = await fetch("/__revision", { cache: "no-store" });
+          if (!response.ok) return;
+          const update = await response.json();
+          if (update.error) {
+            hadError = true;
+            $("#status").textContent =
+              "Rebuild failed — showing the last successful preview. See the terminal.";
+            return;
+          }
+          if (hadError) {
+            $("#status").textContent =
+              current?.scene.label || "No matching scenes";
+            hadError = false;
+          }
+          const next = update.revision;
+          if (revision && next !== revision) {
+            sessionStorage.setItem(
+              "ui-review-scroll",
+              JSON.stringify({
+                pane: $(".workbench").scrollTop,
+                sidebar: $("aside").scrollTop,
+              }),
+            );
+            location.reload();
+          }
+          revision = next;
+        } catch {}
+      }, 1500);
+      try {
+        const saved = JSON.parse(sessionStorage.getItem("ui-review-scroll"));
+        if (saved) {
+          $(".workbench").scrollTop = saved.pane;
+          $("aside").scrollTop = saved.sidebar;
+        }
+      } catch {}
+    }
+  </script>
+</html>

@@ -10,16 +10,16 @@ pub fn conversation() -> UiTheme {
     use crate::shimmer::{DEIXIC_ACCENT, DEIXIC_BORDER, DEIXIC_MUTED, DEIXIC_SURFACE, DEIXIC_TEXT};
     let color = |(r, g, b)| Color::Rgb(r, g, b);
     UiTheme {
-        panel: Some(Color::Rgb(0x22, 0x22, 0x26)),
+        panel: Some(Color::Rgb(0x23, 0x21, 0x32)),
         selection: Some(Color::Rgb(0x32, 0x2e, 0x40)),
         surface: color(DEIXIC_SURFACE),
         text: color(DEIXIC_TEXT),
         muted: color(DEIXIC_MUTED),
         border: color(DEIXIC_BORDER),
         focus: color(DEIXIC_ACCENT),
-        success: Color::Rgb(0xa3, 0xbb, 0xa1),
-        attention: Color::Rgb(0xcf, 0xb9, 0x87),
-        error: Color::Rgb(0xdb, 0x9b, 0x96),
+        success: Color::Rgb(0x92, 0xc8, 0xb2),
+        attention: Color::Rgb(0xe0, 0xbc, 0x87),
+        error: Color::Rgb(0xea, 0xa2, 0x9b),
     }
 }
 
@@ -31,7 +31,7 @@ mod tests {
     fn command_controls_and_conversation_share_the_brand_palette() {
         let controls = default_controls();
         assert_eq!(controls, conversation());
-        assert_eq!(controls.surface, Color::Rgb(0x19, 0x19, 0x1b));
-        assert_eq!(controls.focus, Color::Rgb(0x9c, 0x92, 0xfc));
+        assert_eq!(controls.surface, Color::Rgb(0x17, 0x16, 0x24));
+        assert_eq!(controls.focus, Color::Rgb(0xab, 0xa0, 0xff));
     }
 }

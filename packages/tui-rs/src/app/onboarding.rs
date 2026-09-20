@@ -45,11 +45,97 @@ impl Drop for OnboardingSession {
 
 impl OnboardingSession {
     pub(super) fn frame(&self) -> u64 {
-        (self.transition.elapsed().as_millis() / 100) as u64
+        (self.transition.elapsed().as_millis() / 80) as u64
     }
 }
 
 impl App {
+    /// Local preparation only. Account/model checks retain their explicit consent step.
+    pub(super) async fn first_run_boot(&mut self) -> Result<()> {
+        if self.ui_prefs.boot_seen || self.ui_prefs.onboarding_seen || self.initial_prompt.is_some()
+        {
+            return Ok(());
+        }
+        let snapshot = match crate::init_cli::load_evalops_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(_) => return Ok(()), // Unknown account state is not a first-time account.
+        };
+        let env = std::env::vars().collect();
+        let has_identity = snapshot.is_some()
+            || crate::credential_mode::platform_session_from(snapshot.as_ref(), &env).is_some();
+        if !boot_eligible(
+            self.ui_prefs.boot_seen,
+            self.ui_prefs.onboarding_seen,
+            has_identity,
+            self.initial_prompt.is_some(),
+        ) {
+            return Ok(());
+        }
+        self.ui_prefs.boot_seen = true;
+        if self.ui_prefs.save_default().is_err() {
+            self.state.add_system_message(
+                self.state
+                    .locale
+                    .translate("Could not save the startup display preference.")
+                    .into(),
+            );
+        }
+        let started = Instant::now();
+        let animate = self
+            .ui_prefs
+            .animations
+            .unwrap_or(self.configured_animations);
+        // Bound time on the identity screen, not the work: the existing scan continues
+        // and its receiver is polled by the normal event loop after skip or timeout.
+        while self.workspace_scan_rx.is_some() && started.elapsed() < Duration::from_millis(1500) {
+            self.poll_workspace_scan();
+            if self.workspace_scan_rx.is_none() {
+                break;
+            }
+            let tick = animate.then_some((started.elapsed().as_millis() / 80) as u64);
+            self.terminal.draw(|frame| {
+                crate::components::startup::render_startup(
+                    frame,
+                    frame.area(),
+                    crate::themes::current_ui_theme(),
+                    tick,
+                );
+            })?;
+            if let Some(event) = self.poll_terminal_event(Duration::from_millis(30))? {
+                match event {
+                    AppTerminalEvent::Key(key) if should_handle_key_event(key.kind) => {
+                        if key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(CrosstermModifiers::CONTROL)
+                        {
+                            self.should_quit = true;
+                            break;
+                        }
+                        if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                            break;
+                        }
+                    }
+                    AppTerminalEvent::Resize { width, height } => {
+                        self.handle_resize(width, height)?;
+                    }
+                    AppTerminalEvent::ThemeReportingStatus(setting) => {
+                        self.state.theme_reporting_available = setting.is_available();
+                        if setting == uncurses::ansi::mode::ModeSetting::Reset {
+                            let _ = terminal::enable_theme_reporting();
+                        }
+                    }
+                    event => {
+                        self.apply_terminal_theme_event(&event);
+                    }
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+        if !self.should_quit && self.active_modal == ActiveModal::None {
+            self.open_onboarding();
+        }
+        Ok(())
+    }
+
     pub(super) fn open_onboarding(&mut self) {
         // Replacing the presentation session cancels an old probe and discards its callbacks.
         self.onboarding = OnboardingSession::default();
@@ -177,9 +263,8 @@ impl App {
                 .ui_prefs
                 .animations
                 .unwrap_or(self.configured_animations)
-            && self.ui_prefs.dex_personality()
-                != crate::components::dex_companion::DexPersonality::Quiet
-            && (self.setup_modal.page() == SetupPage::Checking
+            && (self.setup_modal.page() == SetupPage::Welcome
+                || self.setup_modal.page() == SetupPage::Checking
                 || (self.setup_modal.checks().is_some_and(|report| report.ready)
                     && self.onboarding.transition.elapsed() < Duration::from_millis(800)))
     }
@@ -223,6 +308,10 @@ impl App {
     }
 }
 
+fn boot_eligible(seen: bool, setup_seen: bool, identity: bool, prompt: bool) -> bool {
+    !seen && !setup_seen && !identity && !prompt
+}
+
 fn invalidate_changed_scope(
     report: &mut OnboardingReadiness,
     checked: Option<&crate::telemetry::TelemetryIdentityScope>,
@@ -257,6 +346,19 @@ fn analytics_check(check: &OnboardingCheck) -> OnboardingCheckResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_is_only_for_first_interactive_launch_without_identity() {
+        assert!(boot_eligible(false, false, false, false));
+        for args in [
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            assert!(!boot_eligible(args.0, args.1, args.2, args.3));
+        }
+    }
 
     #[test]
     fn collection_omits_local_details() {

@@ -20,6 +20,10 @@ pub struct UiPrefs {
     /// Suppresses automatic first-run setup; never proves runtime readiness.
     #[serde(default)]
     pub onboarding_seen: bool,
+    /// First-launch artwork was shown. Separate from setup completion so quitting
+    /// preparation does not replay it or suppress account setup. No authority.
+    #[serde(default)]
+    pub boot_seen: bool,
     /// The user's choice for structured onboarding information collection.
     #[serde(default)]
     pub onboarding_share_diagnostics: Option<bool>,
@@ -263,11 +267,14 @@ mod tests {
         let mut prefs = UiPrefs::default();
         assert!(!prefs.onboarding_seen);
         assert_eq!(prefs.onboarding_share_diagnostics, None);
+        assert!(!prefs.boot_seen);
+        prefs.boot_seen = true;
         prefs.onboarding_seen = true;
         prefs.onboarding_share_diagnostics = Some(false);
         save_to_path(&prefs, &path).unwrap();
         let loaded = load_from_path(&path).unwrap();
         assert!(loaded.onboarding_seen);
+        assert!(loaded.boot_seen);
         assert_eq!(loaded.onboarding_share_diagnostics, Some(false));
     }
 }

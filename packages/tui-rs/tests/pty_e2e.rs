@@ -542,6 +542,26 @@ impl PtySession {
         }
     }
 
+    /// Compare prose across terminal line wraps without weakening its wording.
+    fn wait_for_wrapped_text(&mut self, needle: &str, timeout: Duration) {
+        let expected = needle.split_whitespace().collect::<Vec<_>>().join(" ");
+        let deadline = Instant::now() + timeout;
+        loop {
+            let visible = self
+                .screen_text()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if visible.contains(&expected) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                self.wait_for_text(needle, Duration::ZERO);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     fn send_bytes(&mut self, bytes: &[u8]) {
         let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         writer.write_all(bytes).expect("write to PTY");
@@ -1942,6 +1962,40 @@ fn wait_for_feedback_status(root: &std::path::Path, expected: &str) {
 }
 
 #[test]
+fn onboarding_first_boot_persists_artwork_without_completing_setup() {
+    let _guard = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("maestro-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("ui.json"),
+        r#"{"onboardingSeen":false,"animations":false}"#,
+    )
+    .unwrap();
+    let mock = MockOpenAiServer::start(vec![]);
+    for _ in 0..2 {
+        let mut session = PtySession::spawn_with_args_and_env(
+            &mock,
+            temp.path(),
+            &[],
+            &[
+                (maestro_tui::credential_mode::ACCESS_TOKEN_ENV, ""),
+                (maestro_tui::credential_mode::ORG_ID_ENV, ""),
+            ],
+        );
+        session.wait_for_text("Connect your account. Choose your model.", READY_TIMEOUT);
+        let prefs: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(home.join("ui.json")).unwrap()).unwrap();
+        assert_eq!(prefs["bootSeen"], true);
+        assert_eq!(prefs["onboardingSeen"], false);
+        assert_eq!(mock.request_count(), 0);
+        // A process interruption must not turn viewing artwork into completed setup.
+        session.child.kill().unwrap();
+        session.child.wait().unwrap();
+    }
+}
+
+#[test]
 fn onboarding_first_run_checks_fixed_prompt_and_persists_display_choice() {
     let _guard = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
@@ -1954,7 +2008,7 @@ fn onboarding_first_run_checks_fixed_prompt_and_persists_display_choice() {
     .unwrap();
     let mock = MockOpenAiServer::start(vec![text_turn("ready")]);
     let mut session = PtySession::spawn(&mock, temp.path(), "");
-    session.wait_for_text("Let's get Deixic Code ready", READY_TIMEOUT);
+    session.wait_for_text("Connect your account. Choose your model.", READY_TIMEOUT);
     session.send_bytes(b"\x04");
     session.wait_for_text("Share setup information: off", TURN_TIMEOUT);
     session.send_bytes(b"\r");
@@ -1964,7 +2018,7 @@ fn onboarding_first_run_checks_fixed_prompt_and_persists_display_choice() {
     session.send_bytes(b"\r");
     session.wait_for_text("How do you plan to run", TURN_TIMEOUT);
     session.send_bytes(b"\r");
-    session.wait_for_text("incur usage charges.", TURN_TIMEOUT);
+    session.wait_for_wrapped_text("incur usage charges.", TURN_TIMEOUT);
     assert_eq!(
         mock.request_count(),
         0,
@@ -2014,7 +2068,7 @@ fn onboarding_failed_model_requires_retry_and_never_claims_verified() {
     .unwrap();
     let mock = MockOpenAiServer::start(vec![text_turn("")]);
     let mut session = PtySession::spawn(&mock, temp.path(), "");
-    session.wait_for_text("Let's get Deixic Code ready", READY_TIMEOUT);
+    session.wait_for_text("Connect your account. Choose your model.", READY_TIMEOUT);
     for expected in [
         "What is your role?",
         "What do you want to do first?",
@@ -2022,7 +2076,7 @@ fn onboarding_failed_model_requires_retry_and_never_claims_verified() {
         "incur usage charges.",
     ] {
         session.send_bytes(b"\r");
-        session.wait_for_text(expected, TURN_TIMEOUT);
+        session.wait_for_wrapped_text(expected, TURN_TIMEOUT);
     }
     session.send_bytes(b"\r");
     session.wait_for_text("Setup needs attention before your first run", READY_TIMEOUT);

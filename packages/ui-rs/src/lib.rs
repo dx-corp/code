@@ -55,6 +55,8 @@ pub mod undo_history;
 pub mod viewport;
 pub mod wrapping;
 
+mod menu;
+pub use menu::Menu;
 mod action_picker;
 pub use action_picker::{
     ActionPicker, PickerError, PickerHelp, PickerOptions, PickerOutcome, PickerStatus,

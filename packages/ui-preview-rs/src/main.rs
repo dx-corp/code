@@ -10,8 +10,14 @@ fn run() -> Result<(), String> {
         time_ms: 0,
     };
     let mut list = false;
+    let mut selectors = false;
+    let mut format = String::from("ansi");
     let mut identity = false;
     while let Some(arg) = args.next() {
+        if arg == "--html" || arg == "--json" {
+            format = arg.trim_start_matches("--").into();
+            continue;
+        }
         if arg == "--identity" {
             identity = true;
             continue;
@@ -20,6 +26,7 @@ fn run() -> Result<(), String> {
             list = true;
             continue;
         }
+        selectors = true;
         let value = args
             .next()
             .ok_or_else(|| format!("missing value for {arg}"))?;
@@ -31,6 +38,9 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("unknown argument: {arg}")),
         }
     }
+    if format != "ansi" && (selectors || list || identity) {
+        return Err("--html and --json export the full catalog; use them without scene selectors, --list, or --identity".into());
+    }
     if identity {
         println!("{}", env!("MAESTRO_PREVIEW_SOURCE_DIGEST"));
     } else if list {
@@ -38,6 +48,14 @@ fn run() -> Result<(), String> {
             "{}",
             serde_json::to_string_pretty(&catalog()).map_err(|e| e.to_string())?
         );
+    } else if format != "ansi" {
+        let captures = maestro_ui_preview::registry()?.captures()?;
+        let output = if format == "html" {
+            maestro_ui_preview::review::html(&captures)?
+        } else {
+            maestro_ui_preview::review::json(&captures)?
+        };
+        println!("{output}");
     } else {
         print!("{}", ansi(&render(&scene)?));
     }

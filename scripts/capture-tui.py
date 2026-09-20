@@ -167,13 +167,31 @@ def color(value, background=False):
     raise ValueError(f"unsupported terminal color: {value}")
 
 
-def render_png(screen, output, font, size=18, cursor=None):
+def font_faces(font, size):
     face = ImageFont.truetype(str(font), size)
     bold_face = face
     if font.suffix.lower() == ".ttc":
         candidate = ImageFont.truetype(str(font), size, index=1)
         if "bold" in candidate.getname()[1].lower():
             bold_face = candidate
+    else:
+        try:
+            axes = face.get_variation_axes()
+        except OSError:
+            axes = []
+        if axes:
+            values = [axis["default"] for axis in axes]
+            for index, axis in enumerate(axes):
+                if axis["name"].lower() == b"weight":
+                    values[index] = min(axis["maximum"], max(700, axis["default"]))
+            candidate = ImageFont.truetype(str(font), size)
+            candidate.set_variation_by_axes(values)
+            bold_face = candidate
+    return face, bold_face
+
+
+def render_png(screen, output, font, size=18, cursor=None):
+    face, bold_face = font_faces(font, size)
     cell_width = math.ceil(face.getlength("M"))
     ascent, descent = face.getmetrics()
     cell_height = ascent + descent
@@ -279,6 +297,11 @@ def render_png(screen, output, font, size=18, cursor=None):
             if cell.underscore:
                 draw.line(
                     (x, y + ascent + 3, x + cell_width - 1, y + ascent + 3), fill=fg
+                )
+            if cell.strikethrough:
+                draw.line(
+                    (x, y + ascent // 2, x + cell_width - 1, y + ascent // 2),
+                    fill=fg,
                 )
     image.save(output)
 

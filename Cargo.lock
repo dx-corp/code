@@ -3988,6 +3988,7 @@ dependencies = [
  "maestro-session-history",
  "maestro-swarm",
  "maestro-ui",
+ "maestro-ui-preview",
  "maestro-workspace",
  "mlua",
  "notify",

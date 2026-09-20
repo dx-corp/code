@@ -281,12 +281,13 @@ fn welcome_owns_canvas_and_motion_respects_preferences() {
     }
     let still = render(false, 0, DexPersonality::Expressive);
     assert_eq!(still, render(false, 62, DexPersonality::Expressive));
+    // Enabled welcome motion uses the embedded frame sequence.
     assert_ne!(
         render(true, 0, DexPersonality::Expressive),
         render(true, 62, DexPersonality::Expressive)
     );
     let text: String = still.content.iter().map(|cell| cell.symbol()).collect();
-    assert!(text.contains("Welcome to Deixic Code"));
+    assert!(text.contains("Deixic Code"));
     assert!(text.contains("Press Enter to continue"));
     assert!(!text.contains("SESSION CONTENT"));
     let quiet = render(true, 62, DexPersonality::Quiet);

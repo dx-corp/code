@@ -18,6 +18,8 @@ vendor/
 
 # Session exports
 *.html
+# Compile-time UI asset must be staged when preparing the public mirror.
+!packages/ui-preview-rs/src/review.html
 
 # Misc artifacts
 out.html
