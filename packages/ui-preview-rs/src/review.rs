@@ -1,5 +1,9 @@
 //! Portable review artifacts from production terminal buffers. No runtime startup.
-use crate::Scene;
+use crate::{
+    Scene, StoryFilter,
+    contract::StoryStepResult,
+    schema::{CaptureMetadata, ResolvedStoryId},
+};
 use ratatui::{
     Frame, Terminal,
     backend::TestBackend,
@@ -22,8 +26,15 @@ pub struct Cell {
 /// Deterministic supplied-state capture. This is a fixture, never live readiness.
 #[derive(Debug, Serialize)]
 pub struct Capture {
+    pub metadata: CaptureMetadata,
     pub scene: Scene,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<StoryFilter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_story: Option<ResolvedStoryId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic: Option<StoryStepResult>,
     pub cells: Vec<Cell>,
 }
 
@@ -62,8 +73,12 @@ pub fn from_buffer(scene: Scene, buffer: &Buffer) -> Result<Capture, String> {
         return Err("scene dimensions differ from rendered buffer".into());
     }
     Ok(Capture {
+        metadata: CaptureMetadata::current(),
         scene,
         source: String::new(),
+        filter: None,
+        resolved_story: None,
+        semantic: None,
         cells: buffer
             .content
             .iter()
@@ -121,13 +136,57 @@ pub fn transcript(capture: &Capture) -> String {
 
 /// Self-contained review page; escaped data is interpreted only as text cells.
 pub fn html(captures: &[Capture]) -> Result<String, String> {
+    let profile = captures
+        .first()
+        .ok_or("a review needs at least one capture")?
+        .metadata
+        .profile
+        .clone();
+    if captures
+        .iter()
+        .any(|capture| capture.metadata.profile != profile)
+    {
+        return Err("a review cannot mix capture profiles".into());
+    }
+    let mut states = std::collections::BTreeMap::new();
+    for capture in captures {
+        let state = match &capture.semantic {
+            Some(result) if result.passed() => "asserted-passed",
+            Some(_) => "asserted-failed",
+            None => "visited",
+        };
+        states.insert(capture.scene.id.clone(), state);
+    }
+    let fallback = serde_json::json!({
+        "profile": profile,
+        "declared": states.keys().collect::<Vec<_>>(),
+        "states": states,
+    });
+    html_with_coverage(captures, &fallback)
+}
+
+/// Self-contained review page with coverage produced by the registry's active profile.
+pub fn html_with_coverage(
+    captures: &[Capture],
+    coverage: &impl Serialize,
+) -> Result<String, String> {
     if captures.is_empty() {
         return Err("a review needs at least one capture".into());
     }
     let data = json(captures)?
         .replace('<', "\\u003c")
         .replace('&', "\\u0026");
-    Ok(include_str!("review.html").replace("__CAPTURES__", &data))
+    let coverage = serde_json::to_string(coverage)
+        .map_err(|error| error.to_string())?
+        .replace('<', "\\u003c")
+        .replace('&', "\\u0026");
+    Ok(include_str!("review.html")
+        .replace("__CAPTURES__", &data)
+        .replace("__COVERAGE__", &coverage)
+        .replace("__MAESTRO_CATALOG_JS__", include_str!("web/catalog.js"))
+        .replace("__MAESTRO_PLAYBACK_JS__", include_str!("web/playback.js"))
+        .replace("__MAESTRO_AUTHORING_JS__", include_str!("web/authoring.js"))
+        .replace("__MAESTRO_RENDERING_JS__", include_str!("web/rendering.js")))
 }
 
 #[cfg(test)]
@@ -167,6 +226,9 @@ mod tests {
         let page = html(&[capture]).unwrap();
         assert!(page.contains("\\u003c/script>"));
         assert!(!page.contains("\"</script>\""));
+        assert!(page.contains("MaestroUI"));
+        assert!(page.contains("registry-coverage"));
+        assert!(!page.contains("__MAESTRO_"));
     }
     #[test]
     fn callback_capture_matches_direct_production_render() {

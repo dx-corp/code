@@ -86,6 +86,42 @@ comparisons and the native terminal suite for interaction regressions.
 
 ## Author a menu or a scene
 
+Studio keeps story creation inside an adapter-owned fixture directory and
+updates only its marker-bounded registration block. Preview a plan before any
+write, then verify the registered story through the same result stream used by
+the gallery and PR evidence:
+
+```sh
+cargo run --locked -p maestro-ui-preview -- studio new --adapter shared-menu workspace-picker --check
+cargo run --locked -p maestro-ui-preview -- studio new --adapter shared-menu workspace-picker
+cargo run --locked -p maestro-ui-preview -- studio verify workspace-picker
+cargo run --locked -p maestro-ui-preview -- studio promote --adapter shared-menu path/to/menu-recipe.json --check
+cargo run --locked -p maestro-ui-preview -- studio coverage
+```
+
+Promotion validates the recipe before writing, refuses existing fixtures,
+runs a fixed adapter verifier, and restores the invocation-owned fixture and
+registration edit if verification fails. Adapter manifests publish the owner,
+supported story kinds, coverage profiles, source directory, and lifecycle.
+
+The complete authoring loop is:
+
+1. Run `studio new ... --check` and inspect the two owned paths.
+2. Run `studio new`, edit the bounded fixture data, and run `studio verify ID`.
+3. For a browser-authored menu recipe, save the envelope inside the repository,
+   run `studio promote ... --check`, then run the same command without `--check`.
+4. Run `studio coverage` and inspect the selected profile, declared inventory,
+   final story states, adapter owner, and lifecycle diagnostics.
+
+Generated modules compile both as registered modules and standalone examples.
+Their registry entry carries the adapter ID, so coverage and contribution
+checks cannot silently classify the story as unowned. Creation and promotion
+use create-new writes: repeating either command refuses the existing fixture.
+Promotion removes only its own fixture and marker entry if its fixed behavior
+verifier fails, while preserving concurrent unrelated registration edits.
+Record tree-keyed verification receipts only after committing the story and
+documentation changes. Rerun them after any fix; stale receipts fail closed.
+
 Generate a minimal runnable menu story without overwriting an existing file:
 
 ```sh
@@ -207,3 +243,17 @@ Failed builds retain the previous page and show an error; they never update
 accepted baselines. It uses the configured `CARGO_TARGET_DIR` or a user cache
 outside the checkout. In Mono it runs the existing build-capacity check before
 each build. Ctrl+C stops serving.
+
+## Coverage and browser modules
+
+`studio coverage` emits the same registry-derived declared, visited, asserted,
+passed, failed, skipped, and unavailable states embedded in the browser report,
+along with adapter owner diagnostics. Legacy ownership is visible but is not an
+authoring target. Browser helpers live in `src/web/`; Rust bundles them into the
+single self-contained HTML artifact, while `node src/web/tests.mjs` exercises
+their pure behavior without adding a JavaScript runtime to Maestro.
+
+Before proposing a story change, run the crate tests, the onboarding story
+tests, the workbench tests, and the browser module tests. PR evidence then
+validates the same versioned captures independently; a gallery render alone is
+never proof that controller expectations passed.

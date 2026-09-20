@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "story_id": "workspace-picker",
+  "owner": "maestro-ui",
+  "expectations": [
+    {"kind": "observation-equals", "name": "state", "value": "ready"}
+  ]
+}

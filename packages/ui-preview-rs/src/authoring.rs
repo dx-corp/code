@@ -304,7 +304,12 @@ impl MenuRecipe {
     }
 
     pub fn fixture_source(&self) -> Result<String, String> {
+        self.fixture_source_for_adapter("shared-menu")
+    }
+
+    pub fn fixture_source_for_adapter(&self, adapter: &str) -> Result<String, String> {
         self.validate()?;
+        validate_id(adapter)?;
         let state = match self.state {
             MenuRecipeState::Ready => "Ready",
             MenuRecipeState::Empty => "Empty",
@@ -361,7 +366,7 @@ pub fn recipe() -> MenuRecipe {{
 
 /// Add this recipe to the ordinary capture and PR-evidence registry.
 pub fn register(registry: &mut Registry) -> Result<(), String> {{
-    registry.add(recipe().story(file!())?)
+    registry.add(recipe().story(file!())?.adapter({adapter:?}))
 }}
 
 pub fn main() -> Result<(), String> {{
@@ -379,6 +384,7 @@ pub fn main() -> Result<(), String> {{
             status_message = self.status_message,
             width = self.width,
             height = self.height,
+            adapter = adapter,
         ))
     }
 }
@@ -770,7 +776,11 @@ pub fn register_menu_recipes(registry: &mut Registry) -> Result<(), String> {
         .into_iter()
         .chain(menu_recipe_interactions())
     {
-        registry.add(recipe.story("products/maestro/packages/ui-preview-rs/src/authoring.rs")?)?;
+        registry.add(
+            recipe
+                .story("products/maestro/packages/ui-preview-rs/src/authoring.rs")?
+                .adapter("shared-menu"),
+        )?;
     }
     Ok(())
 }
@@ -924,6 +934,7 @@ mod tests {
                 .fixture_source
                 .contains("pub fn register(registry: &mut Registry)")
         );
+        assert!(first.fixture_source.contains(".adapter(\"shared-menu\")"));
     }
 
     #[test]

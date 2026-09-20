@@ -12,6 +12,7 @@ maestro-ui.workspace = true
 maestro-interaction.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+dunce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 unicode-width.workspace = true

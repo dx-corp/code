@@ -51,7 +51,8 @@ pub fn register(registry: &mut Registry) -> Result<(), String> {
                     );
                 },
             )
-            .matrix(&[(40, 20), (60, 24), (100, 30)], &[0]),
+            .matrix(&[(40, 20), (60, 24), (100, 30)], &[0])
+            .adapter("shared-menu"),
         )?;
     }
     Ok(())
