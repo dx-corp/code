@@ -12,6 +12,10 @@ use maestro_ui_preview::{
     Scene,
     authoring::{MenuRecipe, menu_recipe_fixtures, menu_studio},
     review::{self, Capture},
+    schema::{
+        RECIPE_SCHEMA, RECIPE_SCHEMA_VERSION, THEME_REPLAY_SCHEMA, THEME_REPLAY_SCHEMA_VERSION,
+        WireEnvelope, migrate_recipe, migrate_theme_replay,
+    },
 };
 
 const STATES: &[(&str, SetupPage)] = &[
@@ -168,9 +172,28 @@ fn captures() -> Result<Vec<Capture>, String> {
     for capture in &mut captures {
         capture.source = "products/maestro/packages/tui-rs/examples/onboarding-preview.rs".into();
     }
-    captures.extend(support::theme_selector_story::captures()?);
+    captures.extend(support::ui_stories::captures()?);
     captures.extend(maestro_ui_preview::registry()?.captures()?);
     Ok(captures)
+}
+fn profiled_captures(profile_id: &str) -> Result<Vec<Capture>, String> {
+    let profile = maestro_ui_preview::schema::builtin_profile(profile_id)?;
+    let mut selected = captures()?;
+    selected.retain(|capture| {
+        profile
+            .geometries
+            .contains(&(capture.scene.width, capture.scene.height))
+            && (profile.terminal.motion || capture.semantic.is_some() || capture.scene.time_ms == 0)
+    });
+    if selected.is_empty() {
+        return Err(format!(
+            "coverage profile {profile_id} selected no captures"
+        ));
+    }
+    for capture in &mut selected {
+        capture.metadata = maestro_ui_preview::schema::CaptureMetadata::for_profile(&profile);
+    }
+    Ok(selected)
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -178,9 +201,15 @@ fn run() -> Result<(), String> {
         println!(
             "{}",
             serde_json::to_string(&serde_json::json!({
-                "fixtures": support::theme_selector_story::fixture_requests(),
-                "menu_starter": MenuRecipe::starter(),
-                "menu_fixtures": menu_recipe_fixtures(),
+                "fixtures": support::theme_selector_story::fixture_requests()
+                    .into_iter()
+                    .map(|request| WireEnvelope::new(THEME_REPLAY_SCHEMA, THEME_REPLAY_SCHEMA_VERSION, request))
+                    .collect::<Vec<_>>(),
+                "menu_starter": WireEnvelope::new(RECIPE_SCHEMA, RECIPE_SCHEMA_VERSION, MenuRecipe::starter()),
+                "menu_fixtures": menu_recipe_fixtures()
+                    .into_iter()
+                    .map(|recipe| WireEnvelope::new(RECIPE_SCHEMA, RECIPE_SCHEMA_VERSION, recipe))
+                    .collect::<Vec<_>>(),
                 "presets": support::theme_selector_story::presets()
                     .into_iter()
                     .zip([
@@ -191,7 +220,7 @@ fn run() -> Result<(), String> {
                     ])
                     .map(|(request, label)| serde_json::json!({
                         "label": label,
-                        "request": request,
+                        "request": WireEnvelope::new(THEME_REPLAY_SCHEMA, THEME_REPLAY_SCHEMA_VERSION, request),
                     }))
                     .collect::<Vec<_>>(),
             }))
@@ -209,7 +238,10 @@ fn run() -> Result<(), String> {
         if body.len() > 16_384 {
             return Err("menu recipe exceeds 16384 bytes".into());
         }
-        let recipe: MenuRecipe = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let value = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let recipe = migrate_recipe(value)
+            .map_err(|error| error.to_string())?
+            .value;
         println!(
             "{}",
             serde_json::to_string(&menu_studio(recipe)?).map_err(|error| error.to_string())?
@@ -226,7 +258,11 @@ fn run() -> Result<(), String> {
         if body.len() > 16_384 {
             return Err("replay request exceeds 16384 bytes".into());
         }
-        let request = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let value = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let request =
+            migrate_theme_replay::<support::theme_selector_story::ThemeReplayRequest>(value)
+                .map_err(|error| error.to_string())?
+                .value;
         let response = support::theme_selector_story::replay(request)?;
         println!(
             "{}",
@@ -234,14 +270,28 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    if args.len() > 1 || args.first().is_some_and(|a| a != "--html" && a != "--json") {
-        return Err(
-            "usage: onboarding-preview [--html|--json|--sequences|--replay-stdin|--studio-stdin]"
-                .into(),
-        );
+    let mut format = None;
+    let mut profile = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--html" | "--json" if format.is_none() => format = Some(args[index].as_str()),
+            "--profile" if profile.is_none() => {
+                index += 1;
+                profile = Some(
+                    args.get(index)
+                        .ok_or("missing value for --profile")?
+                        .as_str(),
+                );
+            }
+            _ => {
+                return Err("usage: onboarding-preview [--html|--json] [--profile pr-v1|scheduled-v1] | [--sequences|--replay-stdin|--studio-stdin]".into());
+            }
+        }
+        index += 1;
     }
-    let captures = captures()?;
-    let output = if args.first().is_some_and(|a| a == "--html") {
+    let captures = profile.map_or_else(captures, profiled_captures)?;
+    let output = if format == Some("--html") {
         review::html(&captures)?
     } else {
         review::json(&captures)?
@@ -295,5 +345,79 @@ mod tests {
                     .contains("external actions and settings are untouched")
             );
         }
+    }
+
+    #[test]
+    fn retry_and_cancel_presets_have_passing_behavior_contracts() {
+        let presets = support::theme_selector_story::presets();
+        for index in [1, 3] {
+            let response = support::theme_selector_story::replay(presets[index].clone()).unwrap();
+            assert!(
+                response.semantic.passed(),
+                "{:?}",
+                response.semantic.failures()
+            );
+        }
+        let cancel = support::theme_selector_story::replay(presets[1].clone()).unwrap();
+        let observed = cancel
+            .semantic
+            .observations
+            .iter()
+            .map(|observation| (observation.name(), observation.display_value()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(observed.get("state").map(String::as_str), Some("ready"));
+        assert_eq!(
+            observed.get("focus-region").map(String::as_str),
+            Some("closed")
+        );
+        let response = support::theme_selector_story::replay(presets[3].clone()).unwrap();
+        let failed = maestro_ui_preview::contract::evaluate_step(
+            response.semantic.step,
+            response.semantic.observations,
+            response.semantic.effects,
+            &[maestro_ui_preview::contract::StoryExpectation::effect_count("retry-themes", 2)],
+        )
+        .unwrap();
+        assert_eq!(
+            failed.failures(),
+            ["expected retry-themes exactly 2 times; observed 1"]
+        );
+    }
+
+    #[test]
+    fn named_profiles_select_bounded_captures_and_stamp_identity() {
+        let pr = profiled_captures("pr-v1").unwrap();
+        let scheduled = profiled_captures("scheduled-v1").unwrap();
+        assert!(!pr.is_empty());
+        assert!(pr.len() < scheduled.len());
+        for (id, captures) in [("pr-v1", pr), ("scheduled-v1", scheduled)] {
+            assert!(
+                captures
+                    .iter()
+                    .all(|capture| capture.metadata.profile.id == id)
+            );
+            assert!(
+                captures
+                    .iter()
+                    .all(|capture| capture.metadata.profile.version == 1)
+            );
+            for (story_id, width) in [
+                ("theme-selector-interaction-3", 30),
+                ("theme-selector-narrow", 28),
+            ] {
+                let final_capture = captures
+                    .iter()
+                    .filter(|capture| capture.scene.id == story_id && capture.scene.width == width)
+                    .max_by_key(|capture| capture.scene.time_ms)
+                    .unwrap_or_else(|| panic!("{id} omitted {story_id} at {width} columns"));
+                let semantic = final_capture
+                    .semantic
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{id} omitted final semantics for {story_id}"));
+                assert!(semantic.passed(), "{id} failed {story_id} semantics");
+                assert!(!semantic.expectations.is_empty());
+            }
+        }
+        assert!(profiled_captures("unknown").is_err());
     }
 }

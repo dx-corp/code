@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "workspace-picker",
+  "label": "Workspace picker",
+  "width": 60,
+  "height": 20,
+  "inputs": [{"type": "key", "key": "down", "ctrl": false}]
+}

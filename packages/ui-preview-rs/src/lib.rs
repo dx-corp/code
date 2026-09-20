@@ -1,9 +1,15 @@
 //! Deterministic component scenes using the widgets linked by the native TUI.
+extern crate self as maestro_ui_preview;
+
+pub mod adapters;
 pub mod authoring;
+pub mod contract;
 mod conversation;
 mod menus;
 pub mod registry;
 pub mod review;
+pub mod schema;
+mod stories;
 
 use maestro_presentation::{
     appearance::{Appearance, LOOKS},
@@ -19,6 +25,13 @@ use maestro_presentation::{
 use ratatui::{prelude::*, widgets::Paragraph};
 use serde::Serialize;
 use std::time::Duration;
+
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum StoryFilter {
+    Story(String),
+    Adapter(String),
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Scene {
@@ -281,7 +294,7 @@ pub fn registry() -> Result<registry::Registry, String> {
         "products/maestro/packages/ui-preview-rs/src/lib.rs",
         legacy_render,
     )?;
-    menus::register(&mut registry)?;
+    stories::register(&mut registry)?;
     authoring::register_menu_recipes(&mut registry)?;
     Ok(registry)
 }
@@ -295,6 +308,12 @@ pub fn render(scene: &Scene) -> Result<Buffer, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generated_story_modules_can_use_the_public_crate_name() {
+        let registry = maestro_ui_preview::registry::Registry::default();
+        assert!(registry.scenes().is_empty());
+    }
+
     #[test]
     fn catalog_renders_and_all_appearance_ids_are_present() {
         for scene in catalog() {

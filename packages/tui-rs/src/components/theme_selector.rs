@@ -64,6 +64,16 @@ impl ThemeSelector {
     pub fn is_visible(&self) -> bool {
         self.picker.is_open()
     }
+    /// Current production picker query after typing, paste, cursor movement, and edits.
+    #[must_use]
+    pub fn query(&self) -> &str {
+        self.picker.query()
+    }
+    /// Stable selected theme from the production picker controller.
+    #[must_use]
+    pub fn selected_theme(&self) -> Option<&str> {
+        self.picker.selected().map(String::as_str)
+    }
     pub fn insert_str(&mut self, text: &str) -> PickerOutcome<String> {
         self.picker.insert_str(text)
     }

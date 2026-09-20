@@ -4,6 +4,10 @@ use maestro_ui::{PickerOutcome, PickerStatus};
 use maestro_ui_preview::{
     Scene,
     authoring::{REPLAY_VERSION, StoryInput, StoryKey, StorySequence},
+    contract::{
+        StoryContract, StoryEffect, StoryExpectation, StoryObservation, StoryStepResult,
+        evaluate_step,
+    },
     review::{self, Capture},
 };
 use serde::{Deserialize, Serialize};
@@ -102,6 +106,7 @@ impl ThemeReplayRequest {
 pub struct ThemeReplayResponse {
     pub capture: Capture,
     pub effects: Vec<SimulatedEffect>,
+    pub semantic: StoryStepResult,
     pub sequence: ThemeReplayRequest,
     pub effect_policy: &'static str,
 }
@@ -188,6 +193,39 @@ impl ThemeStory {
         capture.source = SOURCE.into();
         Ok(capture)
     }
+    fn semantic(
+        &self,
+        step: usize,
+        expectations: &[StoryExpectation],
+    ) -> Result<StoryStepResult, String> {
+        let selected_action = self.selector.selected_theme().unwrap_or("none");
+        let observations = vec![
+            StoryObservation::id("state", self.fixture.id()),
+            StoryObservation::text("selected-action", selected_action),
+            StoryObservation::text("query", self.selector.query()),
+            StoryObservation::id(
+                "focus-region",
+                if self.selector.is_visible() {
+                    "theme-list"
+                } else {
+                    "closed"
+                },
+            ),
+        ];
+        let effects = self
+            .effects
+            .iter()
+            .map(|effect| {
+                StoryEffect::new(match effect {
+                    SimulatedEffect::PreviewTheme(_) => "preview-theme",
+                    SimulatedEffect::CommitTheme(_) => "commit-theme",
+                    SimulatedEffect::RestoreOpeningTheme => "restore-opening-theme",
+                    SimulatedEffect::RetryThemes => "retry-themes",
+                })
+            })
+            .collect();
+        evaluate_step(step, observations, effects, expectations)
+    }
 }
 
 fn items(fixture: ThemeFixture) -> Vec<String> {
@@ -227,6 +265,8 @@ pub fn replay(request: ThemeReplayRequest) -> Result<ThemeReplayResponse, String
         story.apply(input)?;
     }
     let effects = story.effects.clone();
+    let contract = journey_contract(&request)?;
+    let semantic = story.semantic(request.inputs.len(), &contract.expectations)?;
     let capture = story.capture(
         "theme-selector-live",
         "Theme selector / interactive replay",
@@ -235,9 +275,47 @@ pub fn replay(request: ThemeReplayRequest) -> Result<ThemeReplayResponse, String
     Ok(ThemeReplayResponse {
         capture,
         effects,
+        semantic,
         sequence: request,
         effect_policy: "simulated only; no theme, sign-in, tool, or setting effect was applied",
     })
+}
+
+fn journey_contract(request: &ThemeReplayRequest) -> Result<StoryContract, String> {
+    let mut contract = StoryContract::new("theme-selector-live", "maestro-tui").expect(
+        StoryExpectation::no_unexpected_effects([
+            "preview-theme",
+            "commit-theme",
+            "restore-opening-theme",
+            "retry-themes",
+        ]),
+    );
+    let has_retry = request
+        .inputs
+        .iter()
+        .any(|input| matches!(input, StoryInput::Retry));
+    let has_cancel = request.inputs.iter().any(|input| {
+        matches!(
+            input,
+            StoryInput::Key {
+                key: StoryKey::Escape,
+                ..
+            }
+        )
+    });
+    if has_retry || has_cancel {
+        contract = contract.expect(StoryExpectation::observation("state", "ready"));
+    }
+    if has_retry {
+        contract = contract.expect(StoryExpectation::effect_count("retry-themes", 1));
+    }
+    if has_cancel {
+        contract = contract
+            .expect(StoryExpectation::observation("focus-region", "closed"))
+            .expect(StoryExpectation::effect_count("restore-opening-theme", 1));
+    }
+    contract.validate()?;
+    Ok(contract)
 }
 
 pub fn presets() -> Vec<ThemeReplayRequest> {
@@ -333,11 +411,16 @@ pub fn captures() -> Result<Vec<Capture>, String> {
     let mut captures = Vec::new();
     for fixture in FIXTURES {
         let (width, height) = fixture.dimensions();
-        captures.push(ThemeStory::new(fixture, width, height)?.capture(
-            &format!("theme-selector-{}", fixture.id()),
-            fixture.label(),
-            0,
-        )?);
+        let story_id = format!("theme-selector-{}", fixture.id());
+        let story = ThemeStory::new(fixture, width, height)?;
+        let contract = StoryContract::new(&story_id, "maestro-tui")
+            .expect(StoryExpectation::observation("state", fixture.id()))
+            .expect(StoryExpectation::no_unexpected_effects(Vec::<String>::new()));
+        contract.validate()?;
+        let semantic = story.semantic(0, &contract.expectations)?;
+        let mut capture = story.capture(&story_id, fixture.label(), 0)?;
+        capture.semantic = Some(semantic);
+        captures.push(capture);
     }
     for (index, request) in presets().into_iter().enumerate() {
         let id = format!("theme-selector-interaction-{}", index + 1);
@@ -352,7 +435,20 @@ pub fn captures() -> Result<Vec<Capture>, String> {
             for input in &request.inputs[..step] {
                 story.apply(input)?;
             }
-            captures.push(story.capture(&id, label, step)?);
+            let contract = if step == request.inputs.len() {
+                Some(journey_contract(&request)?)
+            } else {
+                None
+            };
+            let semantic = story.semantic(
+                step,
+                contract
+                    .as_ref()
+                    .map_or(&[][..], |contract| &contract.expectations),
+            )?;
+            let mut capture = story.capture(&id, label, step)?;
+            capture.semantic = Some(semantic);
+            captures.push(capture);
         }
     }
     Ok(captures)
@@ -361,6 +457,33 @@ pub fn captures() -> Result<Vec<Capture>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_retry_and_cancel_has_one_final_state_expectation() {
+        let request = ThemeReplayRequest {
+            version: REPLAY_VERSION,
+            fixture: ThemeFixture::Error,
+            width: 72,
+            height: 22,
+            inputs: vec![
+                StoryInput::Retry,
+                StoryInput::Key {
+                    key: StoryKey::Escape,
+                    ctrl: false,
+                },
+            ],
+        };
+        let contract = journey_contract(&request).unwrap();
+        assert_eq!(
+            contract
+                .expectations
+                .iter()
+                .filter(|expectation| matches!(expectation, StoryExpectation::ObservationEquals { name, .. } if name == "state"))
+                .count(),
+            1
+        );
+        assert!(replay(request).unwrap().semantic.passed());
+    }
 
     #[test]
     fn fixtures_and_interactions_are_deterministic_and_bounded() {
@@ -430,5 +553,41 @@ mod tests {
         assert_eq!(ready.len(), 12);
         assert_eq!(ready[0], "auto");
         assert_eq!(ready.last().unwrap(), "vscode-light-modern");
+    }
+
+    #[test]
+    fn semantic_query_and_selection_follow_controller_cursor_edits() {
+        let request = ThemeReplayRequest {
+            version: REPLAY_VERSION,
+            fixture: ThemeFixture::Ready,
+            width: 72,
+            height: 22,
+            inputs: vec![
+                StoryInput::Text {
+                    text: "daxk".into(),
+                },
+                StoryInput::Key {
+                    key: StoryKey::Left,
+                    ctrl: false,
+                },
+                StoryInput::Key {
+                    key: StoryKey::Backspace,
+                    ctrl: false,
+                },
+                StoryInput::Text { text: "r".into() },
+            ],
+        };
+        let response = replay(request).unwrap();
+        let observed = response
+            .semantic
+            .observations
+            .iter()
+            .map(|observation| (observation.name(), observation.display_value()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(observed.get("query").map(String::as_str), Some("dark"));
+        assert_eq!(
+            observed.get("selected-action").map(String::as_str),
+            Some("dark")
+        );
     }
 }

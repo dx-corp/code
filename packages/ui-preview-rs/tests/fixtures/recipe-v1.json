@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "workspace-picker",
+  "label": "Workspace picker",
+  "title": "Choose a workspace",
+  "placeholder": "Filter workspaces",
+  "empty": "No matching workspaces",
+  "items": [{"id": "docs", "label": "Documentation"}],
+  "state": "ready",
+  "status_message": "",
+  "width": 60,
+  "height": 20,
+  "inputs": [{"type": "text", "text": "doc"}]
+}

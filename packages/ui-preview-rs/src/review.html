@@ -397,6 +397,7 @@
         <p id="live-effects" role="status"></p>
       </section>
       <p id="status" role="status"></p>
+      <p id="generation-status" role="status"></p>
       <div class="studio-layout">
         <main>
           <section class="pane">
@@ -463,6 +464,11 @@
       </footer>
     </section>
   </div>
+  <script>__MAESTRO_CATALOG_JS__</script>
+  <script>__MAESTRO_PLAYBACK_JS__</script>
+  <script>__MAESTRO_AUTHORING_JS__</script>
+  <script>__MAESTRO_RENDERING_JS__</script>
+  <script id="registry-coverage" type="application/json">__COVERAGE__</script>
   <script id="fixtures" type="application/json">
     __CAPTURES__
   </script>
@@ -471,6 +477,8 @@
     const captures = JSON.parse(
         document.querySelector("#fixtures").textContent,
       ),
+      coverageReport = JSON.parse(document.querySelector("#registry-coverage").textContent),
+      storyCoverage = new Map(Object.entries(coverageReport.states || {})),
       $ = (s) => document.querySelector(s),
       scene = $("#scene"),
       size = $("#size"),
@@ -480,51 +488,13 @@
       pinned = null,
       restoring = false,
       visibleEntries = [],
+      activeGeneration = null,
       exitInteractive = () => {},
       exitStudio = () => {};
-    const colors = [
-      "#000000",
-      "#800000",
-      "#008000",
-      "#808000",
-      "#000080",
-      "#800080",
-      "#008080",
-      "#c0c0c0",
-      "#808080",
-      "#ff0000",
-      "#00ff00",
-      "#ffff00",
-      "#0000ff",
-      "#ff00ff",
-      "#00ffff",
-      "#ffffff",
-    ];
-    function color(c, fallback) {
-      if (c === "reset") return fallback;
-      if (!c.startsWith("indexed:")) return c;
-      let n = Number(c.slice(8));
-      if (n < 16) return colors[n];
-      if (n >= 232) {
-        let v = 8 + (n - 232) * 10;
-        return `rgb(${v},${v},${v})`;
-      }
-      n -= 16;
-      const ramp = [0, 95, 135, 175, 215, 255];
-      return `rgb(${ramp[Math.floor(n / 36)]},${ramp[Math.floor(n / 6) % 6]},${ramp[n % 6]})`;
-    }
-    function options(el, entries) {
-      const prior = el.value;
-      el.replaceChildren(
-        ...entries.map(([value, label]) => {
-          const o = document.createElement("option");
-          o.value = value;
-          o.textContent = label;
-          return o;
-        }),
-      );
-      if (entries.some((e) => e[0] === prior)) el.value = prior;
-    }
+    const { draw, readable, sourceUrl } = MaestroUI.rendering;
+    const { options, stateLabel, coverageLabel, experienceOrder } = MaestroUI.catalog;
+    const playback = MaestroUI.playback;
+    const authoring = MaestroUI.authoring;
     function stop() {
       clearTimeout(timer);
       timer = null;
@@ -532,40 +502,17 @@
     }
     function selectScenes() {
       stop();
-      const query = $("#search").value.toLowerCase();
-      const map = new Map();
-      captures.forEach((c) => {
-        if ((c.scene.id + " " + c.scene.label).toLowerCase().includes(query))
-          map.set(c.scene.id, c.scene.label + " / " + c.scene.id);
-      });
-      visibleEntries = [...map];
+      visibleEntries = MaestroUI.catalog.sceneEntries(captures, $("#search").value);
       options(scene, visibleEntries);
       sidebar(visibleEntries);
       selectSizes();
     }
     function selectSizes() {
       stop();
-      const map = new Map();
-      captures
-        .filter((c) => c.scene.id === scene.value)
-        .forEach((c) =>
-          map.set(
-            `${c.scene.width}x${c.scene.height}`,
-            `${c.scene.width} × ${c.scene.height}`,
-          ),
-        );
-      options(size, [...map]);
+      options(size, MaestroUI.catalog.sizeEntries(captures, scene.value));
       selectTimes();
     }
-    function selected() {
-      return captures
-        .filter(
-          (c) =>
-            c.scene.id === scene.value &&
-            `${c.scene.width}x${c.scene.height}` === size.value,
-        )
-        .sort((a, b) => a.scene.time_ms - b.scene.time_ms);
-    }
+    function selected() { return playback.selectedFrames(captures, scene.value, size.value); }
     function selectTimes() {
       stop();
       options(
@@ -608,50 +555,10 @@
         );
       const source = $("#source");
       source.hidden = !current.source;
-      source.href =
-        "https://github.com/dx-corp/mono/blob/main/" +
-        (current.source || "").split("/").map(encodeURIComponent).join("/");
+      source.href = sourceUrl(current.source);
       $("#pin").disabled = false;
       paintComparison();
       if (!restoring) saveRoute();
-    }
-    function draw(screen, current) {
-      screen.replaceChildren();
-      const { width, height } = current.scene;
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; ) {
-          const c = current.cells[y * width + x],
-            span = document.createElement("span"),
-            m = c.modifiers;
-          let fg = color(c.foreground, "#efebff"),
-            bg = color(c.background, "#171624");
-          if (m & 64) [fg, bg] = [bg, fg];
-          span.className = "cell";
-          const glyph = document.createElement("span");
-          glyph.textContent = c.text;
-          glyph.style.opacity = m & 2 ? ".55" : "1";
-          glyph.style.visibility = m & 128 ? "hidden" : "visible";
-          span.append(glyph);
-          span.style.cssText = `width:${c.columns}ch;color:${fg};background:${bg};font-weight:${m & 1 ? "700" : "400"};font-style:${m & 4 ? "italic" : "normal"};text-decoration:${[m & 8 ? "underline" : "", m & 256 ? "line-through" : ""].filter(Boolean).join(" ") || "none"}`;
-          screen.append(span);
-          x += c.columns;
-        }
-        screen.append(document.createTextNode("\n"));
-      }
-    }
-    function readable(capture) {
-      const lines = [];
-      for (let y = 0; y < capture.scene.height; y++) {
-        let line = "";
-        for (let x = 0; x < capture.scene.width; ) {
-          const cell = capture.cells[y * capture.scene.width + x];
-          line += cell.modifiers & 128 ? " ".repeat(cell.columns) : cell.text;
-          x += cell.columns;
-        }
-        lines.push(line.trimEnd());
-      }
-      while (lines.at(-1) === "") lines.pop();
-      return lines.join("\n");
     }
     scene.onchange = () => {
       exitStudio();
@@ -683,12 +590,7 @@
       function next() {
         const frames = selected(),
           i = time.selectedIndex,
-          delay =
-            i + 1 < frames.length
-              ? frames[i + 1].scene.time_ms - frames[i].scene.time_ms
-              : frames.length > 1
-                ? frames[1].scene.time_ms - frames[0].scene.time_ms
-                : 80;
+          delay = playback.nextDelay(frames, i);
         timer = setTimeout(
           () => {
             time.selectedIndex = (time.selectedIndex + 1) % time.options.length;
@@ -716,32 +618,9 @@
       URL.revokeObjectURL(url);
     };
 
-    function group(id) {
-      if (id.startsWith("first-boot")) return "First launch";
-      if (id.startsWith("onboarding-")) return "Onboarding";
-      if (id.startsWith("conversation-")) return "Conversation";
-      if (id.startsWith("menu-")) return "Workspace menu";
-      if (id.startsWith("theme-selector")) return "Theme selector";
-      if (id.startsWith("picker")) return "Appearance picker";
-      if (["startup", "header", "quiet", "motion-off", "working", "finished", "failed", "needs-input", "pet"].includes(id) || id.startsWith("accessory-") || id.startsWith("accent-")) return "Companion appearance";
-      return "Other scenes";
-    }
-    const experienceOrder = ["First launch", "Onboarding", "Conversation", "Workspace menu", "Theme selector", "Appearance picker", "Companion appearance", "Other scenes"];
-    function stateLabel(capture) {
-      if (capture.scene.id.startsWith("onboarding-")) {
-        const id = capture.scene.id.slice("onboarding-".length);
-        return ({ welcome: "Welcome", role: "Role", "use-case": "Use case", workflow: "Workflow", connect: "Connect", verify: "Verify connection", checking: "Checking", ready: "Results · ready", failed: "Results · failed", waiting: "Waiting", provider: "Provider", key: "API key" })[id] || capture.scene.label;
-      }
-      return capture.scene.label.replace(/^.*?\s[\/·]\s/, "");
-    }
     function sidebar(entries) {
-      const groups = new Map();
-      for (const [id] of entries) {
-        const key = group(id);
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(id);
-      }
-      const active = groups.has(group(scene.value)) ? group(scene.value) : experienceOrder.find((name) => groups.has(name));
+      const groups = MaestroUI.catalog.grouped(entries);
+      const active = MaestroUI.catalog.activeGroup(groups, scene.value);
       const experienceRoot = $("#experiences"), stateRoot = $("#stories");
       experienceRoot.replaceChildren();
       stateRoot.replaceChildren();
@@ -765,8 +644,10 @@
         button.type = "button";
         button.className = "story";
         button.dataset.scene = id;
+        button.dataset.coverage = storyCoverage.get(id) || "declared";
         button.setAttribute("aria-current", String(id === scene.value));
         button.textContent = stateLabel(c);
+        button.title = `Coverage: ${coverageLabel(button.dataset.coverage)}`;
         button.onclick = () => {
           exitStudio();
           exitInteractive(false);
@@ -781,17 +662,7 @@
       $("#comparison").hidden = !pinned;
       $("#unpin").hidden = !pinned;
       if (!pinned) return;
-      const frames = captures
-        .filter(
-          (c) =>
-            c.scene.id === pinned.id &&
-            c.scene.width === pinned.width &&
-            c.scene.height === pinned.height,
-        )
-        .sort((a, b) => a.scene.time_ms - b.scene.time_ms);
-      const c =
-        frames.filter((c) => c.scene.time_ms <= Number(time.value)).at(-1) ||
-        frames[0];
+      const c = playback.comparisonFrame(captures, pinned, time.value);
       if (!c) {
         pinned = null;
         $("#comparison").hidden = true;
@@ -803,16 +674,7 @@
       $("#reference-transcript").textContent = readable(c);
     }
     function saveRoute() {
-      const p = new URLSearchParams({
-        scene: scene.value,
-        size: size.value,
-        time: time.value,
-      });
-      if (pinned) {
-        p.set("compare", pinned.id);
-        p.set("compareSize", `${pinned.width}x${pinned.height}`);
-      }
-      history.replaceState(null, "", "#" + p.toString());
+      history.replaceState(null, "", playback.routeString(scene.value, size.value, time.value, pinned));
     }
     function restoreRoute() {
       stop();
@@ -896,45 +758,11 @@
       document.querySelectorAll("[data-tab]").forEach((button) => { button.onclick = () => setTab(button.dataset.tab); });
 
       function fill(recipe) {
-        $("#studio-id").value = recipe.id;
-        $("#studio-label").value = recipe.label;
-        $("#studio-title").value = recipe.title;
-        $("#studio-placeholder").value = recipe.placeholder;
-        $("#studio-empty").value = recipe.empty;
-        $("#studio-items").value = recipe.items.map((item) => `${item.id} | ${item.label}`).join("\n");
-        $("#studio-state").value = recipe.state;
-        $("#studio-message").value = recipe.status_message;
-        $("#studio-width").value = recipe.width;
-        $("#studio-height").value = recipe.height;
+        applyForm(authoring.recipeValues(recipe));
       }
-      function read() {
-        const items = $("#studio-items").value.split(/\r?\n/).filter((line) => line.trim()).map((line) => {
-          const separator = line.indexOf("|");
-          if (separator < 1) throw new Error("Each item needs a stable-id | Display label.");
-          return { id: line.slice(0, separator).trim(), label: line.slice(separator + 1).trim() };
-        });
-        return {
-          ...request,
-          id: $("#studio-id").value,
-          label: $("#studio-label").value,
-          title: $("#studio-title").value,
-          placeholder: $("#studio-placeholder").value,
-          empty: $("#studio-empty").value,
-          items,
-          state: $("#studio-state").value,
-          status_message: $("#studio-message").value,
-          width: Number($("#studio-width").value),
-          height: Number($("#studio-height").value),
-        };
-      }
-      function formValues() {
-        return Object.fromEntries(["id", "label", "title", "placeholder", "empty", "items", "state", "message", "width", "height"].map((name) => [name, $("#studio-" + name).value]));
-      }
-      function applyForm(values) {
-        for (const name of ["id", "label", "title", "placeholder", "empty", "items", "state", "message", "width", "height"]) {
-          if (typeof values[name] === "string") $("#studio-" + name).value = values[name];
-        }
-      }
+      function read() { return authoring.readRecipe(request, (name) => $("#studio-" + name)); }
+      function formValues() { return authoring.formValues((name) => $("#studio-" + name)); }
+      function applyForm(values) { authoring.applyForm(values, (name) => $("#studio-" + name)); }
       function saveDraft() {
         sessionStorage.setItem("ui-studio-draft", JSON.stringify(request));
         sessionStorage.setItem("ui-studio-form", JSON.stringify(formValues()));
@@ -991,7 +819,7 @@
           const response = await fetch("/__studio", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(recipe),
+            body: JSON.stringify(recipe && recipe.schema ? recipe : authoring.wire("maestro.ui.menu-recipe", recipe)),
           });
           const value = await response.json();
           if (response.status === 429) {
@@ -1019,6 +847,7 @@
             try {
               const next = await post(submitted, () => active && submittedGeneration === generation);
               if (!active || submittedGeneration !== generation || pending) continue;
+              if (!playback.acceptsGeneration(activeGeneration, next.generation)) continue;
               result = next;
               paintResult(next, submittedContentGeneration);
               saveDraft();
@@ -1051,7 +880,7 @@
         const body = $("#coverage tbody");
         body.replaceChildren(...next.coverage.map((row) => {
           const tr = document.createElement("tr");
-          for (const value of [row.variant, row.availability.replaceAll("-", " "), row.exercised ? "Exercised" : "Not exercised", row.automated_check === null ? "Not reported" : row.automated_check ? "Covered" : "Missing"]) {
+          for (const value of authoring.coverageCells(row)) {
             const td = document.createElement("td"); td.textContent = value; tr.append(td);
           }
           tr.title = row.note;
@@ -1059,7 +888,7 @@
         }));
         const source = $("#source");
         source.hidden = !next.capture.source;
-        source.href = "https://github.com/dx-corp/mono/blob/main/" + next.capture.source.split("/").map(encodeURIComponent).join("/");
+        source.href = sourceUrl(next.capture.source);
         updateStudioControls();
       }
       function edited(clearInputs = true) {
@@ -1112,8 +941,8 @@
           if (!$("#studio-error").textContent) $("#studio-error").textContent = "Render the current Content fields before adding interaction inputs.";
           return;
         }
-        if (request.inputs.length + inputs.length > 64) { $("#studio-error").textContent = "Sequence limit reached (64 inputs)."; return; }
-        request.inputs.push(...inputs);
+        try { authoring.addInputs(request, inputs); }
+        catch (error) { $("#studio-error").textContent = error.message; return; }
         saveDraft();
         render();
       }
@@ -1137,8 +966,8 @@
         const url = URL.createObjectURL(new Blob([value], { type })), anchor = document.createElement("a");
         anchor.href = url; anchor.download = name; anchor.click(); URL.revokeObjectURL(url);
       }
-      $("#studio-export").onclick = () => download(`${request.id}-recipe.json`, JSON.stringify(request, null, 2));
-      $("#studio-replay-export").onclick = () => download(`${request.id}-replay.json`, JSON.stringify({ version: 1, id: request.id, label: request.label, width: request.width, height: request.height, inputs: request.inputs }, null, 2));
+      $("#studio-export").onclick = () => download(`${request.id}-recipe.json`, JSON.stringify(authoring.wire("maestro.ui.menu-recipe", request), null, 2));
+      $("#studio-replay-export").onclick = () => download(`${request.id}-replay.json`, JSON.stringify(authoring.wire("maestro.ui.replay", { version: 1, id: request.id, label: request.label, width: request.width, height: request.height, inputs: request.inputs }), null, 2));
       $("#studio-source").onclick = () => { if (result) download(`${request.id}.rs`, result.fixture_source, "text/plain"); };
       $("#studio-import").onclick = () => $("#studio-file").click();
       $("#studio-file").onchange = async (event) => {
@@ -1204,6 +1033,14 @@
         const response = await fetch("/__sequences", { cache: "no-store" });
         if (!response.ok) return;
         catalog = await response.json();
+      } catch {
+        return;
+      }
+      try {
+        catalog.fixtures = catalog.fixtures.map((value) => authoring.unwrap(value, "maestro.ui.theme-replay"));
+        catalog.presets = catalog.presets.map((preset) => ({ ...preset, request: authoring.unwrap(preset.request, "maestro.ui.theme-replay") }));
+        catalog.menu_starter = authoring.unwrap(catalog.menu_starter, "maestro.ui.menu-recipe");
+        catalog.menu_fixtures = catalog.menu_fixtures.map((value) => authoring.unwrap(value, "maestro.ui.menu-recipe"));
       } catch {
         return;
       }
@@ -1283,7 +1120,7 @@
           const response = await fetch("/__replay", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(sequence),
+            body: JSON.stringify(sequence && sequence.schema ? sequence : authoring.wire("maestro.ui.theme-replay", sequence)),
           });
           const result = await response.json();
           if (response.status === 429) {
@@ -1291,6 +1128,7 @@
             continue;
           }
           if (!response.ok) throw new Error(result.error || `Replay failed (${response.status})`);
+          if (!playback.acceptsGeneration(activeGeneration, result.generation)) continue;
           return result;
         }
       }
@@ -1306,7 +1144,7 @@
           : "No simulated effects. Nothing was persisted or executed.";
         const source = $("#source");
         source.hidden = !result.capture.source;
-        source.href = "https://github.com/dx-corp/mono/blob/main/" + (result.capture.source || "").split("/").map(encodeURIComponent).join("/");
+        source.href = sourceUrl(result.capture.source);
       }
       function add(input) {
         if (request.inputs.length >= 64) {
@@ -1363,7 +1201,7 @@
         add({ type: "text", text: event.clipboardData.getData("text") });
       };
       $("#live-export").onclick = () => {
-        const blob = new Blob([JSON.stringify(request, null, 2)], { type: "application/json" }), url = URL.createObjectURL(blob), anchor = document.createElement("a");
+        const blob = new Blob([JSON.stringify(authoring.wire("maestro.ui.theme-replay", request), null, 2)], { type: "application/json" }), url = URL.createObjectURL(blob), anchor = document.createElement("a");
         anchor.href = url;
         anchor.download = `theme-selector-${request.fixture}-sequence.json`;
         anchor.click();
@@ -1384,8 +1222,9 @@
           generation++;
           const importGeneration = generation;
           while (rendering) await new Promise((resolve) => setTimeout(resolve, 10));
+          const imported = authoring.unwrap(candidate, "maestro.ui.theme-replay");
           const result = await renderSequence(candidate, () => importGeneration === generation);
-          request = candidate;
+          request = imported;
           interactive = wasInteractive;
           activate();
           const index = catalog.fixtures.findIndex((item) => item.fixture === request.fixture);
@@ -1420,6 +1259,11 @@
           const response = await fetch("/__revision", { cache: "no-store" });
           if (!response.ok) return;
           const update = await response.json();
+          activeGeneration = update.generation || activeGeneration;
+          const shortGeneration = update.generation ? update.generation.slice(0, 10) : "none";
+          $("#generation-status").textContent = update.building
+            ? `${update.stale ? "Building — last good" : "Building"} ${shortGeneration}`
+            : `Current generation ${shortGeneration} · ${update.build_ms || 0} ms`;
           if (update.error) {
             hadError = true;
             $("#status").textContent =
@@ -1431,7 +1275,7 @@
               current?.scene.label || "No matching scenes";
             hadError = false;
           }
-          const next = update.revision;
+          const next = update.generation;
           if (revision && next !== revision) {
             sessionStorage.setItem(
               "ui-review-scroll",

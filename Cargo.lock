@@ -4202,6 +4202,7 @@ name = "maestro-ui-preview"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "dunce",
  "maestro-interaction",
  "maestro-presentation",
  "maestro-ui",
