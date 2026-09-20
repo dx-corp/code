@@ -1,6 +1,11 @@
 //! Portable review artifacts from production terminal buffers. No runtime startup.
 use crate::Scene;
-use ratatui::{Frame, Terminal, backend::TestBackend, buffer::Buffer, style::Color};
+use ratatui::{
+    Frame, Terminal,
+    backend::TestBackend,
+    buffer::Buffer,
+    style::{Color, Modifier},
+};
 use serde::Serialize;
 use unicode_width::UnicodeWidthStr;
 
@@ -89,6 +94,31 @@ pub fn json(captures: &[Capture]) -> Result<String, String> {
     serde_json::to_string(captures).map_err(|e| e.to_string())
 }
 
+/// A line-oriented reading of a capture for assistive technology and review.
+/// Hidden cells stay in the visual receipt but never enter readable text.
+#[must_use]
+pub fn transcript(capture: &Capture) -> String {
+    let mut lines = Vec::with_capacity(capture.scene.height as usize);
+    for y in 0..capture.scene.height as usize {
+        let mut line = String::new();
+        let mut x = 0usize;
+        while x < capture.scene.width as usize {
+            let cell = &capture.cells[y * capture.scene.width as usize + x];
+            if cell.modifiers & Modifier::HIDDEN.bits() == 0 {
+                line.push_str(&cell.text);
+            } else {
+                line.extend(std::iter::repeat_n(' ', cell.columns));
+            }
+            x += cell.columns;
+        }
+        lines.push(line.trim_end().to_owned());
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
 /// Self-contained review page; escaped data is interpreted only as text cells.
 pub fn html(captures: &[Capture]) -> Result<String, String> {
     if captures.is_empty() {
@@ -156,5 +186,27 @@ mod tests {
         assert!(html(&[]).is_err());
         let scene = crate::catalog()[0].clone();
         assert!(from_buffer(scene, &Buffer::empty(Rect::new(0, 0, 8, 3))).is_err());
+    }
+
+    #[test]
+    fn transcript_is_line_oriented_and_omits_hidden_glyphs() {
+        let scene = Scene {
+            id: "fixture".into(),
+            label: "Fixture".into(),
+            width: 8,
+            height: 3,
+            time_ms: 0,
+        };
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 3));
+        buffer.set_string(0, 0, "Visible", Style::default());
+        buffer.set_string(
+            0,
+            1,
+            "secret",
+            Style::default().add_modifier(Modifier::HIDDEN),
+        );
+        let capture = from_buffer(scene, &buffer).unwrap();
+        assert_eq!(transcript(&capture), "Visible");
+        assert!(capture.cells.iter().any(|cell| cell.text == "s"));
     }
 }

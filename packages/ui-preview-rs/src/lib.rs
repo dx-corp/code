@@ -282,6 +282,7 @@ pub fn registry() -> Result<registry::Registry, String> {
         legacy_render,
     )?;
     menus::register(&mut registry)?;
+    authoring::register_menu_recipes(&mut registry)?;
     Ok(registry)
 }
 pub fn catalog() -> Vec<Scene> {

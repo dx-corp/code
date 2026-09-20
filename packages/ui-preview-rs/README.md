@@ -133,10 +133,13 @@ retaining their stable IDs; new stories do not need a second rendering switch.
 Use repository-relative source paths for links to GitHub; `file!()` is useful
 for local source identification but may need a repository path prefix.
 
-The browser has grouped thumbnails, scene/size/frame URLs, renderer links and a
-pinned comparison. Comparison follows the selected timestamp using the nearest
-available earlier frame. Existing baseline acceptance remains explicit and is
-never performed by the workbench.
+The browser groups states under their product experience, preserves
+scene/size/frame URLs, links to renderer source, and supports a pinned
+comparison. Comparison follows the selected timestamp using the nearest
+available earlier frame. Its accessible preview is a line-oriented transcript;
+hidden terminal glyphs stay in visual cell data but are omitted from that
+transcript. Existing baseline acceptance remains explicit and is never
+performed by the workbench.
 
 ## Watch while designing
 
@@ -160,8 +163,47 @@ signs in, executes a tool, or writes application settings.
 The server rejects non-loopback Host/Origin values, oversized bodies, text,
 event counts and dimensions. It invokes no browser-supplied command or path.
 `--components-only` remains a static catalog and exposes no replay endpoint.
-The workbench preserves URL state
-and scroll across successful refreshes. Failed builds retain the previous page
-and show an error; they never update accepted baselines. It uses the configured
-`CARGO_TARGET_DIR` or a user cache outside the checkout. In Mono it runs the
-existing build-capacity check before each build. Ctrl+C stops serving.
+
+Choose **New menu scene** to open the Scene Inspector. Content edits keep stable
+action IDs separate from labels and render through the same Rust `ActionPicker`
+and `Menu` used by product code. State switches cover ready, loading, empty,
+error, long-content, Unicode, and narrow fixtures. The Interaction tab replays
+typing, navigation, selection, cancel, resize, and retry and reports simulated
+effects by stable ID. The coverage table distinguishes available variants from
+the variants exercised by the current draft; its automated-check column is
+reported separately and is never inferred from a preview.
+
+**Export recipe** saves the bounded declarative draft. **Export replay** saves
+the ordinary deterministic input sequence consumed by capture tests. **Export
+Rust fixture** emits a runnable Cargo example that uses the production widgets;
+the caller still owns real action dispatch and persistence. Import validates a
+recipe with Rust before replacing the current draft. Draft form fields live in
+browser session storage so a source-watch reload preserves even a temporarily
+invalid edit. This storage is editor state only and never changes application
+settings.
+
+To keep an exported scene, place its `.rs` file beside the owning preview
+adapter. Its generated `register(&mut Registry)` function adds the recipe state
+and every deterministic input prefix to the same registry used by `--json`,
+`--html`, and PR visual evidence:
+
+```rust
+#[path = "workspace_menu.rs"]
+pub mod exported_workspace_menu;
+
+exported_workspace_menu::register(&mut registry)?;
+```
+
+Keep that generated module public when compiling with dead-code warnings: the
+same file also exposes a public standalone `main` used by `cargo run --example`.
+
+The built-in recipe states and four interaction journeys use this path. They
+add 21 bounded cases, including select, filter/cancel, retry/select, and
+Unicode/resize/cancel prefixes. Registration rejects duplicate IDs or invalid
+dimensions; it never accepts a baseline.
+
+The workbench preserves URL state and scroll across successful refreshes.
+Failed builds retain the previous page and show an error; they never update
+accepted baselines. It uses the configured `CARGO_TARGET_DIR` or a user cache
+outside the checkout. In Mono it runs the existing build-capacity check before
+each build. Ctrl+C stops serving.

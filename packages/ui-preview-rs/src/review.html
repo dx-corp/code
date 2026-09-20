@@ -3,7 +3,7 @@
   <meta charset="utf-8" /><meta
     name="viewport"
     content="width=device-width,initial-scale=1"
-  /><title>Deixic — UI library</title>
+  /><title>Deixic — UI scene workspace</title>
   <style>
     :root {
       color-scheme: dark;
@@ -35,12 +35,17 @@
       color: #b0a8c6;
       margin: 0;
     }
-    nav {
+    .workbench > nav {
       padding: 20px 28px;
       display: flex;
       flex-wrap: wrap;
       gap: 16px;
       border-bottom: 1px solid #4e4764;
+    }
+    #experiences {
+      display: block;
+      padding: 0;
+      border: 0;
     }
     label {
       font-size: 11px;
@@ -125,7 +130,7 @@
       color: #b0a8c6;
       font-size: 11px;
     }
-    #screen.live {
+    #terminal.live {
       cursor: text;
       outline: 1px dashed #4e4764;
       outline-offset: 8px;
@@ -172,14 +177,14 @@
       width: 100%;
       min-width: 0;
     }
-    #stories h2 {
+    .library-heading {
       font-size: 10px;
       text-transform: uppercase;
       color: #b0a8c6;
       letter-spacing: 0.1em;
       margin: 22px 4px 10px;
     }
-    .story {
+    .story, .experience {
       display: block;
       width: 100%;
       text-align: left;
@@ -189,17 +194,15 @@
       margin: 4px 0;
       padding: 8px;
     }
-    .story[aria-current="true"] {
+    .story[aria-current="true"], .experience[aria-current="true"] {
       background: #232132;
       border-color: #aba0ff;
     }
     .story canvas {
-      display: block;
-      width: 148px;
-      height: 42px;
-      opacity: 0.65;
-      margin-bottom: 8px;
+      display: none;
     }
+    #new-scene { width: 100%; margin: 12px 0; }
+    #states { border-top: 1px solid #4e4764; margin-top: 14px; padding-top: 8px; }
     .workbench {
       min-width: 0;
       overflow: auto;
@@ -258,6 +261,57 @@
     #source {
       overflow-wrap: anywhere;
     }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: pre;
+      border: 0;
+    }
+    #terminal { width: max-content; min-width: min(100%, 360px); }
+    #inspector {
+      margin: 0 18px 18px;
+      border: 1px solid #4e4764;
+      background: #1d1b2a;
+    }
+    .inspector-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px; }
+    .inspector-heading h2 { margin: 0; font-size: 12px; }
+    .tabs { display: flex; flex-wrap: wrap; border-top: 1px solid #4e4764; border-bottom: 1px solid #4e4764; }
+    .tabs button { flex: 1; border-width: 0 1px 0 0; }
+    .tabs button[aria-selected="true"] { background: #aba0ff; color: #171624; }
+    .inspector-panel { padding: 14px; display: grid; gap: 12px; }
+    .inspector-panel input, .inspector-panel textarea, .inspector-panel select { width: 100%; }
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font: inherit;
+      color: #efebff;
+      background: #232132;
+      border: 1px solid #4e4764;
+      padding: 8px;
+    }
+    .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .quiet { color: #b0a8c6; font-size: 11px; }
+    #coverage { width: 100%; border-collapse: collapse; font-size: 11px; }
+    #coverage th, #coverage td { border-bottom: 1px solid #4e4764; padding: 7px; text-align: left; vertical-align: top; }
+    #studio-effects, #studio-error { overflow-wrap: anywhere; }
+    #studio-error { color: #ff9b9b; }
+    @media (min-width: 1100px) {
+      .studio-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
+      .studio-layout #inspector { margin-top: 20px; }
+    }
+    @media (max-width: 760px) {
+      .workspace { grid-template-columns: 150px minmax(0, 1fr); }
+      .field-grid { grid-template-columns: 1fr; }
+      #inspector { margin: 0 10px 14px; }
+      main { display: block; }
+      .pane + .pane { margin-top: 24px; }
+    }
     @media (max-width: 600px) {
       .workspace {
         display: block;
@@ -267,12 +321,12 @@
         max-height: 220px;
         border-bottom: 1px solid #4e4764;
       }
-      #stories {
+      #experiences, #states {
         display: flex;
         gap: 8px;
         overflow: auto;
       }
-      #stories h2 {
+      .library-heading {
         display: none;
       }
       .story {
@@ -296,18 +350,24 @@
     }
   </style>
   <header>
-    <h1>DEIXIC / UI LIBRARY</h1>
-    <p>Production widgets · supplied fixture state</p>
+    <h1>DEIXIC / UI SCENE WORKSPACE</h1>
+    <p>Explore experiences · author bounded fixtures · replay in Rust</p>
   </header>
   <div class="workspace">
-    <aside aria-label="Scene library">
+    <aside aria-label="Experience library">
       <label
         >Find a scene<input
           id="search"
           type="search"
           placeholder="Search scenes…"
       /></label>
-      <div id="stories"></div>
+      <button id="new-scene" type="button" hidden>New menu scene</button>
+      <h2 class="library-heading">Experiences</h2>
+      <nav id="experiences" aria-label="Experiences"></nav>
+      <section id="states" aria-label="States">
+        <h2 class="library-heading">States</h2>
+        <div id="stories"></div>
+      </section>
     </aside>
     <section class="workbench">
       <nav aria-label="Preview controls">
@@ -337,16 +397,64 @@
         <p id="live-effects" role="status"></p>
       </section>
       <p id="status" role="status"></p>
-      <main>
-        <section class="pane">
-          <h2>SELECTED STATE</h2>
-          <pre id="screen" tabindex="0" aria-label="Native terminal preview"></pre>
+      <div class="studio-layout">
+        <main>
+          <section class="pane">
+            <h2>SELECTED STATE</h2>
+            <div id="terminal" tabindex="0" aria-label="Native terminal preview" aria-describedby="screen-transcript">
+              <pre id="screen" aria-hidden="true"></pre>
+              <pre id="screen-transcript" class="sr-only" aria-live="polite"></pre>
+            </div>
+          </section>
+          <section id="comparison" class="pane" hidden>
+            <h2 id="comparison-label"></h2>
+            <pre id="reference" aria-hidden="true"></pre>
+            <pre id="reference-transcript" class="sr-only"></pre>
+          </section>
+        </main>
+        <section id="inspector" aria-label="Scene inspector" hidden>
+          <div class="inspector-heading"><h2>Menu scene inspector</h2><button id="studio-close" type="button">Back to preview</button></div>
+          <div class="tabs" role="tablist" aria-label="Inspector sections">
+            <button type="button" role="tab" data-tab="content" aria-selected="true">Content</button>
+            <button type="button" role="tab" data-tab="state" aria-selected="false">State</button>
+            <button type="button" role="tab" data-tab="appearance" aria-selected="false">Appearance</button>
+            <button type="button" role="tab" data-tab="interaction" aria-selected="false">Interaction</button>
+          </div>
+          <section class="inspector-panel" data-panel="content">
+            <div class="field-grid">
+              <label>Scene ID<input id="studio-id" maxlength="64" /></label>
+              <label>Scene label<input id="studio-label" maxlength="160" /></label>
+            </div>
+            <label>Menu title<input id="studio-title" maxlength="160" /></label>
+            <div class="field-grid">
+              <label>Search placeholder<input id="studio-placeholder" maxlength="160" /></label>
+              <label>Empty message<input id="studio-empty" maxlength="240" /></label>
+            </div>
+            <label>Items <span class="quiet">one stable-id | Display label per line</span><textarea id="studio-items" spellcheck="false"></textarea></label>
+            <p class="quiet">The draft stays in this browser tab across workbench rebuilds. It is development state, not a simulated product effect or persisted application setting.</p>
+          </section>
+          <section class="inspector-panel" data-panel="state" hidden>
+            <label>Recipe example<select id="studio-fixture"></select></label>
+            <label>Fixture state<select id="studio-state"><option value="ready">Ready</option><option value="loading">Loading</option><option value="empty">Empty</option><option value="error">Error</option></select></label>
+            <label>Status message<input id="studio-message" maxlength="240" /></label>
+            <p class="quiet">Loading, empty, and error are supplied fixture states. Retry is simulated and never starts I/O.</p>
+          </section>
+          <section class="inspector-panel" data-panel="appearance" hidden>
+            <div class="field-grid"><label>Columns<input id="studio-width" type="number" min="8" max="240" /></label><label>Rows<input id="studio-height" type="number" min="3" max="100" /></label></div>
+            <p class="quiet">Uses the production menu theme tokens. Reduced motion is not applicable because this recipe has no motion path.</p>
+          </section>
+          <section class="inspector-panel" data-panel="interaction" hidden>
+            <p class="quiet">Focus the preview and type, or use ↑ ↓ ← → Enter Backspace Esc. Inputs replay through the production ActionPicker.</p>
+            <div class="actions"><button id="studio-select" type="button">Navigate and select</button><button id="studio-filter" type="button">Filter and cancel</button><button id="studio-retry" type="button">Retry</button><button id="studio-cancel" type="button">Cancel</button><button id="studio-reset" type="button">Reset inputs</button></div>
+            <p id="studio-inputs" class="quiet"></p>
+            <p id="studio-effects" role="status"></p>
+            <h3>Variant coverage</h3>
+            <table id="coverage"><thead><tr><th>Variant</th><th>Available</th><th>This preview</th><th>Automated</th></tr></thead><tbody></tbody></table>
+            <div class="actions"><button id="studio-export" type="button">Export recipe</button><button id="studio-replay-export" type="button">Export replay fixture</button><button id="studio-source" type="button">Export Rust fixture</button><button id="studio-import" type="button">Import recipe</button><input id="studio-file" type="file" accept="application/json" hidden /></div>
+          </section>
+          <p id="studio-error" role="alert"></p>
         </section>
-        <section id="comparison" class="pane" hidden>
-          <h2 id="comparison-label"></h2>
-          <pre id="reference" aria-label="Comparison terminal preview"></pre>
-        </section>
-      </main>
+      </div>
       <footer>
         <span id="details"></span
         ><button id="download" type="button">Export frame JSON</button
@@ -371,7 +479,9 @@
       current,
       pinned = null,
       restoring = false,
-      exitInteractive = () => {};
+      visibleEntries = [],
+      exitInteractive = () => {},
+      exitStudio = () => {};
     const colors = [
       "#000000",
       "#800000",
@@ -428,8 +538,9 @@
         if ((c.scene.id + " " + c.scene.label).toLowerCase().includes(query))
           map.set(c.scene.id, c.scene.label + " / " + c.scene.id);
       });
-      options(scene, [...map]);
-      sidebar([...map]);
+      visibleEntries = [...map];
+      options(scene, visibleEntries);
+      sidebar(visibleEntries);
       selectSizes();
     }
     function selectSizes() {
@@ -474,6 +585,7 @@
       if (!current) {
         $("#status").textContent = "No matching scenes";
         $("#details").textContent = "";
+        $("#screen-transcript").textContent = "";
         $("#download").disabled = true;
         $("#pin").disabled = true;
         $("#source").hidden = true;
@@ -485,6 +597,7 @@
       $("#details").textContent =
         `${current.scene.id} / ${size.value} / ${time.value} ms`;
       draw(screen, current);
+      $("#screen-transcript").textContent = readable(current);
       document
         .querySelectorAll(".story")
         .forEach((b) =>
@@ -526,20 +639,38 @@
         screen.append(document.createTextNode("\n"));
       }
     }
+    function readable(capture) {
+      const lines = [];
+      for (let y = 0; y < capture.scene.height; y++) {
+        let line = "";
+        for (let x = 0; x < capture.scene.width; ) {
+          const cell = capture.cells[y * capture.scene.width + x];
+          line += cell.modifiers & 128 ? " ".repeat(cell.columns) : cell.text;
+          x += cell.columns;
+        }
+        lines.push(line.trimEnd());
+      }
+      while (lines.at(-1) === "") lines.pop();
+      return lines.join("\n");
+    }
     scene.onchange = () => {
+      exitStudio();
       exitInteractive();
       selectSizes();
     };
     size.onchange = () => {
+      exitStudio();
       exitInteractive();
       selectTimes();
     };
     time.onchange = () => {
+      exitStudio();
       exitInteractive();
       stop();
       paint();
     };
     $("#search").oninput = () => {
+      exitStudio();
       exitInteractive();
       selectScenes();
     };
@@ -589,54 +720,61 @@
       if (id.startsWith("first-boot")) return "First launch";
       if (id.startsWith("onboarding-")) return "Onboarding";
       if (id.startsWith("conversation-")) return "Conversation";
-      if (id.startsWith("menu-") || id.startsWith("picker") || id.startsWith("theme-selector")) return "Menus";
-      return "Appearance";
+      if (id.startsWith("menu-")) return "Workspace menu";
+      if (id.startsWith("theme-selector")) return "Theme selector";
+      if (id.startsWith("picker")) return "Appearance picker";
+      if (["startup", "header", "quiet", "motion-off", "working", "finished", "failed", "needs-input", "pet"].includes(id) || id.startsWith("accessory-") || id.startsWith("accent-")) return "Companion appearance";
+      return "Other scenes";
+    }
+    const experienceOrder = ["First launch", "Onboarding", "Conversation", "Workspace menu", "Theme selector", "Appearance picker", "Companion appearance", "Other scenes"];
+    function stateLabel(capture) {
+      if (capture.scene.id.startsWith("onboarding-")) {
+        const id = capture.scene.id.slice("onboarding-".length);
+        return ({ welcome: "Welcome", role: "Role", "use-case": "Use case", workflow: "Workflow", connect: "Connect", verify: "Verify connection", checking: "Checking", ready: "Results · ready", failed: "Results · failed", waiting: "Waiting", provider: "Provider", key: "API key" })[id] || capture.scene.label;
+      }
+      return capture.scene.label.replace(/^.*?\s[\/·]\s/, "");
     }
     function sidebar(entries) {
-      const root = $("#stories");
-      root.replaceChildren();
       const groups = new Map();
       for (const [id] of entries) {
         const key = group(id);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(id);
       }
-      for (const [label, ids] of groups) {
-        const heading = document.createElement("h2");
-        heading.textContent = label;
-        root.append(heading);
-        for (const id of ids) {
-          const c = captures.find((c) => c.scene.id === id),
-            button = document.createElement("button");
-          button.type = "button";
-          button.className = "story";
-          button.dataset.scene = id;
-          button.setAttribute("aria-label", c.scene.label);
-          const canvas = document.createElement("canvas");
-          canvas.width = 296;
-          canvas.height = 84;
-          canvas.setAttribute("aria-hidden", "true");
-          const ctx = canvas.getContext("2d");
-          ctx.fillStyle = "#aba0ff";
-          ctx.font = `${Math.min(6, 280 / c.scene.width)}px monospace`;
-          const step = Math.min(7, 80 / c.scene.height);
-          for (let y = 0; y < c.scene.height; y++) {
-            let line = "";
-            for (let x = 0; x < c.scene.width; ) {
-              const cell = c.cells[y * c.scene.width + x];
-              line += cell.text;
-              x += cell.columns;
-            }
-            ctx.fillText(line, 4, step * (y + 1));
-          }
-          button.append(canvas, document.createTextNode(c.scene.label));
-          button.onclick = () => {
-            exitInteractive(false);
-            scene.value = id;
-            selectSizes();
-          };
-          root.append(button);
-        }
+      const active = groups.has(group(scene.value)) ? group(scene.value) : experienceOrder.find((name) => groups.has(name));
+      const experienceRoot = $("#experiences"), stateRoot = $("#stories");
+      experienceRoot.replaceChildren();
+      stateRoot.replaceChildren();
+      for (const label of experienceOrder.filter((name) => groups.has(name))) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "experience";
+        button.setAttribute("aria-current", String(label === active));
+        button.textContent = `${label} (${groups.get(label).length})`;
+        button.onclick = () => {
+          exitStudio();
+          exitInteractive(false);
+          scene.value = groups.get(label)[0];
+          selectSizes();
+          sidebar(entries);
+        };
+        experienceRoot.append(button);
+      }
+      for (const id of groups.get(active) || []) {
+        const c = captures.find((capture) => capture.scene.id === id), button = document.createElement("button");
+        button.type = "button";
+        button.className = "story";
+        button.dataset.scene = id;
+        button.setAttribute("aria-current", String(id === scene.value));
+        button.textContent = stateLabel(c);
+        button.onclick = () => {
+          exitStudio();
+          exitInteractive(false);
+          scene.value = id;
+          selectSizes();
+          sidebar(entries);
+        };
+        stateRoot.append(button);
       }
     }
     function paintComparison() {
@@ -662,6 +800,7 @@
       $("#comparison-label").textContent =
         `${c.scene.label} / ${c.scene.width} × ${c.scene.height} / ${c.scene.time_ms} ms`;
       draw($("#reference"), c);
+      $("#reference-transcript").textContent = readable(c);
     }
     function saveRoute() {
       const p = new URLSearchParams({
@@ -677,6 +816,7 @@
     }
     function restoreRoute() {
       stop();
+      exitStudio(false);
       exitInteractive(false);
       restoring = true;
       const p = new URLSearchParams(location.hash.slice(1));
@@ -703,6 +843,7 @@
           height: c.scene.height,
         };
       paint();
+      sidebar(visibleEntries);
       restoring = false;
       saveRoute();
     }
@@ -732,6 +873,330 @@
     window.addEventListener("hashchange", restoreRoute);
     restoreRoute();
 
+    function enableStudio(catalog) {
+      if (!catalog.menu_starter || !Array.isArray(catalog.menu_fixtures) || !catalog.menu_fixtures.length) return false;
+      const terminal = $("#terminal"), inspector = $("#inspector"), fixture = $("#studio-fixture");
+      $("#new-scene").hidden = false;
+      options(fixture, [["", "Custom draft"], ...catalog.menu_fixtures.map((recipe, index) => [String(index), recipe.label])]);
+      let request = structuredClone(catalog.menu_starter), result = null, active = false,
+        rendering = false, pending = false, generation = 0, contentGeneration = 0,
+        validatedContentGeneration = -1, resultCurrent = false,
+        galleryState = null, editTimer = null, rawDraft = null;
+      try {
+        const saved = JSON.parse(sessionStorage.getItem("ui-studio-draft"));
+        if (saved && typeof saved === "object") request = saved;
+        const raw = JSON.parse(sessionStorage.getItem("ui-studio-form"));
+        if (raw && typeof raw === "object") rawDraft = raw;
+      } catch {}
+
+      function setTab(name) {
+        document.querySelectorAll("[data-tab]").forEach((button) => button.setAttribute("aria-selected", String(button.dataset.tab === name)));
+        document.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== name; });
+      }
+      document.querySelectorAll("[data-tab]").forEach((button) => { button.onclick = () => setTab(button.dataset.tab); });
+
+      function fill(recipe) {
+        $("#studio-id").value = recipe.id;
+        $("#studio-label").value = recipe.label;
+        $("#studio-title").value = recipe.title;
+        $("#studio-placeholder").value = recipe.placeholder;
+        $("#studio-empty").value = recipe.empty;
+        $("#studio-items").value = recipe.items.map((item) => `${item.id} | ${item.label}`).join("\n");
+        $("#studio-state").value = recipe.state;
+        $("#studio-message").value = recipe.status_message;
+        $("#studio-width").value = recipe.width;
+        $("#studio-height").value = recipe.height;
+      }
+      function read() {
+        const items = $("#studio-items").value.split(/\r?\n/).filter((line) => line.trim()).map((line) => {
+          const separator = line.indexOf("|");
+          if (separator < 1) throw new Error("Each item needs a stable-id | Display label.");
+          return { id: line.slice(0, separator).trim(), label: line.slice(separator + 1).trim() };
+        });
+        return {
+          ...request,
+          id: $("#studio-id").value,
+          label: $("#studio-label").value,
+          title: $("#studio-title").value,
+          placeholder: $("#studio-placeholder").value,
+          empty: $("#studio-empty").value,
+          items,
+          state: $("#studio-state").value,
+          status_message: $("#studio-message").value,
+          width: Number($("#studio-width").value),
+          height: Number($("#studio-height").value),
+        };
+      }
+      function formValues() {
+        return Object.fromEntries(["id", "label", "title", "placeholder", "empty", "items", "state", "message", "width", "height"].map((name) => [name, $("#studio-" + name).value]));
+      }
+      function applyForm(values) {
+        for (const name of ["id", "label", "title", "placeholder", "empty", "items", "state", "message", "width", "height"]) {
+          if (typeof values[name] === "string") $("#studio-" + name).value = values[name];
+        }
+      }
+      function saveDraft() {
+        sessionStorage.setItem("ui-studio-draft", JSON.stringify(request));
+        sessionStorage.setItem("ui-studio-form", JSON.stringify(formValues()));
+        sessionStorage.setItem("ui-studio-active", String(active));
+      }
+      function updateStudioControls() {
+        const contentValid = contentGeneration === validatedContentGeneration;
+        for (const id of ["studio-select", "studio-filter", "studio-retry", "studio-cancel", "studio-reset"]) {
+          $("#" + id).disabled = !contentValid;
+        }
+        for (const id of ["studio-export", "studio-replay-export", "studio-source", "download"]) {
+          $("#" + id).disabled = !resultCurrent;
+        }
+        if (!resultCurrent) $("#source").hidden = true;
+      }
+      function activate() {
+        exitInteractive(false);
+        if (!active) galleryState = { scene: scene.value, size: size.value, time: time.value };
+        active = true;
+        inspector.hidden = false;
+        terminal.classList.add("live");
+        document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = true; });
+        $("#live-toggle").hidden = true;
+        $("#comparison").hidden = true;
+        $("#unpin").hidden = true;
+        $("#status").textContent = "New menu scene / authoring in Rust";
+        saveDraft();
+      }
+      exitStudio = (restoreGallery = true) => {
+        if (!active) return;
+        active = false;
+        pending = false;
+        generation++;
+        clearTimeout(editTimer);
+        inspector.hidden = true;
+        terminal.classList.remove("live");
+        document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = false; });
+        $("#live-toggle").hidden = false;
+        saveDraft();
+        if (restoreGallery && galleryState) {
+          scene.value = galleryState.scene;
+          selectSizes();
+          if ([...size.options].some((option) => option.value === galleryState.size)) size.value = galleryState.size;
+          selectTimes();
+          if ([...time.options].some((option) => option.value === galleryState.time)) time.value = galleryState.time;
+          paint();
+          sidebar(visibleEntries);
+        }
+      };
+
+      async function post(recipe, stillCurrent = () => true) {
+        while (true) {
+          if (!stillCurrent()) throw new Error("Render superseded");
+          const response = await fetch("/__studio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(recipe),
+          });
+          const value = await response.json();
+          if (response.status === 429) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            continue;
+          }
+          if (!response.ok) throw new Error(value.error || `Scene render failed (${response.status})`);
+          return value;
+        }
+      }
+      async function render() {
+        activate();
+        pending = true;
+        resultCurrent = false;
+        updateStudioControls();
+        if (rendering) return;
+        rendering = true;
+        try {
+          while (pending) {
+            pending = false;
+            const submitted = structuredClone(request), submittedGeneration = generation,
+              submittedContentGeneration = contentGeneration;
+            $("#studio-error").textContent = "";
+            $("#studio-effects").textContent = "Rendering updated recipe in Rust…";
+            try {
+              const next = await post(submitted, () => active && submittedGeneration === generation);
+              if (!active || submittedGeneration !== generation || pending) continue;
+              result = next;
+              paintResult(next, submittedContentGeneration);
+              saveDraft();
+            } catch (error) {
+              if (active && submittedGeneration === generation && !pending) {
+                $("#studio-error").textContent = error.message;
+                $("#studio-effects").textContent = "No current render. Fix the bounded recipe fields and retry.";
+              }
+            }
+          }
+        } finally {
+          rendering = false;
+        }
+      }
+      function paintResult(next, renderedContentGeneration = contentGeneration) {
+        validatedContentGeneration = renderedContentGeneration;
+        resultCurrent = true;
+        $("#studio-error").textContent = "";
+        current = next.capture;
+        draw($("#screen"), next.capture);
+        $("#screen-transcript").textContent = next.transcript;
+        $("#status").textContent = `${next.capture.scene.label} / authored menu`;
+        $("#details").textContent = `${next.capture.scene.width} × ${next.capture.scene.height} · ${next.recipe.inputs.length} inputs`;
+        $("#studio-inputs").textContent = next.recipe.inputs.length
+          ? next.recipe.inputs.map((input, index) => `${index + 1}. ${input.type}${input.key ? `(${input.key})` : input.text ? `(${input.text})` : ""}`).join(" · ")
+          : "No interaction inputs yet.";
+        $("#studio-effects").textContent = next.effects.length
+          ? `Simulated receipts: ${next.effects.map((effect) => effect.id ? `${effect.type}(${effect.id}: ${effect.label})` : effect.type).join(", ")}. ${next.effect_policy}.`
+          : `No simulated receipts. ${next.effect_policy}.`;
+        const body = $("#coverage tbody");
+        body.replaceChildren(...next.coverage.map((row) => {
+          const tr = document.createElement("tr");
+          for (const value of [row.variant, row.availability.replaceAll("-", " "), row.exercised ? "Exercised" : "Not exercised", row.automated_check === null ? "Not reported" : row.automated_check ? "Covered" : "Missing"]) {
+            const td = document.createElement("td"); td.textContent = value; tr.append(td);
+          }
+          tr.title = row.note;
+          return tr;
+        }));
+        const source = $("#source");
+        source.hidden = !next.capture.source;
+        source.href = "https://github.com/dx-corp/mono/blob/main/" + next.capture.source.split("/").map(encodeURIComponent).join("/");
+        updateStudioControls();
+      }
+      function edited(clearInputs = true) {
+        clearTimeout(editTimer);
+        generation++;
+        contentGeneration++;
+        sessionStorage.setItem("ui-studio-form", JSON.stringify(formValues()));
+        sessionStorage.setItem("ui-studio-active", "true");
+        result = null;
+        current = null;
+        resultCurrent = false;
+        updateStudioControls();
+        fixture.value = "";
+        $("#screen").replaceChildren();
+        $("#screen-transcript").textContent = "";
+        $("#studio-effects").textContent = "Recipe changed; prior interaction receipts were cleared.";
+        try {
+          request = read();
+          if (clearInputs) request.inputs = [];
+          saveDraft();
+          editTimer = setTimeout(render, 140);
+        } catch (error) {
+          $("#studio-error").textContent = error.message;
+        }
+      }
+      for (const id of ["studio-id", "studio-label", "studio-title", "studio-placeholder", "studio-empty", "studio-items", "studio-message"]) {
+        $("#" + id).addEventListener("input", edited);
+      }
+      for (const id of ["studio-width", "studio-height"]) $("#" + id).addEventListener("change", edited);
+      $("#studio-state").onchange = () => {
+        if ($("#studio-state").value === "loading" && !$("#studio-message").value) $("#studio-message").value = "Loading workspaces…";
+        if ($("#studio-state").value === "error" && !$("#studio-message").value) $("#studio-message").value = "Could not load workspaces. Retry.";
+        edited();
+      };
+      fixture.onchange = () => {
+        if (fixture.value === "") return;
+        generation++;
+        contentGeneration++;
+        request = structuredClone(catalog.menu_fixtures[Number(fixture.value)]);
+        result = null;
+        current = null;
+        fill(request);
+        render();
+      };
+      function add(input) {
+        addMany([input]);
+      }
+      function addMany(inputs) {
+        if (contentGeneration !== validatedContentGeneration) {
+          if (!$("#studio-error").textContent) $("#studio-error").textContent = "Render the current Content fields before adding interaction inputs.";
+          return;
+        }
+        if (request.inputs.length + inputs.length > 64) { $("#studio-error").textContent = "Sequence limit reached (64 inputs)."; return; }
+        request.inputs.push(...inputs);
+        saveDraft();
+        render();
+      }
+      $("#studio-select").onclick = () => addMany([{ type: "key", key: "down", ctrl: false }, { type: "key", key: "enter", ctrl: false }]);
+      $("#studio-filter").onclick = () => addMany([{ type: "text", text: "doc" }, { type: "key", key: "escape", ctrl: false }]);
+      $("#studio-retry").onclick = () => add({ type: "retry" });
+      $("#studio-cancel").onclick = () => add({ type: "key", key: "escape", ctrl: false });
+      $("#studio-reset").onclick = () => { request.inputs = []; saveDraft(); render(); };
+      terminal.addEventListener("keydown", (event) => {
+        if (!active) return;
+        const keys = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "enter", Backspace: "backspace", Escape: "escape" };
+        if (keys[event.key]) { event.preventDefault(); event.stopImmediatePropagation(); add({ type: "key", key: keys[event.key], ctrl: event.ctrlKey }); }
+        else if (event.key.length === 1 && !event.metaKey && !event.altKey && !event.ctrlKey) { event.preventDefault(); event.stopImmediatePropagation(); add({ type: "text", text: event.key }); }
+      }, true);
+      terminal.addEventListener("paste", (event) => {
+        if (!active) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        add({ type: "text", text: event.clipboardData.getData("text") });
+      }, true);
+      function download(name, value, type = "application/json") {
+        const url = URL.createObjectURL(new Blob([value], { type })), anchor = document.createElement("a");
+        anchor.href = url; anchor.download = name; anchor.click(); URL.revokeObjectURL(url);
+      }
+      $("#studio-export").onclick = () => download(`${request.id}-recipe.json`, JSON.stringify(request, null, 2));
+      $("#studio-replay-export").onclick = () => download(`${request.id}-replay.json`, JSON.stringify({ version: 1, id: request.id, label: request.label, width: request.width, height: request.height, inputs: request.inputs }, null, 2));
+      $("#studio-source").onclick = () => { if (result) download(`${request.id}.rs`, result.fixture_source, "text/plain"); };
+      $("#studio-import").onclick = () => $("#studio-file").click();
+      $("#studio-file").onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file || file.size > 16384) { $("#studio-error").textContent = "Recipe files must be 16 KiB or smaller."; return; }
+        const previousResultCurrent = resultCurrent;
+        resultCurrent = false;
+        updateStudioControls();
+        const importGeneration = ++generation;
+        try {
+          const candidate = JSON.parse(await file.text());
+          if (!active || importGeneration !== generation) return;
+          const imported = await post(candidate, () => active && importGeneration === generation);
+          if (!active || importGeneration !== generation) return;
+          contentGeneration++;
+          request = imported.recipe;
+          result = imported;
+          fill(request);
+          fixture.value = "";
+          activate();
+          paintResult(imported, contentGeneration);
+          saveDraft();
+        } catch (error) {
+          if (active && importGeneration === generation) {
+            $("#studio-error").textContent = `Recipe was not imported: ${error.message}`;
+            resultCurrent = previousResultCurrent;
+            updateStudioControls();
+          }
+        } finally {
+          event.target.value = "";
+        }
+      };
+      $("#new-scene").onclick = () => {
+        generation++;
+        contentGeneration++;
+        request = structuredClone(catalog.menu_starter);
+        result = null;
+        current = null;
+        fixture.value = "";
+        fill(request);
+        setTab("content");
+        $("#screen").replaceChildren();
+        $("#screen-transcript").textContent = "";
+        $("#studio-effects").textContent = "Starting a new menu scene…";
+        render();
+      };
+      $("#studio-close").onclick = () => exitStudio(true);
+      updateStudioControls();
+      fill(request);
+      if (rawDraft) applyForm(rawDraft);
+      const restoreDraft = sessionStorage.getItem("ui-studio-active") === "true";
+      if (restoreDraft) {
+        activate();
+        edited(false);
+      }
+      return restoreDraft;
+    }
+
     async function enableInteraction() {
       if (!new URLSearchParams(location.search).has("interactive")) return;
       let catalog;
@@ -743,7 +1208,7 @@
         return;
       }
       if (!Array.isArray(catalog.fixtures) || !Array.isArray(catalog.presets)) return;
-      const panel = $("#interaction"), fixture = $("#live-fixture"), preset = $("#live-preset"), screen = $("#screen");
+      const panel = $("#interaction"), fixture = $("#live-fixture"), preset = $("#live-preset"), screen = $("#screen"), terminal = $("#terminal");
       $("#live-toggle").hidden = false;
       options(fixture, catalog.fixtures.map((request, index) => [String(index), request.fixture]));
       options(preset, [["", "Custom"], ...catalog.presets.map((item, index) => [String(index), item.label])]);
@@ -754,11 +1219,12 @@
         }
         interactive = true;
         panel.hidden = false;
-        screen.classList.add("live");
+        terminal.classList.add("live");
         document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = true; });
         $("#live-toggle").textContent = "Back to preview";
         const fixtureId = `theme-selector-${request.fixture}`;
         if ([...scene.options].some((option) => option.value === fixtureId)) scene.value = fixtureId;
+        sidebar(visibleEntries);
         document.querySelectorAll(".story").forEach((button) => button.setAttribute("aria-current", String(button.dataset.scene === fixtureId)));
         $("#status").textContent = "Theme menu / interactive";
       }
@@ -768,7 +1234,7 @@
         pending = false;
         generation++;
         panel.hidden = true;
-        screen.classList.remove("live");
+        terminal.classList.remove("live");
         document.querySelectorAll("[data-gallery-control]").forEach((control) => { control.hidden = false; });
         $("#unpin").hidden = !pinned;
         $("#live-toggle").textContent = "Interact with theme menu";
@@ -779,6 +1245,7 @@
           selectTimes();
           if ([...time.options].some((option) => option.value === galleryState.time)) time.value = galleryState.time;
           paint();
+          sidebar(visibleEntries);
         }
       };
       function syncDimensions() {
@@ -829,7 +1296,9 @@
       }
       function paintReplay(result, sequence) {
         current = result.capture;
+        $("#download").disabled = false;
         draw(screen, result.capture);
+        $("#screen-transcript").textContent = readable(result.capture);
         $("#status").textContent = `Theme menu / interactive · step ${sequence.inputs.length}`;
         $("#details").textContent = `${result.capture.scene.width} × ${result.capture.scene.height} · ${sequence.inputs.length} inputs`;
         $("#live-effects").textContent = result.effects.length
@@ -877,7 +1346,7 @@
         syncDimensions();
         replay();
       };
-      screen.onkeydown = (event) => {
+      terminal.onkeydown = (event) => {
         if (!interactive) return;
         const keys = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "enter", Backspace: "backspace", Escape: "escape" };
         if (keys[event.key]) {
@@ -888,7 +1357,7 @@
           add({ type: "text", text: event.key });
         }
       };
-      screen.onpaste = (event) => {
+      terminal.onpaste = (event) => {
         if (!interactive) return;
         event.preventDefault();
         add({ type: "text", text: event.clipboardData.getData("text") });
@@ -934,8 +1403,9 @@
         if (interactive) exitInteractive(true);
         else replay();
       };
+      const restoredStudio = enableStudio(catalog);
       syncDimensions();
-      replay();
+      if (!restoredStudio) replay();
     }
     enableInteraction();
     // The optional local watcher exposes only a revision; static files need no server.

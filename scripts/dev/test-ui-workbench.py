@@ -16,6 +16,26 @@ spec.loader.exec_module(workbench)
 
 
 class WorkbenchTests(unittest.TestCase):
+    @staticmethod
+    def menu_recipe():
+        return {
+            'version': 1,
+            'id': 'new-menu',
+            'label': 'New menu',
+            'title': 'Choose a workspace',
+            'placeholder': 'Filter workspaces',
+            'empty': 'No workspaces',
+            'items': [
+                {'id': 'application', 'label': 'Application'},
+                {'id': 'docs', 'label': 'Docs 夜'},
+            ],
+            'state': 'ready',
+            'status_message': '',
+            'width': 60,
+            'height': 20,
+            'inputs': [],
+        }
+
     def test_failure_preserves_previous_capture_and_revision(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(workbench, 'WORKSPACE', Path(directory)):
             preview = workbench.Preview(['cargo'], {})
@@ -67,11 +87,59 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs['input'], body)
         self.assertNotIn('shell', run.call_args.kwargs)
 
+    def test_studio_validates_typed_items_and_invokes_only_fixed_command(self):
+        request = self.menu_recipe()
+        body = json.dumps(request).encode()
+        workbench.validate_studio(body)
+        for mutate in (
+            lambda value: value['items'].append({'id': 'docs', 'label': 'Duplicate'}),
+            lambda value: value['items'][0].update(id='../command'),
+            lambda value: value.update(path='/tmp/output'),
+            lambda value: value.update(inputs=[{'type': 'retry'}] * 65),
+            lambda value: value.update(state={}),
+            lambda value: value.update(inputs=[{'type': {}}]),
+        ):
+            invalid = json.loads(json.dumps(request))
+            mutate(invalid)
+            with self.assertRaises(ValueError):
+                workbench.validate_studio(json.dumps(invalid).encode())
+
+        preview = workbench.Preview(
+            ['renderer', '--html'],
+            {},
+            studio_command=['fixed-renderer', '--studio-stdin'],
+        )
+        result = subprocess.CompletedProcess([], 0, b'{"capture":{},"coverage":[]}', b'')
+        with patch.object(workbench.subprocess, 'run', return_value=result) as run:
+            self.assertEqual(preview.studio(body), result.stdout)
+        self.assertEqual(run.call_args.args[0], ['fixed-renderer', '--studio-stdin'])
+        self.assertEqual(run.call_args.kwargs['input'], body)
+        self.assertNotIn('shell', run.call_args.kwargs)
+
+    def test_invalid_studio_edit_cannot_replay_the_previous_valid_request(self):
+        valid = json.dumps(self.menu_recipe()).encode()
+        invalid_recipe = self.menu_recipe()
+        invalid_recipe['items'] = [{'id': 'unfinished-id'}]
+        invalid = json.dumps(invalid_recipe).encode()
+        preview = workbench.Preview(
+            ['renderer', '--html'],
+            {},
+            studio_command=['fixed-renderer', '--studio-stdin'],
+        )
+        result = subprocess.CompletedProcess([], 0, b'{"capture":{},"coverage":[]}', b'')
+        with patch.object(workbench.subprocess, 'run', return_value=result) as run:
+            preview.studio(valid)
+            with self.assertRaises(ValueError):
+                preview.studio(invalid)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs['input'], valid)
+
     def test_http_replay_rejects_foreign_origin_and_accepts_same_origin(self):
         seen = []
         preview = SimpleNamespace(
             html=b'<html></html>', sequences=b'{"fixtures":[],"presets":[]}', revision='r', error='',
             replay=lambda body: seen.append(body) or b'{"capture":{},"effects":[]}',
+            studio=lambda body: seen.append(body) or b'{"capture":{},"coverage":[]}',
         )
         server = workbench.ThreadingHTTPServer(('127.0.0.1', 0), workbench.handler(preview))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -94,6 +162,16 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(json.loads(response.read()), {'capture': {}, 'effects': []})
             self.assertEqual(seen, [body.encode()])
+
+            studio = json.dumps(self.menu_recipe())
+            connection = http.client.HTTPConnection('127.0.0.1', port)
+            connection.request('POST', '/__studio', studio, {
+                'Content-Type': 'application/json', 'Origin': f'http://localhost:{port}',
+            })
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read()), {'capture': {}, 'coverage': []})
+            self.assertEqual(seen[-1], studio.encode())
         finally:
             server.shutdown()
             server.server_close()
