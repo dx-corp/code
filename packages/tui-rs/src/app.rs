@@ -2087,6 +2087,12 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             );
         }
 
+        self.spawn_workspace_scan();
+        self.first_run_boot().await?;
+        if self.should_quit {
+            return Ok(0);
+        }
+
         // Paint the chrome immediately. Workspace file indexing used to run
         // *before* the first frame and blocked on `rg --files --follow` of the
         // entire cwd (often `$HOME`), so typing `maestro` looked hung/broken.
@@ -2099,7 +2105,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
 
         // Index @-mention files with a bounded, killable scan (see workspace.rs).
         // Kick it off on a background thread so agent spawn is not gated on it.
-        self.spawn_workspace_scan();
+        // The scan was started before first-run presentation and continues after skip.
 
         // Spawn the agent (async operation).
         // This creates the channels and starts the agent task.

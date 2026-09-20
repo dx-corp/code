@@ -816,6 +816,50 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "  /  01  SETUP",
+        [
+            "  /  01  CONFIGURACIÓN",
+            "  /  01  CONFIGURATION",
+            "  /  01  EINRICHTUNG",
+            "  /  01  セットアップ",
+            "  /  01  설정",
+            "  /  01  设置",
+        ],
+    ),
+    (
+        "  /  02  PREFERENCES",
+        [
+            "  /  02  PREFERENCIAS",
+            "  /  02  PRÉFÉRENCES",
+            "  /  02  EINSTELLUNGEN",
+            "  /  02  設定",
+            "  /  02  환경 설정",
+            "  /  02  偏好",
+        ],
+    ),
+    (
+        "  /  03  CONNECT",
+        [
+            "  /  03  CONECTAR",
+            "  /  03  CONNEXION",
+            "  /  03  VERBINDEN",
+            "  /  03  接続",
+            "  /  03  연결",
+            "  /  03  连接",
+        ],
+    ),
+    (
+        "  /  04  VERIFY",
+        [
+            "  /  04  VERIFICAR",
+            "  /  04  VÉRIFICATION",
+            "  /  04  PRÜFEN",
+            "  /  04  確認",
+            "  /  04  확인",
+            "  /  04  验证",
+        ],
+    ),
+    (
         "  /  Guided setup",
         [
             "  /  Establecimiento guiado",
@@ -6898,6 +6942,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Connect your account. Choose your model.",
+        [
+            "Conecta tu cuenta. Elige tu modelo.",
+            "Connectez votre compte. Choisissez votre modèle.",
+            "Konto verbinden. Modell auswählen.",
+            "アカウントを接続し、モデルを選択。",
+            "계정을 연결하고 모델을 선택하세요.",
+            "连接账户，选择模型。",
+        ],
+    ),
+    (
         "Connected",
         [
             "Conectado",
@@ -7406,6 +7461,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "オンボーディング表示設定を保存できません。",
             "onboarding 표시 선호도를 저장할 수 없습니다.",
             "无法保存登机显示偏好 。",
+        ],
+    ),
+    (
+        "Could not save the startup display preference.",
+        [
+            "No se pudo guardar la preferencia de pantalla de inicio.",
+            "Impossible d’enregistrer la préférence d’affichage au démarrage.",
+            "Die Einstellung für den Startbildschirm konnte nicht gespeichert werden.",
+            "起動画面の設定を保存できませんでした。",
+            "시작 화면 설정을 저장하지 못했습니다.",
+            "无法保存启动画面偏好设置。",
         ],
     ),
     (
@@ -8889,6 +8955,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
     (
         "Enter",
         ["Enter", "Enter", "Enter", "Enter", "Enter", "Enter"],
+    ),
+    (
+        "Enter / Esc  continue    Ctrl+C  quit",
+        [
+            "Enter / Esc  continuar    Ctrl+C  salir",
+            "Enter / Esc  continuer    Ctrl+C  quitter",
+            "Enter / Esc  weiter    Ctrl+C  beenden",
+            "Enter / Esc  続行    Ctrl+C  終了",
+            "Enter / Esc  계속    Ctrl+C  종료",
+            "Enter / Esc  继续    Ctrl+C  退出",
+        ],
     ),
     (
         "Enter send",
@@ -15616,6 +15693,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Preparing workspace search",
+        [
+            "Preparando la búsqueda del espacio de trabajo",
+            "Préparation de la recherche dans l’espace de travail",
+            "Arbeitsbereichssuche wird vorbereitet",
+            "ワークスペース検索を準備中",
+            "작업 공간 검색 준비 중",
+            "正在准备工作区搜索",
+        ],
+    ),
+    (
         "Press Enter to continue…   esc skip   PgUp/PgDn scroll",
         [
             "Pulsa Enter para continuar... esc skip PgUp/PgDn rollo",
@@ -17572,6 +17660,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "安全なゾーンへのコマンド実行を制限する",
             "안전한 영역에 명령 실행을 제한",
             "将命令执行限制在安全区域",
+        ],
+    ),
+    (
+        "Results appear here when the checks finish.",
+        [
+            "Los resultados aparecerán aquí al terminar las comprobaciones.",
+            "Les résultats s’afficheront ici à la fin des vérifications.",
+            "Nach Abschluss der Prüfungen erscheinen hier die Ergebnisse.",
+            "確認が完了すると、ここに結果が表示されます。",
+            "검사가 끝나면 여기에 결과가 표시됩니다.",
+            "检查完成后，结果将显示在这里。",
         ],
     ),
     (
@@ -19577,6 +19676,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "Identityで最初に署名し、OpenRouter、Anthropic、OpenAI、または別のキーを加えて下さい。",
             "Identity에 있는 표시는, 그 후에 OpenRouter, Anthropic, OpenAI, 또는 다른 열쇠를 추가합니다.",
             "先与身份签名,然后加入OpenRouter,Anthropic,OpenAI或另一键.",
+        ],
+    ),
+    (
+        "Sign in, then verify model access before your first task.",
+        [
+            "Inicia sesión y verifica el acceso al modelo antes de tu primera tarea.",
+            "Connectez-vous, puis vérifiez l’accès au modèle avant votre première tâche.",
+            "Anmelden und vor der ersten Aufgabe den Modellzugriff prüfen.",
+            "サインインして、最初のタスクの前にモデルへのアクセスを確認します。",
+            "로그인한 후 첫 작업 전에 모델 접근을 확인하세요.",
+            "登录后，在开始首个任务前验证模型访问权限。",
         ],
     ),
     (
@@ -24176,6 +24286,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "パスワードはチャット、ツールの結果、保存されたタスク履歴に含まれません。",
             "비밀번호는 채팅, 도구 결과, 저장된 작업 기록에 포함되지 않습니다.",
             "您的密码不会出现在聊天、工具结果或保存的任务历史中。",
+        ],
+    ),
+    (
+        "Your preferences",
+        [
+            "Tus preferencias",
+            "Vos préférences",
+            "Ihre Einstellungen",
+            "設定",
+            "환경 설정",
+            "偏好设置",
         ],
     ),
     (

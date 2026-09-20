@@ -148,7 +148,7 @@ impl PickerHelp<'_> {
 }
 
 /// Presentation options. Omit search by constructing a picker without `searchable`.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct PickerOptions<'a> {
     pub placeholder: &'a str,
     pub empty: &'a str,

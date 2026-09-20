@@ -1,5 +1,8 @@
 //! Deterministic component scenes using the widgets linked by the native TUI.
 mod conversation;
+mod menus;
+pub mod registry;
+pub mod review;
 
 use maestro_presentation::{
     appearance::{Appearance, LOOKS},
@@ -25,7 +28,7 @@ pub struct Scene {
     pub time_ms: u64,
 }
 /// Appearance scenes come from the same stable IDs as native commands.
-pub fn catalog() -> Vec<Scene> {
+fn legacy_catalog() -> Vec<Scene> {
     let mut scenes = Vec::new();
     for width in [40, 60, 100] {
         for (id, label) in [
@@ -69,7 +72,12 @@ pub fn catalog() -> Vec<Scene> {
         for id in ["picker", "picker-scrolled"] {
             scenes.push(Scene {
                 id: id.into(),
-                label: "Appearance picker".into(),
+                label: if id == "picker-scrolled" {
+                    "Appearance picker · scrolled"
+                } else {
+                    "Appearance picker"
+                }
+                .into(),
                 width,
                 height,
                 time_ms: 0,
@@ -80,7 +88,7 @@ pub fn catalog() -> Vec<Scene> {
     scenes
 }
 
-pub fn render(scene: &Scene) -> Result<Buffer, String> {
+fn legacy_render(scene: &Scene) -> Result<Buffer, String> {
     if !(8..=240).contains(&scene.width)
         || !(3..=100).contains(&scene.height)
         || scene.time_ms > 86_400_000
@@ -262,6 +270,24 @@ pub fn ansi(buffer: &Buffer) -> String {
     }
     out.push_str("\x1b[0m");
     out
+}
+
+/// One registry powers CLI rendering, browser navigation and fixture exports.
+pub fn registry() -> Result<registry::Registry, String> {
+    let mut registry = registry::Registry::default();
+    registry.import(
+        legacy_catalog(),
+        "products/maestro/packages/ui-preview-rs/src/lib.rs",
+        legacy_render,
+    )?;
+    menus::register(&mut registry)?;
+    Ok(registry)
+}
+pub fn catalog() -> Vec<Scene> {
+    registry().expect("valid built-in stories").scenes()
+}
+pub fn render(scene: &Scene) -> Result<Buffer, String> {
+    registry()?.render(scene)
 }
 
 #[cfg(test)]

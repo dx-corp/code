@@ -186,6 +186,7 @@ hot-reload = ["notify", "maestro-local-host/hot-reload"]
 hooks-full = ["lua", "wasm", "hot-reload"]
 
 [dev-dependencies]
+maestro-ui-preview = { path = "../ui-preview-rs" }
 maestro-local-host = { workspace = true, features = ["test-support"] }
 maestro-runtime = { workspace = true, features = ["test-support"] }
 maestro-session = { workspace = true, features = ["test-support"] }

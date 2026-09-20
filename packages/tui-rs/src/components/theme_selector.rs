@@ -1,7 +1,7 @@
 //! Theme selection uses the shared picker; applying a theme remains with the app.
 use crate::themes;
 use crossterm::event::KeyCode;
-use maestro_ui::{ActionPicker, KeyHint, Modal, ModalSize, PickerOptions, PickerOutcome};
+use maestro_ui::{ActionPicker, KeyHint, Menu, PickerOptions, PickerOutcome};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -79,38 +79,31 @@ impl ThemeSelector {
             return;
         }
         let theme = themes::current_ui_theme();
-        let inner = Modal::sized(
-            maestro_ui::localization::tr("Select Theme"),
-            ModalSize::Standard,
-        )
-        .theme(theme)
-        .render(frame, area);
         let current = &self.current_theme;
-        self.picker.render(
-            frame,
-            inner,
-            theme,
-            PickerOptions {
-                placeholder: maestro_ui::localization::tr("Type to filter themes..."),
-                empty: maestro_ui::localization::tr("No matching themes"),
-                hints: Some(&[
-                    KeyHint::new("Enter", maestro_ui::localization::tr("select")),
-                    KeyHint::new("Esc", maestro_ui::localization::tr("cancel")),
-                    KeyHint::new("↑↓", maestro_ui::localization::tr("navigate")),
-                ]),
-                ..PickerOptions::default()
-            },
-            |name| {
-                let mut spans = vec![Span::styled(name.as_str(), Style::default())];
-                if current.as_ref().is_some_and(|c| c == name) {
-                    spans.push(Span::styled(
-                        maestro_ui::localization::tr(" (current)"),
-                        Style::default().fg(theme.success),
-                    ));
-                }
-                ListItem::new(Line::from(spans))
-            },
-        );
+        Menu::new(
+            maestro_ui::localization::tr("Select Theme"),
+            &mut self.picker,
+        )
+        .options(PickerOptions {
+            placeholder: maestro_ui::localization::tr("Type to filter themes..."),
+            empty: maestro_ui::localization::tr("No matching themes"),
+            hints: Some(&[
+                KeyHint::new("Enter", maestro_ui::localization::tr("select")),
+                KeyHint::new("Esc", maestro_ui::localization::tr("cancel")),
+                KeyHint::new("↑↓", maestro_ui::localization::tr("navigate")),
+            ]),
+            ..PickerOptions::default()
+        })
+        .render_items(frame, area, theme, |name| {
+            let mut spans = vec![Span::styled(name.as_str(), Style::default())];
+            if current.as_ref().is_some_and(|c| c == name) {
+                spans.push(Span::styled(
+                    maestro_ui::localization::tr(" (current)"),
+                    Style::default().fg(theme.success),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        });
     }
 }
 #[cfg(test)]

@@ -129,6 +129,7 @@ mod input;
 mod layout;
 mod mcp_manager;
 mod message;
+pub mod startup;
 pub(crate) use message::should_render_message;
 pub(crate) mod message_layout;
 pub(crate) mod model_selector;
