@@ -86,6 +86,19 @@ loading/errors and scrolling with `TestBackend` and the native visual tools.
 
 ## Review the real controls visually
 
+From the public repository root, the quickest loop is:
+
+```sh
+./dev ui review --adapter shared-menu
+./dev ui inspect menu-ready
+./dev ui check menu-ready --require-contract
+```
+
+The inspection result names the production source, owning adapter, complete
+case matrix, behavior-contract state, and copyable review commands. The live
+workbench uses the same Rust buffers as pull request evidence and never accepts
+a baseline automatically.
+
 From `products/maestro`, use the existing capture suite with a debug `maestro`
 binary. Choose a new output directory for each review:
 

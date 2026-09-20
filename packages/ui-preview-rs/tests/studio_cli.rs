@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{fs, process::Command};
 
 fn run(args: &[&str]) -> std::process::Output {
     let test_exe = std::env::current_exe().unwrap();
@@ -81,11 +81,61 @@ fn verify_uses_registered_story_results() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let captures: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["summary"]["story"], "menu-ready");
+    assert_eq!(report["summary"]["owner"], "maestro-ui");
+    assert_eq!(report["captures"].as_array().unwrap().len(), 3);
+    assert_eq!(report["summary"]["assertions"], 0);
+    assert_eq!(
+        report["summary"]["contract_status"],
+        "behavior-not-asserted"
+    );
+}
+
+#[test]
+fn inspect_and_strict_check_expose_the_contribution_contract() {
+    let output = run(&["studio", "inspect", "menu-ready"]);
     assert!(
-        captures
-            .as_array()
-            .is_some_and(|captures| captures.len() == 3)
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["owner"], "maestro-ui");
+    assert_eq!(report["story"]["adapter"], "shared-menu");
+    assert!(report["story"]["cases"].as_array().unwrap().len() >= 3);
+    assert_eq!(report["commands"]["check"], "./dev ui check menu-ready");
+
+    let strict = run(&["studio", "verify", "menu-ready", "--require-contract"]);
+    assert_eq!(strict.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&strict.stderr).contains("behavior not asserted"));
+}
+
+#[test]
+fn migrate_check_validates_a_canonical_portable_receipt() {
+    let path = std::env::temp_dir().join(format!(
+        "maestro-ui-receipt-{}-{}.json",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let value: serde_json::Value =
+        serde_json::from_slice(include_bytes!("fixtures/recipe-v1.json")).unwrap();
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "maestro.ui.menu-recipe",
+            "version": 1,
+            "value": value,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = run(&["studio", "migrate", path.to_str().unwrap(), "--check"]);
+    let _ = fs::remove_file(path);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

@@ -407,11 +407,14 @@ pub fn fixture_requests() -> Vec<ThemeReplayRequest> {
         .collect()
 }
 
-pub fn captures() -> Result<Vec<Capture>, String> {
+pub fn captures_selected(selected: Option<&str>) -> Result<Vec<Capture>, String> {
     let mut captures = Vec::new();
     for fixture in FIXTURES {
         let (width, height) = fixture.dimensions();
         let story_id = format!("theme-selector-{}", fixture.id());
+        if selected.is_some_and(|id| id != story_id) {
+            continue;
+        }
         let story = ThemeStory::new(fixture, width, height)?;
         let contract = StoryContract::new(&story_id, "maestro-tui")
             .expect(StoryExpectation::observation("state", fixture.id()))
@@ -424,6 +427,9 @@ pub fn captures() -> Result<Vec<Capture>, String> {
     }
     for (index, request) in presets().into_iter().enumerate() {
         let id = format!("theme-selector-interaction-{}", index + 1);
+        if selected.is_some_and(|story_id| story_id != id) {
+            continue;
+        }
         let label = match index {
             0 => "Theme selector interaction / keyboard commit",
             1 => "Theme selector interaction / type and cancel",
@@ -455,8 +461,24 @@ pub fn captures() -> Result<Vec<Capture>, String> {
 }
 
 #[cfg(test)]
+fn captures() -> Result<Vec<Capture>, String> {
+    captures_selected(None)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_capture_renders_only_the_selected_story() {
+        let captures = captures_selected(Some("theme-selector-interaction-1")).unwrap();
+        assert!(!captures.is_empty());
+        assert!(
+            captures
+                .iter()
+                .all(|capture| capture.scene.id == "theme-selector-interaction-1")
+        );
+    }
 
     #[test]
     fn combined_retry_and_cancel_has_one_final_state_expectation() {

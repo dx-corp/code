@@ -164,8 +164,8 @@ impl AdapterRegistry {
                 ..AdapterManifest::active(
                     "legacy",
                     "maestro-presentation",
-                    "products/maestro/packages/ui-preview-rs/src",
-                    "products/maestro/packages/ui-preview-rs/src/lib.rs",
+                    "packages/ui-preview-rs/src",
+                    "packages/ui-preview-rs/src/lib.rs",
                     StoryTemplate::ThemeSelector,
                 )
             },
@@ -174,8 +174,8 @@ impl AdapterRegistry {
                 ..AdapterManifest::active(
                     "shared-menu",
                     "maestro-ui",
-                    "products/maestro/packages/ui-preview-rs/src/stories",
-                    "products/maestro/packages/ui-preview-rs/src/stories/mod.rs",
+                    "packages/ui-preview-rs/src/stories",
+                    "packages/ui-preview-rs/src/stories/mod.rs",
                     StoryTemplate::MenuRecipe,
                 )
             },
@@ -185,8 +185,8 @@ impl AdapterRegistry {
                 ..AdapterManifest::active(
                     "theme-selector",
                     "maestro-tui",
-                    "products/maestro/packages/tui-rs/examples/support/ui_stories",
-                    "products/maestro/packages/tui-rs/examples/support/ui_stories.rs",
+                    "packages/tui-rs/examples/support/ui_stories",
+                    "packages/tui-rs/examples/support/ui_stories.rs",
                     StoryTemplate::ThemeSelector,
                 )
             },
@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(theme.verifier, AdapterVerifier::OnboardingPreview);
         assert_eq!(
             theme.fixture_dir,
-            PathBuf::from("products/maestro/packages/tui-rs/examples/support/ui_stories")
+            PathBuf::from("packages/tui-rs/examples/support/ui_stories")
         );
         let source = template_source(theme, "workspace-picker").unwrap();
         assert!(source.contains("ThemeSelector::with_themes"));

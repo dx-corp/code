@@ -185,6 +185,7 @@ pub fn html_with_coverage(
         .replace("__COVERAGE__", &coverage)
         .replace("__MAESTRO_CATALOG_JS__", include_str!("web/catalog.js"))
         .replace("__MAESTRO_PLAYBACK_JS__", include_str!("web/playback.js"))
+        .replace("__MAESTRO_WORKSPACE_JS__", include_str!("web/workspace.js"))
         .replace("__MAESTRO_AUTHORING_JS__", include_str!("web/authoring.js"))
         .replace("__MAESTRO_RENDERING_JS__", include_str!("web/rendering.js")))
 }

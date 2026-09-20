@@ -18,6 +18,42 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 WORKSPACE = Path(__file__).resolve().parents[2]
 
 
+def repository_provenance(workspace):
+    """Return bounded checkout identity without exposing the local absolute path."""
+    try:
+        def git_output(*args):
+            return (
+                subprocess.run(
+                    ["git", "-C", str(workspace), *args],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=True,
+                )
+                .stdout.decode()
+                .strip()
+            )
+
+        remote = git_output("remote", "get-url", "origin")
+        branch = git_output("branch", "--show-current") or "detached"
+        revision = git_output("rev-parse", "HEAD")
+        if remote.startswith("git@") and ":" in remote:
+            repository = remote.split(":", 1)[1]
+        elif "://" in remote:
+            location = remote.split("://", 1)[1]
+            repository = location.split("/", 1)[1] if "/" in location else location
+        else:
+            repository = Path(remote).name
+        repository = repository.removesuffix(".git").strip("/")
+        return {
+            "repository": (repository or "workspace")[:128],
+            "branch": branch[:256],
+            "revision": revision[:64],
+        }
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError, ValueError):
+        return {"repository": "workspace", "branch": "unknown", "revision": ""}
+
+
 def source_paths(workspace, filter_kind="", filter_value="", manifests=None):
     paths = [
         workspace / "Cargo.toml",
@@ -27,17 +63,16 @@ def source_paths(workspace, filter_kind="", filter_value="", manifests=None):
     roots = None
     if filter_kind == "adapter" and manifests and filter_value in manifests:
         manifest = manifests[filter_value]
-        mono = workspace.parents[1]
         roots = [
             workspace / "packages" / "ui-preview-rs",
             workspace / "packages" / "interaction-rs",
             workspace / "packages" / "ui-rs",
             workspace / "packages" / "presentation-rs",
-            mono / manifest["fixture_dir"],
+            workspace / manifest["fixture_dir"],
         ]
         if manifest.get("template") == "theme-selector":
             roots.append(workspace / "packages" / "tui-rs")
-        paths.append(mono / manifest["registration_file"])
+        paths.append(workspace / manifest["registration_file"])
     if roots is None:
         roots = (workspace / "packages", workspace / "scripts" / "dev")
     for root in roots:
@@ -131,6 +166,7 @@ class Preview:
         manifest_command=None,
         filter_kind="",
         filter_value="",
+        source_provenance=None,
     ):
         self.command, self.env = command, env
         self.build_command = build_command
@@ -139,6 +175,12 @@ class Preview:
         self.sequences_command = sequences_command
         self.manifest_command = manifest_command
         self.filter_kind, self.filter_value = filter_kind, filter_value
+        if callable(source_provenance):
+            self._source_provenance_provider = source_provenance
+        else:
+            fixed_provenance = dict(source_provenance or {})
+            self._source_provenance_provider = lambda: dict(fixed_provenance)
+        self._source_provenance = {}
         self.manifests = {}
         self.generation = None
         self.error = ""
@@ -182,8 +224,10 @@ class Preview:
             return request_id
 
     def install_generation(self, generation):
+        source_provenance = self._source_provenance_provider()
         with self.lock:
             self.generation = generation
+            self._source_provenance = source_provenance
             self.error = ""
 
     def finish_build(self, generation, request_id=None):
@@ -191,7 +235,12 @@ class Preview:
         with self.lock:
             if request_id != self._building_request:
                 return False
+        source_provenance = self._source_provenance_provider()
+        with self.lock:
+            if request_id != self._building_request:
+                return False
             self.generation = generation
+            self._source_provenance = source_provenance
             self._building_request = None
             self.error = ""
             return True
@@ -433,6 +482,7 @@ class Preview:
                 "generation": generation.id if generation else "",
                 "renderer_digest": generation.renderer_digest if generation else "",
                 "source_digest": generation.source_digest if generation else "",
+                "source": self._source_provenance,
                 "filter": {
                     "kind": generation.filter_kind,
                     "value": generation.filter_value,
@@ -690,7 +740,9 @@ def main():
     filter_kind = "story" if args.story else ("adapter" if args.adapter else "")
     filter_value = args.story or args.adapter or ""
     filter_args = [f"--{filter_kind}", filter_value] if filter_kind else []
-    if args.components_only:
+    source_provenance = lambda: repository_provenance(WORKSPACE)
+    components_only = args.components_only or bool(args.adapter)
+    if components_only:
         binary = target / f"maestro-ui-preview{executable_suffix}"
         build_command = ["cargo", "build", "--locked", "-p", "maestro-ui-preview"]
         preview = Preview(
@@ -701,10 +753,9 @@ def main():
             manifest_command=[str(binary), "studio", "manifests"],
             filter_kind=filter_kind,
             filter_value=filter_value,
+            source_provenance=source_provenance,
         )
     else:
-        if filter_kind:
-            parser.error("--story and --adapter currently require --components-only")
         binary = target / "examples" / f"onboarding-preview{executable_suffix}"
         build_command = [
             "cargo",
@@ -716,7 +767,7 @@ def main():
             "onboarding-preview",
         ]
         preview = Preview(
-            [str(binary), "--html"],
+            [str(binary), "--html", *filter_args],
             env,
             build_command=build_command,
             replay_command=[str(binary), "--replay-stdin"],
@@ -724,6 +775,7 @@ def main():
             sequences_command=[str(binary), "--sequences"],
             filter_kind=filter_kind,
             filter_value=filter_value,
+            source_provenance=source_provenance,
         )
     # Bind before building, so a busy port fails without starting an unused build.
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(preview))
