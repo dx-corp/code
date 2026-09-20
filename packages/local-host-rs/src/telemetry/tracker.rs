@@ -534,6 +534,109 @@ impl TurnTracker {
         }
     }
 
+    pub(crate) fn record_output(&mut self, bytes: u64, first_observed_at: std::time::Instant) {
+        if bytes == 0 {
+            return;
+        }
+        if let Some(turn) = &mut self.current_turn {
+            turn.record_output_at(first_observed_at);
+            turn.add_output_size(bytes);
+            self.diagnostics.output_size_bytes = Some(
+                self.diagnostics
+                    .output_size_bytes
+                    .unwrap_or(0)
+                    .saturating_add(bytes),
+            );
+        }
+    }
+
+    pub(crate) fn finish_side_question(
+        &mut self,
+        side_id: &str,
+        answer_bytes: u64,
+        usage: Option<&TokenUsage>,
+        failed: bool,
+    ) -> Option<CanonicalTurnEvent> {
+        let mut side = self.side_questions.remove(side_id)?;
+        side.record_output(answer_bytes, std::time::Instant::now());
+        side.handle_event(&FromAgent::ResponseEnd {
+            response_id: side_id.to_owned(),
+            usage: usage.cloned(),
+        });
+        side.end_turn(
+            if failed {
+                TurnStatus::Error
+            } else {
+                TurnStatus::Success
+            },
+            failed.then(|| ErrorDetails {
+                category: Some("runtime".into()),
+                message: None,
+            }),
+        )
+    }
+
+    pub(crate) fn record_tool_call(
+        &mut self,
+        call_id: &str,
+        tool: &str,
+        input_size_bytes: Option<u64>,
+        requires_approval: bool,
+    ) {
+        if requires_approval {
+            self.pending_approvals
+                .entry(call_id.to_owned())
+                .or_insert_with(std::time::Instant::now);
+        }
+        if let Some(turn) = &mut self.current_turn {
+            turn.record_tool_start(tool, call_id, input_size_bytes);
+        }
+    }
+
+    pub(crate) fn record_tool_end(
+        &mut self,
+        call_id: &str,
+        success: bool,
+        receipt: Option<(&str, &str, maestro_runtime::ExecutionStatus, Option<u64>)>,
+    ) {
+        if let Some(turn) = &mut self.current_turn {
+            let receipt = receipt.map(|(receipt_call_id, tool_name, status, duration_ms)| {
+                maestro_runtime::ExecutionReceipt {
+                    code_authority: None,
+                    call_id: receipt_call_id.to_owned(),
+                    tool_name: tool_name.to_owned(),
+                    source: maestro_runtime::ExecutionSource::Native,
+                    status,
+                    duration_ms,
+                    policy: None,
+                    details: maestro_runtime::ToolReceiptDetails::None,
+                }
+            });
+            turn.record_tool_receipt(call_id, receipt.as_ref());
+            turn.record_tool_end(call_id, success, None, None);
+        }
+    }
+
+    /// Close any state whose causal stream became incomplete. This preserves
+    /// the last observed facts while preventing a later turn from inheriting
+    /// measurements across a queue gap.
+    pub(crate) fn abandon_incomplete(&mut self) -> Vec<CanonicalTurnEvent> {
+        let snapshots = self.pending_snapshots();
+        self.current_turn = None;
+        self.current_identity_scope = None;
+        self.current_response_id = None;
+        self.accumulated_usage = None;
+        self.cost_complete = true;
+        self.diagnostics = Default::default();
+        self.response_started = None;
+        self.response_reasoning = None;
+        self.total_reasoning = None;
+        self.current_attempt = None;
+        self.pending_approvals.clear();
+        self.side_questions.clear();
+        snapshots
+    }
+
     fn start_turn(&mut self) {
         self.turn_number += 1;
         self.diagnostics = super::operation::OperationDiagnostics {

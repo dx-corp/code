@@ -635,9 +635,15 @@ impl TurnCollector {
 
     /// Observe output without retaining its content.
     pub fn record_output(&mut self) {
+        self.record_output_at(Instant::now());
+    }
+
+    /// Preserve the producer-observed first-output instant when collection is
+    /// performed by a delayed background worker.
+    pub(crate) fn record_output_at(&mut self, observed_at: Instant) {
         self.measurements.first_output_ms.get_or_insert_with(|| {
-            self.start_time
-                .elapsed()
+            observed_at
+                .saturating_duration_since(self.start_time)
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64
         });

@@ -667,97 +667,70 @@ pub(crate) use maestro_runtime::agent::managed_turn_lineage_id;
 /// Observe the same event stream delivered to the caller, preserving the
 /// canonical turn accounting that was attached to the actor before extraction.
 fn relay_runtime_events(
-    mut runtime_event_rx: tokio::sync::mpsc::UnboundedReceiver<FromAgent>,
+    runtime_event_rx: tokio::sync::mpsc::UnboundedReceiver<FromAgent>,
     config: &NativeAgentConfig,
     provider_name: String,
     telemetry_identity_scope: Arc<RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>,
     telemetry_host: Option<maestro_runtime::agent::NativeExecutionHostHandle>,
 ) -> tokio::sync::mpsc::UnboundedReceiver<FromAgent> {
     let (consumer_event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut turn_tracker =
-        crate::telemetry::TurnTracker::new(crate::telemetry::TurnTrackerConfig {
+    let initial_identity_scope = telemetry_identity_scope
+        .read()
+        .expect("telemetry identity scope lock poisoned")
+        .clone();
+    let telemetry = crate::telemetry::TurnTelemetryRelay::spawn(
+        crate::telemetry::TurnTrackerConfig {
             // A runtime run ID is not a captured conversation ID. Missing
             // session context stays unattributed in the cloud projection.
             session_id: String::new(),
             sampling_config: crate::telemetry::TailSamplingConfig::from_env(),
-        });
-    turn_tracker.update_context(crate::telemetry::TurnTrackerContext {
-        model: Some(crate::telemetry::ModelInfo {
-            id: config.model.clone(),
-            provider: provider_name,
-            thinking_level: crate::telemetry::ThinkingLevel::Off,
-        }),
-        sandbox_mode: if config.sandbox_policy.is_some() {
-            crate::telemetry::SandboxMode::Local
-        } else {
-            crate::telemetry::SandboxMode::None
         },
-        approval_mode: match config.approval_mode {
-            ApprovalMode::Yolo => crate::telemetry::ApprovalMode::Auto,
-            ApprovalMode::Selective | ApprovalMode::Safe => crate::telemetry::ApprovalMode::Prompt,
+        crate::telemetry::TurnTrackerContext {
+            model: Some(crate::telemetry::ModelInfo {
+                id: config.model.clone(),
+                provider: provider_name,
+                thinking_level: crate::telemetry::ThinkingLevel::Off,
+            }),
+            sandbox_mode: if config.sandbox_policy.is_some() {
+                crate::telemetry::SandboxMode::Local
+            } else {
+                crate::telemetry::SandboxMode::None
+            },
+            approval_mode: match config.approval_mode {
+                ApprovalMode::Yolo => crate::telemetry::ApprovalMode::Auto,
+                ApprovalMode::Selective | ApprovalMode::Safe => {
+                    crate::telemetry::ApprovalMode::Prompt
+                }
+            },
+            mcp_servers: Vec::new(),
+            context_source_count: 0,
+            features: crate::telemetry::FeatureFlags {
+                safe_mode: config.approval_mode != ApprovalMode::Yolo,
+                ..Default::default()
+            },
+            identity_scope: initial_identity_scope,
         },
-        mcp_servers: Vec::new(),
-        context_source_count: 0,
-        features: crate::telemetry::FeatureFlags {
-            safe_mode: config.approval_mode != ApprovalMode::Yolo,
-            ..Default::default()
-        },
-        identity_scope: telemetry_identity_scope
-            .read()
-            .expect("telemetry identity scope lock poisoned")
-            .clone(),
-    });
+        telemetry_identity_scope,
+        telemetry_host,
+    );
+    relay_runtime_events_with_telemetry(runtime_event_rx, telemetry, consumer_event_tx);
+    event_rx
+}
+
+fn relay_runtime_events_with_telemetry(
+    mut runtime_event_rx: tokio::sync::mpsc::UnboundedReceiver<FromAgent>,
+    mut telemetry: crate::telemetry::TurnTelemetryRelay,
+    consumer_event_tx: tokio::sync::mpsc::UnboundedSender<FromAgent>,
+) {
     tokio::spawn(async move {
-        let mut journal = crate::telemetry::TurnJournal::open();
         while let Some(event) = runtime_event_rx.recv().await {
-            if matches!(
-                &event,
-                FromAgent::TurnStarted | FromAgent::ResponseStart { .. }
-                    | FromAgent::SideQuestionStart { .. }
-                    | FromAgent::OperationObservation { observation: maestro_runtime_contracts::operation_observation::OperationObservation::Admitted { .. } }
-            ) {
-                let session_id = match &telemetry_host {
-                    Some(host) => host.hook_session_id().await,
-                    None => None,
-                };
-                // Clear a previous session when the owner has none; the
-                // collector pins the current turn's identity at its start.
-                turn_tracker.set_session_id(session_id.unwrap_or_default());
-            }
-            if matches!(&event, FromAgent::ModelChanged { .. }) {
-                turn_tracker.set_identity_scope(
-                    telemetry_identity_scope
-                        .read()
-                        .expect("telemetry identity scope lock poisoned")
-                        .clone(),
-                );
-            }
-            let completed = turn_tracker.handle_event(&event);
-            if let Some(completed) = completed.as_ref() {
-                if let Some(journal) = &mut journal {
-                    journal.finish(completed);
-                } else {
-                    crate::telemetry::record_canonical_turn_event(completed);
-                }
-            }
-            if matches!(
-                &event,
-                FromAgent::TurnStarted
-                    | FromAgent::OperationObservation { .. }
-                    | FromAgent::SideQuestionStart { .. }
-                    | FromAgent::ResponseStart { .. }
-                    | FromAgent::ResponseEnd { .. }
-            ) {
-                if let Some(journal) = &mut journal {
-                    journal.observe(&turn_tracker.pending_snapshots());
-                }
-            }
+            let observation = telemetry.project(&event);
             // A detached consumer does not end the actor's turn. Keep draining
             // until the runtime exits so terminal telemetry is still recorded.
             let _ = consumer_event_tx.send(event);
+            telemetry.submit(observation);
         }
     });
-    event_rx
 }
 
 /// Bind a model transition before publishing its identity to turn telemetry.
@@ -815,6 +788,28 @@ mod identity_transition_tests {
                 provider: "test".to_owned(),
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn saturated_telemetry_never_delays_runtime_event_delivery() {
+        let (runtime_tx, runtime_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (telemetry, _blocked_receiver) =
+            crate::telemetry::TurnTelemetryRelay::saturated_for_test();
+        super::relay_runtime_events_with_telemetry(runtime_rx, telemetry, consumer_tx);
+
+        runtime_tx
+            .send(super::FromAgent::ResponseStart {
+                response_id: "response".to_owned(),
+            })
+            .unwrap();
+
+        let delivered =
+            tokio::time::timeout(std::time::Duration::from_millis(100), consumer_rx.recv())
+                .await
+                .expect("a full telemetry queue must not delay the consumer")
+                .expect("runtime event relay closed unexpectedly");
+        assert!(matches!(delivered, super::FromAgent::ResponseStart { .. }));
     }
 
     fn scope(org: &str, workspace: &str) -> Option<TelemetryIdentityScope> {
