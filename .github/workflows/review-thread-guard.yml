@@ -19,8 +19,9 @@ concurrency:
 jobs:
   unresolved-review-threads:
     if: ${{ github.event.pull_request.draft == false }}
-    uses: dx-corp/.github/.github/workflows/review-thread-guard.yml@d45c0bca2cf2ccea6786c57c9b5e84df09009fc8
+    uses: dx-corp/.github/.github/workflows/review-thread-guard.yml@8e89570d9d337b9b3f153374610e50965de8c193
     with:
       pr_number: ${{ github.event.pull_request.number }}
       min_severity: high
-      guard_ref: d45c0bca2cf2ccea6786c57c9b5e84df09009fc8
+      runner_label: ubuntu-latest
+      guard_ref: 8e89570d9d337b9b3f153374610e50965de8c193
