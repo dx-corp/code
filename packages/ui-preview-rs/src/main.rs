@@ -9,19 +9,41 @@ use std::{
     process::Command,
 };
 
-fn repo_root() -> Result<PathBuf, String> {
-    let current = std::env::current_dir().map_err(|error| error.to_string())?;
-    for directory in current.ancestors() {
-        if directory.join("products/maestro").is_dir() {
-            return Ok(directory.to_path_buf());
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkspaceLayout {
+    repository_root: PathBuf,
+    maestro_root: PathBuf,
+}
+impl WorkspaceLayout {
+    fn discover_from(start: &Path) -> Result<Self, String> {
+        for directory in start.ancestors() {
+            let nested = directory.join("products/maestro");
+            if nested.join("Cargo.toml").is_file() && nested.join("packages/ui-preview-rs").is_dir()
+            {
+                return Ok(Self {
+                    repository_root: directory.to_path_buf(),
+                    maestro_root: nested,
+                });
+            }
         }
+        for directory in start.ancestors() {
+            if directory.join("Cargo.toml").is_file()
+                && directory.join("packages/ui-preview-rs").is_dir()
+            {
+                return Ok(Self {
+                    repository_root: directory.to_path_buf(),
+                    maestro_root: directory.to_path_buf(),
+                });
+            }
+        }
+        Err("run Studio inside Mono or the Maestro public repository".into())
     }
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .find(|directory| directory.join("products/maestro").is_dir())
-        .map(Path::to_path_buf)
-        .ok_or("run Studio inside the Mono repository".into())
+}
+
+fn workspace_layout() -> Result<WorkspaceLayout, String> {
+    let current = std::env::current_dir().map_err(|error| error.to_string())?;
+    WorkspaceLayout::discover_from(&current)
+        .or_else(|_| WorkspaceLayout::discover_from(Path::new(env!("CARGO_MANIFEST_DIR"))))
 }
 
 fn verify_adapter(
@@ -40,9 +62,8 @@ fn verify_adapter(
             return Err("generated fixture formatting failed".into());
         }
     }
-    let maestro = root.join("products/maestro");
     let mut cargo = Command::new("cargo");
-    cargo.current_dir(maestro).args(["test", "--locked"]);
+    cargo.current_dir(root).args(["test", "--locked"]);
     match verifier {
         AdapterVerifier::UiPreview => {
             cargo.args(["-p", "maestro-ui-preview"]);
@@ -63,7 +84,7 @@ fn verify_adapter(
 
 fn onboarding_story(root: &Path, story_id: &str) -> Result<Option<Vec<serde_json::Value>>, String> {
     let output = Command::new("cargo")
-        .current_dir(root.join("products/maestro"))
+        .current_dir(root)
         .args([
             "run",
             "--quiet",
@@ -74,10 +95,15 @@ fn onboarding_story(root: &Path, story_id: &str) -> Result<Option<Vec<serde_json
             "onboarding-preview",
             "--",
             "--json",
+            "--story",
+            story_id,
         ])
         .output()
         .map_err(|error| format!("start onboarding verifier: {error}"))?;
     if !output.status.success() {
+        if String::from_utf8_lossy(&output.stderr).contains(&format!("unknown story: {story_id}")) {
+            return Ok(None);
+        }
         return Err(format!(
             "onboarding verifier failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -86,6 +112,38 @@ fn onboarding_story(root: &Path, story_id: &str) -> Result<Option<Vec<serde_json
     let captures: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
     validate_onboarding_captures(captures, story_id)
+}
+
+#[derive(Debug, serde::Serialize)]
+struct VerificationSummary {
+    story: String,
+    owner: String,
+    captures: usize,
+    assertions: usize,
+    contract_status: &'static str,
+}
+
+fn verification_summary(
+    story: &str,
+    owner: &str,
+    captures: &[maestro_ui_preview::review::Capture],
+) -> VerificationSummary {
+    let assertions = captures
+        .iter()
+        .filter_map(|capture| capture.semantic.as_ref())
+        .map(|semantic| semantic.expectations.len())
+        .sum();
+    VerificationSummary {
+        story: story.into(),
+        owner: owner.into(),
+        captures: captures.len(),
+        assertions,
+        contract_status: if assertions == 0 {
+            "behavior-not-asserted"
+        } else {
+            "asserted-passed"
+        },
+    }
 }
 
 fn validate_onboarding_captures(
@@ -170,33 +228,135 @@ fn studio(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
+    if command == "inspect" {
+        if tail.len() != 1 || tail[0].starts_with('-') {
+            return Err("usage: studio inspect <story-id>".into());
+        }
+        let registry = maestro_ui_preview::registry()?;
+        let inspection = registry.inspect(&tail[0])?;
+        let adapters = AdapterRegistry::builtins()?;
+        let manifest = adapters.get(&inspection.adapter)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "story": inspection,
+                "owner": manifest.owner,
+                "adapter": manifest,
+                "commands": {
+                    "check": format!("./dev ui check {}", tail[0]),
+                    "review": format!("./dev ui review --story {}", tail[0]),
+                },
+            }))
+            .map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    if command == "migrate" {
+        let check = tail.iter().any(|arg| arg == "--check");
+        let paths: Vec<_> = tail
+            .iter()
+            .filter(|arg| arg.as_str() != "--check")
+            .collect();
+        if paths.len() != 1 || paths[0].starts_with('-') {
+            return Err("usage: studio migrate <receipt.json> [--check]".into());
+        }
+        let path = Path::new(paths[0]);
+        let size = std::fs::metadata(path)
+            .map_err(|error| format!("read {} metadata: {error}", path.display()))?
+            .len();
+        if size > 1_048_576 {
+            return Err("receipt exceeds 1048576 bytes".into());
+        }
+        let bytes =
+            std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let schema = value.get("schema").and_then(serde_json::Value::as_str);
+        let migrated = match schema {
+            Some(maestro_ui_preview::schema::RECIPE_SCHEMA) => serde_json::to_value(
+                maestro_ui_preview::schema::migrate_recipe(value)
+                    .map_err(|error| error.to_string())?,
+            ),
+            Some(maestro_ui_preview::schema::REPLAY_SCHEMA) => serde_json::to_value(
+                maestro_ui_preview::schema::migrate_replay(value)
+                    .map_err(|error| error.to_string())?,
+            ),
+            Some(maestro_ui_preview::schema::CONTRACT_SCHEMA) => serde_json::to_value(
+                maestro_ui_preview::schema::migrate_contract(value)
+                    .map_err(|error| error.to_string())?,
+            ),
+            Some(other) => return Err(format!("unsupported migration schema: {other}")),
+            None => return Err("migration requires a versioned wire envelope".into()),
+        }
+        .map_err(|error| error.to_string())?;
+        let encoded =
+            serde_json::to_string_pretty(&migrated).map_err(|error| error.to_string())? + "\n";
+        if check {
+            let current: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            if current != migrated {
+                return Err(format!("{} requires migration", path.display()));
+            }
+        } else {
+            std::fs::write(path, encoded)
+                .map_err(|error| format!("write {}: {error}", path.display()))?;
+        }
+        println!("{}", path.display());
+        return Ok(());
+    }
     if !matches!(command.as_str(), "new" | "verify" | "promote") {
         return Err(format!("unknown studio command: {command}"));
     }
     if command == "verify" {
-        if tail.len() != 1 {
-            return Err("usage: studio verify <story-id>".into());
+        let require_contract = tail.iter().any(|arg| arg == "--require-contract");
+        let positional: Vec<_> = tail
+            .iter()
+            .filter(|arg| arg.as_str() != "--require-contract")
+            .collect();
+        if positional.len() != 1 {
+            return Err("usage: studio verify <story-id> [--require-contract]".into());
         }
-        let story_id = &tail[0];
+        let story_id = positional[0];
         if story_id.starts_with('-') {
             return Err(format!("unknown argument: {story_id}"));
         }
-        let captures: Vec<_> = maestro_ui_preview::registry()?
-            .results()?
-            .into_iter()
-            .filter(|capture| capture.scene.id == *story_id)
-            .collect();
-        if captures.is_empty() {
-            let root = repo_root()?;
-            if let Some(capture) = onboarding_story(&root, story_id)? {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&capture).map_err(|error| error.to_string())?
-                );
-                return Ok(());
+        let registry = maestro_ui_preview::registry()?;
+        let captures = registry
+            .filtered(StoryFilter::Story(story_id.clone()))
+            .and_then(|selected| selected.captures());
+        let captures = match captures {
+            Ok(captures) => captures,
+            Err(error) if error == format!("unknown story: {story_id}") => {
+                let root = workspace_layout()?.maestro_root;
+                if let Some(capture) = onboarding_story(&root, story_id)? {
+                    let assertions = capture
+                        .iter()
+                        .filter_map(|value| value.pointer("/semantic/expectations"))
+                        .filter_map(serde_json::Value::as_array)
+                        .map(Vec::len)
+                        .sum::<usize>();
+                    if require_contract && assertions == 0 {
+                        return Err(format!("story {story_id}: behavior not asserted"));
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "summary": {
+                                "story": story_id,
+                                "owner": "maestro-tui",
+                                "captures": capture.len(),
+                                "assertions": assertions,
+                                "contract_status": if assertions == 0 { "behavior-not-asserted" } else { "asserted-passed" },
+                            },
+                            "captures": capture,
+                        })).map_err(|error| error.to_string())?
+                    );
+                    return Ok(());
+                }
+                return Err(format!("unknown story: {story_id}"));
             }
-            return Err(format!("unknown story: {story_id}"));
-        }
+            Err(error) => return Err(error),
+        };
         let failures: Vec<_> = captures
             .iter()
             .filter_map(|capture| capture.semantic.as_ref())
@@ -208,9 +368,23 @@ fn studio(args: &[String]) -> Result<(), String> {
                 failures.join("; ")
             ));
         }
+        let adapters = AdapterRegistry::builtins()?;
+        let diagnostics = registry.contribution_diagnostics(&adapters)?;
+        let owner = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.story == *story_id)
+            .map_or("unowned", |diagnostic| diagnostic.owner.as_str());
+        let summary = verification_summary(story_id, owner, &captures);
+        if require_contract && summary.assertions == 0 {
+            return Err(format!("story {story_id}: behavior not asserted"));
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&captures).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "summary": summary,
+                "captures": captures,
+            }))
+            .map_err(|error| error.to_string())?
         );
         return Ok(());
     }
@@ -243,7 +417,7 @@ fn studio(args: &[String]) -> Result<(), String> {
         positional.ok_or_else(|| format!("studio {command} requires a story or recipe path"))?;
     let adapters = AdapterRegistry::builtins()?;
     let adapter = adapters.get(&adapter_id)?;
-    let root = repo_root()?;
+    let root = workspace_layout()?.maestro_root;
     let plan = if command == "new" {
         create_story(&root, adapter, &value, check)?
     } else {
@@ -437,6 +611,57 @@ fn main() {
 #[cfg(test)]
 mod studio_tests {
     use super::*;
+    use std::fs;
+
+    fn temp_layout(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("maestro-ui-layout-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn workspace_layout_supports_mono_and_the_public_repository() {
+        let mono = temp_layout("mono");
+        let maestro = mono.join("products/maestro");
+        fs::create_dir_all(maestro.join("packages/ui-preview-rs")).unwrap();
+        fs::write(maestro.join("Cargo.toml"), "[workspace]\n").unwrap();
+        let layout = WorkspaceLayout::discover_from(&maestro.join("packages/ui-preview-rs"))
+            .expect("Mono layout");
+        assert_eq!(layout.repository_root, mono);
+        assert_eq!(layout.maestro_root, maestro);
+
+        let public = temp_layout("public");
+        fs::create_dir_all(public.join("packages/ui-preview-rs/src")).unwrap();
+        fs::write(public.join("Cargo.toml"), "[workspace]\n").unwrap();
+        let layout = WorkspaceLayout::discover_from(&public.join("packages/ui-preview-rs/src"))
+            .expect("public layout");
+        assert_eq!(layout.repository_root, public);
+        assert_eq!(layout.maestro_root, layout.repository_root);
+        let _ = fs::remove_dir_all(layout.repository_root);
+    }
+
+    #[test]
+    fn verification_summary_names_unasserted_behavior() {
+        let captures = vec![
+            maestro_ui_preview::review::capture(
+                Scene {
+                    id: "plain-menu".into(),
+                    label: "Plain menu".into(),
+                    width: 20,
+                    height: 5,
+                    time_ms: 0,
+                },
+                |_| {},
+            )
+            .unwrap(),
+        ];
+        let summary = verification_summary("plain-menu", "maestro-ui", &captures);
+        assert_eq!(summary.contract_status, "behavior-not-asserted");
+        assert_eq!(summary.captures, 1);
+        assert_eq!(summary.assertions, 0);
+    }
 
     #[test]
     fn controller_capture_verification_rejects_failed_expectations() {

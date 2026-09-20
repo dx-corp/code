@@ -23,6 +23,27 @@ cargo run -p maestro -- web --port 3000
 
 Use `cargo test -p <package> [test-name]` for focused work. Workspace package names include `maestro`, `maestro-tui`, `maestro-runtime`, `maestro-runtime-contracts`, `maestro-runtime-gateway`, and `ambient-agent`.
 
+### Native UI development
+
+Use the repository-local UI front door instead of remembering Cargo examples
+or fixture paths:
+
+```bash
+./dev ui                         # live full-flow workbench
+./dev ui list                    # registered stories and cases
+./dev ui inspect menu-ready      # owner, source, states, and exact commands
+./dev ui check menu-ready        # focused render and behavior verification
+./dev ui new workspace-picker --adapter shared-menu --check
+./dev ui doctor
+```
+
+`./dev ui review --story ID` keeps the familiar AI composer and onboarding
+flows in the production Rust renderer while narrowing rebuilds to the selected
+story. Exported menu and theme receipts replay with `./dev ui replay FILE`.
+Run `./dev ui migrate FILE --check` on checked-in receipts. See the
+[UI contributor workflow](docs/ui-contributor-workflow.md) for adapters,
+compatibility, and pull request evidence.
+
 ## Verification
 
 Before opening a pull request, run the checks relevant to the changed surface. For workspace or release changes, run the full set:

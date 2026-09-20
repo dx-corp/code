@@ -341,7 +341,15 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_revision_reports_last_good_build_while_next_generation_builds(self):
         preview = workbench.Preview(
-            ["renderer"], {}, filter_kind="adapter", filter_value="shared-menu"
+            ["renderer"],
+            {},
+            filter_kind="adapter",
+            filter_value="shared-menu",
+            source_provenance={
+                "repository": "mono",
+                "branch": "codex/ui-workspace",
+                "revision": "0123456789abcdef",
+            },
         )
         preview.install_generation(self.generation("g1"))
         preview.begin_build("g2")
@@ -349,10 +357,64 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(state["generation"], "g1")
         self.assertTrue(state["building"])
         self.assertTrue(state["stale"])
+        self.assertEqual(
+            state["source"],
+            {
+                "repository": "mono",
+                "branch": "codex/ui-workspace",
+                "revision": "0123456789abcdef",
+            },
+        )
         preview.fail_build("g2", "compile failed")
         failed = preview.revision_state()
         self.assertTrue(failed["stale"])
         self.assertEqual(failed["generation"], "g1")
+
+    def test_repository_provenance_is_bounded_and_handles_detached_head(self):
+        results = [
+            subprocess.CompletedProcess([], 0, b"git@github.com:dx-corp/mono.git\n", b""),
+            subprocess.CompletedProcess([], 0, b"\n", b""),
+            subprocess.CompletedProcess([], 0, b"0123456789abcdef\n", b""),
+        ]
+        with patch.object(workbench.subprocess, "run", side_effect=results) as run:
+            self.assertEqual(
+                workbench.repository_provenance(Path("/repo/mono/products/maestro")),
+                {
+                    "repository": "dx-corp/mono",
+                    "branch": "detached",
+                    "revision": "0123456789abcdef",
+                },
+            )
+        self.assertEqual(
+            [call.args[0][-2:] for call in run.call_args_list],
+            [
+                ["get-url", "origin"],
+                ["branch", "--show-current"],
+                ["rev-parse", "HEAD"],
+            ],
+        )
+        self.assertTrue(
+            all(call.kwargs["timeout"] == 2 for call in run.call_args_list)
+        )
+
+    def test_source_provenance_refreshes_only_with_a_successful_generation(self):
+        sources = iter(
+            [
+                {"repository": "mono", "branch": "feature", "revision": "first"},
+                {"repository": "mono", "branch": "feature", "revision": "second"},
+            ]
+        )
+        preview = workbench.Preview(
+            ["renderer"], {}, source_provenance=lambda: next(sources)
+        )
+        preview.install_generation(self.generation("g1"))
+        self.assertEqual(preview.revision_state()["source"]["revision"], "first")
+        preview.begin_build("g2")
+        preview.fail_build("g2", "compile failed")
+        self.assertEqual(preview.revision_state()["source"]["revision"], "first")
+        preview.begin_build("g3")
+        self.assertTrue(preview.finish_build(self.generation("g3")))
+        self.assertEqual(preview.revision_state()["source"]["revision"], "second")
 
     def test_adapter_fingerprint_narrows_and_unknown_falls_back(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -383,8 +445,8 @@ class WorkbenchTests(unittest.TestCase):
             (workspace / "packages/unrelated/noise.rs").write_text("noise")
             manifests = {
                 "owned": {
-                    "fixture_dir": "products/maestro/packages/owned/src",
-                    "registration_file": "products/maestro/packages/owned/register.rs",
+                    "fixture_dir": "packages/owned/src",
+                    "registration_file": "packages/owned/register.rs",
                     "template": "theme-selector",
                 }
             }
@@ -412,6 +474,35 @@ class WorkbenchTests(unittest.TestCase):
                 fallback,
                 workbench.fingerprint(workspace, "adapter", "missing", manifests),
             )
+
+    def test_adapter_paths_are_relative_to_public_maestro_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            for path in [
+                workspace / "packages/ui-preview-rs/src",
+                workspace / "packages/ui-rs",
+                workspace / "packages/interaction-rs",
+                workspace / "packages/presentation-rs",
+                workspace / "packages/owned/src",
+                workspace / ".cargo",
+            ]:
+                path.mkdir(parents=True, exist_ok=True)
+            (workspace / "Cargo.toml").write_text("")
+            (workspace / "Cargo.lock").write_text("")
+            owned = workspace / "packages/owned/src/story.rs"
+            owned.write_text("story")
+            registration = workspace / "packages/owned/register.rs"
+            registration.write_text("register")
+            manifests = {
+                "owned": {
+                    "fixture_dir": "packages/owned/src",
+                    "registration_file": "packages/owned/register.rs",
+                    "template": "menu-recipe",
+                }
+            }
+            paths = workbench.source_paths(workspace, "adapter", "owned", manifests)
+            self.assertIn(owned, paths)
+            self.assertIn(registration, paths)
 
     def test_source_digest_uses_contents_even_when_metadata_is_restored(self):
         with tempfile.TemporaryDirectory() as directory:

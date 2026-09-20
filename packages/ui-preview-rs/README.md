@@ -7,10 +7,15 @@ script so changing preview inputs cannot invalidate the native TUI library.
 From the public repository root (or `products/maestro` in Mono), run:
 
 ```sh
-cargo run --locked -p maestro-ui-preview -- --list
-cargo run --locked -p maestro-ui-preview -- --scene startup --width 100 --height 10
-cargo test --locked -p maestro-ui-preview
+./dev ui
+./dev ui list
+./dev ui inspect menu-ready
+./dev ui check menu-ready
 ```
+
+In Mono, use `products/maestro/dev ui ...`. The front door discovers either
+layout and keeps adapter-owned paths relative to the Maestro workspace, so the
+same plan and receipt work in the internal and public repositories.
 
 The executable prints ANSI terminal previews. In Mono, the optional
 `make maestro-ui-review MAESTRO_UI_OUTPUT=/tmp/dex-review` wrapper builds a
@@ -92,17 +97,20 @@ write, then verify the registered story through the same result stream used by
 the gallery and PR evidence:
 
 ```sh
-cargo run --locked -p maestro-ui-preview -- studio new --adapter shared-menu workspace-picker --check
-cargo run --locked -p maestro-ui-preview -- studio new --adapter shared-menu workspace-picker
-cargo run --locked -p maestro-ui-preview -- studio verify workspace-picker
-cargo run --locked -p maestro-ui-preview -- studio promote --adapter shared-menu path/to/menu-recipe.json --check
-cargo run --locked -p maestro-ui-preview -- studio coverage
+./dev ui new workspace-picker --adapter shared-menu --check
+./dev ui new workspace-picker --adapter shared-menu
+./dev ui check workspace-picker
+./dev ui inspect workspace-picker
 ```
 
 Promotion validates the recipe before writing, refuses existing fixtures,
 runs a fixed adapter verifier, and restores the invocation-owned fixture and
 registration edit if verification fails. Adapter manifests publish the owner,
 supported story kinds, coverage profiles, source directory, and lifecycle.
+`inspect` adds the exact source, case matrix, input and assertion counts, and
+copyable check/review commands. A successful check says
+`behavior-not-asserted` when a story has no semantic contract; use
+`--require-contract` when that should fail.
 
 The complete authoring loop is:
 
@@ -238,7 +246,13 @@ add 21 bounded cases, including select, filter/cancel, retry/select, and
 Unicode/resize/cancel prefixes. Registration rejects duplicate IDs or invalid
 dimensions; it never accepts a baseline.
 
-The workbench preserves URL state and scroll across successful refreshes.
+The workbench preserves scene, size, frame, comparison, named layout, and scroll
+state across successful refreshes. **Browse**, **Design**, **Debug**, and
+**Review** reorganize the same production-rendered catalog without creating a
+second renderer. The header distinguishes the complete catalog from a focused
+`--story` or `--adapter` server and exposes the last-good checkout and content
+digests. A link to a scene outside the current server scope remains intact and
+shows an explicit unavailable notice instead of silently replacing the URL.
 Failed builds retain the previous page and show an error; they never update
 accepted baselines. It uses the configured `CARGO_TARGET_DIR` or a user cache
 outside the checkout. In Mono it runs the existing build-capacity check before

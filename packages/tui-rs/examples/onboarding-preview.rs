@@ -108,18 +108,21 @@ fn fixture(id: &str, expected: SetupPage) -> SetupModal {
     assert_eq!(modal.page(), expected, "fixture {id}");
     modal
 }
-fn captures() -> Result<Vec<Capture>, String> {
+fn captures_selected(story: Option<&str>) -> Result<Vec<Capture>, String> {
     let mut captures = Vec::new();
     for (width, height) in [(40, 24), (60, 32), (100, 40)] {
         for motion in [true, false] {
+            let scene_id = if motion {
+                "first-boot"
+            } else {
+                "first-boot-motion-off"
+            };
+            if story.is_some_and(|selected| selected != scene_id) {
+                continue;
+            }
             for tick in 0..if motion { 36 } else { 1 } {
                 let scene = Scene {
-                    id: if motion {
-                        "first-boot"
-                    } else {
-                        "first-boot-motion-off"
-                    }
-                    .into(),
+                    id: scene_id.into(),
                     label: if motion {
                         "First launch"
                     } else {
@@ -141,6 +144,10 @@ fn captures() -> Result<Vec<Capture>, String> {
             }
         }
         for &(id, page) in STATES {
+            let scene_id = format!("onboarding-{id}");
+            if story.is_some_and(|selected| selected != scene_id) {
+                continue;
+            }
             let times: &[u64] = if id == "welcome" {
                 &[0, 640, 1280, 1920]
             } else {
@@ -149,7 +156,7 @@ fn captures() -> Result<Vec<Capture>, String> {
             for &time_ms in times {
                 let mut modal = fixture(id, page);
                 let scene = Scene {
-                    id: format!("onboarding-{id}"),
+                    id: scene_id.clone(),
                     label: format!("Onboarding / {id}"),
                     width,
                     height,
@@ -172,9 +179,21 @@ fn captures() -> Result<Vec<Capture>, String> {
     for capture in &mut captures {
         capture.source = "products/maestro/packages/tui-rs/examples/onboarding-preview.rs".into();
     }
-    captures.extend(support::ui_stories::captures()?);
-    captures.extend(maestro_ui_preview::registry()?.captures()?);
+    captures.extend(support::ui_stories::captures_selected(story)?);
+    match story {
+        Some(id) => {
+            if let Ok(selected) = maestro_ui_preview::registry()?
+                .filtered(maestro_ui_preview::StoryFilter::Story(id.into()))
+            {
+                captures.extend(selected.captures()?);
+            }
+        }
+        None => captures.extend(maestro_ui_preview::registry()?.captures()?),
+    }
     Ok(captures)
+}
+fn captures() -> Result<Vec<Capture>, String> {
+    captures_selected(None)
 }
 fn profiled_captures(profile_id: &str) -> Result<Vec<Capture>, String> {
     let profile = maestro_ui_preview::schema::builtin_profile(profile_id)?;
@@ -272,6 +291,7 @@ fn run() -> Result<(), String> {
     }
     let mut format = None;
     let mut profile = None;
+    let mut story = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -284,13 +304,28 @@ fn run() -> Result<(), String> {
                         .as_str(),
                 );
             }
+            "--story" if story.is_none() => {
+                index += 1;
+                story = Some(args.get(index).ok_or("missing value for --story")?.as_str());
+            }
             _ => {
-                return Err("usage: onboarding-preview [--html|--json] [--profile pr-v1|scheduled-v1] | [--sequences|--replay-stdin|--studio-stdin]".into());
+                return Err("usage: onboarding-preview [--html|--json] [--profile pr-v1|scheduled-v1] [--story ID] | [--sequences|--replay-stdin|--studio-stdin]".into());
             }
         }
         index += 1;
     }
-    let captures = profile.map_or_else(captures, profiled_captures)?;
+    if profile.is_some() && story.is_some() {
+        return Err("--profile and --story cannot be combined".into());
+    }
+    let captures = if let Some(story) = story {
+        let selected = captures_selected(Some(story))?;
+        if selected.is_empty() {
+            return Err(format!("unknown story: {story}"));
+        }
+        selected
+    } else {
+        profile.map_or_else(captures, profiled_captures)?
+    };
     let output = if format == Some("--html") {
         review::html(&captures)?
     } else {

@@ -56,6 +56,18 @@ pub struct ContributionDiagnostic {
     pub status: &'static str,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct StoryInspection {
+    pub id: String,
+    pub label: String,
+    pub source: String,
+    pub adapter: String,
+    pub cases: Vec<(u16, u16, u64)>,
+    pub input_count: usize,
+    pub assertion_count: usize,
+    pub contract_status: &'static str,
+}
+
 type Renderer = Box<dyn Fn(&Scene) -> Result<Buffer, String>>;
 type Observer = Box<
     dyn Fn(
@@ -185,6 +197,34 @@ pub struct Registry {
     aliases: StoryAliases,
 }
 impl Registry {
+    pub fn inspect(&self, id: &str) -> Result<StoryInspection, String> {
+        let resolved = self.aliases.resolve(id);
+        let story = self
+            .stories
+            .get(&resolved.canonical)
+            .ok_or_else(|| format!("unknown story: {id}"))?;
+        let assertion_count = story
+            .contract
+            .as_ref()
+            .map_or(0, |contract| contract.expectations.len());
+        Ok(StoryInspection {
+            id: story.id.clone(),
+            label: story.label.clone(),
+            source: story.source.clone(),
+            adapter: story.adapter.clone(),
+            cases: story.cases.clone(),
+            input_count: story
+                .sequence
+                .as_ref()
+                .map_or(0, |sequence| sequence.inputs.len()),
+            assertion_count,
+            contract_status: if assertion_count == 0 {
+                "behavior-not-asserted"
+            } else {
+                "asserted"
+            },
+        })
+    }
     pub fn add(&mut self, story: Story) -> Result<(), String> {
         validate_id(&story.id)?;
         if let Some(sequence) = &story.sequence {

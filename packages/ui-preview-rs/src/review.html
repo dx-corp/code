@@ -35,6 +35,40 @@
       color: #b0a8c6;
       margin: 0;
     }
+    .header-tools {
+      display: grid;
+      justify-items: end;
+      gap: 8px;
+      min-width: min(100%, 440px);
+    }
+    #scope-status {
+      color: #efebff;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    #provenance {
+      color: #b0a8c6;
+      font-size: 10px;
+      max-width: 100%;
+    }
+    #provenance summary { cursor: pointer; text-align: right; }
+    #provenance-detail { margin-top: 7px; overflow-wrap: anywhere; text-align: right; }
+    .layout-switcher {
+      display: flex;
+      gap: 0;
+    }
+    .layout-switcher button {
+      padding: 5px 8px;
+      border-right-width: 0;
+      color: #b0a8c6;
+    }
+    .layout-switcher button:last-child { border-right-width: 1px; }
+    .layout-switcher button[aria-pressed="true"] {
+      color: #171624;
+      background: #aba0ff;
+    }
+    #layout-note { text-align: right; }
     .workbench > nav {
       padding: 20px 28px;
       display: flex;
@@ -109,6 +143,20 @@
       font-size: 12px;
       color: #b0a8c6;
       padding: 0 28px;
+    }
+    #route-notice {
+      margin: 12px 18px 0;
+      padding: 10px 12px;
+      border: 1px solid #ffbf69;
+      color: #ffe0b2;
+      background: #2a211c;
+      font-size: 11px;
+    }
+    #generation-status {
+      margin: 8px 18px 0;
+      color: #81798f;
+      font-size: 10px;
+      letter-spacing: 0.04em;
     }
     #interaction {
       margin: 0 18px 14px;
@@ -305,6 +353,13 @@
       .studio-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
       .studio-layout #inspector { margin-top: 20px; }
     }
+    body[data-layout="design"] .workspace { grid-template-columns: 230px minmax(0, 1fr); }
+    body[data-layout="design"] #inspector { border-color: #aba0ff; }
+    body[data-layout="debug"] .workspace { grid-template-columns: 230px minmax(0, 1fr); }
+    body[data-layout="debug"] #interaction { border-color: #aba0ff; }
+    body[data-layout="review"] .workspace { grid-template-columns: minmax(0, 1fr); }
+    body[data-layout="review"] aside { display: none; }
+    body[data-layout="review"] main { gap: 48px; }
     @media (max-width: 760px) {
       .workspace { grid-template-columns: 150px minmax(0, 1fr); }
       .field-grid { grid-template-columns: 1fr; }
@@ -350,8 +405,21 @@
     }
   </style>
   <header>
-    <h1>DEIXIC / UI SCENE WORKSPACE</h1>
-    <p>Explore experiences · author bounded fixtures · replay in Rust</p>
+    <div>
+      <h1>DEIXIC / UI SCENE WORKSPACE</h1>
+      <p>Explore experiences · author bounded fixtures · replay in Rust</p>
+    </div>
+    <div class="header-tools">
+      <div id="scope-status" role="status">Loading workspace scope…</div>
+      <details id="provenance"><summary>Build provenance</summary><div id="provenance-detail"></div></details>
+      <div id="layout-switcher" class="layout-switcher" role="group" aria-label="Workspace layout">
+        <button type="button" data-layout="browse" aria-pressed="true">Browse</button>
+        <button type="button" data-layout="design" aria-pressed="false">Design</button>
+        <button type="button" data-layout="debug" aria-pressed="false">Debug</button>
+        <button type="button" data-layout="review" aria-pressed="false">Review</button>
+      </div>
+      <p id="layout-note">Catalog, state list, and selected preview</p>
+    </div>
   </header>
   <div class="workspace">
     <aside aria-label="Experience library">
@@ -397,6 +465,7 @@
         <p id="live-effects" role="status"></p>
       </section>
       <p id="status" role="status"></p>
+      <p id="route-notice" role="alert" hidden></p>
       <p id="generation-status" role="status"></p>
       <div class="studio-layout">
         <main>
@@ -466,6 +535,7 @@
   </div>
   <script>__MAESTRO_CATALOG_JS__</script>
   <script>__MAESTRO_PLAYBACK_JS__</script>
+  <script>__MAESTRO_WORKSPACE_JS__</script>
   <script>__MAESTRO_AUTHORING_JS__</script>
   <script>__MAESTRO_RENDERING_JS__</script>
   <script id="registry-coverage" type="application/json">__COVERAGE__</script>
@@ -489,12 +559,51 @@
       restoring = false,
       visibleEntries = [],
       activeGeneration = null,
+      activeLayout = "browse",
+      missingRouteScene = "",
+      lastRevision = null,
       exitInteractive = () => {},
       exitStudio = () => {};
     const { draw, readable, sourceUrl } = MaestroUI.rendering;
     const { options, stateLabel, coverageLabel, experienceOrder } = MaestroUI.catalog;
     const playback = MaestroUI.playback;
+    const workspace = MaestroUI.workspace;
     const authoring = MaestroUI.authoring;
+    const availableSceneCount = new Set(captures.map((capture) => capture.scene.id)).size;
+    const layoutNotes = {
+      browse: "Catalog, state list, and selected preview",
+      design: "Authoring surface with a wider inspector",
+      debug: "Replay controls, effects, and build evidence",
+      review: "Focused before-and-after comparison",
+    };
+    function applyLayout(value) {
+      activeLayout = workspace.normalizeLayout(value);
+      document.body.dataset.layout = activeLayout;
+      document.querySelectorAll("#layout-switcher [data-layout]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.layout === activeLayout));
+      });
+      $("#layout-note").textContent = layoutNotes[activeLayout];
+      $("#provenance").open = activeLayout === "debug";
+    }
+    function updateMissingSceneNotice() {
+      const notice = $("#route-notice");
+      notice.hidden = !missingRouteScene;
+      if (!missingRouteScene) return;
+      const scope = workspace.scopeSummary(lastRevision, availableSceneCount).label.toLowerCase();
+      notice.textContent = `Scene “${missingRouteScene}” is unavailable in ${scope}. Showing “${scene.value || "none"}” without replacing the requested URL.`;
+    }
+    function updateWorkspaceMeta(update) {
+      lastRevision = update;
+      const summary = workspace.scopeSummary(update, availableSceneCount);
+      $("#scope-status").textContent = summary.label;
+      $("#scope-status").dataset.filtered = String(summary.filtered);
+      $("#provenance-detail").textContent = workspace.provenance(update);
+      updateMissingSceneNotice();
+    }
+    function acceptSceneSelection() {
+      missingRouteScene = "";
+      updateMissingSceneNotice();
+    }
     function stop() {
       clearTimeout(timer);
       timer = null;
@@ -563,6 +672,7 @@
     scene.onchange = () => {
       exitStudio();
       exitInteractive();
+      acceptSceneSelection();
       selectSizes();
     };
     size.onchange = () => {
@@ -634,6 +744,7 @@
           exitStudio();
           exitInteractive(false);
           scene.value = groups.get(label)[0];
+          acceptSceneSelection();
           selectSizes();
           sidebar(entries);
         };
@@ -652,6 +763,7 @@
           exitStudio();
           exitInteractive(false);
           scene.value = id;
+          acceptSceneSelection();
           selectSizes();
           sidebar(entries);
         };
@@ -674,7 +786,7 @@
       $("#reference-transcript").textContent = readable(c);
     }
     function saveRoute() {
-      history.replaceState(null, "", playback.routeString(scene.value, size.value, time.value, pinned));
+      history.replaceState(null, "", playback.routeString(workspace.routeScene(missingRouteScene, scene.value), size.value, time.value, pinned, activeLayout));
     }
     function restoreRoute() {
       stop();
@@ -682,10 +794,15 @@
       exitInteractive(false);
       restoring = true;
       const p = new URLSearchParams(location.hash.slice(1));
+      applyLayout(p.get("layout"));
       $("#search").value = "";
       selectScenes();
-      if ([...scene.options].some((o) => o.value === p.get("scene")))
-        scene.value = p.get("scene");
+      const resolution = workspace.resolveScene(
+        p.get("scene"),
+        [...scene.options].map((option) => option.value),
+      );
+      scene.value = resolution.selected;
+      missingRouteScene = resolution.missing;
       selectSizes();
       if ([...size.options].some((o) => o.value === p.get("size")))
         size.value = p.get("size");
@@ -707,8 +824,15 @@
       paint();
       sidebar(visibleEntries);
       restoring = false;
-      saveRoute();
+      updateMissingSceneNotice();
+      if (!missingRouteScene) saveRoute();
     }
+    document.querySelectorAll("#layout-switcher [data-layout]").forEach((button) => {
+      button.onclick = () => {
+        applyLayout(button.dataset.layout);
+        saveRoute();
+      };
+    });
     $("#pin").onclick = () => {
       if (current) {
         pinned = {
@@ -1254,12 +1378,13 @@
     ) {
       let revision,
         hadError = false;
-      setInterval(async () => {
+      const pollRevision = async () => {
         try {
           const response = await fetch("/__revision", { cache: "no-store" });
           if (!response.ok) return;
           const update = await response.json();
           activeGeneration = update.generation || activeGeneration;
+          updateWorkspaceMeta(update);
           const shortGeneration = update.generation ? update.generation.slice(0, 10) : "none";
           $("#generation-status").textContent = update.building
             ? `${update.stale ? "Building — last good" : "Building"} ${shortGeneration}`
@@ -1288,7 +1413,9 @@
           }
           revision = next;
         } catch {}
-      }, 1500);
+      };
+      pollRevision();
+      setInterval(pollRevision, 1500);
       try {
         const saved = JSON.parse(sessionStorage.getItem("ui-review-scroll"));
         if (saved) {
@@ -1296,6 +1423,8 @@
           $("aside").scrollTop = saved.sidebar;
         }
       } catch {}
+    } else {
+      updateWorkspaceMeta(null);
     }
   </script>
 </html>

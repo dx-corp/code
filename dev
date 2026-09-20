@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Stable contributor commands for Deixic Code."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+MAESTRO_ROOT = Path(__file__).resolve().parent
+MONO_ROOT = (
+    MAESTRO_ROOT.parents[1]
+    if MAESTRO_ROOT.parent.name == "products"
+    else MAESTRO_ROOT
+)
+WORKBENCH = MAESTRO_ROOT / "scripts/dev/ui-workbench.py"
+
+
+def cargo_preview(*args: str, stdin: bytes | None = None) -> int:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--locked",
+        "-p",
+        "maestro-ui-preview",
+        "--",
+        *args,
+    ]
+    return subprocess.run(command, cwd=MAESTRO_ROOT, input=stdin).returncode
+
+
+def cargo_onboarding(mode: str, body: bytes) -> int:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "--locked",
+        "-p",
+        "maestro-tui",
+        "--example",
+        "onboarding-preview",
+        "--",
+        mode,
+    ]
+    return subprocess.run(command, cwd=MAESTRO_ROOT, input=body).returncode
+
+
+def read_receipt(path: str) -> tuple[bytes, str]:
+    receipt = Path(path)
+    if receipt.stat().st_size > 1_048_576:
+        raise ValueError("receipt exceeds 1048576 bytes")
+    body = receipt.read_bytes()
+    value = json.loads(body)
+    if not isinstance(value, dict) or not isinstance(value.get("schema"), str):
+        raise ValueError("receipt must be a versioned wire envelope")
+    return body, value["schema"]
+
+
+def changed_review_filter() -> list[str]:
+    if MONO_ROOT == MAESTRO_ROOT or not (MONO_ROOT / ".git").exists():
+        return []
+    base = subprocess.run(
+        ["git", "merge-base", "origin/main", "HEAD"],
+        cwd=MONO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    paths = subprocess.run(
+        ["git", "diff", "--name-only", base, "HEAD", "--", "products/maestro"],
+        cwd=MONO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    visual = [path for path in paths if "/packages/ui-preview-rs/" in path]
+    if visual and len(visual) == len(paths):
+        return ["--components-only", "--adapter", "shared-menu"]
+    return []
+
+
+def doctor(as_json: bool) -> int:
+    tools = {name: shutil.which(name) for name in ("cargo", "python3", "rustfmt")}
+    required_paths = [
+        MAESTRO_ROOT / "Cargo.toml",
+        MAESTRO_ROOT / "packages/ui-preview-rs/Cargo.toml",
+        WORKBENCH,
+    ]
+    missing = [str(path) for path in required_paths if not path.is_file()]
+    ready = tools["cargo"] is not None and tools["python3"] is not None and not missing
+    report = {
+        "status": "ready" if ready else "blocked",
+        "maestro_root": str(MAESTRO_ROOT),
+        "repository_root": str(MONO_ROOT),
+        "layout": "mono" if MONO_ROOT != MAESTRO_ROOT else "public",
+        "tools": tools,
+        "missing": missing,
+    }
+    if as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(f"Maestro UI development: {report['status']}")
+        print(f"Layout: {report['layout']} ({MAESTRO_ROOT})")
+        for name, path in tools.items():
+            print(f"{name}: {path or 'missing'}")
+        for path in missing:
+            print(f"missing: {path}")
+    return 0 if ready else 2
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="./dev", description=__doc__)
+    top = parser.add_subparsers(dest="area", required=True)
+    ui = top.add_parser("ui", help="design, inspect, replay, and review native UI stories")
+    commands = ui.add_subparsers(dest="command")
+
+    commands.add_parser("list", help="list registered stories and cases")
+    new = commands.add_parser("new", help="plan or create an adapter-owned story")
+    new.add_argument("story")
+    new.add_argument("--adapter", default="shared-menu")
+    new.add_argument("--check", action="store_true")
+
+    check = commands.add_parser("check", help="render one story and evaluate its contract")
+    check.add_argument("story")
+    check.add_argument("--require-contract", action="store_true")
+
+    inspect = commands.add_parser("inspect", help="show owner, source, cases, and exact commands")
+    inspect.add_argument("story")
+    inspect.add_argument("--json", action="store_true", help="reserved; output is always JSON")
+
+    replay = commands.add_parser("replay", help="replay a portable menu or theme receipt")
+    replay.add_argument("receipt")
+
+    migrate = commands.add_parser("migrate", help="migrate a versioned recipe, replay, or contract")
+    migrate.add_argument("receipt")
+    migrate.add_argument("--check", action="store_true")
+
+    review = commands.add_parser("review", help="open the live production-renderer workbench")
+    review.add_argument("--story")
+    review.add_argument("--adapter")
+    review.add_argument("--components-only", action="store_true")
+    review.add_argument("--changed", action="store_true")
+    review.add_argument("--port", type=int, default=8770)
+
+    doctor_parser = commands.add_parser("doctor", help="check the local UI toolchain and layout")
+    doctor_parser.add_argument("--json", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.area != "ui":
+        parser.error("unknown development area")
+    command = args.command or "review"
+    if command == "list":
+        return cargo_preview("--list")
+    if command == "new":
+        tail = ["studio", "new", "--adapter", args.adapter, args.story]
+        if args.check:
+            tail.append("--check")
+        return cargo_preview(*tail)
+    if command == "check":
+        tail = ["studio", "verify", args.story]
+        if args.require_contract:
+            tail.append("--require-contract")
+        return cargo_preview(*tail)
+    if command == "inspect":
+        return cargo_preview("studio", "inspect", args.story)
+    if command == "migrate":
+        tail = ["studio", "migrate", args.receipt]
+        if args.check:
+            tail.append("--check")
+        return cargo_preview(*tail)
+    if command == "replay":
+        try:
+            body, schema = read_receipt(args.receipt)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(error, file=sys.stderr)
+            return 2
+        if schema == "maestro.ui.menu-recipe":
+            return cargo_onboarding("--studio-stdin", body)
+        if schema == "maestro.ui.theme-replay":
+            return cargo_onboarding("--replay-stdin", body)
+        print(f"unsupported replay schema: {schema}", file=sys.stderr)
+        return 2
+    if command == "doctor":
+        return doctor(args.json)
+    if command == "review":
+        port = getattr(args, "port", 8770)
+        story = getattr(args, "story", None)
+        adapter = getattr(args, "adapter", None)
+        tail = [sys.executable, str(WORKBENCH), "--port", str(port)]
+        if getattr(args, "changed", False):
+            tail.extend(changed_review_filter())
+        elif getattr(args, "components_only", False):
+            tail.append("--components-only")
+        if story:
+            tail.extend(["--story", story])
+        if adapter:
+            tail.extend(["--adapter", adapter])
+        return subprocess.run(tail, cwd=MAESTRO_ROOT).returncode
+    parser.error(f"unknown ui command: {command}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

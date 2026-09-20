@@ -23,8 +23,9 @@ generated_stories! {
 // maestro-ui-stories:end
 }
 
-pub fn captures() -> Result<Vec<Capture>, String> {
-    let mut captures = super::theme_selector_story::captures()?;
+pub fn captures_selected(selected: Option<&str>) -> Result<Vec<Capture>, String> {
+    let mut captures = super::theme_selector_story::captures_selected(selected)?;
     generated_captures(&mut captures)?;
+    captures.retain(|capture| selected.is_none_or(|id| capture.scene.id == id));
     Ok(captures)
 }

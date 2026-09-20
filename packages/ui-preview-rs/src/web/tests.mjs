@@ -3,7 +3,8 @@ await import("./catalog.js");
 await import("./playback.js");
 await import("./authoring.js");
 await import("./rendering.js");
-const { catalog, playback, authoring, rendering } = globalThis.MaestroUI;
+await import("./workspace.js");
+const { catalog, playback, authoring, rendering, workspace } = globalThis.MaestroUI;
 
 const hiddenCapture = {
   scene: { id: "menu-ready", label: "Menu / Ready", width: 2, height: 1, time_ms: 0 },
@@ -26,7 +27,28 @@ const frames = [
 assert.deepEqual(playback.selectedFrames(frames, "menu-ready", "40x20").map((frame) => frame.scene.time_ms), [0, 80]);
 assert.equal(playback.comparisonFrame(frames, { id: "menu-ready", width: 40, height: 20 }, 40).scene.time_ms, 0);
 assert.equal(playback.routeString("menu ready", "40x20", "80", { id: "base", width: 40, height: 20 }), "#scene=menu+ready&size=40x20&time=80&compare=base&compareSize=40x20");
+assert.equal(playback.routeString("menu-ready", "40x20", "80", null, "debug"), "#scene=menu-ready&size=40x20&time=80&layout=debug");
 assert.deepEqual(playback.route({ scene: "a", mode: "bad" }, { scene: ["a"], mode: ["side"] }), { scene: "a" });
+assert.deepEqual(playback.route({ scene: "a", layout: "review" }, { scene: ["a"], layout: workspace.layouts }), { scene: "a", layout: "review" });
+
+assert.equal(workspace.normalizeLayout("unknown"), "browse");
+assert.equal(workspace.normalizeLayout("design"), "design");
+assert.deepEqual(workspace.resolveScene("missing", ["ready", "error"]), { selected: "ready", missing: "missing" });
+assert.deepEqual(workspace.resolveScene("error", ["ready", "error"]), { selected: "error", missing: "" });
+assert.equal(workspace.routeScene("does-not-exist", "ready"), "does-not-exist");
+assert.equal(workspace.routeScene("", "ready"), "ready");
+assert.deepEqual(workspace.scopeSummary({ filter: { kind: "story", value: "first-boot" }, building: false, stale: false }, 1), {
+  label: "FILTERED · STORY first-boot · 1 SCENE · FRESH",
+  filtered: true,
+});
+assert.deepEqual(workspace.scopeSummary({ filter: { kind: "", value: "" }, building: true, stale: true }, 70), {
+  label: "ALL EXPERIENCES · 70 SCENES · BUILDING — LAST GOOD",
+  filtered: false,
+});
+assert.deepEqual(workspace.scopeSummary(null, 70), {
+  label: "ALL EXPERIENCES · 70 SCENES · STATIC",
+  filtered: false,
+});
 
 const captures = [{ scene: { id: "menu-ready", label: "Menu / Ready", width: 40, height: 20 } }];
 assert.deepEqual(catalog.sceneEntries(captures, "READY"), [["menu-ready", "Menu / Ready / menu-ready"]]);
@@ -45,4 +67,4 @@ assert.throws(() => authoring.readRecipe({ inputs: [] }, (name) => fields[name])
 assert.deepEqual(authoring.coverageCells({ variant: "error", availability: "fixture-only", exercised: false, automated_check: null }), ["error", "fixture only", "Not exercised", "Not reported"]);
 assert.throws(() => authoring.addInputs({ inputs: [1, 2] }, [3], 2), /Sequence limit/);
 
-console.log("24 browser module assertions passed");
+console.log("35 browser module assertions passed");
