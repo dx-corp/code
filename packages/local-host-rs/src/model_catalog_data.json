@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789802841,
+  "generated_at": 1789889919,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1324,7 +1324,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -2529,25 +2529,6 @@
       }
     },
     {
-      "id": "deepseek/deepseek-v4-flash-0731:free",
-      "name": "DeepSeek: DeepSeek V4 Flash 0731 (free)",
-      "provider": "openrouter",
-      "description": "DeepSeek V4 Flash 0731 is a sparse mixture-of-experts model from DeepSeek, with 13B active parameters out of 284B…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 393216
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "deepseek/deepseek-v4-flash-vision-exp",
       "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
       "provider": "openrouter",
@@ -2597,7 +2578,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -3718,7 +3699,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -4283,7 +4264,7 @@
       "description": "Mistral Small 3.1 24B Instruct is an upgraded variant of Mistral Small 3 (2501), featuring 24 billion parameters with…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": false,
+        "tools": true,
         "vision": true,
         "reasoning": false,
         "streaming": true,
@@ -6888,7 +6869,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -6926,7 +6907,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
