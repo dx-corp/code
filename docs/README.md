@@ -13,6 +13,7 @@ Use this index to jump to the right guide quickly and see how the pieces connect
 ## Core Reference
 - [Tools Reference](TOOLS_REFERENCE.md) — authoritative slash command and flag definitions.
 - [Coding acceptance](CODING_ACCEPTANCE.md) — task readiness, independent validation, and evidence required for completion.
+- [PR UI evidence](ui-pr-evidence.md) — deterministic native before/after captures, trust boundaries, and local reproduction.
 - [Safety](SAFETY.md) — approvals, sandboxing, and firewall behavior.
 - [Agent Safety Boundary](design/AGENT_SAFETY_BOUNDARY.md) — how MCP workspace trust, guarded files, approvals, audit, and sandbox policy compose.
 - [Threat Model](THREAT_MODEL.md) — security architecture, trust boundaries, and attack mitigations.
