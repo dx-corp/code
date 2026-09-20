@@ -66,8 +66,9 @@ step through supplied timestamps, play animation, and export a frame as JSON.
 Nothing is fetched from a server. The fixtures do not sign in, call a model,
 execute tools, or persist configuration. Playback starts only when requested.
 RGB, indexed/default colors, style flags and Unicode column widths are retained;
-blink flags remain static for inspection. Native cursor behavior and keyboard
-interaction remain covered by the PTY suite rather than this cell-only gallery.
+blink flags remain static for inspection. Interaction scenes use 80 ms per
+input, so every prefix remains an ordinary capture consumed by the PR evidence
+pipeline.
 
 `review::capture(scene, |frame| ...)` accepts a production rendering closure.
 `review::from_buffer` adapts existing buffer-based widgets. `review::html` and
@@ -84,6 +85,22 @@ are an inspection convenience, not a pixel baseline: continue to use the existin
 comparisons and the native terminal suite for interaction regressions.
 
 ## Author a menu or a scene
+
+Generate a minimal runnable menu story without overwriting an existing file:
+
+```sh
+cargo run --locked -p maestro-ui-preview -- \
+  --scaffold workspace-menu \
+  --output packages/ui-preview-rs/examples/workspace_menu.rs
+cargo run --locked -p maestro-ui-preview --example workspace_menu > workspace-menu.html
+```
+
+The generated example declares its labels, items, and typed interaction inputs,
+then calls `menu_story` and `export_story`. Those helpers use the real shared
+`ActionPicker` and `Menu`; product-specific adapters can use the lower-level
+`Story::replay`. Move a finished story beside its owning adapter and add it once
+to that adapter's registry. IDs are lowercase and at most 64 bytes. The
+generator uses create-new semantics and refuses to overwrite a file.
 
 Use `maestro_ui::Menu` for menu chrome, empty/loading/error presentation and help.
 Keep one caller-owned `ActionPicker<T>` for query, selection and keyboard input:
@@ -131,8 +148,19 @@ python3 scripts/dev/ui-workbench.py
 python3 scripts/dev/ui-workbench.py --components-only --port 8771
 ```
 
-The command builds the real Rust renderer, watches source changes, and serves
-only the generated page and rebuild status on loopback. It preserves URL state
+The command builds the real Rust renderer once, watches source changes, and serves
+the generated page on loopback. In the **Interactive Rust replay** panel, focus
+the terminal preview and type, paste, navigate, resize, cancel, or retry. The
+browser sends a bounded typed sequence to a fixed Rust executable; the production
+`ThemeSelector` controller and renderer rebuild the frame from the full sequence.
+Export saves that portable JSON receipt and **Replay file** imports it. Effects
+are returned as explicit simulated receipts. The preview never changes a theme,
+signs in, executes a tool, or writes application settings.
+
+The server rejects non-loopback Host/Origin values, oversized bodies, text,
+event counts and dimensions. It invokes no browser-supplied command or path.
+`--components-only` remains a static catalog and exposes no replay endpoint.
+The workbench preserves URL state
 and scroll across successful refreshes. Failed builds retain the previous page
 and show an error; they never update accepted baselines. It uses the configured
 `CARGO_TARGET_DIR` or a user cache outside the checkout. In Mono it runs the

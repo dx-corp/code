@@ -1,4 +1,5 @@
 //! Deterministic component scenes using the widgets linked by the native TUI.
+pub mod authoring;
 mod conversation;
 mod menus;
 pub mod registry;

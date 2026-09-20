@@ -54,7 +54,7 @@ dirs.workspace = true
 dunce.workspace = true
 
 # GitHub
-octocrab = "0.41"
+octocrab = "0.54.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

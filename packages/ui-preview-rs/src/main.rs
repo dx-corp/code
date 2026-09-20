@@ -1,5 +1,6 @@
 //! Headless component rendering; no terminal session or agent runtime.
 use maestro_ui_preview::{Scene, ansi, catalog, render};
+use std::path::PathBuf;
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let mut scene = Scene {
@@ -13,6 +14,8 @@ fn run() -> Result<(), String> {
     let mut selectors = false;
     let mut format = String::from("ansi");
     let mut identity = false;
+    let mut scaffold = None;
+    let mut output = None;
     while let Some(arg) = args.next() {
         if arg == "--html" || arg == "--json" {
             format = arg.trim_start_matches("--").into();
@@ -26,6 +29,16 @@ fn run() -> Result<(), String> {
             list = true;
             continue;
         }
+        if arg == "--scaffold" {
+            scaffold = Some(args.next().ok_or("missing value for --scaffold")?);
+            continue;
+        }
+        if arg == "--output" {
+            output = Some(PathBuf::from(
+                args.next().ok_or("missing value for --output")?,
+            ));
+            continue;
+        }
         selectors = true;
         let value = args
             .next()
@@ -37,6 +50,18 @@ fn run() -> Result<(), String> {
             "--time-ms" => scene.time_ms = value.parse().map_err(|_| "invalid time-ms")?,
             _ => return Err(format!("unknown argument: {arg}")),
         }
+    }
+    if let Some(scaffold) = scaffold {
+        if selectors || list || identity || format != "ansi" {
+            return Err("--scaffold cannot be combined with rendering options".into());
+        }
+        let output = output.ok_or("--scaffold requires --output")?;
+        maestro_ui_preview::authoring::write_scaffold(&scaffold, &output)?;
+        println!("{}", output.display());
+        return Ok(());
+    }
+    if output.is_some() {
+        return Err("--output requires --scaffold".into());
     }
     if format != "ansi" && (selectors || list || identity) {
         return Err("--html and --json export the full catalog; use them without scene selectors, --list, or --identity".into());
