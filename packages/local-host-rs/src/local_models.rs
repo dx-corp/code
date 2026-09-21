@@ -564,7 +564,7 @@ fn parse_models_response(provider: &str, payload: &serde_json::Value) -> Vec<Mod
 mod tests {
     use std::collections::HashMap;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::Duration;
 
@@ -817,6 +817,48 @@ mod tests {
         assert_eq!(models[0].capabilities.protocol, ModelProtocol::OpenAiChat);
     }
 
+    /// Read the whole request head so no unread bytes stay on the socket.
+    /// Closing a TCP socket that still holds unread data makes the kernel
+    /// send RST instead of FIN, and a reset can discard a response the
+    /// client has not read yet -- which made the fast probe in the
+    /// concurrent-discovery test intermittently "unreachable" under load.
+    fn read_request_head(stream: &mut TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+            }
+        }
+        request
+    }
+
+    /// Write the response, half-close, and wait for the client to hang up so
+    /// the fixture never drops the socket while the response is in flight.
+    fn respond_and_close(mut stream: TcpStream, response: &[u8]) -> std::io::Result<()> {
+        stream.write_all(response)?;
+        stream.flush()?;
+        stream.shutdown(Shutdown::Write)?;
+        let mut sink = [0_u8; 1024];
+        while matches!(stream.read(&mut sink), Ok(read) if read > 0) {}
+        Ok(())
+    }
+
+    fn models_response(body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .into_bytes()
+    }
+
     fn serve_models_after(delay: Duration, body: &'static str) -> String {
         serve_models_after_requests(delay, body, 1)
     }
@@ -827,16 +869,9 @@ mod tests {
         std::thread::spawn(move || {
             for _ in 0..requests {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0_u8; 2048];
-                let _ = stream.read(&mut request);
+                let _ = read_request_head(&mut stream);
                 std::thread::sleep(delay);
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
+                respond_and_close(stream, &models_response(body)).unwrap();
             }
         });
         format!("http://{address}/v1")
@@ -852,8 +887,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request);
+            let _ = read_request_head(&mut stream);
             arrivals.send(provider).unwrap();
 
             let (released, wake) = &*release;
@@ -863,12 +897,7 @@ mod tests {
             }
             drop(released);
 
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
+            let _ = respond_and_close(stream, &models_response(body));
         });
         (format!("http://{address}/v1"), server)
     }
@@ -1027,9 +1056,12 @@ mod tests {
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request);
-            stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret").unwrap();
+            let _ = read_request_head(&mut stream);
+            respond_and_close(
+                stream,
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
+            )
+            .unwrap();
         });
         let endpoint = LocalRuntimeEndpoint {
             provider: "llamacpp",
