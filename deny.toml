@@ -31,6 +31,9 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 unmaintained; proc-macro pulled in by ratatui (production, TUI rendering). No ratatui release has dropped it yet. expires: 2026-10-23" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1 unmaintained; pulled in transitively via lopdf 0.42.0 (the fix version for RUSTSEC-2026-0187) via pdf-extract 0.12.0. No known vulnerability; re-check when lopdf/pdf-extract bump their ttf-parser dependency or adopt a maintained fork. expires: 2026-10-23" },
 
+    # --- Vulnerabilities without a fixed release ---
+    { id = "RUSTSEC-2023-0071", reason = "rsa 0.9.10 (Marvin timing side channel) pulled in by jsonwebtoken 10.4.0 via octocrab 0.54.2 (ambient-agent, production). No fixed rsa release exists; the same advisory is already ignored in products/computer, platform/cerebro and the root workspace cargo-audit step. expires: 2026-10-23" },
+
     # --- Unsound (no known exploitable vulnerability reported here) ---
     { id = "RUSTSEC-2026-0002", reason = "lru 0.12.5: IterMut violates Stacked Borrows (Miri/unsafe-code soundness issue), pulled in by ratatui (production). Not a memory-safety issue under normal (non-Miri) execution; tracked for the next ratatui bump that picks up a fixed lru. expires: 2026-10-23" },
     { id = "RUSTSEC-2026-0285", reason = "rustls <0.23.45 accepts TLS 1.3 handshake messages at the wrong encryption level after a key change in the same record (GHSA-2mjx-qc3c-rqvc, CVSS 5.3). Fixed in rustls 0.23.45, published 2026-09-14; that upgrade also resolves aws-lc-rs 1.18.1 and aws-lc-sys 0.45.0, all still inside the 14-day dependency-admission cool-off in security/rust-dependency-admission.toml. Bump the lockfile once they age past it. expires: 2026-09-30" },
