@@ -98,6 +98,7 @@ dependencies = [
  "futures",
  "glob",
  "hex",
+ "maestro-runtime-contracts",
  "octocrab",
  "rand 0.10.2",
  "regex",
@@ -4076,6 +4077,7 @@ name = "maestro-swarm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "maestro-runtime-contracts",
  "regex",
  "serde",
  "serde_json",

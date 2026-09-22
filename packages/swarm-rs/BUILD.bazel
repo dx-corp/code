@@ -13,6 +13,7 @@ cargo_toml_env_vars(
 rust_library(
     name = "maestro_swarm",
     deps = [
+        "//products/maestro/packages/runtime-contracts-rs:maestro_runtime_contracts",
         "@crates//:anyhow-1.0.103",
         "@crates//:regex-1.13.0",
         "@crates//:serde-1.0.228",

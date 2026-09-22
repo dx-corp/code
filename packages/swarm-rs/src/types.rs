@@ -462,19 +462,20 @@ impl SubagentDispatchRule {
 }
 
 pub fn model_for_tier(tier: ModelTier, provider: ModelProvider) -> &'static str {
+    use maestro_runtime_contracts::DefaultModel as D;
     match (tier, provider) {
-        (ModelTier::Opus, ModelProvider::Anthropic) => "claude-opus-5-5",
+        (ModelTier::Opus, ModelProvider::Anthropic) => D::AnthropicFlagship.id(),
         (ModelTier::Opus, ModelProvider::OpenAi) => "gpt-5.2",
-        (ModelTier::Opus, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Opus, ModelProvider::Google) => "gemini-3.1-pro-preview",
-        (ModelTier::Sonnet, ModelProvider::Anthropic) => "claude-sonnet-5",
+        (ModelTier::Opus, ModelProvider::OpenAiCodex) => D::OpenAiCodex.id(),
+        (ModelTier::Opus, ModelProvider::Google) => D::GoogleFlagship.id(),
+        (ModelTier::Sonnet, ModelProvider::Anthropic) => D::AnthropicBalanced.id(),
         (ModelTier::Sonnet, ModelProvider::OpenAi) => "gpt-4o",
-        (ModelTier::Sonnet, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Sonnet, ModelProvider::Google) => "gemini-flash-latest",
-        (ModelTier::Haiku, ModelProvider::Anthropic) => "claude-haiku-4-5-20251001",
-        (ModelTier::Haiku, ModelProvider::OpenAi) => "gpt-4o-mini",
-        (ModelTier::Haiku, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Haiku, ModelProvider::Google) => "gemini-flash-lite-latest",
+        (ModelTier::Sonnet, ModelProvider::OpenAiCodex) => D::OpenAiCodex.id(),
+        (ModelTier::Sonnet, ModelProvider::Google) => D::GoogleBalanced.id(),
+        (ModelTier::Haiku, ModelProvider::Anthropic) => D::AnthropicFast.id(),
+        (ModelTier::Haiku, ModelProvider::OpenAi) => D::OpenAiFast.id(),
+        (ModelTier::Haiku, ModelProvider::OpenAiCodex) => D::OpenAiCodex.id(),
+        (ModelTier::Haiku, ModelProvider::Google) => D::GoogleFast.id(),
     }
 }
 

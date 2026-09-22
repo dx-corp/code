@@ -10,13 +10,14 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 pub const DEFAULT_OPENROUTER_FRONTIER_MODEL: &str = "~anthropic/claude-opus-latest";
-/// Direct-Anthropic frontier model.
+/// Direct-Anthropic frontier model, from the central default-model table.
 ///
 /// Was `claude-opus-4-1-20250805`. Anthropic's model list no longer carries
 /// Opus 4.1 — its oldest listed Opus is 4.5 — and the id is absent from the
 /// bundled catalog, so every ambient task on the direct Anthropic route named
 /// a retired snapshot. `frontier_model_is_catalogued` guards this now.
-pub const DEFAULT_ANTHROPIC_FRONTIER_MODEL: &str = "claude-opus-5-5";
+pub const DEFAULT_ANTHROPIC_FRONTIER_MODEL: &str =
+    maestro_runtime_contracts::DefaultModel::AnthropicFlagship.id();
 pub const DEFAULT_FRONTIER_PROVIDER: &str = "openrouter";
 
 /// Bundled model catalog, read for published per-million-token rates.
