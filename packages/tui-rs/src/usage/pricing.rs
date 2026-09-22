@@ -294,7 +294,10 @@ impl Default for ModelPricing {
         pricing.add_tier("mixtral-8x7b", PricingTier::simple(0.24, 0.24));
 
         // DeepSeek
-        pricing.add_tier("deepseek-chat", PricingTier::simple(0.14, 0.28));
+        // 0.14/0.28 was DeepSeek's old direct rate. bundled_rates("deepseek-chat")
+        // returns None, because the catalog carries the id only as
+        // "deepseek/deepseek-chat", so this tier is what actually bills.
+        pricing.add_tier("deepseek-chat", PricingTier::simple(0.32, 0.89));
         pricing.add_tier("deepseek-coder", PricingTier::simple(0.14, 0.28));
         pricing.add_tier("deepseek-reasoner", PricingTier::simple(0.55, 2.19));
 
