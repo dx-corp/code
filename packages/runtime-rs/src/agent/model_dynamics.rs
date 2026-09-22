@@ -186,15 +186,7 @@ pub fn normalize_thinking(_model: &str, requested: ThinkingLevel) -> ThinkingLev
 #[must_use]
 pub fn next_thinking_level(model: &str, current: ThinkingLevel) -> ThinkingLevel {
     let current = normalize_thinking(model, current);
-    let levels = [
-        ThinkingLevel::Off,
-        ThinkingLevel::Minimal,
-        ThinkingLevel::Low,
-        ThinkingLevel::Medium,
-        ThinkingLevel::High,
-        ThinkingLevel::XHigh,
-        ThinkingLevel::Max,
-    ];
+    let levels = ThinkingLevel::ALL;
     let index = levels
         .iter()
         .position(|level| *level == current)

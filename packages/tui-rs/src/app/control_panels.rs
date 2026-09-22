@@ -816,18 +816,10 @@ impl App {
 }
 
 fn supported_efforts(model: &str) -> Vec<ThinkingLevel> {
-    [
-        ThinkingLevel::Off,
-        ThinkingLevel::Minimal,
-        ThinkingLevel::Low,
-        ThinkingLevel::Medium,
-        ThinkingLevel::High,
-        ThinkingLevel::XHigh,
-        ThinkingLevel::Max,
-    ]
-    .into_iter()
-    .filter(|level| crate::model_dynamics::normalize_thinking(model, *level) == *level)
-    .collect()
+    ThinkingLevel::ALL
+        .into_iter()
+        .filter(|level| crate::model_dynamics::normalize_thinking(model, *level) == *level)
+        .collect()
 }
 
 #[cfg(test)]
