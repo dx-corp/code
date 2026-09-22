@@ -178,14 +178,13 @@ impl ErrorKind {
             return ErrorKind::RateLimited { retry_after };
         }
 
-        // Check for context overflow
-        if lower.contains("context_length")
-            || lower.contains("context length")
-            || lower.contains("maximum context")
-            || lower.contains("token limit")
-            || lower.contains("too long")
-            || lower.contains("max_tokens")
-        {
+        // Check for context overflow. One vocabulary, shared with the
+        // provider clients, so a rejection the client already recognizes is
+        // not classified differently here and denied its recovery. The
+        // bodyless-4xx half of `is_context_overflow_error` is deliberately
+        // left out: this classification compacts history, which is too
+        // destructive to trigger on a status code with no message.
+        if crate::ai::is_context_overflow_message(&lower) {
             return ErrorKind::ContextOverflow;
         }
 
@@ -661,11 +660,63 @@ mod tests {
 
     #[test]
     fn test_error_kind_classify_context_overflow() {
-        let kind = ErrorKind::classify("context_length_exceeded");
-        assert_eq!(kind, ErrorKind::ContextOverflow);
+        // The rejection wording of every provider the clients recognize. A
+        // miss here is a session that ends instead of compacting, so each of
+        // these is one provider's way of saying the same thing.
+        for message in [
+            // Anthropic
+            "prompt is too long: 213462 tokens > 200000 maximum",
+            "input length and `max_tokens` exceed context limit",
+            // OpenAI
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model",
+            // OpenRouter
+            "This model's maximum context length is 128000 tokens",
+            // Google Gemini
+            "The input token count exceeds the maximum number of tokens",
+            // xAI
+            "maximum prompt length is 131072 but request contains 140000 tokens",
+            // Groq
+            "Please reduce the length of the messages",
+            // llama.cpp
+            "the request exceeds the available context size",
+            // LM Studio
+            "is greater than the context length",
+            // Generic
+            "too many tokens in request",
+            "token limit exceeded",
+        ] {
+            assert_eq!(
+                ErrorKind::classify(message),
+                ErrorKind::ContextOverflow,
+                "{message}"
+            );
+        }
+    }
 
-        let kind = ErrorKind::classify("Maximum context length exceeded");
-        assert_eq!(kind, ErrorKind::ContextOverflow);
+    #[test]
+    fn classify_does_not_read_a_slow_request_as_an_oversized_one() {
+        // Compaction rewrites history, so a false overflow costs real context.
+        // A bare "too long" used to be enough to trigger one, which made a
+        // report that something took too long look like an oversized request.
+        for message in [
+            "the operation took too long to complete",
+            "the request is taking too long",
+        ] {
+            assert_ne!(
+                ErrorKind::classify(message),
+                ErrorKind::ContextOverflow,
+                "{message}"
+            );
+        }
+        // Timeouts the transient vocabulary does name stay retryable.
+        for message in ["request timed out", "504 gateway timeout"] {
+            assert_eq!(
+                ErrorKind::classify(message),
+                ErrorKind::Transient,
+                "{message}"
+            );
+        }
     }
 
     #[test]

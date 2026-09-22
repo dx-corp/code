@@ -161,7 +161,7 @@ impl RuntimeTestHost {
         self
     }
 
-    fn with_model_limits(mut self, max_output_tokens: u32, context_window: u64) -> Self {
+    pub(super) fn with_model_limits(mut self, max_output_tokens: u32, context_window: u64) -> Self {
         self.max_output_tokens = max_output_tokens;
         self.context_window = context_window;
         self
@@ -829,7 +829,7 @@ pub(super) fn new_runtime_test_agent(
     new_runtime_test_agent_with_host(config, host)
 }
 
-fn new_runtime_test_agent_with_host(
+pub(super) fn new_runtime_test_agent_with_host(
     config: NativeAgentConfig,
     host: RuntimeTestHost,
 ) -> Result<(super::NativeAgent, mpsc::UnboundedReceiver<FromAgent>)> {
@@ -3559,6 +3559,7 @@ async fn ordinary_compaction_keeps_restored_user_boundaries_in_checkpoint() {
         "continuation",
         vec![crate::ai::ScriptedResponse::text("Done.")],
     );
+    let script = client.clone();
     let (agent, mut events) =
         NativeAgent::new_with_test_client(config, UnifiedClient::Scripted(client)).unwrap();
     let history = (0..20)
@@ -3617,13 +3618,20 @@ async fn ordinary_compaction_keeps_restored_user_boundaries_in_checkpoint() {
         .cache_topology
         .as_ref()
         .unwrap();
+    // The restored history is already over the compaction trigger, so it is
+    // compacted before the turn's first request rather than after its
+    // response. That request therefore opens the first cache generation from
+    // the compacted history, and no second model request was needed to
+    // install the checkpoint.
     assert_eq!(
-        topology.generation, 2,
-        "checkpoint must be installed without another model request"
+        script.remaining(),
+        0,
+        "the checkpoint must cost no model request beyond the turn's own"
     );
+    assert_eq!(topology.generation, 1);
     assert_eq!(
         topology.transition,
-        maestro_ai::cache_topology::CacheTransition::HistoryRewritten
+        maestro_ai::cache_topology::CacheTransition::Initial
     );
 
     assert_eq!(
@@ -5980,21 +5988,61 @@ fn a_spent_budget_still_yields_a_valid_request() {
 }
 
 #[test]
-fn local_output_allowance_fits_the_estimated_request_in_live_context() {
+fn output_allowance_fits_the_estimated_request_in_live_context() {
     assert_eq!(
-        clamp_output_to_remaining_context(4_096, 8_192, 5_000),
+        clamp_output_to_remaining_context(4_096, 8_192, 5_000, 1),
         Some(3_128)
     );
     assert_eq!(
-        clamp_output_to_remaining_context(2_048, 8_192, 1_000),
+        clamp_output_to_remaining_context(2_048, 8_192, 1_000, 1),
         Some(2_048),
         "remaining context must not raise the configured output cap"
     );
     assert_eq!(
-        clamp_output_to_remaining_context(4_096, 8_192, 9_000),
+        clamp_output_to_remaining_context(4_096, 8_192, 9_000, 1),
         None,
         "an input-filled context must fail before provider dispatch"
     );
+}
+
+#[test]
+fn output_allowance_refuses_a_response_smaller_than_the_floor() {
+    // 8_192 - 7_500 - 64 leaves 628 tokens, which is a response too small to
+    // finish a tool call, so the history has to give way instead.
+    assert_eq!(
+        clamp_output_to_remaining_context(4_096, 8_192, 7_500, MIN_RESPONSE_RESERVE_TOKENS),
+        None
+    );
+    assert_eq!(
+        clamp_output_to_remaining_context(4_096, 8_192, 7_000, MIN_RESPONSE_RESERVE_TOKENS),
+        Some(1_128),
+        "a response at or above the floor is still worth asking for"
+    );
+}
+
+#[test]
+fn catalogued_output_ceilings_do_not_fit_beside_a_full_compaction_trigger() {
+    // The failure this clamp removes, in the numbers of a real catalog entry.
+    // claude-opus-4-5 is a 200_000-token window with a 64_000-token output
+    // ceiling, and compaction does not trigger until 85% of the window.
+    let window = 200_000_u64;
+    let output_ceiling = 64_000_u32;
+    let compaction_trigger = (window as f64 * 0.85) as u64;
+
+    assert!(
+        compaction_trigger + u64::from(output_ceiling) > window,
+        "unclamped, a request at the compaction trigger asks for more than the window holds"
+    );
+    // Clamped, the same request is legal and still leaves a usable response.
+    let clamped = clamp_output_to_remaining_context(
+        output_ceiling,
+        window,
+        compaction_trigger,
+        MIN_RESPONSE_RESERVE_TOKENS,
+    )
+    .expect("a response still fits at the compaction trigger");
+    assert!(compaction_trigger + u64::from(clamped) <= window);
+    assert!(clamped >= MIN_RESPONSE_RESERVE_TOKENS);
 }
 
 #[test]

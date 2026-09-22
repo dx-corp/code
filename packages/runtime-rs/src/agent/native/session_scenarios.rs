@@ -350,15 +350,25 @@ impl EventStats {
         }
     }
 
-    /// Every compaction must shrink the history it measured: the post-turn
-    /// estimate is strictly below `tokens_before`, and `tokens_before` is a
-    /// real measurement rather than the zero of a missing cut point.
-    fn check_compaction_accounting(&mut self, state: &SessionState) -> Result<()> {
+    /// Every compaction must report a real measurement rather than the zero of
+    /// a missing cut point, and must leave a history that fits the model's
+    /// context window.
+    ///
+    /// The post-turn size is not compared against `tokens_before`. Compaction
+    /// runs before a request as well as after a response, so a turn that
+    /// compacts between its tool batches then legitimately appends its own
+    /// assistant message and tool results can end larger than the history the
+    /// compaction measured, while never exceeding the window.
+    fn check_compaction_accounting(
+        &mut self,
+        state: &SessionState,
+        context_window: u64,
+    ) -> Result<()> {
         if let Some(tokens_before) = self.unchecked_compaction_tokens.take() {
             ensure!(tokens_before > 0, "compaction reported tokens_before=0");
             ensure!(
-                state.metrics.message_tokens < tokens_before,
-                "compaction did not reduce history: {} tokens before, {} after",
+                state.metrics.message_tokens <= context_window,
+                "compaction left history over the context window: {} tokens before, {} after",
                 tokens_before,
                 state.metrics.message_tokens
             );
@@ -483,7 +493,8 @@ async fn run(scenario: Scenario) -> Result<()> {
                         turns += 1;
                         ensure!(scripted.remaining() == 0, "unconsumed response at turn {turns}");
                         let state = observe(&agent, false).await?;
-                        event_stats.check_compaction_accounting(&state)?;
+                        event_stats
+                            .check_compaction_accounting(&state, scenario.context_window)?;
                         ensure!(state.metrics.orphan_tool_ids == 0, "turn {turns}: tool call/result identities diverged: {:?}", state.metrics);
                     }
                 }
@@ -516,7 +527,7 @@ async fn run(scenario: Scenario) -> Result<()> {
             let state = observe(&agent, false).await?;
             // Drain trailing notifications too; measurements must not retain snapshots.
             while let Ok(event) = events.try_recv() { event_stats.observe(&event); }
-            event_stats.check_compaction_accounting(&state)?;
+            event_stats.check_compaction_accounting(&state, scenario.context_window)?;
             ensure!(state.metrics.orphan_tool_ids == 0, "step {index}: tool call/result identities diverged: {:?}", state.metrics);
             eprintln!("SESSION_STEP {}", serde_json::json!({"scenario": scenario.name, "step": index, "turn": turns, "events": event_stats, "elapsed_ms": started.elapsed().as_millis(), "checkpoint_bytes": saved.as_ref().map_or(0, json_bytes), "metrics": state.metrics}));
         }

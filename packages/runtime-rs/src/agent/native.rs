@@ -401,6 +401,8 @@ mod cancellation;
 mod codex;
 mod commands;
 mod context;
+#[cfg(test)]
+mod context_overflow_tests;
 mod deferred_tool_schemas;
 #[cfg(test)]
 mod deferred_tool_tests;
@@ -3614,16 +3616,59 @@ fn output_token_allowance(configured: u32, budget: Option<u32>, spent: u64) -> u
     if allowance == 0 { 1 } else { allowance }
 }
 
+/// Smallest response worth asking a provider for.
+///
+/// Below this the request is not worth sending: the model cannot finish a tool
+/// call in the space left, so the history has to give way instead. Returning
+/// `None` at this floor is what turns "the window is full" into a compaction
+/// rather than into a provider rejection.
+pub const MIN_RESPONSE_RESERVE_TOKENS: u32 = 1_024;
+
+/// The output allowance that fits beside this request's input.
+///
+/// Providers charge `max_tokens` against the same context window as the input,
+/// so a request whose input plus output ceiling exceeds the window is rejected
+/// outright however small the response turns out to be. `configured` is
+/// therefore an upper bound, not a promise; what fits is the floor of the two.
+///
+/// Returns `None` when less than `floor` is left, which the caller treats as a
+/// request that cannot be sent as composed.
 fn clamp_output_to_remaining_context(
     configured: u32,
     context_tokens: u64,
     estimated_input_tokens: u64,
+    floor: u32,
 ) -> Option<u32> {
     let remaining = context_tokens
         .saturating_sub(estimated_input_tokens)
         .saturating_sub(REQUEST_CONTEXT_SAFETY_TOKENS);
-    (remaining > 0).then(|| configured.min(u32::try_from(remaining).unwrap_or(u32::MAX)))
+    let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+    (remaining >= floor.max(1)).then(|| configured.min(remaining))
 }
+
+/// A request whose input leaves no room for a usable response.
+///
+/// Raised while the request is being built, before it costs a provider round
+/// trip. The turn loop treats it as a context overflow: compaction is the only
+/// thing that changes the answer, and the numbers here say by how much.
+#[derive(Debug)]
+pub(crate) struct RequestExceedsContextWindow {
+    pub(crate) estimated_input_tokens: u64,
+    pub(crate) context_tokens: u64,
+    pub(crate) minimum_response_tokens: u32,
+}
+
+impl std::fmt::Display for RequestExceedsContextWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "request input is too long for the model context window: {} estimated input tokens leave less than {} tokens for a response inside a {}-token window",
+            self.estimated_input_tokens, self.minimum_response_tokens, self.context_tokens
+        )
+    }
+}
+
+impl std::error::Error for RequestExceedsContextWindow {}
 
 async fn recv_command_or_shutdown(
     shutdown_token: &CancellationToken,

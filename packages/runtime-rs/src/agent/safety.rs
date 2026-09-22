@@ -286,29 +286,6 @@ pub fn is_retryable_error(error_message: &str) -> bool {
         .any(|pattern| lower.contains(pattern))
 }
 
-/// Context overflow patterns
-const OVERFLOW_PATTERNS: &[&str] = &[
-    "context_length_exceeded",
-    "context length",
-    "maximum context",
-    "token limit",
-    "too long",
-    "reduce the length",
-    "max_tokens",
-    "exceeds the model",
-];
-
-/// Check if an error message indicates context overflow
-///
-/// Context overflow is NOT retryable - requires context compaction.
-#[must_use]
-pub fn is_context_overflow(error_message: &str) -> bool {
-    let lower = error_message.to_lowercase();
-    OVERFLOW_PATTERNS
-        .iter()
-        .any(|pattern| lower.contains(pattern))
-}
-
 /// Stable JSON stringify for signature comparison
 ///
 /// Produces a canonical JSON string with sorted keys for deterministic
@@ -462,22 +439,6 @@ mod tests {
         assert!(!is_retryable_error("File not found"));
         assert!(!is_retryable_error("Permission denied"));
         assert!(!is_retryable_error("Invalid syntax"));
-    }
-
-    #[test]
-    fn test_is_context_overflow() {
-        // Context overflow errors
-        assert!(is_context_overflow(
-            "context_length_exceeded: 150000 tokens"
-        ));
-        assert!(is_context_overflow("Maximum context length exceeded"));
-        assert!(is_context_overflow("Request too long, reduce the length"));
-        assert!(is_context_overflow("Input exceeds the model's max_tokens"));
-
-        // Not context overflow
-        assert!(!is_context_overflow("Rate limit exceeded"));
-        assert!(!is_context_overflow("File not found"));
-        assert!(!is_context_overflow("Authentication failed"));
     }
 
     #[test]

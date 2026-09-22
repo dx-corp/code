@@ -122,6 +122,122 @@ impl NativeAgentRunner {
         }
     }
 
+    /// Tokens the last prepared request spent on everything that is not
+    /// conversation history: the system prompt and the tool schemas.
+    ///
+    /// Read from the runtime audit, so it costs nothing and needs no second
+    /// request build. Both parts are stable across the requests of one tool
+    /// chain, which is the case [`NativeAgentRunner::compact_before_request`]
+    /// has to get right. It is zero before the first request of a session,
+    /// where the history is the whole request anyway.
+    fn last_request_overhead_tokens(&self) -> u64 {
+        let audit = self
+            .runtime_audit
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        audit.request_context.as_ref().map_or(0, |request| {
+            request
+                .tools
+                .iter()
+                .fold(request.system, |total, (_, tokens)| {
+                    total.saturating_add(*tokens)
+                })
+        })
+    }
+
+    /// Compact before building a request whose size would cross the
+    /// compaction trigger. Returns whether the history changed.
+    ///
+    /// Two gaps make this necessary. Post-response compaction is skipped
+    /// whenever the response carried tool calls, so a long tool chain never
+    /// reaches it and grows until the provider rejects the request. And that
+    /// gate measures history alone, while the provider measures the whole
+    /// request, so a large tool catalog can fill the window with the history
+    /// still under the threshold.
+    ///
+    /// The caller runs this at the top of a turn iteration, after
+    /// `repair_orphaned_tool_calls` and after the previous batch's tool
+    /// results are in history, so every tool call already has its result and
+    /// the history is a consistent cut candidate.
+    /// `notes_delivered` says whether a request has already gone out in this
+    /// turn, which is what carries an accepted user note to the provider.
+    pub(super) fn compact_before_request(&mut self, notes_delivered: bool) -> bool {
+        // Accepted notes must reach a provider verbatim before they can be
+        // summarized. A note injected during this turn is still pending; one
+        // the turn is already consuming has reached the provider only once a
+        // request has gone out.
+        let notes_awaiting_a_provider = !self.pending_user_note_texts.is_empty()
+            || (!notes_delivered && !self.active_user_note_texts.is_empty());
+        if notes_awaiting_a_provider || self.model_route.uses_app_server() {
+            return false;
+        }
+        let request_tokens = self
+            .compactor
+            .estimate_tokens(&self.messages)
+            .saturating_add(self.last_request_overhead_tokens());
+        if !self.compactor.should_auto_compact_request(request_tokens) {
+            return false;
+        }
+        let started = Instant::now();
+        let result = self
+            .compactor
+            .compact_for_request(&self.messages, request_tokens);
+        self.adopt_compaction(result, started, "Context compacted before request")
+    }
+
+    /// Compact after the provider rejected a request as larger than its
+    /// context window. Returns whether the history changed, so the caller can
+    /// retry the request instead of ending the turn.
+    ///
+    /// The outer retry policy classifies this failure as
+    /// [`crate::agent::retry::ErrorKind::ContextOverflow`] and treats it as
+    /// terminal, which is correct for a retry of the same request and wrong
+    /// for the turn: the oversized history stays, so every later prompt in
+    /// the session fails the same way. Compaction is the only thing that
+    /// changes the provider's answer.
+    pub(super) fn compact_after_context_overflow(&mut self) -> bool {
+        // Accepted notes must reach a provider verbatim before they can be summarized.
+        if !self.pending_user_note_texts.is_empty() || self.model_route.uses_app_server() {
+            return false;
+        }
+        self.repair_orphaned_tool_calls();
+        let started = Instant::now();
+        let result = self.compactor.compact_over_provider_limit(&self.messages);
+        self.adopt_compaction(result, started, "Context compacted after provider limit")
+    }
+
+    /// Adopt a compaction result as the live history, emitting the events the
+    /// UI and the session transcript expect. Returns false, changing nothing,
+    /// when the result did not shorten the history.
+    fn adopt_compaction(
+        &mut self,
+        mut result: crate::agent::compaction::CompactionResult,
+        started: Instant,
+        fallback_summary: &str,
+    ) -> bool {
+        if !result.was_compacted() {
+            return false;
+        }
+        self.prepare_continuation(&mut result);
+        let _ = self.event_tx.send(FromAgent::CompactionMeasured {
+            duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        });
+        emit_compaction_event(
+            &self.event_tx,
+            &self.messages,
+            result.summary.as_deref().unwrap_or(fallback_summary),
+            result.cut_point.as_ref(),
+            result.continuation.as_ref(),
+            true,
+        );
+        if let Some(record) = result.continuation {
+            self.semantic_continuation = Some(record);
+        }
+        self.messages = Arc::new(result.messages);
+        self.emit_conversation_snapshot();
+        true
+    }
+
     /// Interrupted streams do not reach post-response compaction. Bound their
     /// accumulated history at the interruption boundary, preserving the
     /// exact original requests in the same atomic checkpoint as the summary.
@@ -377,11 +493,15 @@ impl NativeAgentRunner {
         };
 
         let mut max_tokens = self.remaining_output_token_allowance();
+        // Every provider charges `max_tokens` against the same window as the
+        // input, so this clamp is not a local-model concern. Asking for a
+        // model's full output ceiling beside a large history is what makes a
+        // request the provider has to reject, and 233 of the 442 catalogued
+        // models have an output ceiling larger than the headroom the
+        // compaction threshold leaves.
         if let Some(context_tokens) = self
             .tool_executor
-            .is_local_model(&self.config.model)
-            .then(|| self.tool_executor.model_context_window(&self.config.model))
-            .flatten()
+            .model_context_window(&self.config.model)
             .filter(|tokens| *tokens > 0)
         {
             let estimated_input_tokens = self
@@ -402,15 +522,27 @@ impl NativeAgentRunner {
                 } else {
                     0
                 });
+            // A reasoning budget is spent out of the same allowance, and a
+            // provider rejects an allowance that cannot cover it, so the floor
+            // never drops below the budget this request asks to think with.
+            let minimum_response_tokens =
+                thinking
+                    .as_ref()
+                    .map_or(MIN_RESPONSE_RESERVE_TOKENS, |thinking| {
+                        thinking
+                            .budget_tokens
+                            .saturating_add(MIN_RESPONSE_RESERVE_TOKENS)
+                    });
             max_tokens = clamp_output_to_remaining_context(
                 max_tokens,
                 context_tokens,
                 estimated_input_tokens,
+                minimum_response_tokens,
             )
-            .with_context(|| {
-                format!(
-                    "Local model request input estimate ({estimated_input_tokens} tokens) fills the live {context_tokens}-token context; reduce the prompt/history/tools or increase the runtime context"
-                )
+            .ok_or(RequestExceedsContextWindow {
+                estimated_input_tokens,
+                context_tokens,
+                minimum_response_tokens,
             })?;
         }
 
@@ -604,9 +736,15 @@ impl NativeAgentRunner {
                 config.system.as_deref().unwrap_or_default(),
                 Some(&model),
             ));
-            config.max_tokens =
-                clamp_output_to_remaining_context(config.max_tokens, context_tokens, input)
-                    .context("Selected history does not fit the summary model")?;
+            // A summary written into less than the floor is not worth the
+            // request, so this path refuses rather than truncates.
+            config.max_tokens = clamp_output_to_remaining_context(
+                config.max_tokens,
+                context_tokens,
+                input,
+                MIN_RESPONSE_RESERVE_TOKENS,
+            )
+            .context("Selected history does not fit the summary model")?;
             config.model = if model.starts_with("evalops/") || model.starts_with("maestro-managed/")
             {
                 model
