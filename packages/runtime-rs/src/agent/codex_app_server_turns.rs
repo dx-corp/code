@@ -144,6 +144,16 @@ impl CodexReasoningModel {
             "medium"
         } else if budget <= 20_000 {
             "high"
+        } else if budget <= 32_000 {
+            // ThinkingLevel::XHigh. Prefer the matching level and only step up
+            // when the model does not advertise it; without this band XHigh and
+            // Max both resolved to the model's top effort.
+            [
+                "xhigh", "ultra", "max", "high", "medium", "low", "minimal", "none",
+            ]
+            .into_iter()
+            .find(|effort| self.supports(effort))
+            .context("Codex model has no supported bounded reasoning effort")?
         } else {
             [
                 "ultra", "max", "xhigh", "high", "medium", "low", "minimal", "none",
@@ -1819,6 +1829,7 @@ mod tests {
             (ThinkingLevel::Low, "low"),
             (ThinkingLevel::Medium, "medium"),
             (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
             (ThinkingLevel::Max, "ultra"),
         ] {
             let (enabled, budget) = level.to_config();

@@ -555,10 +555,11 @@ impl SessionManager {
 pub enum ThinkingLevel {
     Off,      // No thinking
     Minimal,  // 1,024 tokens
-    Low,      // 5,000 tokens
+    Low,      // 4,096 tokens
     Medium,   // 10,000 tokens
     High,     // 20,000 tokens
-    Max,      // 32,000 tokens
+    XHigh,    // 32,000 tokens
+    Max,      // 50,000 tokens
 }
 ```
 
