@@ -779,6 +779,8 @@ pub enum ThinkingLevel {
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
     Ultra,
 }
 

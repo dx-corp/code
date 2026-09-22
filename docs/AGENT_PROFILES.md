@@ -28,13 +28,13 @@ primary:
   reasoningEffort: high
 oracle:
   provider: anthropic
-  model: claude-opus-4-6
+  model: claude-opus-5-5
   reasoningEffort: high
   readOnly: true
 specialists:
   reviewer:
     provider: anthropic
-    model: claude-opus-4-6
+    model: claude-opus-5-5
     reasoningEffort: high
 fallbackLevels: [medium, low]
 budgets:

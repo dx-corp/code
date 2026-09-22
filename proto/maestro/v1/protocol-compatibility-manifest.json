@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:48a353a4260873b61b821ea7bcfb54e2e421fd812ac6a02ea664a9d95fd68237",
+  "compatibilityDigest": "sha256:f009e58adacc2d460b21c9e14aa69470e85b966f633bca5c51be132e323820da",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -37,8 +37,8 @@
         "2026-08-08"
       ],
       "schemaDeclaredVersion": "2026-08-08",
-      "schemaContractDigest": "sha256:52936fa6b3fc78afcdf96f5968297fd3bfbc3c35d093492882d14a1d721bc456",
-      "runtimeContractDigest": "sha256:9d10e46f0b4b398a22750b0fe456e0a74bd66e37f6ae0c13bceceb96a9d03214",
+      "schemaContractDigest": "sha256:6f861ccdc76c8f85150a6a2aeceb99a0da5847f04ffd3d0b39011d94c81dbc53",
+      "runtimeContractDigest": "sha256:7d6fdd19ccfa036f0441b06e6d02bc2188302f6f9b805ee6c518cecb53b589dd",
       "messages": {
         "toRuntime": [
           "managed_authorization_result",

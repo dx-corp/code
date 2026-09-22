@@ -123,6 +123,9 @@ enum ThinkingLevel {
   THINKING_LEVEL_MEDIUM = 4;
   THINKING_LEVEL_HIGH = 5;
   THINKING_LEVEL_ULTRA = 6;
+  // Anthropic's xhigh effort. Added after ULTRA, so the field number order
+  // does not follow the effort ladder; wire compatibility wins over tidiness.
+  THINKING_LEVEL_XHIGH = 7;
 }
 
 enum ApprovalMode {

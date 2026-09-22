@@ -1,5 +1,5 @@
 {
-  "generated_at": 1790062657,
+  "generated_at": 1790101652,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -178,6 +178,25 @@
       "name": "Claude Opus 5",
       "provider": "anthropic",
       "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "capabilities": {
+        "protocol": "anthropic",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "provider": "anthropic",
+      "description": "Claude model for long-running agentic coding and knowledge work",
       "capabilities": {
         "protocol": "anthropic",
         "tools": true,
@@ -1324,7 +1343,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 943718
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -1552,7 +1571,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 131072
       },
       "verification": {
         "state": "catalog",
@@ -1570,7 +1589,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
+        "context_tokens": 1048576,
         "output_tokens": 32768
       },
       "verification": {
@@ -1589,7 +1608,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
+        "context_tokens": 1048576,
         "output_tokens": 32768
       },
       "verification": {
@@ -1608,7 +1627,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
+        "context_tokens": 1048576,
         "output_tokens": 32768
       },
       "verification": {
@@ -1925,6 +1944,25 @@
       "name": "Anthropic: Claude Opus 5",
       "provider": "openrouter",
       "description": "Claude Opus 5 is Anthropic’s flagship model for demanding reasoning, coding, and long-horizon agentic work. It is…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "name": "Anthropic: Claude Opus 5.5",
+      "provider": "openrouter",
+      "description": "Claude Opus 5.5 is Anthropic's flagship model for demanding reasoning, coding, and long-horizon agentic work,…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -2559,7 +2597,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 943718
+        "output_tokens": 384000
       },
       "verification": {
         "state": "catalog",
@@ -5645,6 +5683,82 @@
       }
     },
     {
+      "id": "openai/gpt-6-luna",
+      "name": "OpenAI: GPT-6 Luna",
+      "provider": "openrouter",
+      "description": "GPT-6 Luna is the fast, cost-efficient model in OpenAI's GPT-6 series, positioned below GPT-6 Sol. It is suited for…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna-pro",
+      "name": "OpenAI: GPT-6 Luna Pro",
+      "provider": "openrouter",
+      "description": "GPT-6 Luna Pro is the same underlying model as [GPT-6 Luna](https://openrouter.ai/openai/gpt-6-luna), served with…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "name": "OpenAI: GPT-6 Sol",
+      "provider": "openrouter",
+      "description": "GPT-6 Sol is the cost-efficient high-end model in OpenAI's GPT-6 series, positioned below the flagship GPT-6 Astra and…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol-pro",
+      "name": "OpenAI: GPT-6 Sol Pro",
+      "provider": "openrouter",
+      "description": "GPT-6 Sol Pro is the same underlying model as [GPT-6 Sol](https://openrouter.ai/openai/gpt-6-sol), served with…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "openai/gpt-audio",
       "name": "OpenAI: GPT Audio",
       "provider": "openrouter",
@@ -5732,7 +5846,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 32768
       },
       "verification": {
         "state": "catalog",
@@ -6983,7 +7097,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 262140
       },
       "verification": {
         "state": "catalog",

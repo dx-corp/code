@@ -1399,6 +1399,7 @@ fn apply_init_settings(
             crate::headless::messages::ThinkingLevel::Low => (true, 5_000),
             crate::headless::messages::ThinkingLevel::Medium => (true, 10_000),
             crate::headless::messages::ThinkingLevel::High => (true, 20_000),
+            crate::headless::messages::ThinkingLevel::XHigh => (true, 32_000),
             crate::headless::messages::ThinkingLevel::Ultra => (true, 50_000),
         };
         state.thinking_enabled = enabled;

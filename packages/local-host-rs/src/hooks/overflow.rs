@@ -49,22 +49,62 @@ impl ModelLimits {
     #[must_use]
     pub fn for_model(model_id: &str) -> Self {
         match model_id {
-            // Claude models
+            // Claude models. Context and output limits track the published
+            // per-model values in platform.claude.com/docs/en/models/overview
+            // and the bundled models.dev snapshot in model_catalog_data.json.
             s if s.contains("claude-3-5-sonnet") => Self {
                 max_context: 200_000,
                 max_output: 8_192,
                 ..Default::default()
             },
+            // Matches claude-opus-5 and claude-opus-5-5.
             s if s.contains("claude-opus-5") => Self {
                 max_context: 1_000_000,
                 max_output: 128_000,
                 ..Default::default()
             },
-            s if s.contains("claude-opus-4-6") => Self {
+            s if s.contains("claude-sonnet-5") => Self {
                 max_context: 1_000_000,
                 max_output: 128_000,
                 ..Default::default()
             },
+            // Matches claude-fable-5 and claude-fable-5-1.
+            s if s.contains("claude-fable-5") => Self {
+                max_context: 1_000_000,
+                max_output: 128_000,
+                ..Default::default()
+            },
+            s if s.contains("claude-opus-4-8")
+                || s.contains("claude-opus-4-7")
+                || s.contains("claude-opus-4-6") =>
+            {
+                Self {
+                    max_context: 1_000_000,
+                    max_output: 128_000,
+                    ..Default::default()
+                }
+            }
+            s if s.contains("claude-sonnet-4-6") => Self {
+                max_context: 1_000_000,
+                max_output: 128_000,
+                ..Default::default()
+            },
+            s if s.contains("claude-sonnet-4-5") => Self {
+                max_context: 1_000_000,
+                max_output: 64_000,
+                ..Default::default()
+            },
+            s if s.contains("claude-opus-4-5") => Self {
+                max_context: 200_000,
+                max_output: 64_000,
+                ..Default::default()
+            },
+            s if s.contains("claude-haiku-4-5") => Self {
+                max_context: 200_000,
+                max_output: 64_000,
+                ..Default::default()
+            },
+            // Opus 4.0 and 4.1 cap output at 32k.
             s if s.contains("claude-opus-4") => Self {
                 max_context: 200_000,
                 max_output: 32_000,
@@ -350,19 +390,38 @@ mod tests {
 
     #[test]
     fn test_model_limits() {
-        let limits = ModelLimits::for_model("claude-opus-5");
-        assert_eq!(limits.max_context, 1_000_000);
-        assert_eq!(limits.max_output, 128_000);
+        for model in [
+            "claude-opus-5-5",
+            "anthropic/claude-opus-5-5",
+            "claude-opus-5",
+            "anthropic/claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+        ] {
+            let limits = ModelLimits::for_model(model);
+            assert_eq!(limits.max_context, 1_000_000, "{model}");
+            assert_eq!(limits.max_output, 128_000, "{model}");
+        }
 
-        let limits = ModelLimits::for_model("anthropic/claude-opus-5");
+        let limits = ModelLimits::for_model("claude-sonnet-4-5-20250929");
         assert_eq!(limits.max_context, 1_000_000);
-        assert_eq!(limits.max_output, 128_000);
-
-        let limits = ModelLimits::for_model("claude-opus-4-6");
-        assert_eq!(limits.max_context, 1_000_000);
-        assert_eq!(limits.max_output, 128_000);
+        assert_eq!(limits.max_output, 64_000);
 
         let limits = ModelLimits::for_model("claude-opus-4-5-20251101");
+        assert_eq!(limits.max_context, 200_000);
+        assert_eq!(limits.max_output, 64_000);
+
+        let limits = ModelLimits::for_model("claude-haiku-4-5-20251001");
+        assert_eq!(limits.max_context, 200_000);
+        assert_eq!(limits.max_output, 64_000);
+
+        // Opus 4.0 and 4.1 keep the older 32k output cap.
+        let limits = ModelLimits::for_model("claude-opus-4-20250514");
         assert_eq!(limits.max_context, 200_000);
         assert_eq!(limits.max_output, 32_000);
 

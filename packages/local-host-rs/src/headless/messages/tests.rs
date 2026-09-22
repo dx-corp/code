@@ -2151,3 +2151,49 @@ fn acceptance_round_trips_from_native_producer_to_shared_contract() {
     );
     assert_eq!(serde_json::to_value(shared).unwrap(), wire);
 }
+
+#[test]
+fn thinking_levels_match_the_generated_protocol_constant() {
+    // HEADLESS_THINKING_LEVELS is the wire contract mirrored from
+    // proto/maestro/v1/headless.proto. Nothing checked it against the enum
+    // before, which is how the enum and the proto could drift apart.
+    use crate::headless::generated_protocol::HEADLESS_THINKING_LEVELS;
+
+    let encoded: Vec<String> = [
+        ThinkingLevel::Off,
+        ThinkingLevel::Minimal,
+        ThinkingLevel::Low,
+        ThinkingLevel::Medium,
+        ThinkingLevel::High,
+        ThinkingLevel::XHigh,
+        ThinkingLevel::Ultra,
+    ]
+    .into_iter()
+    .map(|level| {
+        serde_json::to_value(level)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
+    })
+    .collect();
+
+    let mut declared: Vec<String> = HEADLESS_THINKING_LEVELS
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect();
+    let mut encoded_sorted = encoded.clone();
+    declared.sort();
+    encoded_sorted.sort();
+    assert_eq!(
+        encoded_sorted, declared,
+        "every ThinkingLevel variant must appear in HEADLESS_THINKING_LEVELS"
+    );
+
+    // snake_case would spell this "x_high"; the wire name is "xhigh".
+    assert!(encoded.contains(&"xhigh".to_owned()));
+    assert_eq!(
+        serde_json::from_value::<ThinkingLevel>(serde_json::json!("xhigh")).unwrap(),
+        ThinkingLevel::XHigh
+    );
+}

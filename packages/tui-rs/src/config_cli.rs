@@ -1883,7 +1883,7 @@ fn provider_presets() -> Vec<ProviderPreset> {
             id: "anthropic",
             name: "Anthropic (Claude)",
             api: "anthropic-messages",
-            default_model: "claude-opus-4-6",
+            default_model: "claude-opus-5-5",
             base_url: Some("https://api.anthropic.com"),
             requires_api_key: true,
             api_key_env: Some("ANTHROPIC_API_KEY"),

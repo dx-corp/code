@@ -2,6 +2,8 @@
 //!
 //! Provides a UI for selecting AI models.
 
+use std::borrow::Cow;
+
 use crossterm::event::KeyCode;
 use maestro_ui::{ActionPicker, KeyHint, Modal, ModalSize, PickerOptions, PickerStatus};
 
@@ -29,6 +31,7 @@ const ACTIVE_ROUTE_SOURCE: &str = "active-route";
 const PREFERRED_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-6-astra"),
     ("anthropic", "claude-fable-5-1"),
+    ("anthropic", "claude-opus-5-5"),
     ("anthropic", "claude-opus-5"),
     ("openai", "gpt-5.6"),
     ("openai", "gpt-5.6-sol"),
@@ -42,17 +45,17 @@ fn discovery_priority(model: &ModelInfo) -> usize {
         let Some((provider, id)) = model.id.split_once('/') else {
             return PREFERRED_MODELS.len() * 2;
         };
-        // OpenRouter uses a dotted release suffix for the same Fable model.
-        (
-            provider,
-            if id == "claude-fable-5.1" {
-                "claude-fable-5-1"
-            } else {
-                id
-            },
-        )
+        // OpenRouter spells a Claude release suffix with a dot
+        // (`claude-opus-5.5`, `claude-fable-5.1`) where the direct Anthropic
+        // id uses a dash. Other providers keep their dotted ids verbatim.
+        let id = if id.starts_with("claude-") {
+            Cow::Owned(id.replace('.', "-"))
+        } else {
+            Cow::Borrowed(id)
+        };
+        (provider, id)
     } else {
-        (model.provider.as_str(), model.id.as_str())
+        (model.provider.as_str(), Cow::Borrowed(model.id.as_str()))
     };
     PREFERRED_MODELS
         .iter()
@@ -1612,10 +1615,11 @@ mod tests {
             .map(|&index| selector.models[index].id.as_str())
             .collect();
         assert_eq!(
-            &ids[..7],
+            &ids[..8],
             &[
                 "gpt-6-astra",
                 "claude-fable-5-1",
+                "claude-opus-5-5",
                 "claude-opus-5",
                 "gpt-5.6",
                 "gpt-5.6-sol",
@@ -1635,6 +1639,24 @@ mod tests {
             selector.models[*selector.filtered.last().unwrap()].id,
             "gpt-4o"
         );
+    }
+
+    #[test]
+    fn routed_claude_ids_normalize_their_dotted_release_suffix() {
+        // OpenRouter ships `anthropic/claude-opus-5.5`; PREFERRED_MODELS holds
+        // the direct id `claude-opus-5-5`. Both must rank as the same model.
+        let direct = discovery_priority(&test_model("claude-opus-5-5", "anthropic"));
+        let routed = discovery_priority(&test_model("anthropic/claude-opus-5.5", "openrouter"));
+        assert!(direct < PREFERRED_MODELS.len(), "direct id must rank");
+        assert!(
+            routed < PREFERRED_MODELS.len() * 2,
+            "routed id must rank behind the direct row, not fall off the list"
+        );
+        assert_eq!(routed, direct + PREFERRED_MODELS.len());
+
+        // A non-Claude dotted id keeps its dots.
+        let sol = discovery_priority(&test_model("openai/gpt-5.6-sol", "openrouter"));
+        assert!(sol < PREFERRED_MODELS.len() * 2, "gpt-5.6-sol must rank");
     }
 
     #[test]
