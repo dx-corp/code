@@ -6,6 +6,7 @@ license = "MIT"
 description = "Task graph planning and parallel agent orchestration for Maestro"
 
 [dependencies]
+maestro-runtime-contracts.workspace = true
 anyhow.workspace = true
 regex.workspace = true
 serde.workspace = true

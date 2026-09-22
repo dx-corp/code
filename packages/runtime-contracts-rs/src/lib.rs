@@ -10,6 +10,7 @@
 mod boundary;
 pub mod cache_topology;
 pub mod contracts;
+pub mod default_models;
 pub mod delegation;
 mod launch_spec;
 pub mod operation_observation;
@@ -33,6 +34,7 @@ pub use contracts::{
     ToolCallContract, ToolError, ToolOutcome, ToolOutput, ToolResult, ValidatorResult,
     mcp_server_id, schema_digest, validate_identity,
 };
+pub use default_models::DefaultModel;
 pub use delegation::{
     DELEGATION_OWNER_PROJECTION_METADATA_KEY, DELEGATION_PROJECTION_SCHEMA_VERSION,
     DelegationControlAction, DelegationControlProjection, DelegationControlState, DelegationEvent,

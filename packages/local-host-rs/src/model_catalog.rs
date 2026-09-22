@@ -1430,6 +1430,31 @@ pub fn protocol_name(protocol: ProviderProtocol) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// Every centrally declared default model must exist in the catalog.
+    ///
+    /// Each of these ids used to live in the crate that consumed it, with
+    /// nothing checking it. Over one audit the Google subagent tiers named
+    /// three retired Gemini 2.0 previews, the ambient Anthropic frontier named
+    /// a retired Opus 4.1 snapshot, and the Anthropic provider preset still
+    /// defaulted to Opus 4.6.
+    #[test]
+    fn default_models_are_catalogued() {
+        use maestro_runtime_contracts::DefaultModel;
+
+        let ids: std::collections::HashSet<&str> =
+            bundled_models().iter().map(|m| m.id.as_str()).collect();
+        let mut missing = Vec::new();
+        for slot in DefaultModel::ALL {
+            if !ids.contains(slot.id()) {
+                missing.push(format!("{slot:?} -> {}", slot.id()));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "default models absent from the bundled catalog: {missing:?}"
+        );
+    }
+
     /// Anthropic's published 1M-context list, pinned against the snapshot.
     ///
     /// models.dev is the snapshot's upstream and it is not infallible: it
