@@ -75,6 +75,7 @@ pub fn supports_explicit_prompt_caching(provider: AiProvider, model: &str) -> bo
                 "anthropic.claude-fable-5",
                 "anthropic.claude-mythos-5",
                 "anthropic.claude-mythos-preview",
+                "anthropic.claude-opus-5-5",
                 "anthropic.claude-opus-5",
                 "anthropic.claude-opus-4-8",
                 "anthropic.claude-opus-4-7",
@@ -147,7 +148,8 @@ pub fn anthropic_request_capabilities(
     let model_id = anthropic_model_id(provider, model);
     let normalized = model_id.as_deref().unwrap_or_default();
 
-    let thinking = if is_model_family(normalized, "claude-fable-5")
+    let thinking = if is_model_family(normalized, "claude-opus-5-5")
+        || is_model_family(normalized, "claude-fable-5")
         || is_model_family(normalized, "claude-mythos-5")
         || is_model_family(normalized, "claude-mythos-preview")
     {

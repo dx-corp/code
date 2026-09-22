@@ -27,7 +27,8 @@ pub const HEADLESS_TOOL_RETRY_DECISION_ACTIONS: &[&str] = &["retry", "skip", "ab
 pub const HEADLESS_CONNECTION_ROLES: &[&str] = &["viewer", "controller"];
 pub const HEADLESS_NOTIFICATION_TYPES: &[&str] =
     &["status", "heartbeat", "connection_info", "compaction"];
-pub const HEADLESS_THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "ultra"];
+pub const HEADLESS_THINKING_LEVELS: &[&str] =
+    &["off", "minimal", "low", "medium", "high", "xhigh", "ultra"];
 pub const HEADLESS_APPROVAL_MODES: &[&str] = &["auto", "prompt", "fail"];
 pub const HEADLESS_ERROR_TYPES: &[&str] = &["transient", "fatal", "tool", "cancelled", "protocol"];
 pub const HEADLESS_UTILITY_OPERATIONS: &[&str] =

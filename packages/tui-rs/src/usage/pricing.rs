@@ -2,7 +2,22 @@
 //!
 //! Provides per-model token pricing for cost estimation.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+/// OpenRouter spells a Claude release suffix with a dot
+/// (`anthropic/claude-opus-5.5`) where the direct Anthropic id uses a dash
+/// (`claude-opus-5-5`). Without this, `claude-opus-5.5` matches only the
+/// shorter `claude-opus-5` tier and bills at the wrong rate. Ids from other
+/// providers keep their dots, so `gpt-5.6` is untouched.
+fn normalize_claude_release_suffix(model: &str) -> Cow<'_, str> {
+    let name = model.rsplit('/').next().unwrap_or(model);
+    if name.starts_with("claude-") && name.contains('.') {
+        Cow::Owned(model.replace('.', "-"))
+    } else {
+        Cow::Borrowed(model)
+    }
+}
 
 /// Pricing tier for a model
 #[derive(Debug, Clone, Copy)]
@@ -94,6 +109,9 @@ impl ModelPricing {
     /// Get pricing for a model (matches by prefix)
     #[must_use]
     pub fn get_tier(&self, model: &str) -> &PricingTier {
+        let normalized = normalize_claude_release_suffix(model);
+        let model = normalized.as_ref();
+
         // Try exact match first
         if let Some(tier) = self.tiers.get(model) {
             return tier;
@@ -161,18 +179,43 @@ impl Default for ModelPricing {
     fn default() -> Self {
         let mut pricing = Self::new();
 
-        // Anthropic Claude models
-        // Claude Opus 4.6 ($5/$25 per M tokens)
+        // Anthropic Claude models. Rates are per million tokens from
+        // platform.claude.com/docs/en/about-claude/pricing, mirrored by the
+        // bundled models.dev snapshot in model_catalog_data.json.
+        // Claude Opus 5.5 ($4/$20; cache reads are 5% of input, not 10%)
+        pricing.add_tier("claude-opus-5-5", PricingTier::new(4.0, 20.0, 0.20, 5.0));
+        // Claude Opus 5 ($5/$25 per M tokens)
+        pricing.add_tier("claude-opus-5", PricingTier::new(5.0, 25.0, 0.50, 6.25));
+        // Claude Opus 4.8, 4.7, 4.6, and 4.5 ($5/$25 per M tokens)
+        pricing.add_tier("claude-opus-4-8", PricingTier::new(5.0, 25.0, 0.50, 6.25));
+        pricing.add_tier("claude-opus-4-7", PricingTier::new(5.0, 25.0, 0.50, 6.25));
         pricing.add_tier("claude-opus-4-6", PricingTier::new(5.0, 25.0, 0.50, 6.25));
-        // Claude Opus 4.5 ($5/$25 per M tokens)
         pricing.add_tier("claude-opus-4-5", PricingTier::new(5.0, 25.0, 0.50, 6.25));
         // Claude Opus 4.0 ($15/$75 per M tokens)
         pricing.add_tier("claude-opus-4", PricingTier::new(15.0, 75.0, 1.50, 18.75));
         pricing.add_tier("claude-4-opus", PricingTier::new(15.0, 75.0, 1.50, 18.75));
 
+        // Claude Fable 5.1 and Fable 5 ($10/$50; Fable 5.1 cache reads are
+        // 2.5% of input, Fable 5 reads are 10%)
+        pricing.add_tier(
+            "claude-fable-5-1",
+            PricingTier::new(10.0, 50.0, 0.25, 12.50),
+        );
+        pricing.add_tier("claude-fable-5", PricingTier::new(10.0, 50.0, 1.0, 12.50));
+
+        // Claude Sonnet 5 ($2/$10 per M tokens)
+        pricing.add_tier("claude-sonnet-5", PricingTier::new(2.0, 10.0, 0.20, 2.50));
+
+        // Claude Sonnet 4.6 and 4.5 ($3/$15 per M tokens)
+        pricing.add_tier("claude-sonnet-4-6", PricingTier::new(3.0, 15.0, 0.30, 3.75));
+        pricing.add_tier("claude-sonnet-4-5", PricingTier::new(3.0, 15.0, 0.30, 3.75));
+
         // Claude Sonnet 4
         pricing.add_tier("claude-sonnet-4", PricingTier::new(3.0, 15.0, 0.30, 3.75));
         pricing.add_tier("claude-4-sonnet", PricingTier::new(3.0, 15.0, 0.30, 3.75));
+
+        // Claude Haiku 4.5 ($1/$5 per M tokens)
+        pricing.add_tier("claude-haiku-4-5", PricingTier::new(1.0, 5.0, 0.10, 1.25));
 
         // Claude 3.5 Sonnet
         pricing.add_tier("claude-3-5-sonnet", PricingTier::new(3.0, 15.0, 0.30, 3.75));
@@ -328,6 +371,51 @@ mod tests {
         // The generic Opus 4 tier should remain $15/$75
         let tier = pricing.get_tier("claude-opus-4-20250514");
         assert!((tier.input_per_million - 15.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_current_anthropic_lineup_pricing() {
+        let pricing = ModelPricing::default();
+
+        // Opus 5.5 must not fall back to the Opus 5 tier.
+        let tier = pricing.get_tier("claude-opus-5-5");
+        assert!((tier.input_per_million - 4.0).abs() < 0.01);
+        assert!((tier.output_per_million - 20.0).abs() < 0.01);
+        assert!((tier.cache_read_per_million - 0.20).abs() < 0.01);
+        assert!((tier.cache_write_per_million - 5.0).abs() < 0.01);
+
+        // Routed and suffixed ids resolve to the same tier.
+        for model in [
+            "anthropic/claude-opus-5-5",
+            "claude-opus-5-5-thinking",
+            "anthropic/claude-opus-5.5",
+        ] {
+            let tier = pricing.get_tier(model);
+            assert!(
+                (tier.input_per_million - 4.0).abs() < 0.01,
+                "{model} got ${}/M instead of $4/M",
+                tier.input_per_million
+            );
+        }
+
+        let tier = pricing.get_tier("claude-opus-5");
+        assert!((tier.input_per_million - 5.0).abs() < 0.01);
+        assert!((tier.output_per_million - 25.0).abs() < 0.01);
+
+        let tier = pricing.get_tier("claude-sonnet-5");
+        assert!((tier.input_per_million - 2.0).abs() < 0.01);
+        assert!((tier.output_per_million - 10.0).abs() < 0.01);
+
+        let tier = pricing.get_tier("claude-fable-5-1");
+        assert!((tier.input_per_million - 10.0).abs() < 0.01);
+        assert!((tier.cache_read_per_million - 0.25).abs() < 0.01);
+
+        let tier = pricing.get_tier("claude-haiku-4-5-20251001");
+        assert!((tier.input_per_million - 1.0).abs() < 0.01);
+        assert!((tier.output_per_million - 5.0).abs() < 0.01);
+
+        let tier = pricing.get_tier("claude-opus-4-8");
+        assert!((tier.input_per_million - 5.0).abs() < 0.01);
     }
 
     #[test]

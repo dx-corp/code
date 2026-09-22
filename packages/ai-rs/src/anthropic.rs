@@ -916,6 +916,17 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         assert!(always_on_body.get("thinking").is_none());
         assert_eq!(always_on_body["output_config"]["effort"], "high");
 
+        // Claude Opus 5.5 has adaptive thinking always on and rejects a
+        // `thinking` object, so effort is the only depth control we send.
+        let opus_5_5_config = RequestConfig {
+            model: "claude-opus-5-5".to_string(),
+            thinking: Some(ThinkingConfig::enabled(16_000)),
+            ..Default::default()
+        };
+        let opus_5_5_body = client.build_request_body(&[], &opus_5_5_config).unwrap();
+        assert!(opus_5_5_body.get("thinking").is_none());
+        assert_eq!(opus_5_5_body["output_config"]["effort"], "high");
+
         let legacy_config = RequestConfig {
             model: "claude-opus-4-5".to_string(),
             thinking: Some(ThinkingConfig::enabled(16_000)),
@@ -955,6 +966,23 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
             )
             .unwrap();
         assert!(always_on_body.get("thinking").is_none());
+
+        // Claude Opus 5.5 returns 400 for `thinking: {"type": "disabled"}` at
+        // every effort level, so the UI's Off setting must omit the field
+        // rather than disable thinking the way it does on Opus 5.
+        for model in ["claude-opus-5-5", "anthropic/claude-opus-5-5"] {
+            let body = client
+                .build_request_body(
+                    &[],
+                    &RequestConfig {
+                        model: model.to_string(),
+                        thinking: None,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert!(body.get("thinking").is_none(), "{model}: {body}");
+        }
 
         let legacy_body = client
             .build_request_body(
@@ -1042,6 +1070,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
             "claude-mythos-5",
             "claude-mythos-5-1",
             "claude-mythos-preview",
+            "claude-opus-5-5",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-opus-4-7",
