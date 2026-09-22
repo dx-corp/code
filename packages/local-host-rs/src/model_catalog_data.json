@@ -1,5 +1,5 @@
 {
-  "generated_at": 1789977421,
+  "generated_at": 1790062657,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "models": [
     {
@@ -1826,25 +1826,6 @@
       }
     },
     {
-      "id": "anthropic/claude-opus-4",
-      "name": "Anthropic: Claude Opus 4",
-      "provider": "openrouter",
-      "description": "Claude Opus 4 is benchmarked as the world’s best coding model, at time of release, bringing sustained performance on…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 32000
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "anthropic/claude-opus-4.1",
       "name": "Anthropic: Claude Opus 4.1",
       "provider": "openrouter",
@@ -1969,7 +1950,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000,
+        "context_tokens": 200000,
         "output_tokens": 64000
       },
       "verification": {
@@ -2578,7 +2559,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 943718
       },
       "verification": {
         "state": "catalog",
@@ -3441,25 +3422,6 @@
       }
     },
     {
-      "id": "kwaipilot/kat-coder-pro-v2",
-      "name": "Kwaipilot: KAT-Coder-Pro V2",
-      "provider": "openrouter",
-      "description": "KAT-Coder-Pro V2 is the latest high-performance model in KwaiKAT’s KAT-Coder series, designed for complex…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 144000
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "kwaipilot/kat-coder-pro-v2.5",
       "name": "Kwaipilot: KAT-Coder-Pro V2.5",
       "provider": "openrouter",
@@ -3547,7 +3509,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 8192
+        "output_tokens": 16384
       },
       "verification": {
         "state": "catalog",
@@ -4505,8 +4467,46 @@
       }
     },
     {
+      "id": "nex-agi/nex-n2.5-mini",
+      "name": "Nex AGI: Nex-N2.5-Mini",
+      "provider": "openrouter",
+      "description": "Nex-N2.5 is an agentic model built to turn goals into working, verified outcomes. Its core strength is agentic coding…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 235929
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "nex-agi/nex-n2.5-mini:free",
       "name": "Nex AGI: Nex-N2.5-Mini (free)",
+      "provider": "openrouter",
+      "description": "Nex-N2.5 is an agentic model built to turn goals into working, verified outcomes. Its core strength is agentic coding…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 235929
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "nex-agi/nex-n2.5-pro",
+      "name": "Nex AGI: Nex-N2.5-Pro",
       "provider": "openrouter",
       "description": "Nex-N2.5 is an agentic model built to turn goals into working, verified outcomes. Its core strength is agentic coding…",
       "capabilities": {
@@ -6679,7 +6679,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 235929
       },
       "verification": {
         "state": "catalog",
@@ -7906,7 +7906,26 @@
       "id": "x-ai/grok-4.6",
       "name": "SpaceXAI: Grok 4.6",
       "provider": "openrouter",
-      "description": "Grok 4.6 is SpaceXAI's smartest model with frontier performance on coding, knowledge work, and STEM.",
+      "description": "Grok 4.6 is a model from SpaceXAI with frontier performance on coding, knowledge work, and STEM. It is succeeded by…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 500000,
+        "output_tokens": 450000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "x-ai/grok-4.7",
+      "name": "SpaceXAI: Grok 4.7",
+      "provider": "openrouter",
+      "description": "Grok 4.7 is SpaceXAI's flagship model for coding, agentic tasks, and knowledge work, succeeding Grok 4.6. It is…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -7971,6 +7990,63 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
+        "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "name": "Xiaomi: MiMo-V2.6-Flash",
+      "provider": "openrouter",
+      "description": "MiMo-V2.6-Flash is an open-source foundation model developed by Xiaomi. Built on a Mixture-of-Experts architecture…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "name": "Xiaomi: MiMo-V2.6-Pro",
+      "provider": "openrouter",
+      "description": "MiMo-V2.6-Pro is the flagship foundation model developed by Xiaomi. Built at a scale of over 1T parameters, it is…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
+      "provider": "openrouter",
+      "description": "MiMo-V2.6-Pro-UltraSpeed is the fast speed edition of Xiaomi's flagship foundation model, MiMo-V2.6-Pro. Built from…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
         "output_tokens": 131072
       },
       "verification": {
@@ -8237,7 +8313,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 131072
+        "output_tokens": 943718
       },
       "verification": {
         "state": "catalog",
@@ -8360,6 +8436,24 @@
     {
       "id": "grok-4.6",
       "name": "Grok 4.6",
+      "provider": "xai",
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 500000
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "grok-4.7",
+      "name": "Grok 4.7",
       "provider": "xai",
       "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
       "capabilities": {
