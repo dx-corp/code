@@ -603,15 +603,36 @@ mod tests {
 
     #[test]
     fn modern_anthropic_effort_preserves_budget_intent() {
+        // An arbitrary budget rounds up to the next exposed effort level. Opus
+        // 4.7 accepts xhigh, so the band above High stops at xhigh rather than
+        // jumping to max.
         let capabilities = anthropic_request_capabilities(Some("anthropic"), "claude-opus-4-7");
         for (budget, effort) in [
             (4_096, "low"),
             (4_097, "medium"),
             (10_001, "high"),
-            (20_001, "max"),
+            (20_001, "xhigh"),
+            (32_000, "xhigh"),
+            (32_001, "max"),
         ] {
-            assert_eq!(capabilities.effort_for_budget(budget), Some(effort));
+            assert_eq!(
+                capabilities.effort_for_budget(budget),
+                Some(effort),
+                "budget {budget}"
+            );
         }
+
+        // Opus 4.6 accepts max without xhigh, so the same band maps to max.
+        let no_xhigh = anthropic_request_capabilities(Some("anthropic"), "claude-opus-4-6");
+        for budget in [20_001, 32_000, 32_001] {
+            assert_eq!(
+                no_xhigh.effort_for_budget(budget),
+                Some("max"),
+                "budget {budget}"
+            );
+        }
+        assert_eq!(no_xhigh.effort_for_budget(20_000), Some("high"));
+
         assert_eq!(
             anthropic_request_capabilities(Some("anthropic"), "claude-opus-4-5")
                 .effort_for_budget(50_000),
