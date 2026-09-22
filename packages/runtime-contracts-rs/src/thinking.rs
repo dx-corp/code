@@ -54,6 +54,39 @@ pub enum ThinkingLevel {
 }
 
 impl ThinkingLevel {
+    /// Every level, in ascending ladder order.
+    ///
+    /// Cycling, boosting, and the effort picker all walk this list. Keeping one
+    /// copy matters: when `XHigh` was inserted, three separate hand-written
+    /// copies of the ladder went stale in three different crates and each one
+    /// surfaced a merge cycle after the last.
+    pub const ALL: [ThinkingLevel; 7] = [
+        ThinkingLevel::Off,
+        ThinkingLevel::Minimal,
+        ThinkingLevel::Low,
+        ThinkingLevel::Medium,
+        ThinkingLevel::High,
+        ThinkingLevel::XHigh,
+        ThinkingLevel::Max,
+    ];
+
+    /// This level's index in [`ThinkingLevel::ALL`].
+    ///
+    /// The match is exhaustive and the array length is fixed, so adding a
+    /// variant without placing it in the ladder fails to compile.
+    #[must_use]
+    pub fn ladder_position(self) -> usize {
+        match self {
+            ThinkingLevel::Off => 0,
+            ThinkingLevel::Minimal => 1,
+            ThinkingLevel::Low => 2,
+            ThinkingLevel::Medium => 3,
+            ThinkingLevel::High => 4,
+            ThinkingLevel::XHigh => 5,
+            ThinkingLevel::Max => 6,
+        }
+    }
+
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
@@ -100,6 +133,44 @@ impl ThinkingLevel {
 #[cfg(test)]
 mod tests {
     use super::ThinkingLevel;
+
+    #[test]
+    fn all_is_the_ladder_in_ascending_budget_order() {
+        assert_eq!(ThinkingLevel::ALL.len(), 7);
+
+        for (index, level) in ThinkingLevel::ALL.into_iter().enumerate() {
+            assert_eq!(level.ladder_position(), index, "{level:?}");
+        }
+
+        let budgets: Vec<u32> = ThinkingLevel::ALL
+            .into_iter()
+            .map(|level| level.to_config().1)
+            .collect();
+        assert_eq!(
+            budgets,
+            vec![0, 1_024, 4_096, 10_000, 20_000, 32_000, 50_000]
+        );
+        assert!(
+            budgets.windows(2).all(|pair| pair[0] < pair[1]),
+            "ALL must be strictly ascending by budget: {budgets:?}"
+        );
+
+        // Every label and every serialized name must round-trip through parse,
+        // so a new level cannot be added to ALL without a parse arm.
+        for level in ThinkingLevel::ALL {
+            assert_eq!(
+                ThinkingLevel::parse(level.label()),
+                Some(level),
+                "{level:?}"
+            );
+            let wire = serde_json::to_value(level).unwrap();
+            assert_eq!(
+                ThinkingLevel::parse(wire.as_str().unwrap()),
+                Some(level),
+                "{level:?}"
+            );
+        }
+    }
 
     #[test]
     fn xhigh_sits_between_high_and_max() {

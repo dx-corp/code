@@ -5785,11 +5785,15 @@ async fn shift_tab_cycles_thinking_while_busy_and_preserves_draft_and_approvals(
     app.state.busy = true;
     let mode = app.state.interaction_mode;
     let approvals = app.state.approval_mode;
+    // fixture/custom-thinking has no catalog entry, so normalize_thinking
+    // passes every level through and Shift+Tab walks the whole ladder,
+    // including XHigh between High and Max.
     for expected in [
         ThinkingLevel::Minimal,
         ThinkingLevel::Low,
         ThinkingLevel::Medium,
         ThinkingLevel::High,
+        ThinkingLevel::XHigh,
         ThinkingLevel::Max,
         ThinkingLevel::Off,
     ] {

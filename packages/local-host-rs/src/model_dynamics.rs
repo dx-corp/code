@@ -157,18 +157,11 @@ pub fn normalize_thinking(model: &str, requested: ThinkingLevel) -> ThinkingLeve
 }
 
 /// Cycle distinct effective levels, skipping budgets the provider normalizes
-/// to the same effort. Unknown/custom models retain the existing six levels.
+/// to the same effort. Unknown/custom models retain every level in
+/// `ThinkingLevel::ALL`.
 pub fn next_thinking_level(model: &str, current: ThinkingLevel) -> ThinkingLevel {
     let mut levels = Vec::new();
-    for requested in [
-        ThinkingLevel::Off,
-        ThinkingLevel::Minimal,
-        ThinkingLevel::Low,
-        ThinkingLevel::Medium,
-        ThinkingLevel::High,
-        ThinkingLevel::XHigh,
-        ThinkingLevel::Max,
-    ] {
+    for requested in ThinkingLevel::ALL {
         let level = normalize_thinking(model, requested);
         if !levels.contains(&level) {
             levels.push(level);
@@ -252,13 +245,25 @@ mod selection_tests {
             normalize_thinking(model, ThinkingLevel::Minimal),
             ThinkingLevel::Low
         );
+        // Fable 5.1 accepts xhigh, so the cycle passes through XHigh between
+        // High and Max before wrapping.
         for (current, next) in [
             (ThinkingLevel::Low, ThinkingLevel::Medium),
             (ThinkingLevel::Medium, ThinkingLevel::High),
-            (ThinkingLevel::High, ThinkingLevel::Max),
+            (ThinkingLevel::High, ThinkingLevel::XHigh),
+            (ThinkingLevel::XHigh, ThinkingLevel::Max),
             (ThinkingLevel::Max, ThinkingLevel::Low),
         ] {
-            assert_eq!(next_thinking_level(model, current), next);
+            assert_eq!(next_thinking_level(model, current), next, "{current:?}");
+        }
+
+        // Opus 4.6 accepts max without xhigh, so its cycle skips XHigh.
+        let no_xhigh = "anthropic/claude-opus-4-6";
+        for (current, next) in [
+            (ThinkingLevel::High, ThinkingLevel::Max),
+            (ThinkingLevel::Max, ThinkingLevel::Off),
+        ] {
+            assert_eq!(next_thinking_level(no_xhigh, current), next, "{current:?}");
         }
         assert_eq!(
             normalize_thinking("anthropic/claude-sonnet-4-6", ThinkingLevel::Off),
