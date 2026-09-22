@@ -19,6 +19,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::model_facts_generated::model_facts;
 use std::sync::LazyLock;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -517,33 +519,6 @@ pub fn bundled_models() -> &'static [ModelInfo] {
     &BUNDLED_CATALOG.models
 }
 
-/// Resolve `model_id` against catalog keys, trying each shape the catalog uses.
-///
-/// The qualified route comes first, because OpenRouter rows are keyed with
-/// their provider prefix (`anthropic/claude-opus-5.5`). Then the bare model
-/// name, which also strips a managed prefix such as
-/// `maestro-managed/openai/...`. Then a Claude dotted release suffix respelled
-/// with a dash, so `anthropic/claude-opus-5.5` also finds `claude-opus-5-5`.
-///
-/// The dotted retry is restricted to Claude ids deliberately: applied to every
-/// id it would make `gpt-4.1` resolve as `gpt-4-1`.
-fn lookup_by_catalog_id<T>(model_id: &str, mut get: impl FnMut(&str) -> Option<T>) -> Option<T> {
-    let trimmed = model_id.trim();
-    let mut candidates = vec![trimmed.to_owned()];
-    if let Some(bare) = trimmed.rsplit('/').next() {
-        if bare != trimmed {
-            candidates.push(bare.to_owned());
-        }
-    }
-    for candidate in candidates.clone() {
-        let name = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
-        if name.starts_with("claude-") && name.contains('.') {
-            candidates.push(candidate.replace('.', "-"));
-        }
-    }
-    candidates.into_iter().find_map(|candidate| get(&candidate))
-}
-
 /// Per-million-token USD rates for one model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelRates {
@@ -555,74 +530,41 @@ pub struct ModelRates {
 
 /// Published rates for `model_id`, from the bundled snapshot.
 ///
-/// Read out of the embedded JSON rather than added to [`ModelInfo`], which
-/// derives `Eq`: an f64 field would remove that, and every consumer of
-/// `ModelInfo` equality would have to change for a field only cost reporting
-/// wants.
+/// Read from the generated binding (`model_facts_generated.rs`, emitted from
+/// the same snapshot by `tools/model-catalog/generate-bindings.mjs`) rather
+/// than added to [`ModelInfo`], which derives `Eq`: an f64 field would remove
+/// that, and every consumer of `ModelInfo` equality would have to change for a
+/// field only cost reporting wants.
 ///
-/// Id matching follows [`bundled_limits`]: the qualified route first, then the
-/// bare model name, then a Claude dotted release suffix respelled with a dash.
+/// A model with no vendor rate at all (self-hosted open weights, a router
+/// meta-route) has no rates. A cache rate the catalog omits reads as 0.0.
+///
+/// Id matching is the binding's rule, shared with the TypeScript and Python
+/// bindings: the qualified route first, then the bare model name, then a
+/// Claude dotted release suffix respelled with a dash. See
+/// [`model_facts_candidates`](crate::model_facts_generated::model_facts_candidates).
 #[must_use]
 pub fn bundled_rates(model_id: &str) -> Option<ModelRates> {
-    static RATES: LazyLock<HashMap<String, ModelRates>> = LazyLock::new(|| {
-        let parsed: serde_json::Value = match serde_json::from_str(BUNDLED_CATALOG_JSON) {
-            Ok(value) => value,
-            Err(_) => return HashMap::new(),
-        };
-        let Some(models) = parsed.get("models").and_then(serde_json::Value::as_array) else {
-            return HashMap::new();
-        };
-        models
-            .iter()
-            .filter_map(|model| {
-                let id = model.get("id")?.as_str()?.to_owned();
-                let cost = model.get("cost")?;
-                let rate = |key: &str| cost.get(key).and_then(serde_json::Value::as_f64);
-                Some((
-                    id,
-                    ModelRates {
-                        input_per_million: rate("input")?,
-                        output_per_million: rate("output")?,
-                        cache_read_per_million: rate("cache_read").unwrap_or(0.0),
-                        cache_write_per_million: rate("cache_write").unwrap_or(0.0),
-                    },
-                ))
-            })
-            .collect()
-    });
-
-    lookup_by_catalog_id(model_id, |candidate| RATES.get(candidate).copied())
+    let facts = model_facts(model_id)?;
+    Some(ModelRates {
+        input_per_million: facts.input_per_million?,
+        output_per_million: facts.output_per_million?,
+        cache_read_per_million: facts.cache_read_per_million.unwrap_or(0.0),
+        cache_write_per_million: facts.cache_write_per_million.unwrap_or(0.0),
+    })
 }
 
 /// Context and output limits for `model_id`, from the bundled snapshot.
 ///
-/// Deliberately reads the bundled snapshot rather than [`find_model`]:
+/// Deliberately reads the generated binding rather than [`find_model`]:
 /// callers are on hot paths. `find_model` goes through `available_models`,
 /// which checks for a background refresh, reads the on-disk cache, and clones
 /// every model in the catalog on each call.
 ///
-/// Matching mirrors the catalog's own id shapes. A `provider/model` route
-/// resolves by its bare id when the qualified form is absent, and a dotted
-/// Claude release suffix resolves to the dashed direct id, so
-/// `anthropic/claude-opus-5.5` finds `claude-opus-5-5`.
+/// Id matching is the binding's rule; see [`bundled_rates`].
 #[must_use]
 pub fn bundled_limits(model_id: &str) -> Option<(u32, Option<u32>)> {
-    static LIMITS: LazyLock<HashMap<String, (u32, Option<u32>)>> = LazyLock::new(|| {
-        bundled_models()
-            .iter()
-            .map(|model| {
-                (
-                    model.id.clone(),
-                    (
-                        model.capabilities.context_tokens,
-                        model.capabilities.output_tokens,
-                    ),
-                )
-            })
-            .collect()
-    });
-
-    lookup_by_catalog_id(model_id, |candidate| LIMITS.get(candidate).copied())
+    model_facts(model_id).map(|facts| (facts.context_window, facts.max_output_tokens))
 }
 
 /// Cache wins only when it carries models and is at least as fresh as the
@@ -1466,6 +1408,68 @@ mod tests {
     /// and the API rejects the oversized request instead.
     ///
     /// scripts/fetch-model-catalog.mjs carries the correction; this asserts it
+    /// Every catalogued model must carry a published price.
+    ///
+    /// A row with no cost is not free, but it is spent as if it were:
+    /// conductor's computeCostDetails returns a zero breakdown when it finds
+    /// no pricing entry, so an unpriced model reports no spend at all.
+    /// `gemma-4-26b-a4b-it` reached the catalog that way, with models.dev
+    /// carrying no cost while OpenRouter published $0.09/$0.30 for the same
+    /// weights.
+    ///
+    /// The exceptions are OpenRouter's routing models. They publish
+    /// `"prompt": "-1"`, meaning the price is whatever the model they route to
+    /// charges, so no fixed number exists to record. They are named here one
+    /// by one rather than matched by prefix, so a new `openrouter/` model that
+    /// really is unpriced has to be looked at instead of being absorbed.
+    #[test]
+    fn every_catalogued_model_has_a_published_price() {
+        const PRICED_AT_ROUTING_TIME: [&str; 5] = [
+            "openrouter/auto",
+            "openrouter/auto-beta",
+            "openrouter/bodybuilder",
+            "openrouter/fusion",
+            "openrouter/pareto-code",
+        ];
+
+        let mut unpriced = Vec::new();
+        for model in bundled_models() {
+            if PRICED_AT_ROUTING_TIME.contains(&model.id.as_str()) {
+                continue;
+            }
+            if bundled_rates(&model.id).is_none() {
+                unpriced.push(model.id.clone());
+            }
+        }
+        assert!(
+            unpriced.is_empty(),
+            "catalogued models with no published price bill as free: {unpriced:?}"
+        );
+    }
+
+    /// The routing exceptions must stay real models, not a stale allowlist.
+    #[test]
+    fn every_routing_time_exception_is_still_catalogued() {
+        const PRICED_AT_ROUTING_TIME: [&str; 5] = [
+            "openrouter/auto",
+            "openrouter/auto-beta",
+            "openrouter/bodybuilder",
+            "openrouter/fusion",
+            "openrouter/pareto-code",
+        ];
+
+        let ids: std::collections::HashSet<&str> =
+            bundled_models().iter().map(|m| m.id.as_str()).collect();
+        let stale: Vec<&str> = PRICED_AT_ROUTING_TIME
+            .into_iter()
+            .filter(|id| !ids.contains(id))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "routing-time exceptions no longer in the catalog: {stale:?}"
+        );
+    }
+
     /// survives a regeneration.
     #[test]
     fn anthropic_context_windows_match_the_published_list() {
@@ -2268,6 +2272,144 @@ mod tests {
             by_id("openai/o4-mini").capabilities.output_tokens,
             Some(100_000)
         );
+    }
+
+    #[test]
+    fn generated_model_facts_match_the_bundled_snapshot() {
+        use crate::model_facts_generated::MODEL_FACTS;
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(BUNDLED_CATALOG_JSON).expect("bundled snapshot parses");
+        let models = parsed["models"].as_array().expect("models array");
+        assert_eq!(
+            models.len(),
+            MODEL_FACTS.len(),
+            "one generated row per catalogued model"
+        );
+        assert!(
+            MODEL_FACTS.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "generated rows must be in byte order for the binary search"
+        );
+        for model in models {
+            let id = model["id"].as_str().expect("id");
+            let index = MODEL_FACTS
+                .binary_search_by(|(key, _)| key.cmp(&id))
+                .unwrap_or_else(|_| panic!("{id} missing from the generated binding"));
+            let facts = MODEL_FACTS[index].1;
+            let caps = &model["capabilities"];
+            assert_eq!(
+                Some(u64::from(facts.context_window)),
+                caps["context_tokens"].as_u64(),
+                "{id} context"
+            );
+            assert_eq!(
+                facts.max_output_tokens.map(u64::from),
+                caps["output_tokens"].as_u64(),
+                "{id} output"
+            );
+            let cost = &model["cost"];
+            assert_eq!(
+                facts.input_per_million,
+                cost["input"].as_f64(),
+                "{id} input"
+            );
+            assert_eq!(
+                facts.output_per_million,
+                cost["output"].as_f64(),
+                "{id} output"
+            );
+            assert_eq!(
+                facts.cache_read_per_million,
+                cost["cache_read"].as_f64(),
+                "{id} cache_read"
+            );
+            assert_eq!(
+                facts.cache_write_per_million,
+                cost["cache_write"].as_f64(),
+                "{id} cache_write"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_model_facts_replay_the_resolution_fixture() {
+        use crate::model_facts_generated::model_facts_candidates;
+
+        // Computed by the generator's reference implementation; the
+        // TypeScript and Python bindings replay the same file.
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("model_facts_resolution.generated.json"))
+                .expect("resolution fixture parses");
+        let probes = fixture["probes"].as_array().expect("probes array");
+        assert!(
+            probes.len() > 100,
+            "fixture is unexpectedly small: {}",
+            probes.len()
+        );
+        for entry in probes {
+            let probe = entry["probe"].as_str().expect("probe");
+            let expected: Vec<&str> = entry["candidates"]
+                .as_array()
+                .expect("candidates")
+                .iter()
+                .map(|value| value.as_str().expect("candidate"))
+                .collect();
+            assert_eq!(
+                model_facts_candidates(probe),
+                expected,
+                "candidates for {probe:?}"
+            );
+            match (model_facts(probe), entry["resolved"].as_str()) {
+                (None, None) => {}
+                (Some(found), Some(id)) => {
+                    assert_eq!(Some(found), model_facts(id), "{probe:?} resolves to {id}");
+                }
+                (found, expected) => {
+                    panic!("{probe:?}: found {found:?}, fixture says {expected:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_limits_and_rates_read_the_generated_binding() {
+        assert_eq!(
+            bundled_limits("anthropic/claude-opus-5.5"),
+            Some((1_000_000, Some(128_000)))
+        );
+        assert_eq!(
+            bundled_limits("claude-opus-5.5"),
+            Some((1_000_000, Some(128_000)))
+        );
+        assert_eq!(
+            bundled_limits("vertex-ai/gemini-3.7-flash"),
+            Some((1_048_576, Some(65_536)))
+        );
+        // Sonnet 4.5 is 200k; models.dev says 1M and the snapshot carries the
+        // documented correction.
+        assert_eq!(
+            bundled_limits("claude-sonnet-4-5").map(|(context, _)| context),
+            Some(200_000)
+        );
+        // A bare name the catalog holds only as a route resolves to it.
+        assert_eq!(bundled_limits("gpt-4"), bundled_limits("openai/gpt-4"));
+        assert!(bundled_limits("gpt-4").is_some());
+        assert_eq!(bundled_limits(""), None);
+        assert_eq!(bundled_limits("anthropic/"), None);
+        assert_eq!(bundled_limits("not-a-real-model"), None);
+
+        // Rates are copied bit-for-bit from the generated table, so the
+        // comparison is exact by construction; `to_bits` keeps clippy's
+        // float_cmp lint out of it.
+        let opus = bundled_rates("claude-opus-5-5").expect("opus rates");
+        assert_eq!(opus.input_per_million.to_bits(), 4.0_f64.to_bits());
+        assert_eq!(opus.cache_read_per_million.to_bits(), 0.2_f64.to_bits());
+        // No vendor rate at all: no rates.
+        assert_eq!(bundled_rates("openrouter/auto"), None);
+        // A cache rate the catalog omits reads as 0.0.
+        let pro = bundled_rates("gpt-5.5-pro").expect("pro rates");
+        assert_eq!(pro.input_per_million.to_bits(), 30.0_f64.to_bits());
+        assert_eq!(pro.cache_read_per_million.to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

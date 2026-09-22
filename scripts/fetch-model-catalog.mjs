@@ -225,6 +225,43 @@ function mapOpenRouterCost(pricing) {
 	return mapped;
 }
 
+/**
+ * Give a direct-provider row the price its OpenRouter twin publishes.
+ *
+ * models.dev carries no cost for some direct rows even when OpenRouter prices
+ * the same weights: `gemma-4-26b-a4b-it` arrived with cost null while
+ * `google/gemma-4-26b-a4b-it` publishes $0.09/$0.30 per million. A row with no
+ * cost is not free, but every consumer treats it that way, because
+ * conductor's computeCostDetails returns a zero breakdown when it finds no
+ * pricing entry. Filling the gap from the twin is the difference between
+ * reporting a real number and reporting nothing as if it were nothing owed.
+ *
+ * Only a row with no cost at all is touched, so a published direct price
+ * always wins over the OpenRouter route's.
+ */
+function backfillMissingCosts(models) {
+	const priced = new Map();
+	for (const model of models) {
+		if (!model.id.includes("/")) continue;
+		if (typeof model.cost?.input !== "number") continue;
+		const bare = model.id.split("/").pop();
+		// An exact twin wins; never let two routes fight over one bare name.
+		if (bare && !priced.has(bare)) priced.set(bare, model.cost);
+	}
+	let filled = 0;
+	for (const model of models) {
+		if (model.cost && typeof model.cost.input === "number") continue;
+		if (model.id.includes("/")) continue;
+		const twin = priced.get(model.id);
+		if (!twin) continue;
+		model.cost = { ...twin };
+		filled += 1;
+	}
+	if (filled > 0) {
+		console.log(`filled ${filled} missing cost(s) from an OpenRouter twin`);
+	}
+}
+
 function mapCost(cost) {
 	const rate = (value) =>
 		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -402,6 +439,8 @@ async function main() {
 	if (!models.some((model) => model.provider === "openrouter")) {
 		throw new Error("OpenRouter payload produced no catalog rows; refusing to write");
 	}
+
+	backfillMissingCosts(models);
 
 	models.sort(
 		(left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
