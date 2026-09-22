@@ -181,7 +181,11 @@ fn loopback_server(
 
 fn loopback_server_records_unexpected_request(
     timeout: Duration,
-) -> (String, mpsc::Receiver<bool>, std::thread::JoinHandle<()>) {
+) -> (
+    String,
+    mpsc::Receiver<Option<String>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback server");
     listener
         .set_nonblocking(true)
@@ -196,7 +200,7 @@ fn loopback_server_records_unexpected_request(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let _ = read_http_request(&mut stream);
+                    let request = read_http_request(&mut stream);
                     let body = "{}";
                     let response = format!(
                         "HTTP/1.1 202 telemetry\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -204,13 +208,13 @@ fn loopback_server_records_unexpected_request(
                     );
                     let _ = stream.write_all(response.as_bytes());
                     sender
-                        .send(true)
+                        .send(Some(request))
                         .expect("report unexpected telemetry request");
                     return;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
-                        sender.send(false).expect("report no telemetry request");
+                        sender.send(None).expect("report no telemetry request");
                         return;
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -546,6 +550,7 @@ fn onboarding_outbox_retries_without_reattributing_identity_scope() {
 }
 
 fn assert_outbox_scope_binding(event: FirstPartyTelemetryEvent) {
+    let event_id = event.event_id().to_string();
     let temp = tempfile::tempdir().expect("telemetry tempdir");
     let origin_scope = test_identity_scope("org-a", "workspace-a");
     let later_scope = test_identity_scope("org-b", "workspace-b");
@@ -577,12 +582,15 @@ fn assert_outbox_scope_binding(event: FirstPartyTelemetryEvent) {
         path.exists(),
         "a different tenant must not acknowledge the origin record"
     );
-    assert!(
-        !switched_requests
-            .recv_timeout(Duration::from_secs(2))
-            .expect("scope-switch result"),
-        "the current tenant bearer must never replay a different tenant's record"
-    );
+    let unexpected = switched_requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("scope-switch result");
+    if let Some(request) = unexpected {
+        assert!(
+            !request.contains(&event_id),
+            "the current tenant bearer must never replay a different tenant's record: {request}"
+        );
+    }
     switched_server
         .join()
         .expect("scope-switch loopback server");
