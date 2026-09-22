@@ -262,14 +262,18 @@ function mapCost(cost) {
  * API rejects it at 200k with "prompt is too long". The conservative value
  * fails safe; the optimistic one fails the request.
  *
- * Keyed by the exact catalog id, including the OpenRouter dotted spelling.
- * Every entry needs a comment naming the vendor source, and entries should be
- * deleted once upstream corrects them.
+ * Keyed by the exact catalog id. Only direct-provider ids belong here. An
+ * OpenRouter id names a route, not the vendor default: OpenRouter sends the
+ * 1M-context beta header on its own account, so `anthropic/claude-sonnet-4.5`
+ * genuinely accepts the 1,000,000 tokens its /api/v1/models entry advertises.
+ * Overriding that id down to 200,000 would discard 80% of a window the route
+ * accepts. Every entry needs a comment naming the vendor source, and entries
+ * should be deleted once upstream corrects them.
  */
 const CONTEXT_WINDOW_OVERRIDES = new Map([
+	// https://docs.anthropic.com/en/docs/about-claude/models/overview - 200K context
 	["claude-sonnet-4-5", 200_000],
 	["claude-sonnet-4-5-20250929", 200_000],
-	["anthropic/claude-sonnet-4.5", 200_000],
 ]);
 
 /** Apply a documented vendor correction to an upstream context window. */
