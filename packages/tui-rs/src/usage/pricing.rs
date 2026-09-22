@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 /// OpenRouter spells a Claude release suffix with a dot
 /// (`anthropic/claude-opus-5.5`) where the direct Anthropic id uses a dash
@@ -77,6 +78,34 @@ impl Default for PricingTier {
     }
 }
 
+/// A tier built from the bundled catalog's published rates, memoized so
+/// `get_tier` can hand back a reference.
+///
+/// 49 catalogued models had no `add_tier` call and billed at the default
+/// $3/$15 Sonnet 4 rate, including every current Gemini and the GPT-5 family.
+/// Rates now come from the same generated snapshot as context limits instead
+/// of being typed in a second time.
+fn catalog_tier(model: &str) -> Option<&'static PricingTier> {
+    static TIERS: LazyLock<Mutex<HashMap<String, &'static PricingTier>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    let mut cache = TIERS.lock().ok()?;
+    if let Some(tier) = cache.get(model) {
+        return Some(*tier);
+    }
+    let rates = maestro_local_host::model_catalog::bundled_rates(model)?;
+    // Leaked once per distinct id seen in a process so the reference can
+    // outlive the lock. Bounded by the size of the snapshot.
+    let tier: &'static PricingTier = Box::leak(Box::new(PricingTier::new(
+        rates.input_per_million,
+        rates.output_per_million,
+        rates.cache_read_per_million,
+        rates.cache_write_per_million,
+    )));
+    cache.insert(model.to_owned(), tier);
+    Some(tier)
+}
+
 /// Model pricing database
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
@@ -109,6 +138,12 @@ impl ModelPricing {
     /// Get pricing for a model (matches by prefix)
     #[must_use]
     pub fn get_tier(&self, model: &str) -> &PricingTier {
+        // The bundled catalog is authoritative for any model whose rates
+        // upstream publishes; the patterns below cover the rest.
+        if let Some(tier) = catalog_tier(model) {
+            return tier;
+        }
+
         let normalized = normalize_claude_release_suffix(model);
         let model = normalized.as_ref();
 
@@ -416,6 +451,81 @@ mod tests {
 
         let tier = pricing.get_tier("claude-opus-4-8");
         assert!((tier.input_per_million - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn catalogued_models_bill_at_their_published_rates() {
+        let pricing = ModelPricing::default();
+
+        // None of these had an add_tier call; every one billed at the $3/$15
+        // Sonnet 4 default before the catalog became authoritative.
+        for (model, input, output) in [
+            ("gemini-3.6-flash", 0.75, 3.75),
+            ("gpt-5", 1.25, 10.0),
+            ("gpt-6-astra", 10.0, 50.0),
+        ] {
+            let tier = pricing.get_tier(model);
+            assert!(
+                (tier.input_per_million - input).abs() < 0.001,
+                "{model} input ${}/M, expected ${input}/M",
+                tier.input_per_million
+            );
+            assert!(
+                (tier.output_per_million - output).abs() < 0.001,
+                "{model} output ${}/M, expected ${output}/M",
+                tier.output_per_million
+            );
+        }
+
+        // A routed row resolves to the same rates as its direct row.
+        let direct = pricing.get_tier("claude-opus-5-5");
+        let routed = pricing.get_tier("anthropic/claude-opus-5.5");
+        assert!((direct.input_per_million - 4.0).abs() < 0.001);
+        assert!((routed.input_per_million - direct.input_per_million).abs() < 0.001);
+        assert!((routed.output_per_million - direct.output_per_million).abs() < 0.001);
+        assert!((routed.cache_read_per_million - direct.cache_read_per_million).abs() < 0.001);
+    }
+
+    #[test]
+    fn every_catalogued_model_has_published_rates() {
+        // The generated snapshot is the single source; this fails when a model
+        // lands in it without cost, which is what would silently put it back
+        // on the $3/$15 default.
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../local-host-rs/src/model_catalog_data.json"
+        )))
+        .expect("bundled catalog parses");
+
+        let mut missing = Vec::new();
+        let mut open_weights = Vec::new();
+        for model in catalog["models"].as_array().expect("models array") {
+            let provider = model["provider"].as_str().unwrap_or_default();
+            if !matches!(provider, "anthropic" | "openai" | "google" | "xai") {
+                continue;
+            }
+            let id = model["id"].as_str().unwrap_or_default().to_owned();
+            if model.get("cost").is_some() {
+                continue;
+            }
+            // An open-weights model is self-hosted and has no vendor rate, so
+            // upstream publishes none. Anything else is a real gap.
+            if model["open_weights"].as_bool() == Some(true) {
+                open_weights.push(id);
+            } else {
+                missing.push(id);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "priced models in the bundled catalog with no published rates: {missing:?}"
+        );
+        // Keep the exemption honest: if it ever covers everything, the check
+        // above has stopped checking anything.
+        assert!(
+            open_weights.len() < 5,
+            "unexpectedly many unpriced open-weights models, is the cost mapping broken? {open_weights:?}"
+        );
     }
 
     #[test]

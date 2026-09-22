@@ -163,11 +163,71 @@ function mapOpenRouterModel(model, tokenLimits) {
 			context_tokens: context,
 			output_tokens: resolveOpenRouterOutput(tokenLimits, id, context, advertised),
 		},
+		cost: mapOpenRouterCost(model.pricing),
 		verification: {
 			state: "catalog",
 			source: "openrouter",
 		},
 	};
+}
+
+/**
+ * Per-million-token USD rates, carried so cost reporting reads the same
+ * snapshot as everything else instead of a hand-maintained table.
+ *
+ * models.dev already states `cost` in USD per million tokens. Only finite,
+ * non-negative numbers are kept; `input` and `output` are required, and the
+ * two cache rates are optional because not every model publishes them.
+ */
+/**
+ * OpenRouter states pricing as USD per token, in strings. Scale to USD per
+ * million tokens so routed rows match the direct-provider rows.
+ */
+function mapOpenRouterCost(pricing) {
+	const rate = (value) => {
+		const parsed = typeof value === "string" ? Number.parseFloat(value) : value;
+		if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) {
+			return undefined;
+		}
+		// Scaling a per-token float leaves artifacts (2e-7 * 1e6 is
+		// 0.19999999999999998). Round so the snapshot stays byte-stable.
+		return Math.round(parsed * 1_000_000 * 1e6) / 1e6;
+	};
+	const input = rate(pricing?.prompt);
+	const output = rate(pricing?.completion);
+	if (input === undefined || output === undefined) {
+		return undefined;
+	}
+	const mapped = { input, output };
+	const cacheRead = rate(pricing?.input_cache_read);
+	if (cacheRead !== undefined) {
+		mapped.cache_read = cacheRead;
+	}
+	const cacheWrite = rate(pricing?.input_cache_write);
+	if (cacheWrite !== undefined) {
+		mapped.cache_write = cacheWrite;
+	}
+	return mapped;
+}
+
+function mapCost(cost) {
+	const rate = (value) =>
+		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+	const input = rate(cost?.input);
+	const output = rate(cost?.output);
+	if (input === undefined || output === undefined) {
+		return undefined;
+	}
+	const mapped = { input, output };
+	const cacheRead = rate(cost?.cache_read);
+	if (cacheRead !== undefined) {
+		mapped.cache_read = cacheRead;
+	}
+	const cacheWrite = rate(cost?.cache_write);
+	if (cacheWrite !== undefined) {
+		mapped.cache_write = cacheWrite;
+	}
+	return mapped;
 }
 
 function mapModel(providerId, modelId, model) {
@@ -195,6 +255,11 @@ function mapModel(providerId, modelId, model) {
 			// copies the context window into output.
 			output_tokens: distinctOutputTokens(model.limit?.context, model.limit?.output),
 		},
+		cost: mapCost(model.cost),
+		// Carried only when true. An open-weights model is self-hosted, so it
+		// has no vendor rate; without this flag a missing `cost` cannot be
+		// told apart from a rate that should be there and is not.
+		...(model.open_weights === true ? { open_weights: true } : {}),
 		verification: {
 			state: "catalog",
 			source: "models.dev",

@@ -517,6 +517,83 @@ pub fn bundled_models() -> &'static [ModelInfo] {
     &BUNDLED_CATALOG.models
 }
 
+/// Resolve `model_id` against catalog keys, trying each shape the catalog uses.
+///
+/// The qualified route comes first, because OpenRouter rows are keyed with
+/// their provider prefix (`anthropic/claude-opus-5.5`). Then the bare model
+/// name, which also strips a managed prefix such as
+/// `maestro-managed/openai/...`. Then a Claude dotted release suffix respelled
+/// with a dash, so `anthropic/claude-opus-5.5` also finds `claude-opus-5-5`.
+///
+/// The dotted retry is restricted to Claude ids deliberately: applied to every
+/// id it would make `gpt-4.1` resolve as `gpt-4-1`.
+fn lookup_by_catalog_id<T>(model_id: &str, mut get: impl FnMut(&str) -> Option<T>) -> Option<T> {
+    let trimmed = model_id.trim();
+    let mut candidates = vec![trimmed.to_owned()];
+    if let Some(bare) = trimmed.rsplit('/').next() {
+        if bare != trimmed {
+            candidates.push(bare.to_owned());
+        }
+    }
+    for candidate in candidates.clone() {
+        let name = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
+        if name.starts_with("claude-") && name.contains('.') {
+            candidates.push(candidate.replace('.', "-"));
+        }
+    }
+    candidates.into_iter().find_map(|candidate| get(&candidate))
+}
+
+/// Per-million-token USD rates for one model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelRates {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+    pub cache_read_per_million: f64,
+    pub cache_write_per_million: f64,
+}
+
+/// Published rates for `model_id`, from the bundled snapshot.
+///
+/// Read out of the embedded JSON rather than added to [`ModelInfo`], which
+/// derives `Eq`: an f64 field would remove that, and every consumer of
+/// `ModelInfo` equality would have to change for a field only cost reporting
+/// wants.
+///
+/// Id matching follows [`bundled_limits`]: the qualified route first, then the
+/// bare model name, then a Claude dotted release suffix respelled with a dash.
+#[must_use]
+pub fn bundled_rates(model_id: &str) -> Option<ModelRates> {
+    static RATES: LazyLock<HashMap<String, ModelRates>> = LazyLock::new(|| {
+        let parsed: serde_json::Value = match serde_json::from_str(BUNDLED_CATALOG_JSON) {
+            Ok(value) => value,
+            Err(_) => return HashMap::new(),
+        };
+        let Some(models) = parsed.get("models").and_then(serde_json::Value::as_array) else {
+            return HashMap::new();
+        };
+        models
+            .iter()
+            .filter_map(|model| {
+                let id = model.get("id")?.as_str()?.to_owned();
+                let cost = model.get("cost")?;
+                let rate = |key: &str| cost.get(key).and_then(serde_json::Value::as_f64);
+                Some((
+                    id,
+                    ModelRates {
+                        input_per_million: rate("input")?,
+                        output_per_million: rate("output")?,
+                        cache_read_per_million: rate("cache_read").unwrap_or(0.0),
+                        cache_write_per_million: rate("cache_write").unwrap_or(0.0),
+                    },
+                ))
+            })
+            .collect()
+    });
+
+    lookup_by_catalog_id(model_id, |candidate| RATES.get(candidate).copied())
+}
+
 /// Context and output limits for `model_id`, from the bundled snapshot.
 ///
 /// Deliberately reads the bundled snapshot rather than [`find_model`]:
@@ -545,25 +622,7 @@ pub fn bundled_limits(model_id: &str) -> Option<(u32, Option<u32>)> {
             .collect()
     });
 
-    let trimmed = model_id.trim();
-    // Qualified form first: OpenRouter routes are keyed with their provider
-    // prefix (`anthropic/claude-opus-5.5`). Then the bare model name, which
-    // also strips a managed prefix such as `maestro-managed/openai/...`.
-    let mut candidates = vec![trimmed.to_owned()];
-    if let Some(bare) = trimmed.rsplit('/').next() {
-        if bare != trimmed {
-            candidates.push(bare.to_owned());
-        }
-    }
-    for candidate in candidates.clone() {
-        let name = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
-        if name.starts_with("claude-") && name.contains('.') {
-            candidates.push(candidate.replace('.', "-"));
-        }
-    }
-    candidates
-        .into_iter()
-        .find_map(|candidate| LIMITS.get(&candidate).copied())
+    lookup_by_catalog_id(model_id, |candidate| LIMITS.get(candidate).copied())
 }
 
 /// Cache wins only when it carries models and is at least as fresh as the
