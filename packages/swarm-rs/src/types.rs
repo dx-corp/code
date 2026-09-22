@@ -466,15 +466,15 @@ pub fn model_for_tier(tier: ModelTier, provider: ModelProvider) -> &'static str 
         (ModelTier::Opus, ModelProvider::Anthropic) => "claude-opus-5-5",
         (ModelTier::Opus, ModelProvider::OpenAi) => "gpt-5.2",
         (ModelTier::Opus, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Opus, ModelProvider::Google) => "gemini-2.0-flash-thinking-exp",
+        (ModelTier::Opus, ModelProvider::Google) => "gemini-3.1-pro-preview",
         (ModelTier::Sonnet, ModelProvider::Anthropic) => "claude-sonnet-5",
         (ModelTier::Sonnet, ModelProvider::OpenAi) => "gpt-4o",
         (ModelTier::Sonnet, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Sonnet, ModelProvider::Google) => "gemini-2.0-flash-exp",
+        (ModelTier::Sonnet, ModelProvider::Google) => "gemini-flash-latest",
         (ModelTier::Haiku, ModelProvider::Anthropic) => "claude-haiku-4-5-20251001",
         (ModelTier::Haiku, ModelProvider::OpenAi) => "gpt-4o-mini",
         (ModelTier::Haiku, ModelProvider::OpenAiCodex) => "gpt-5.6",
-        (ModelTier::Haiku, ModelProvider::Google) => "gemini-2.0-flash-lite-exp",
+        (ModelTier::Haiku, ModelProvider::Google) => "gemini-flash-lite-latest",
     }
 }
 

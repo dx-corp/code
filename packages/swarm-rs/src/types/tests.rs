@@ -393,7 +393,12 @@ fn test_custom_researcher_subagent_dispatch_falls_back_to_mode_tier() {
     assert_eq!(dispatch.mode, AgentMode::Custom);
     assert_eq!(dispatch.subagent_type, SubagentType::Researcher);
     assert_eq!(dispatch.provider, ModelProvider::Google);
-    assert_eq!(dispatch.model, "gemini-2.0-flash-exp");
+    // Derived, not a literal: this test pinned "gemini-2.0-flash-exp" and so
+    // kept passing after that model was retired.
+    assert_eq!(
+        dispatch.model,
+        model_for_tier(ModelTier::Sonnet, ModelProvider::Google)
+    );
     assert_eq!(dispatch.model_tier, Some(ModelTier::Sonnet));
     assert_eq!(dispatch.reasoning_effort, ReasoningEffort::Medium);
     assert_eq!(dispatch.source, DispatchSource::Fallback);
@@ -1966,4 +1971,42 @@ fn test_swarm_plan_continue_on_failure() {
         continue_on_failure: true,
     };
     assert!(plan.continue_on_failure);
+}
+
+#[test]
+fn every_tier_model_exists_in_the_bundled_catalog() {
+    // The Google tiers pointed at gemini-2.0-flash-thinking-exp,
+    // gemini-2.0-flash-exp and gemini-2.0-flash-lite-exp: retired 2.0
+    // experimental previews absent from the catalog, so every Google-provider
+    // subagent dispatch named a model that no longer exists. Nothing checked
+    // these ids against the catalog, so they went stale silently.
+    let catalog: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../local-host-rs/src/model_catalog_data.json"
+    )))
+    .expect("bundled catalog parses");
+    let ids: std::collections::HashSet<&str> = catalog["models"]
+        .as_array()
+        .expect("models array")
+        .iter()
+        .filter_map(|model| model["id"].as_str())
+        .collect();
+
+    let mut missing = Vec::new();
+    for tier in [ModelTier::Opus, ModelTier::Sonnet, ModelTier::Haiku] {
+        for provider in [
+            ModelProvider::Anthropic,
+            ModelProvider::OpenAi,
+            ModelProvider::Google,
+        ] {
+            let model = model_for_tier(tier, provider);
+            if !ids.contains(model) {
+                missing.push(format!("{tier:?}/{provider:?} -> {model}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "tier models absent from the bundled catalog: {missing:?}"
+    );
 }
