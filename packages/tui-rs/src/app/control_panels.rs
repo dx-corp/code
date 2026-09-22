@@ -822,6 +822,7 @@ fn supported_efforts(model: &str) -> Vec<ThinkingLevel> {
         ThinkingLevel::Low,
         ThinkingLevel::Medium,
         ThinkingLevel::High,
+        ThinkingLevel::XHigh,
         ThinkingLevel::Max,
     ]
     .into_iter()
@@ -841,6 +842,7 @@ mod tests {
                 ThinkingLevel::Low,
                 ThinkingLevel::Medium,
                 ThinkingLevel::High,
+                ThinkingLevel::XHigh,
                 ThinkingLevel::Max
             ]
         );

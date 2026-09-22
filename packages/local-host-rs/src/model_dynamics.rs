@@ -66,7 +66,8 @@ pub fn boost_choice(current: &ModelChoice, config: &ModelDynamicsConfig) -> Opti
                 | ThinkingLevel::Minimal
                 | ThinkingLevel::Low
                 | ThinkingLevel::Medium => ThinkingLevel::High,
-                ThinkingLevel::High => ThinkingLevel::Max,
+                ThinkingLevel::High => ThinkingLevel::XHigh,
+                ThinkingLevel::XHigh => ThinkingLevel::Max,
                 ThinkingLevel::Max => return None,
             }
         };
@@ -133,6 +134,7 @@ pub fn normalize_thinking(model: &str, requested: ThinkingLevel) -> ThinkingLeve
             Some("low") => ThinkingLevel::Low,
             Some("medium") => ThinkingLevel::Medium,
             Some("high") => ThinkingLevel::High,
+            Some("xhigh") => ThinkingLevel::XHigh,
             Some("max") => ThinkingLevel::Max,
             _ => requested,
         };
@@ -164,6 +166,7 @@ pub fn next_thinking_level(model: &str, current: ThinkingLevel) -> ThinkingLevel
         ThinkingLevel::Low,
         ThinkingLevel::Medium,
         ThinkingLevel::High,
+        ThinkingLevel::XHigh,
         ThinkingLevel::Max,
     ] {
         let level = normalize_thinking(model, requested);
@@ -348,6 +351,55 @@ mod selection_tests {
             ThinkingLevel::Low
         );
     }
+    #[test]
+    fn xhigh_normalizes_to_max_on_models_without_it() {
+        // Anthropic documents xhigh on these families.
+        for model in [
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+        ] {
+            assert_eq!(
+                normalize_thinking(model, ThinkingLevel::XHigh),
+                ThinkingLevel::XHigh,
+                "{model}"
+            );
+        }
+
+        // These accept max but not xhigh, so the picker must not offer XHigh.
+        for model in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+            assert_eq!(
+                normalize_thinking(model, ThinkingLevel::XHigh),
+                ThinkingLevel::Max,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn boost_steps_through_xhigh_before_max() {
+        let config = ModelDynamicsConfig::default();
+        let high = ModelChoice {
+            model: "claude-opus-5-5".into(),
+            thinking: ThinkingLevel::High,
+        };
+        let boosted = boost_choice(&high, &config).expect("high boosts");
+        assert_eq!(boosted.thinking, ThinkingLevel::XHigh);
+
+        let xhigh = ModelChoice {
+            model: "claude-opus-5-5".into(),
+            thinking: ThinkingLevel::XHigh,
+        };
+        assert_eq!(
+            boost_choice(&xhigh, &config)
+                .expect("xhigh boosts")
+                .thinking,
+            ThinkingLevel::Max
+        );
+    }
+
     #[test]
     fn codex_effort_keeps_live_adapter_authority() {
         let model = "openai-codex/gpt-6-astra";

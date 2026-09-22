@@ -123,6 +123,7 @@ pub fn thinking_level(enabled: bool, budget: u32) -> ThinkingLevel {
         1025..=4096 => ThinkingLevel::Low,
         4097..=10_000 => ThinkingLevel::Medium,
         10_001..=20_000 => ThinkingLevel::High,
+        20_001..=32_000 => ThinkingLevel::XHigh,
         _ => ThinkingLevel::Max,
     }
 }
@@ -160,7 +161,8 @@ pub fn boost_choice(current: &ModelChoice, config: &ModelDynamicsConfig) -> Opti
             | ThinkingLevel::Minimal
             | ThinkingLevel::Low
             | ThinkingLevel::Medium => ThinkingLevel::High,
-            ThinkingLevel::High => ThinkingLevel::Max,
+            ThinkingLevel::High => ThinkingLevel::XHigh,
+            ThinkingLevel::XHigh => ThinkingLevel::Max,
             ThinkingLevel::Max => return None,
         };
         ModelChoice {
@@ -190,6 +192,7 @@ pub fn next_thinking_level(model: &str, current: ThinkingLevel) -> ThinkingLevel
         ThinkingLevel::Low,
         ThinkingLevel::Medium,
         ThinkingLevel::High,
+        ThinkingLevel::XHigh,
         ThinkingLevel::Max,
     ];
     let index = levels

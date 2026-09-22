@@ -15,11 +15,13 @@ use serde::{Deserialize, Serialize};
 /// - **Low**: 4,096 tokens
 /// - **Medium**: 10,000 tokens (default)
 /// - **High**: 20,000 tokens
+/// - **XHigh**: 32,000 tokens
 /// - **Max**: 50,000 tokens
 ///
 /// # Serialization
 ///
-/// Serializes to lowercase strings: "off", "minimal", "low", "medium", "high", "max"
+/// Serializes to lowercase strings: "off", "minimal", "low", "medium", "high",
+/// "xhigh", "max"
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
@@ -39,6 +41,14 @@ pub enum ThinkingLevel {
     /// High thinking budget (20,000 tokens).
     High,
 
+    /// Extended thinking budget for long-horizon work (32,000 tokens).
+    ///
+    /// Anthropic exposes this as the `xhigh` effort level and recommends it as
+    /// the starting point for coding and agentic work on the models that
+    /// support it. Models that do not support `xhigh` resolve this level back
+    /// to the nearest level they do support; see `normalize_thinking`.
+    XHigh,
+
     /// Maximum thinking budget (50,000 tokens).
     Max,
 }
@@ -52,6 +62,7 @@ impl ThinkingLevel {
             ThinkingLevel::Low => "Low",
             ThinkingLevel::Medium => "Medium",
             ThinkingLevel::High => "High",
+            ThinkingLevel::XHigh => "XHigh",
             ThinkingLevel::Max => "Max",
         }
     }
@@ -65,6 +76,7 @@ impl ThinkingLevel {
             ThinkingLevel::Low => (true, 4096),
             ThinkingLevel::Medium => (true, 10000),
             ThinkingLevel::High => (true, 20000),
+            ThinkingLevel::XHigh => (true, 32000),
             ThinkingLevel::Max => (true, 50000),
         }
     }
@@ -78,8 +90,41 @@ impl ThinkingLevel {
             "low" => Some(ThinkingLevel::Low),
             "medium" | "med" | "default" => Some(ThinkingLevel::Medium),
             "high" => Some(ThinkingLevel::High),
+            "xhigh" | "x-high" | "extra-high" => Some(ThinkingLevel::XHigh),
             "max" | "maximum" => Some(ThinkingLevel::Max),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThinkingLevel;
+
+    #[test]
+    fn xhigh_sits_between_high_and_max() {
+        assert_eq!(ThinkingLevel::XHigh.to_config(), (true, 32_000));
+        assert!(ThinkingLevel::High.to_config().1 < ThinkingLevel::XHigh.to_config().1);
+        assert!(ThinkingLevel::XHigh.to_config().1 < ThinkingLevel::Max.to_config().1);
+        assert_eq!(ThinkingLevel::XHigh.label(), "XHigh");
+    }
+
+    #[test]
+    fn xhigh_parses_and_serializes_as_the_anthropic_effort_name() {
+        for value in ["xhigh", "XHigh", "x-high", "extra-high"] {
+            assert_eq!(
+                ThinkingLevel::parse(value),
+                Some(ThinkingLevel::XHigh),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&ThinkingLevel::XHigh).unwrap(),
+            "\"xhigh\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ThinkingLevel>("\"xhigh\"").unwrap(),
+            ThinkingLevel::XHigh
+        );
     }
 }
