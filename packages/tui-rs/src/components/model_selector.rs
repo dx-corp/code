@@ -29,6 +29,7 @@ const ACTIVE_ROUTE_SOURCE: &str = "active-route";
 const PREFERRED_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-6-astra"),
     ("anthropic", "claude-fable-5-1"),
+    ("anthropic", "claude-opus-5"),
     ("openai", "gpt-5.6"),
     ("openai", "gpt-5.6-sol"),
     ("openai", "gpt-5.6-terra"),
@@ -1611,10 +1612,11 @@ mod tests {
             .map(|&index| selector.models[index].id.as_str())
             .collect();
         assert_eq!(
-            &ids[..6],
+            &ids[..7],
             &[
                 "gpt-6-astra",
                 "claude-fable-5-1",
+                "claude-opus-5",
                 "gpt-5.6",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
