@@ -517,6 +517,55 @@ pub fn bundled_models() -> &'static [ModelInfo] {
     &BUNDLED_CATALOG.models
 }
 
+/// Context and output limits for `model_id`, from the bundled snapshot.
+///
+/// Deliberately reads the bundled snapshot rather than [`find_model`]:
+/// callers are on hot paths. `find_model` goes through `available_models`,
+/// which checks for a background refresh, reads the on-disk cache, and clones
+/// every model in the catalog on each call.
+///
+/// Matching mirrors the catalog's own id shapes. A `provider/model` route
+/// resolves by its bare id when the qualified form is absent, and a dotted
+/// Claude release suffix resolves to the dashed direct id, so
+/// `anthropic/claude-opus-5.5` finds `claude-opus-5-5`.
+#[must_use]
+pub fn bundled_limits(model_id: &str) -> Option<(u32, Option<u32>)> {
+    static LIMITS: LazyLock<HashMap<String, (u32, Option<u32>)>> = LazyLock::new(|| {
+        bundled_models()
+            .iter()
+            .map(|model| {
+                (
+                    model.id.clone(),
+                    (
+                        model.capabilities.context_tokens,
+                        model.capabilities.output_tokens,
+                    ),
+                )
+            })
+            .collect()
+    });
+
+    let trimmed = model_id.trim();
+    // Qualified form first: OpenRouter routes are keyed with their provider
+    // prefix (`anthropic/claude-opus-5.5`). Then the bare model name, which
+    // also strips a managed prefix such as `maestro-managed/openai/...`.
+    let mut candidates = vec![trimmed.to_owned()];
+    if let Some(bare) = trimmed.rsplit('/').next() {
+        if bare != trimmed {
+            candidates.push(bare.to_owned());
+        }
+    }
+    for candidate in candidates.clone() {
+        let name = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
+        if name.starts_with("claude-") && name.contains('.') {
+            candidates.push(candidate.replace('.', "-"));
+        }
+    }
+    candidates
+        .into_iter()
+        .find_map(|candidate| LIMITS.get(&candidate).copied())
+}
+
 /// Cache wins only when it carries models and is at least as fresh as the
 /// bundled snapshot; anything else falls back to the bundled snapshot.
 fn select_models<'a>(
