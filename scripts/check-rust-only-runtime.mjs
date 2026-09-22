@@ -9,6 +9,13 @@ const SCAN_ROOTS = ["."];
 const TYPESCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const SOURCE_EXTENSIONS = new Set([...TYPESCRIPT_EXTENSIONS, ".js", ".jsx", ".mjs", ".cjs"]);
 const SKIP_SEGMENTS = new Set(["dist", "node_modules", "target", "coverage", ".git"]);
+// #9990 vendored the ZCode desktop client under desktop/. It is a TypeScript
+// Electron app with its own upstream, not Maestro agent-runtime source, so the
+// runtime guard does not read it. Its Agent constructions are undici connection
+// dispatchers and its agent factory calls write agent config files; neither is
+// a TypeScript agent runtime. Anything promoted out of desktop/ into Maestro
+// source is scanned again by this guard.
+const VENDORED_ROOTS = new Set(["desktop"]);
 
 const CONTENT_RULES = [
 	["Agent construction", /\bnew\s+Agent\s*\(/g],
@@ -35,6 +42,7 @@ async function collectFiles(directory) {
 	const files = [];
 	for (const entry of entries) {
 		if (SKIP_SEGMENTS.has(entry.name)) continue;
+		if (directory === "." && VENDORED_ROOTS.has(entry.name)) continue;
 		const path = resolve(absolute, entry.name);
 		if (entry.isDirectory()) {
 			files.push(...(await collectFiles(relative(ROOT, path))));
