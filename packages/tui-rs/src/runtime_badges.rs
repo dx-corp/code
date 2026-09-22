@@ -194,6 +194,7 @@ fn thinking_badge_label(level: ThinkingLevel) -> Option<&'static str> {
         ThinkingLevel::Low => Some(maestro_ui::localization::tr("low")),
         ThinkingLevel::Medium => Some(maestro_ui::localization::tr("medium")),
         ThinkingLevel::High => Some(maestro_ui::localization::tr("high")),
+        ThinkingLevel::XHigh => Some("xhigh"),
         ThinkingLevel::Max => Some("max"),
     }
 }

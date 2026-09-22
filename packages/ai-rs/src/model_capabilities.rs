@@ -47,6 +47,13 @@ pub enum AnthropicThinkingMode {
 pub struct AnthropicRequestCapabilities {
     pub thinking: AnthropicThinkingMode,
     pub temperature: bool,
+    /// Whether the model accepts the `xhigh` effort level.
+    ///
+    /// Anthropic documents `xhigh` on Claude Fable 5.1, Mythos 5.1, Fable 5,
+    /// Mythos 5, Opus 5.5, Opus 5, Opus 4.8, Opus 4.7, and Sonnet 5. Mythos
+    /// Preview, Opus 4.6, and Sonnet 4.6 support `max` without it, so this is
+    /// a per-family capability rather than a threshold on the effort ladder.
+    pub supports_xhigh: bool,
 }
 
 /// Whether a provider route accepts explicit prompt-cache markers for this model.
@@ -95,8 +102,13 @@ pub fn supports_explicit_prompt_caching(provider: AiProvider, model: &str) -> bo
 impl AnthropicRequestCapabilities {
     /// Map the existing token-budget control to a supported modern effort
     /// level. Anthropic's adaptive and always-on models accept `low`,
-    /// `medium`, `high`, and `max`; legacy extended-thinking models retain
-    /// their `budget_tokens` contract.
+    /// `medium`, `high`, and `max`, and most of them also accept `xhigh`;
+    /// legacy extended-thinking models retain their `budget_tokens` contract.
+    ///
+    /// The budget boundaries mirror `ThinkingLevel::to_config`. A model
+    /// without `xhigh` maps the `XHigh` budget up to `max`, which is the
+    /// nearest level it does accept; `normalize_thinking` then reports `Max`
+    /// so the picker never offers a level the route would reject.
     #[must_use]
     pub fn effort_for_budget(&self, budget_tokens: u32) -> Option<&'static str> {
         if !matches!(
@@ -106,8 +118,10 @@ impl AnthropicRequestCapabilities {
             return None;
         }
 
-        Some(if budget_tokens > 20_000 {
+        Some(if budget_tokens > 32_000 {
             "max"
+        } else if budget_tokens > 20_000 {
+            if self.supports_xhigh { "xhigh" } else { "max" }
         } else if budget_tokens > 10_000 {
             "high"
         } else if budget_tokens > 4_096 {
@@ -162,9 +176,17 @@ pub fn anthropic_request_capabilities(
             && !is_model_family(model, "claude-sonnet-latest")
     });
 
+    let supports_xhigh = is_model_family(normalized, "claude-fable-5")
+        || is_model_family(normalized, "claude-mythos-5")
+        || is_model_family(normalized, "claude-opus-5")
+        || is_model_family(normalized, "claude-opus-4-8")
+        || is_model_family(normalized, "claude-opus-4-7")
+        || is_model_family(normalized, "claude-sonnet-5");
+
     AnthropicRequestCapabilities {
         thinking,
         temperature,
+        supports_xhigh,
     }
 }
 
@@ -465,6 +487,57 @@ mod tests {
         assert_eq!(
             openai_request_capabilities(None, "maestro-managed/openai/gpt-6-astra"),
             openai_request_capabilities(Some("openai"), "gpt-6-astra")
+        );
+    }
+
+    #[test]
+    fn xhigh_effort_is_gated_on_the_documented_model_families() {
+        // ThinkingLevel::XHigh carries a 32,000-token budget.
+        const XHIGH_BUDGET: u32 = 32_000;
+
+        for model in [
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-mythos-5-1",
+        ] {
+            let caps = anthropic_request_capabilities(Some("anthropic"), model);
+            assert!(caps.supports_xhigh, "{model} should accept xhigh");
+            assert_eq!(
+                caps.effort_for_budget(XHIGH_BUDGET),
+                Some("xhigh"),
+                "{model}"
+            );
+        }
+
+        // These accept `max` but not `xhigh`, so the level maps up to `max`
+        // rather than being sent as an effort the route would reject.
+        for model in [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-mythos-preview",
+        ] {
+            let caps = anthropic_request_capabilities(Some("anthropic"), model);
+            assert!(!caps.supports_xhigh, "{model} should not accept xhigh");
+            assert_eq!(caps.effort_for_budget(XHIGH_BUDGET), Some("max"), "{model}");
+        }
+
+        // The other levels are unchanged by the new band.
+        let caps = anthropic_request_capabilities(Some("anthropic"), "claude-opus-5-5");
+        assert_eq!(caps.effort_for_budget(50_000), Some("max"));
+        assert_eq!(caps.effort_for_budget(20_000), Some("high"));
+        assert_eq!(caps.effort_for_budget(10_000), Some("medium"));
+        assert_eq!(caps.effort_for_budget(4_096), Some("low"));
+
+        // Legacy extended-thinking models keep their budget_tokens contract.
+        assert_eq!(
+            anthropic_request_capabilities(Some("anthropic"), "claude-opus-4-5")
+                .effort_for_budget(XHIGH_BUDGET),
+            None
         );
     }
 
