@@ -543,6 +543,159 @@ mod tests {
         );
     }
 
+    /// One row per current Anthropic model: the three request capabilities
+    /// `anthropic_request_capabilities` decides, in one place.
+    ///
+    /// Those three answers come from four separate hand-maintained family
+    /// lists in that function: the always-on set, the adaptive set, the
+    /// temperature exclusions, and `supports_xhigh`. Shipping one model means
+    /// editing up to four of them, and nothing previously checked that a model
+    /// appeared in all the right ones. Claude Opus 5.5 shipped missing from
+    /// the always-on set, which made every request with thinking off return
+    /// 400.
+    ///
+    /// `thinking` and `xhigh` are the values Anthropic documents. `temperature`
+    /// is what Maestro actually sends, which is not the same thing for three
+    /// models; see the note on the rows below.
+    const ANTHROPIC_CAPABILITY_MATRIX: &[(&str, AnthropicThinkingMode, bool, bool)] = &[
+        // model, thinking, sends temperature, accepts xhigh
+        (
+            "claude-opus-5-5",
+            AnthropicThinkingMode::AlwaysOn,
+            false,
+            true,
+        ),
+        (
+            "claude-opus-5",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            true,
+        ),
+        (
+            "claude-fable-5-1",
+            AnthropicThinkingMode::AlwaysOn,
+            false,
+            true,
+        ),
+        (
+            "claude-fable-5",
+            AnthropicThinkingMode::AlwaysOn,
+            false,
+            true,
+        ),
+        (
+            "claude-sonnet-5",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            true,
+        ),
+        (
+            "claude-opus-4-8",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            true,
+        ),
+        (
+            "claude-opus-4-7",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            true,
+        ),
+        // Upstream lists temperature as supported on Opus 4.6 and Opus 4.5,
+        // but Maestro omits it for the whole claude-opus-4 family
+        // (is_anthropic_opus_4_family_for_capabilities). Omitting a sampling
+        // parameter cannot fail a request, so this is pinned as the current
+        // deliberate behaviour rather than silently changed here.
+        (
+            "claude-opus-4-6",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            false,
+        ),
+        (
+            "claude-opus-4-5",
+            AnthropicThinkingMode::Extended,
+            false,
+            false,
+        ),
+        (
+            "claude-sonnet-4-6",
+            AnthropicThinkingMode::Adaptive,
+            true,
+            false,
+        ),
+        (
+            "claude-sonnet-4-5",
+            AnthropicThinkingMode::Extended,
+            true,
+            false,
+        ),
+        (
+            "claude-haiku-4-5",
+            AnthropicThinkingMode::Extended,
+            true,
+            false,
+        ),
+    ];
+
+    #[test]
+    fn every_current_anthropic_model_has_the_documented_capabilities() {
+        for &(model, thinking, temperature, xhigh) in ANTHROPIC_CAPABILITY_MATRIX {
+            let caps = anthropic_request_capabilities(Some("anthropic"), model);
+            assert_eq!(caps.thinking, thinking, "{model} thinking");
+            assert_eq!(caps.temperature, temperature, "{model} temperature");
+            assert_eq!(caps.supports_xhigh, xhigh, "{model} xhigh");
+        }
+    }
+
+    #[test]
+    fn capability_matrix_covers_every_anthropic_model_in_the_bundled_catalog() {
+        // The bundled snapshot is regenerated from models.dev by
+        // scripts/fetch-model-catalog.mjs. When a new Anthropic model lands in
+        // it, this fails until the model is given a row above, which is the
+        // one place that forces every family list to be revisited.
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../local-host-rs/src/model_catalog_data.json"
+        )))
+        .expect("bundled catalog parses");
+
+        let mut missing: Vec<String> = Vec::new();
+        for model in catalog["models"].as_array().expect("models array") {
+            if model["provider"].as_str() != Some("anthropic") {
+                continue;
+            }
+            let id = model["id"].as_str().expect("model id");
+            // A dated snapshot resolves through its dateless family row.
+            let covered = ANTHROPIC_CAPABILITY_MATRIX
+                .iter()
+                .any(|&(family, ..)| is_model_family(id, family));
+            if !covered {
+                missing.push(id.to_owned());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Anthropic models in the bundled catalog with no capability row: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn dated_snapshots_inherit_their_family_capabilities() {
+        for (dated, family) in [
+            ("claude-opus-5-5-20260922", "claude-opus-5-5"),
+            ("claude-opus-4-5-20251101", "claude-opus-4-5"),
+            ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5"),
+        ] {
+            assert_eq!(
+                anthropic_request_capabilities(Some("anthropic"), dated),
+                anthropic_request_capabilities(Some("anthropic"), family),
+                "{dated} must resolve like {family}"
+            );
+        }
+    }
+
     #[test]
     fn anthropic_thinking_modes_follow_documented_model_families() {
         for model in [
