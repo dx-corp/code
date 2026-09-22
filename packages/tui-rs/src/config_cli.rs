@@ -878,8 +878,8 @@ fn run_init(args: &[String]) -> Result<i32> {
         json!([{
             "id": preset.default_model,
             "name": if create_prompts { "{file:./prompts/system.md}" } else { "Default assistant" },
-            "contextWindow": preset.context_window.unwrap_or(200_000),
-            "maxTokens": preset.max_tokens.unwrap_or(8192),
+            "contextWindow": preset_context_window(&preset),
+            "maxTokens": preset_max_tokens(&preset),
         }]),
     );
 
@@ -1877,6 +1877,39 @@ fn toml_to_json(value: &TomlValue) -> JsonValue {
 // Provider presets + local templates
 // ─────────────────────────────────────────────────────────────
 
+/// The limits written into a generated config for `preset`'s default model.
+///
+/// The catalog wins over the preset's own numbers whenever it describes the
+/// model, because the preset numbers were typed by hand and drifted: the
+/// `openai` preset declared a 200,000-token window for `gpt-4o-mini`, whose
+/// real window is 128,000, so a generated config invited requests past the
+/// model's limit. `google-gemini` declared 200,000 for `gemini-2.5-flash` at
+/// 1,048,576, and `openrouter` declared an 8,192-token output ceiling for
+/// `openai/o4-mini` at 100,000.
+///
+/// `find_model` is used rather than the bundled snapshot directly because this
+/// runs once in an interactive `config` flow, not on a request path, and it
+/// picks up a locally discovered model the snapshot does not carry.
+fn preset_catalog_limits(preset: &ProviderPreset) -> Option<(u64, Option<u64>)> {
+    let model = crate::model_catalog::find_model(preset.default_model)?;
+    let context = u64::from(model.capabilities.context_tokens);
+    (context > 0).then(|| (context, model.capabilities.output_tokens.map(u64::from)))
+}
+
+fn preset_context_window(preset: &ProviderPreset) -> u64 {
+    preset_catalog_limits(preset)
+        .map(|(context, _)| context)
+        .or(preset.context_window)
+        .unwrap_or(200_000)
+}
+
+fn preset_max_tokens(preset: &ProviderPreset) -> u64 {
+    preset_catalog_limits(preset)
+        .and_then(|(_, output)| output)
+        .or(preset.max_tokens)
+        .unwrap_or(8192)
+}
+
 fn provider_presets() -> Vec<ProviderPreset> {
     let mut presets = vec![
         ProviderPreset {
@@ -2388,6 +2421,59 @@ You are a helpful AI coding assistant.
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn provider_presets_take_their_limits_from_the_catalog() {
+        // Every preset whose default model the catalog describes must publish
+        // the catalog's numbers. These three disagreed: openai declared a
+        // 200,000-token window for gpt-4o-mini (real 128,000), which invited
+        // requests past the model's limit; google-gemini declared 200,000 for
+        // gemini-2.5-flash (real 1,048,576); openrouter declared an 8,192
+        // output ceiling for openai/o4-mini (real 100,000).
+        let mut checked = 0;
+        for preset in provider_presets() {
+            let Some(model) = crate::model_catalog::find_model(preset.default_model) else {
+                continue;
+            };
+            if model.capabilities.context_tokens == 0 {
+                continue;
+            }
+            checked += 1;
+            assert_eq!(
+                preset_context_window(&preset),
+                u64::from(model.capabilities.context_tokens),
+                "{} contextWindow",
+                preset.id
+            );
+            if let Some(output) = model.capabilities.output_tokens {
+                assert_eq!(
+                    preset_max_tokens(&preset),
+                    u64::from(output),
+                    "{} maxTokens",
+                    preset.id
+                );
+            }
+        }
+        assert!(
+            checked >= 4,
+            "expected several presets to resolve through the catalog, saw {checked}"
+        );
+    }
+
+    #[test]
+    fn uncatalogued_preset_models_keep_their_declared_limits() {
+        // deepseek-chat and kimi-k2.6 are not in the bundled snapshot, so the
+        // hand-declared numbers remain the answer for them.
+        let presets = provider_presets();
+        let deepseek = presets
+            .iter()
+            .find(|preset| preset.id == "deepseek")
+            .expect("deepseek preset");
+        if crate::model_catalog::find_model(deepseek.default_model).is_none() {
+            assert_eq!(preset_context_window(deepseek), 131_072);
+            assert_eq!(preset_max_tokens(deepseek), 8192);
+        }
+    }
     use super::*;
     use tempfile::TempDir;
 
