@@ -1484,6 +1484,66 @@ mod tests {
         );
     }
 
+    /// The desktop built-in provider release derives its Claude rules from
+    /// this snapshot via scripts/sync-desktop-claude-model-rules.mjs. If the
+    /// two fall out of step the desktop app runs Claude models at the wrong
+    /// context window, which is how Opus 4.6, 4.7 and 4.8 came to be capped at
+    /// 200,000 tokens against a 1,000,000-token catalog value.
+    #[test]
+    fn desktop_provider_claude_rules_match_the_bundled_catalog() {
+        let desktop: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../desktop/config/provider/zcode-builtin.json"
+        )))
+        .expect("desktop provider release parses");
+
+        let rules = desktop["config"]["modelConfigRules"]["modelRules"]
+            .as_array()
+            .expect("modelRules array");
+
+        let mut drift = Vec::new();
+        for model in bundled_models() {
+            if model.provider != "anthropic" {
+                continue;
+            }
+            // Match the generated direct id exactly. A substring would also
+            // select a later rule for a different model such as Opus 5.5.
+            let declared = rules.iter().rfind(|rule| {
+                rule["modelMatch"]
+                    .as_str()
+                    .and_then(|pattern| pattern.strip_prefix(".*"))
+                    .and_then(|pattern| pattern.split_once("(?:"))
+                    .is_some_and(|(id, _)| id == model.id.as_str())
+            });
+            let Some(rule) = declared else {
+                drift.push(format!("{}: no rule", model.id));
+                continue;
+            };
+            let context = rule["config"]["properties"]["contextWindow"].as_u64();
+            if context != Some(u64::from(model.capabilities.context_tokens)) {
+                drift.push(format!(
+                    "{}: contextWindow {context:?}, catalog {}",
+                    model.id, model.capabilities.context_tokens
+                ));
+            }
+            if let Some(expected) = model.capabilities.output_tokens {
+                let declared_output =
+                    rule["config"]["optionSpecs"]["maxOutputTokens"]["max"].as_u64();
+                if declared_output != Some(u64::from(expected)) {
+                    drift.push(format!(
+                        "{}: maxOutputTokens {declared_output:?}, catalog {expected}",
+                        model.id
+                    ));
+                }
+            }
+        }
+        assert!(
+            drift.is_empty(),
+            "desktop provider release disagrees with the bundled catalog; run \
+             node scripts/sync-desktop-claude-model-rules.mjs: {drift:?}"
+        );
+    }
+
     use super::*;
 
     fn catalog_model(id: &str) -> ModelInfo {
