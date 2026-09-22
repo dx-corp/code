@@ -45,6 +45,7 @@ pub mod mission_cli;
 pub mod mission_readiness;
 pub mod model_catalog;
 pub mod model_dynamics;
+pub mod model_facts_generated;
 mod native_credentials;
 pub mod openai_cli;
 pub mod orb_connection;

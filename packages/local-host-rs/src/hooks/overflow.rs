@@ -568,7 +568,16 @@ mod tests {
         // picture, an id the GPT-4 arm used to swallow must not come back with
         // the 8,192-token window.
         assert_ne!(ModelLimits::for_model("gpt-4.9-preview").max_context, 8_192);
-        assert_eq!(ModelLimits::for_model("gpt-4").max_context, 8_192);
+        // The catalog holds gpt-4 only as the openai/gpt-4 route, which the
+        // binding's bare-name alias resolves; OpenRouter publishes 8,191 for
+        // it. Either way the window must stay at the GPT-4 size, never wider.
+        let (catalogued, _) =
+            crate::model_catalog::bundled_limits("gpt-4").expect("gpt-4 resolves via its route");
+        assert_eq!(
+            ModelLimits::for_model("gpt-4").max_context,
+            u64::from(catalogued)
+        );
+        assert!(ModelLimits::for_model("gpt-4").max_context <= 8_192);
     }
 
     #[test]

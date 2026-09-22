@@ -1202,6 +1202,11 @@
       ],
       "reasoning_efforts": [],
       "open_weights": true,
+      "cost": {
+        "input": 0.09,
+        "output": 0.3,
+        "cache_read": 0.05
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1227,6 +1232,11 @@
       ],
       "reasoning_efforts": [],
       "open_weights": true,
+      "cost": {
+        "input": 0.09,
+        "output": 0.34,
+        "cache_read": 0.05
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
