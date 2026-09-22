@@ -1430,6 +1430,60 @@ pub fn protocol_name(protocol: ProviderProtocol) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// Anthropic's published 1M-context list, pinned against the snapshot.
+    ///
+    /// models.dev is the snapshot's upstream and it is not infallible: it
+    /// lists Claude Sonnet 4.5 with a 1,000,000-token window, while
+    /// Anthropic's context-windows doc names the models that have 1M and then
+    /// says "Other Claude models, including Claude Sonnet 4.5, have a
+    /// 200k-token context window". A too-large window is the dangerous
+    /// direction, because the overflow detector compacts at a fraction of it
+    /// and the API rejects the oversized request instead.
+    ///
+    /// scripts/fetch-model-catalog.mjs carries the correction; this asserts it
+    /// survives a regeneration.
+    #[test]
+    fn anthropic_context_windows_match_the_published_list() {
+        const ONE_MILLION: [&str; 9] = [
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+        ];
+
+        let mut wrong = Vec::new();
+        for model in bundled_models() {
+            if model.provider != "anthropic" {
+                continue;
+            }
+            let base = model
+                .id
+                .split_once("-2025")
+                .or_else(|| model.id.split_once("-2026"))
+                .map_or(model.id.as_str(), |(head, _)| head);
+            let expected = if ONE_MILLION.contains(&base) {
+                1_000_000
+            } else {
+                200_000
+            };
+            if model.capabilities.context_tokens != expected {
+                wrong.push(format!(
+                    "{}: {} declared, {expected} published",
+                    model.id, model.capabilities.context_tokens
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "context windows disagree with Anthropic's published list: {wrong:?}"
+        );
+    }
+
     use super::*;
 
     fn catalog_model(id: &str) -> ModelInfo {

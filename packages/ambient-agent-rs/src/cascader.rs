@@ -5,12 +5,144 @@
 
 use crate::types::*;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 pub const DEFAULT_OPENROUTER_FRONTIER_MODEL: &str = "~anthropic/claude-opus-latest";
-pub const DEFAULT_ANTHROPIC_FRONTIER_MODEL: &str = "claude-opus-4-1-20250805";
+/// Direct-Anthropic frontier model.
+///
+/// Was `claude-opus-4-1-20250805`. Anthropic's model list no longer carries
+/// Opus 4.1 — its oldest listed Opus is 4.5 — and the id is absent from the
+/// bundled catalog, so every ambient task on the direct Anthropic route named
+/// a retired snapshot. `frontier_model_is_catalogued` guards this now.
+pub const DEFAULT_ANTHROPIC_FRONTIER_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_FRONTIER_PROVIDER: &str = "openrouter";
+
+/// Bundled model catalog, read for published per-million-token rates.
+///
+/// Read directly rather than through `maestro-local-host`: adding a crate
+/// dependency here would need matching Bazel wiring, and this only needs two
+/// numbers per model.
+const CATALOG_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../local-host-rs/src/model_catalog_data.json"
+));
+
+/// Which models an operator permits for each complexity band.
+///
+/// Economy routing picks the cheapest model *within a band*, never outside it.
+/// Price alone is not evidence a model can do the work:
+/// `docs/AGENT_PROFILES.md` records that automatic promotion is not wired up
+/// and, when it is, must require verified outcomes. Until then a human decides
+/// which models are eligible and economics only decides between them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EconomyAllowlist {
+    pub light: Vec<String>,
+    pub medium: Vec<String>,
+    pub heavy: Vec<String>,
+}
+
+impl EconomyAllowlist {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.light.is_empty() && self.medium.is_empty() && self.heavy.is_empty()
+    }
+
+    fn band(&self, complexity: Complexity) -> &[String] {
+        match complexity {
+            Complexity::Trivial | Complexity::Simple => &self.light,
+            Complexity::Medium => &self.medium,
+            Complexity::Complex | Complexity::High => &self.heavy,
+        }
+    }
+}
+
+/// Published rates for `model_id`, scaled to USD per 1,000 tokens.
+///
+/// The catalog states USD per million tokens; `ModelTier` is per thousand.
+fn catalog_rates_per_1k(model_id: &str) -> Option<(f64, f64)> {
+    static RATES: LazyLock<HashMap<String, (f64, f64)>> = LazyLock::new(|| {
+        let parsed: serde_json::Value = match serde_json::from_str(CATALOG_JSON) {
+            Ok(value) => value,
+            Err(_) => return HashMap::new(),
+        };
+        parsed
+            .get("models")
+            .and_then(serde_json::Value::as_array)
+            .map(|models| {
+                models
+                    .iter()
+                    .filter_map(|model| {
+                        let id = model.get("id")?.as_str()?.to_owned();
+                        let cost = model.get("cost")?;
+                        let input = cost.get("input")?.as_f64()?;
+                        let output = cost.get("output")?.as_f64()?;
+                        Some((id, (input / 1000.0, output / 1000.0)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    let trimmed = model_id.trim();
+    RATES.get(trimmed).copied().or_else(|| {
+        let bare = trimmed.rsplit('/').next()?;
+        RATES.get(bare).copied()
+    })
+}
+
+/// Build cascade tiers from an operator allowlist, priced from the catalog.
+///
+/// A model the catalog does not price is skipped and named in the returned
+/// warnings: routing on a guessed rate is worse than not routing on it.
+#[must_use]
+pub fn tiers_from_allowlist(allowlist: &EconomyAllowlist) -> (Vec<ModelTier>, Vec<String>) {
+    let mut tiers = Vec::new();
+    let mut skipped = Vec::new();
+    // The band's ceiling: eligibility is `tier.max_complexity >= task`, so a
+    // band must advertise the hardest work it is allowed to take.
+    for (band, complexity) in [
+        ("light", Complexity::Simple),
+        ("medium", Complexity::Medium),
+        ("heavy", Complexity::High),
+    ] {
+        for model in allowlist.band(complexity) {
+            let Some((input, output)) = catalog_rates_per_1k(model) else {
+                skipped.push(format!(
+                    "{model} (band {band}): no published rate in the catalog"
+                ));
+                continue;
+            };
+            tiers.push(ModelTier {
+                name: format!("{band}:{model}"),
+                model: model.clone(),
+                cost_per_1k_input: input,
+                cost_per_1k_output: output,
+                // A band entry is an operator statement that the model may
+                // serve that band, so it inherits the band's capabilities.
+                capabilities: band_capabilities(complexity),
+                max_complexity: complexity,
+            });
+        }
+    }
+    (tiers, skipped)
+}
+
+fn band_capabilities(complexity: Complexity) -> Vec<String> {
+    let light = ["typo-fix", "simple-refactor", "doc-update"];
+    let medium = ["feature-impl", "bug-fix", "refactor", "test-write"];
+    let heavy = ["architecture", "complex-debug", "security-fix"];
+    let selected: Vec<&str> = match complexity {
+        Complexity::Trivial | Complexity::Simple => light.to_vec(),
+        Complexity::Medium => [light.as_slice(), medium.as_slice()].concat(),
+        Complexity::Complex | Complexity::High => {
+            [light.as_slice(), medium.as_slice(), heavy.as_slice()].concat()
+        }
+    };
+    selected.into_iter().map(str::to_owned).collect()
+}
 
 /// Default model tiers
 fn default_tiers() -> Vec<ModelTier> {
@@ -113,6 +245,28 @@ pub struct Cascader {
 
 impl Cascader {
     /// Create a new Cascader
+    /// Economy routing over an operator allowlist.
+    ///
+    /// Returns the cascader plus any allowlist entries that were dropped for
+    /// want of a published rate. An empty or entirely unpriced allowlist keeps
+    /// the single-frontier default, so opting in cannot silently leave routing
+    /// with nothing to choose from.
+    #[must_use]
+    pub fn with_economy_allowlist(allowlist: &EconomyAllowlist) -> (Self, Vec<String>) {
+        let (tiers, skipped) = tiers_from_allowlist(allowlist);
+        if tiers.is_empty() {
+            return (Self::new(None), skipped);
+        }
+        (
+            Self::new(Some(CascaderConfig {
+                tiers,
+                fallback_to_higher: true,
+                max_retries: 2,
+            })),
+            skipped,
+        )
+    }
+
     pub fn new(config: Option<CascaderConfig>) -> Self {
         let config = config.unwrap_or_else(|| CascaderConfig {
             tiers: default_tiers(),
@@ -369,6 +523,120 @@ mod tests {
             priority: 100,
             estimated_tokens: Some(4_000),
         }
+    }
+
+    fn allowlist(light: &[&str], medium: &[&str], heavy: &[&str]) -> EconomyAllowlist {
+        EconomyAllowlist {
+            light: light.iter().map(|m| (*m).to_owned()).collect(),
+            medium: medium.iter().map(|m| (*m).to_owned()).collect(),
+            heavy: heavy.iter().map(|m| (*m).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn economy_tiers_are_priced_from_the_catalog() {
+        let (tiers, skipped) = tiers_from_allowlist(&allowlist(
+            &["claude-haiku-4-5"],
+            &["claude-sonnet-5"],
+            &["claude-opus-5-5"],
+        ));
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(tiers.len(), 3);
+
+        // The catalog states USD per million tokens; ModelTier is per 1,000.
+        // Opus 5.5 is $4/$20 per million.
+        let opus = tiers
+            .iter()
+            .find(|tier| tier.model == "claude-opus-5-5")
+            .expect("opus tier");
+        assert!((opus.cost_per_1k_input - 0.004).abs() < 1e-9);
+        assert!((opus.cost_per_1k_output - 0.020).abs() < 1e-9);
+
+        // Haiku 4.5 is $1/$5 per million, so it must price below Opus.
+        let haiku = tiers
+            .iter()
+            .find(|tier| tier.model == "claude-haiku-4-5")
+            .expect("haiku tier");
+        assert!(haiku.cost_per_1k_input < opus.cost_per_1k_input);
+    }
+
+    #[test]
+    fn economy_routing_picks_the_cheapest_model_allowed_for_the_band() {
+        // Both models are allowed for light work; price decides between them.
+        let (mut cascader, skipped) = Cascader::with_economy_allowlist(&allowlist(
+            &["claude-opus-5-5", "claude-haiku-4-5"],
+            &[],
+            &[],
+        ));
+        assert!(skipped.is_empty(), "{skipped:?}");
+
+        let routing = cascader.route(
+            &task(TaskType::Document),
+            &TaskContext {
+                complexity: Complexity::Trivial,
+                task_type: TaskType::Document,
+                estimated_tokens: Some(2_000),
+                previous_attempts: 0,
+            },
+        );
+        assert_eq!(routing.tier.model, "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn allowlisted_models_the_catalog_cannot_price_are_reported_not_guessed() {
+        let (tiers, skipped) =
+            tiers_from_allowlist(&allowlist(&["not-a-real-model-xyz"], &[], &[]));
+        assert!(tiers.is_empty());
+        assert_eq!(skipped.len(), 1);
+        assert!(
+            skipped[0].contains("not-a-real-model-xyz"),
+            "the skipped entry must name the model: {skipped:?}"
+        );
+    }
+
+    #[test]
+    fn opting_in_with_nothing_priceable_keeps_the_frontier_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // An allowlist that yields no priced tier must not leave routing with
+        // an empty candidate set.
+        let (cascader, skipped) =
+            Cascader::with_economy_allowlist(&allowlist(&["not-a-real-model-xyz"], &[], &[]));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(cascader.config.tiers.len(), default_tiers().len());
+
+        let (untouched, skipped) = Cascader::with_economy_allowlist(&EconomyAllowlist::default());
+        assert!(skipped.is_empty());
+        assert_eq!(untouched.config.tiers.len(), default_tiers().len());
+    }
+
+    #[test]
+    fn frontier_model_is_catalogued() {
+        // The direct-Anthropic default was claude-opus-4-1-20250805, a
+        // retired snapshot absent from the catalog, and nothing checked it.
+        // This is the same failure the Google subagent tiers had in #10149.
+        // Inlined rather than a module constant so this does not collide
+        // with the economy-allowlist work, which introduces one.
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../local-host-rs/src/model_catalog_data.json"
+        )))
+        .expect("bundled catalog parses");
+        let ids: std::collections::HashSet<&str> = catalog["models"]
+            .as_array()
+            .expect("models array")
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect();
+        assert!(
+            ids.contains(DEFAULT_ANTHROPIC_FRONTIER_MODEL),
+            "{DEFAULT_ANTHROPIC_FRONTIER_MODEL} is not in the bundled catalog"
+        );
+
+        // The OpenRouter default is deliberately a floating alias
+        // (`~anthropic/claude-opus-latest`). OpenRouter resolves it to the
+        // current Opus, so it is self-updating and is not a catalog row; it is
+        // asserted for shape rather than membership.
+        assert!(DEFAULT_OPENROUTER_FRONTIER_MODEL.starts_with("~anthropic/"));
     }
 
     #[test]

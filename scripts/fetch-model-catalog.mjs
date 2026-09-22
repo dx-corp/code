@@ -160,7 +160,7 @@ function mapOpenRouterModel(model, tokenLimits) {
 				supportedParameter(model, "include_reasoning") ||
 				(model.reasoning != null && typeof model.reasoning === "object"),
 			streaming: true,
-			context_tokens: context,
+			context_tokens: correctedContextWindow(id, context),
 			output_tokens: resolveOpenRouterOutput(tokenLimits, id, context, advertised),
 		},
 		cost: mapOpenRouterCost(model.pricing),
@@ -230,6 +230,38 @@ function mapCost(cost) {
 	return mapped;
 }
 
+/**
+ * Context windows where models.dev disagrees with the vendor's own docs.
+ *
+ * models.dev lists Claude Sonnet 4.5 with a 1,000,000-token context window.
+ * Anthropic states 200k twice in
+ * platform.claude.com/docs/en/build-with-claude/context-windows: it names the
+ * twelve models that have 1M and says "Other Claude models, including Claude
+ * Sonnet 4.5, have a 200k-token context window", then repeats it for context
+ * awareness — "1M tokens for Claude Sonnet 5 and Claude Sonnet 4.6, and 200k
+ * tokens for Claude Sonnet 4.5 and Claude Haiku 4.5".
+ *
+ * This matters more than a wrong number in a table. The overflow detector
+ * compacts at a fraction of the declared window, so a 1,000,000 value lets a
+ * Sonnet 4.5 session run to roughly 750k tokens before compacting, while the
+ * API rejects it at 200k with "prompt is too long". The conservative value
+ * fails safe; the optimistic one fails the request.
+ *
+ * Keyed by the exact catalog id, including the OpenRouter dotted spelling.
+ * Every entry needs a comment naming the vendor source, and entries should be
+ * deleted once upstream corrects them.
+ */
+const CONTEXT_WINDOW_OVERRIDES = new Map([
+	["claude-sonnet-4-5", 200_000],
+	["claude-sonnet-4-5-20250929", 200_000],
+	["anthropic/claude-sonnet-4.5", 200_000],
+]);
+
+/** Apply a documented vendor correction to an upstream context window. */
+function correctedContextWindow(id, context) {
+	return CONTEXT_WINDOW_OVERRIDES.get(id) ?? context;
+}
+
 function mapModel(providerId, modelId, model) {
 	const protocol =
 		providerId === "openai" ? openAiProtocol(modelId) : PROVIDER_PROTOCOLS[providerId];
@@ -249,7 +281,7 @@ function mapModel(providerId, modelId, model) {
 			vision: Array.isArray(model.modalities?.input) && model.modalities.input.includes("image"),
 			reasoning: model.reasoning === true,
 			streaming: true,
-			context_tokens: model.limit.context,
+			context_tokens: correctedContextWindow(modelId, model.limit.context),
 			// Per-response output ceiling (reasoning included) from
 			// models.dev `limit.output`. Omitted when the source lacks it or
 			// copies the context window into output.

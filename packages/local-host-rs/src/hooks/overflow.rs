@@ -142,8 +142,11 @@ impl ModelLimits {
                 max_output: 128_000,
                 ..Default::default()
             },
+            // 200k, not 1M. See CONTEXT_WINDOW_OVERRIDES in
+            // scripts/fetch-model-catalog.mjs: models.dev is wrong here and
+            // Anthropic's context-windows doc names Sonnet 4.5 as a 200k model.
             s if is_model_family(s, "claude-sonnet-4-5") => Self {
-                max_context: 1_000_000,
+                max_context: 200_000,
                 max_output: 64_000,
                 ..Default::default()
             },
@@ -461,8 +464,10 @@ mod tests {
             assert_eq!(limits.max_output, 128_000, "{model}");
         }
 
+        // Declaring 1M here let a Sonnet 4.5 session run to ~750k before
+        // compacting, where the API rejects at 200k with "prompt is too long".
         let limits = ModelLimits::for_model("claude-sonnet-4-5-20250929");
-        assert_eq!(limits.max_context, 1_000_000);
+        assert_eq!(limits.max_context, 200_000);
         assert_eq!(limits.max_output, 64_000);
 
         let limits = ModelLimits::for_model("claude-opus-4-5-20251101");
@@ -506,7 +511,7 @@ mod tests {
             ("claude-opus-5-5", 1_000_000, 128_000),
             ("anthropic/claude-opus-5-5", 1_000_000, 128_000),
             ("anthropic/claude-opus-5.5", 1_000_000, 128_000),
-            ("claude-sonnet-4-5-20250929", 1_000_000, 64_000),
+            ("claude-sonnet-4-5-20250929", 200_000, 64_000),
             ("claude-opus-4-5-20251101", 200_000, 64_000),
             ("claude-haiku-4-5-20251001", 200_000, 64_000),
         ] {
