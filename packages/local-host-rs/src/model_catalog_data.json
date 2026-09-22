@@ -16,6 +16,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 10,
         "output": 50,
@@ -41,6 +53,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 10,
         "output": 50,
@@ -66,6 +90,12 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1,
         "output": 5,
@@ -91,6 +121,12 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1,
         "output": 5,
@@ -116,6 +152,16 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -141,6 +187,16 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -166,6 +222,17 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -191,6 +258,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -216,6 +295,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -241,6 +332,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 5,
         "output": 25,
@@ -266,6 +369,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 4,
         "output": 20,
@@ -291,6 +406,12 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 3,
         "output": 15,
@@ -316,6 +437,12 @@
         "context_tokens": 200000,
         "output_tokens": 64000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 3,
         "output": 15,
@@ -341,6 +468,17 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
       "cost": {
         "input": 3,
         "output": 15,
@@ -366,6 +504,18 @@
         "context_tokens": 1000000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 2,
         "output": 10,
@@ -391,6 +541,14 @@
         "context_tokens": 131072,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2,
         "output": 12,
@@ -415,6 +573,14 @@
         "context_tokens": 131072,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2,
         "output": 12,
@@ -439,6 +605,11 @@
         "context_tokens": 131072,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1.25,
         "output": 10
@@ -462,6 +633,14 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 0.3,
         "output": 2.5,
@@ -486,6 +665,14 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 0.1,
         "output": 0.4,
@@ -510,6 +697,14 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1.25,
         "output": 10,
@@ -534,6 +729,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.5,
         "output": 3,
@@ -558,6 +766,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.25,
         "output": 1.5,
@@ -581,6 +802,14 @@
         "streaming": true,
         "context_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "high"
+      ],
       "cost": {
         "input": 0.25,
         "output": 30
@@ -604,6 +833,18 @@
         "context_tokens": 131072,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.75,
         "output": 4.5
@@ -627,6 +868,18 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 2,
         "output": 12,
@@ -651,6 +904,18 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 2,
         "output": 12,
@@ -675,6 +940,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 1.5,
         "output": 9,
@@ -699,6 +977,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.3,
         "output": 2.5,
@@ -723,6 +1014,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.75,
         "output": 3.75,
@@ -747,6 +1051,18 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.75,
         "output": 3.75,
@@ -771,6 +1087,18 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.75,
         "output": 3.75,
@@ -795,6 +1123,18 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.75,
         "output": 3.75,
@@ -819,6 +1159,19 @@
         "context_tokens": 1048576,
         "output_tokens": 65536
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.3,
         "output": 2.5,
@@ -843,6 +1196,11 @@
         "context_tokens": 262144,
         "output_tokens": 32768
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [],
       "open_weights": true,
       "verification": {
         "state": "catalog",
@@ -863,6 +1221,11 @@
         "context_tokens": 262144,
         "output_tokens": 32768
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [],
       "open_weights": true,
       "verification": {
         "state": "catalog",
@@ -883,6 +1246,12 @@
         "context_tokens": 1047576,
         "output_tokens": 32768
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2,
         "output": 8,
@@ -907,6 +1276,12 @@
         "context_tokens": 1047576,
         "output_tokens": 32768
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 0.4,
         "output": 1.6,
@@ -931,6 +1306,12 @@
         "context_tokens": 128000,
         "output_tokens": 16384
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2.5,
         "output": 10,
@@ -955,6 +1336,11 @@
         "context_tokens": 128000,
         "output_tokens": 16384
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2.5,
         "output": 10,
@@ -979,6 +1365,11 @@
         "context_tokens": 128000,
         "output_tokens": 16384
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 2.5,
         "output": 10,
@@ -1003,6 +1394,12 @@
         "context_tokens": 128000,
         "output_tokens": 16384
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 0.15,
         "output": 0.6,
@@ -1027,6 +1424,16 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 1.25,
         "output": 10,
@@ -1051,6 +1458,16 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.25,
         "output": 2,
@@ -1075,6 +1492,16 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 0.05,
         "output": 0.4,
@@ -1099,6 +1526,13 @@
         "context_tokens": 400000,
         "output_tokens": 272000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "high"
+      ],
       "cost": {
         "input": 15,
         "output": 120
@@ -1122,6 +1556,16 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 1.25,
         "output": 10,
@@ -1146,6 +1590,17 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 1.75,
         "output": 14,
@@ -1170,6 +1625,15 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 21,
         "output": 168
@@ -1193,6 +1657,18 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 1.75,
         "output": 14,
@@ -1217,6 +1693,18 @@
         "context_tokens": 128000,
         "output_tokens": 32000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 1.75,
         "output": 14,
@@ -1241,6 +1729,18 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 2.5,
         "output": 15,
@@ -1265,6 +1765,17 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 0.75,
         "output": 4.5,
@@ -1289,6 +1800,17 @@
         "context_tokens": 400000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 0.2,
         "output": 1.25,
@@ -1313,6 +1835,15 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 30,
         "output": 180
@@ -1336,6 +1867,18 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 5,
         "output": 30,
@@ -1360,6 +1903,16 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 30,
         "output": 180
@@ -1383,6 +1936,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 4,
         "output": 20,
@@ -1408,6 +1974,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 0.2,
         "output": 1.2,
@@ -1433,6 +2012,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 4,
         "output": 20,
@@ -1458,6 +2050,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 2,
         "output": 12,
@@ -1483,6 +2088,18 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 10,
         "output": 50,
@@ -1508,6 +2125,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 0.1,
         "output": 0.5,
@@ -1533,6 +2163,19 @@
         "context_tokens": 1050000,
         "output_tokens": 128000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "cost": {
         "input": 2,
         "output": 10,
@@ -1558,6 +2201,18 @@
         "context_tokens": 128000,
         "output_tokens": 32000
       },
+      "input_modalities": [
+        "text",
+        "audio",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 4,
         "output": 24,
@@ -1582,6 +2237,16 @@
         "context_tokens": 200000,
         "output_tokens": 100000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 2,
         "output": 8,
@@ -1606,6 +2271,15 @@
         "context_tokens": 200000,
         "output_tokens": 100000
       },
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 20,
         "output": 80
@@ -10684,6 +11358,12 @@
         "context_tokens": 1000000,
         "output_tokens": 30000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1.25,
         "output": 2.5,
@@ -10708,6 +11388,12 @@
         "context_tokens": 1000000,
         "output_tokens": 30000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1.25,
         "output": 2.5,
@@ -10732,6 +11418,17 @@
         "context_tokens": 1000000,
         "output_tokens": 30000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 1.25,
         "output": 2.5,
@@ -10755,6 +11452,16 @@
         "streaming": true,
         "context_tokens": 500000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
       "cost": {
         "input": 2,
         "output": 6,
@@ -10778,6 +11485,17 @@
         "streaming": true,
         "context_tokens": 500000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 2,
         "output": 6,
@@ -10801,6 +11519,17 @@
         "streaming": true,
         "context_tokens": 500000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
       "cost": {
         "input": 2,
         "output": 6,
@@ -10824,6 +11553,12 @@
         "streaming": true,
         "context_tokens": 256000
       },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [],
       "cost": {
         "input": 1,
         "output": 2,

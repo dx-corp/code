@@ -172,6 +172,21 @@ function mapOpenRouterModel(model, tokenLimits) {
 }
 
 /**
+ * The effort levels a models.dev entry advertises, in ladder order.
+ *
+ * models.dev states these under `reasoning_options` as one or more blocks of
+ * `{type, values}`; only the `effort` block is a level ladder.
+ */
+function reasoningEfforts(model) {
+	const options = Array.isArray(model?.reasoning_options) ? model.reasoning_options : [];
+	const values = options
+		.filter((option) => option?.type === "effort")
+		.flatMap((option) => (Array.isArray(option.values) ? option.values : []))
+		.filter((value) => typeof value === "string");
+	return [...new Set(values)];
+}
+
+/**
  * Per-million-token USD rates, carried so cost reporting reads the same
  * snapshot as everything else instead of a hand-maintained table.
  *
@@ -287,6 +302,13 @@ function mapModel(providerId, modelId, model) {
 			// copies the context window into output.
 			output_tokens: distinctOutputTokens(model.limit?.context, model.limit?.output),
 		},
+		// Input modalities and the effort ladder, carried so consumers that
+		// need them (the desktop built-in provider rules) derive from this
+		// snapshot instead of restating them in a second hand-edited file.
+		input_modalities: Array.isArray(model.modalities?.input)
+			? model.modalities.input.filter((value) => typeof value === "string")
+			: [],
+		reasoning_efforts: reasoningEfforts(model),
 		cost: mapCost(model.cost),
 		// Carried only when true. An open-weights model is self-hosted, so it
 		// has no vendor rate; without this flag a missing `cost` cannot be
