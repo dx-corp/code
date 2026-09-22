@@ -118,6 +118,7 @@ pub use client::{
 pub use error::summarize_error_body;
 pub use google::GoogleClient;
 pub use openai::OpenAiClient;
+pub use openai_base::is_context_overflow_message;
 pub use providers::{ProviderDescriptor, ProviderProtocol, ProviderRegistry, ResolvedProvider};
 pub use sanitize::{sanitize_control_chars, sanitize_for_api, sanitize_surrogates};
 pub use scripted::{ScriptedBlock, ScriptedClient, ScriptedResponse};

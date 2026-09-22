@@ -253,6 +253,15 @@ impl NativeAgentRunner {
             // send a history with orphaned tool calls to the provider.
             self.repair_orphaned_tool_calls();
 
+            // Bound the history before the request is built. Post-response
+            // compaction cannot cover a tool chain, whose every response
+            // carries tool calls, so without this the history grows until the
+            // provider rejects it.
+            // `record_step` above counts this attempt, so a count above one
+            // means an earlier request in this turn already carried any
+            // accepted user note to the provider.
+            self.compact_before_request(step_budget.executed() > 1);
+
             // Make the API call
             let request_messages = project_observation_history(
                 &self.messages,

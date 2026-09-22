@@ -685,6 +685,88 @@ fn extract_function_call(item: &serde_json::Value) -> Option<(String, String, se
     Some((identity, name, arguments_value))
 }
 
+/// Whether an error message names a context-window overflow.
+///
+/// This is the wording test on its own, with no status-code heuristic, so it
+/// is safe for any caller that must decide whether an arbitrary error means
+/// "the request was too large". [`is_context_overflow_error`] adds the
+/// bodyless-4xx heuristic on top for the providers that send no message at
+/// all; a caller that would act destructively on a false positive — by
+/// rewriting history, say — wants this function instead.
+///
+/// Every pattern is anchored to overflow wording. A message is not an
+/// overflow because it says "took too long".
+///
+/// # Supported Providers
+///
+/// - **Anthropic**: "prompt is too long: X tokens > Y maximum"
+/// - **`OpenAI`**: "exceeds the context window", `context_length_exceeded`
+/// - **Google Gemini**: "input token count exceeds the maximum"
+/// - **xAI (Grok)**: "maximum prompt length is X but request contains Y"
+/// - **Groq**: "reduce the length of the messages"
+/// - **`OpenRouter`**: "maximum context length is X tokens"
+/// - **llama.cpp**: "exceeds the available context size"
+/// - **LM Studio**: "greater than the context length"
+#[must_use]
+pub fn is_context_overflow_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+
+    // Provider-specific patterns
+    if lower.contains("prompt is too long")
+        || lower.contains("exceeds the context window")
+        || (lower.contains("input token count") && lower.contains("exceeds the maximum"))
+        || (lower.contains("maximum prompt length is") && lower.contains("contains"))
+        || lower.contains("reduce the length")
+        || lower.contains("maximum context length is")
+        || lower.contains("exceeds the available context size")
+        || lower.contains("greater than the context length")
+    {
+        return true;
+    }
+
+    // Generic fallback patterns
+    if lower.contains("context length")
+        || lower.contains("context_length")
+        || lower.contains("context limit")
+        || lower.contains("maximum context")
+        || lower.contains("token limit")
+        || lower.contains("too many tokens")
+        || (lower.contains("context window") && lower.contains("exceeded"))
+        || (lower.contains("maximum") && lower.contains("tokens") && lower.contains("exceeded"))
+    {
+        return true;
+    }
+
+    // An output ceiling named in a rejection about size. Anthropic reports a
+    // full window as "input length and `max_tokens` exceed context limit",
+    // and a bare mention of the parameter is not on its own an overflow.
+    if lower.contains("max_tokens") && (lower.contains("context") || lower.contains("exceed")) {
+        return true;
+    }
+
+    // "too long" only where it is the request that is too long. A timeout
+    // that reports something "took too long" is not an overflow, and acting
+    // on it as one would compact a history that was never the problem.
+    if lower.contains("too long")
+        && [
+            "prompt",
+            "input",
+            "request",
+            "message",
+            "conversation",
+            "context",
+        ]
+        .iter()
+        .any(|subject| lower.contains(subject))
+        && !lower.contains("took too long")
+        && !lower.contains("taking too long")
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Check if an error message indicates context window overflow.
 ///
 /// This function detects context overflow errors from multiple LLM providers
@@ -706,30 +788,10 @@ fn extract_function_call(item: &serde_json::Value) -> Option<(String, String, se
 ///
 /// `true` if the message indicates a context overflow error.
 pub fn is_context_overflow_error(message: &str) -> bool {
+    if is_context_overflow_message(message) {
+        return true;
+    }
     let lower = message.to_lowercase();
-
-    // Provider-specific patterns
-    if lower.contains("prompt is too long")
-        || lower.contains("exceeds the context window")
-        || (lower.contains("input token count") && lower.contains("exceeds the maximum"))
-        || (lower.contains("maximum prompt length is") && lower.contains("contains"))
-        || lower.contains("reduce the length of the messages")
-        || lower.contains("maximum context length is")
-        || lower.contains("exceeds the available context size")
-        || lower.contains("greater than the context length")
-    {
-        return true;
-    }
-
-    // Generic fallback patterns
-    if lower.contains("context length exceeded")
-        || lower.contains("too many tokens")
-        || lower.contains("token limit exceeded")
-        || (lower.contains("context window") && lower.contains("exceeded"))
-        || (lower.contains("maximum") && lower.contains("tokens") && lower.contains("exceeded"))
-    {
-        return true;
-    }
 
     // Cerebras and Mistral return 400/413 with no body
     // Match patterns like "400 status code (no body)" or "413 (no body)"

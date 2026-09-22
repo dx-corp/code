@@ -851,12 +851,20 @@ impl ContextCompactor {
     /// for the model to hit `MaxTokens` and fail.
     #[must_use]
     pub fn should_auto_compact(&self, messages: &[Message]) -> bool {
+        self.should_auto_compact_request(self.estimate_tokens(messages))
+    }
+
+    /// Whether a sealed request of `request_tokens` should be compacted before
+    /// it is sent. Takes the whole prepared request — history, system prompt
+    /// and tool schemas — which is the total the provider measures against its
+    /// context limit. See [`ContextCompactor::compact_for_request`].
+    #[must_use]
+    pub fn should_auto_compact_request(&self, request_tokens: u64) -> bool {
         if !self.config.auto_compact_enabled {
             return false;
         }
 
-        let tokens = self.estimate_tokens(messages);
-        tokens > self.auto_compact_threshold_tokens()
+        request_tokens > self.auto_compact_threshold_tokens()
     }
 
     /// Token count above which proactive auto-compaction triggers.
@@ -959,13 +967,40 @@ impl ContextCompactor {
     /// Returns a `CompactionResult` with information about whether a turn was split.
     #[must_use]
     pub fn compact_with_tokens(&self, messages: &[Message]) -> CompactionResult {
-        let total_tokens = self.estimate_tokens(messages);
+        self.compact_for_request(messages, self.estimate_tokens(messages))
+    }
 
+    /// Compact because the provider rejected the request as larger than its
+    /// context window, whatever the local estimate says.
+    ///
+    /// The estimate is what failed in this case: it stayed under the trigger
+    /// while the real request did not. So the trigger is skipped here rather
+    /// than consulted, and compaction is bounded only by what the history can
+    /// give up.
+    #[must_use]
+    pub fn compact_over_provider_limit(&self, messages: &[Message]) -> CompactionResult {
+        self.compact_for_request(messages, u64::MAX)
+    }
+
+    /// Compact against the size of the sealed request rather than of `messages`.
+    ///
+    /// `request_tokens` is the whole prepared request: history plus the system
+    /// prompt plus the tool schemas. The provider enforces its context limit on
+    /// that total, while [`ContextCompactor::estimate_tokens`] sees only the
+    /// history, so a large tool catalog can fill the window while the history
+    /// alone is still under the trigger. The cut point is still chosen from
+    /// `messages`, because history is the only part a compaction can shorten.
+    #[must_use]
+    pub fn compact_for_request(
+        &self,
+        messages: &[Message],
+        request_tokens: u64,
+    ) -> CompactionResult {
         // Check if compaction is needed. This uses the same trigger point as
         // `should_auto_compact` so the proactive path in the agent turn loop
         // does not announce "Auto-compaction triggered" and then return the
         // message list untouched between the threshold and the full window.
-        if total_tokens <= self.compaction_trigger_tokens() {
+        if request_tokens <= self.compaction_trigger_tokens() {
             return CompactionResult {
                 messages: messages.to_vec(),
                 summary: None,
@@ -2972,6 +3007,61 @@ mod tests {
     // ============================================================
     // Auto-Compaction Tests
     // ============================================================
+
+    /// A 1000-token window with the same proportions `for_model` derives:
+    /// an 850-token trigger and a 200-token recent window, so a fixture of a
+    /// few hundred tokens is both under the trigger and large enough to cut.
+    fn request_trigger_config() -> CompactionConfig {
+        CompactionConfig {
+            max_context_tokens: 1000,
+            keep_recent_tokens: 200,
+            auto_compact_enabled: true,
+            auto_compact_threshold: 0.85,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn request_overhead_crosses_the_trigger_that_history_alone_does_not() {
+        let compactor = ContextCompactor::new(request_trigger_config());
+        // Forty turns, together well under the 850-token trigger.
+        let messages: Vec<Message> = (0..40)
+            .map(|index| make_user_message(&format!("turn {index}: {}", "a".repeat(40))))
+            .collect();
+        let history_tokens = compactor.estimate_tokens(&messages);
+        assert!(
+            history_tokens <= 850,
+            "fixture must sit under the trigger on history alone, got {history_tokens}"
+        );
+
+        // The history alone is not compacted, and a request whose system
+        // prompt and tool schemas carry it over the trigger is.
+        assert!(!compactor.should_auto_compact(&messages));
+        assert!(!compactor.compact_with_tokens(&messages).was_compacted());
+        assert!(compactor.should_auto_compact_request(900));
+        assert!(
+            compactor
+                .compact_for_request(&messages, 900)
+                .was_compacted()
+        );
+    }
+
+    #[test]
+    fn provider_limit_compacts_below_the_local_trigger() {
+        let compactor = ContextCompactor::new(request_trigger_config());
+        let messages: Vec<Message> = (0..40)
+            .map(|index| make_user_message(&format!("turn {index}: {}", "a".repeat(40))))
+            .collect();
+
+        // The estimate is what failed, so the provider's rejection compacts
+        // regardless of what the estimate says.
+        assert!(!compactor.should_auto_compact(&messages));
+        assert!(
+            compactor
+                .compact_over_provider_limit(&messages)
+                .was_compacted()
+        );
+    }
 
     #[test]
     fn test_should_auto_compact_disabled() {

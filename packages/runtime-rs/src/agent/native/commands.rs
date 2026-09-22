@@ -756,6 +756,7 @@ impl NativeAgentRunner {
                     let mut waited_for_codex_login = false;
                     let mut codex_transport_restarted = false;
                     let mut codex_auth_resumed = false;
+                    let mut compacted_after_context_overflow = false;
                     loop {
                         let result = run_request_with_cancellation(
                             self.run_loop(&mut step_budget),
@@ -773,6 +774,11 @@ impl NativeAgentRunner {
                                     .map(|error| (error.kind, error.message.clone()));
                                 let provider_admission_denied =
                                     e.downcast_ref::<ProviderAdmissionDenied>().is_some();
+                                // Raised while composing the request, so it
+                                // never reached a provider and carries no
+                                // provider error text to classify.
+                                let request_exceeds_context_window =
+                                    e.downcast_ref::<RequestExceedsContextWindow>().is_some();
                                 let empty_assistant_response =
                                     e.downcast_ref::<EmptyAssistantResponse>().is_some();
                                 // Preserve the complete anyhow cause chain so
@@ -846,6 +852,29 @@ impl NativeAgentRunner {
                                         request_cancelled = cancel_token.is_cancelled();
                                         break;
                                     }
+                                }
+
+                                // The provider rejected this request as larger
+                                // than its context window. The retry policy
+                                // below treats that as terminal, which is right
+                                // for resending the same request and wrong for
+                                // the turn: the oversized history stays, so
+                                // every later prompt fails identically.
+                                // Compact once and resend.
+                                if (request_exceeds_context_window
+                                    || matches!(
+                                        error_kind,
+                                        crate::agent::retry::ErrorKind::ContextOverflow
+                                    ))
+                                    && !compacted_after_context_overflow
+                                    && self.compact_after_context_overflow()
+                                {
+                                    compacted_after_context_overflow = true;
+                                    let _ = self.event_tx.send(FromAgent::Status {
+                                        message: "Request exceeded the model context window; compacted the conversation and retrying."
+                                            .to_owned(),
+                                    });
+                                    continue;
                                 }
 
                                 let retry_decision = if step_budget

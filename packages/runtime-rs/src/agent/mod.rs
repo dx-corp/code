@@ -76,8 +76,7 @@ pub use protocol::{
 pub use reminders::{REMINDER_CLOSE, REMINDER_OPEN, Reminder, ReminderContext, ReminderEngine};
 pub use retry::{ErrorKind, RetryConfig, RetryDecision, RetryPolicy};
 pub use safety::{
-    SafetyConfig, SafetyController, SafetyVerdict, is_context_overflow, is_retryable_error,
-    stable_stringify,
+    SafetyConfig, SafetyController, SafetyVerdict, is_retryable_error, stable_stringify,
 };
 pub use selective_summary::{
     RangeSelection, SelectiveSummaryOutcome, SelectiveSummaryPreview, SelectiveSummaryRequest,
