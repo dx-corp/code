@@ -3276,7 +3276,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 200000,
+        "context_tokens": 1000000,
         "output_tokens": 64000
       },
       "cost": {
