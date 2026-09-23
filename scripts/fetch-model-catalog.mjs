@@ -519,6 +519,49 @@ function applyVendorCorrections(models, corrections) {
 	return { applied, noops, missing };
 }
 
+/**
+ * The lifecycle models.dev publishes for a model, when it publishes one.
+ *
+ * 125 upstream rows are marked `deprecated` and 28 `beta`, and the catalog was
+ * dropping the field. That is the same information #10177 reconstructed by
+ * hand from Gemini id patterns, and upstream had it all along: o1 and o1-pro
+ * are `deprecated` upstream and conductor offers both unflagged.
+ *
+ * Only the two values upstream actually uses are accepted. A third value is a
+ * change in upstream's vocabulary and should be looked at rather than passed
+ * through as if understood.
+ */
+const UPSTREAM_STATUSES = new Set(["deprecated", "beta"]);
+
+/**
+ * The lifecycle the model's OWN vendor publishes, or nothing.
+ *
+ * 125 upstream rows are marked `deprecated` and 28 `beta`, and the catalog was
+ * dropping the field. That is the same information #10177 reconstructed by
+ * hand from Gemini id patterns, and upstream had it all along.
+ *
+ * Resolved strictly from the vendor's own row. Aggregators disagree: for
+ * `o4-mini`, models.dev has `openai` and `azure` saying deprecated while
+ * `llmgateway`, `helicone` and `abacus` say nothing, and for
+ * `deepseek/deepseek-r1` the DeepSeek provider has no row at all while an
+ * aggregator does. Accepting any provider's answer attributes one vendor's
+ * retirement to another, which is the loose-match mistake this whole body of
+ * work keeps finding. No vendor row means no status.
+ */
+function mapStatus(model) {
+	const status = model?.status;
+	if (status === undefined || status === null) {
+		return undefined;
+	}
+	if (typeof status !== "string" || !UPSTREAM_STATUSES.has(status)) {
+		throw new Error(
+			`models.dev published an unrecognised status ${JSON.stringify(status)}; ` +
+				"add it to UPSTREAM_STATUSES once its meaning is known",
+		);
+	}
+	return status;
+}
+
 function mapModel(providerId, modelId, model) {
 	const protocol =
 		providerId === "openai" ? openAiProtocol(modelId) : PROVIDER_PROTOCOLS[providerId];
@@ -561,6 +604,7 @@ function mapModel(providerId, modelId, model) {
 		// has no vendor rate; without this flag a missing `cost` cannot be
 		// told apart from a rate that should be there and is not.
 		...(model.open_weights === true ? { open_weights: true } : {}),
+		...(mapStatus(model) === undefined ? {} : { status: mapStatus(model) }),
 		verification: {
 			state: "catalog",
 			source: "models.dev",

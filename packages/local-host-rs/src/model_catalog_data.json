@@ -4028,6 +4028,7 @@
         "output": 0.098,
         "cache_read": 0.0098
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -4075,6 +4076,7 @@
         "output": 0.66,
         "cache_read": 0.007
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -4486,6 +4488,7 @@
         "cache_read": 0.025,
         "cache_write": 0.083333
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -5900,6 +5903,7 @@
         "output": 2,
         "cache_read": 0.04
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -6909,6 +6913,7 @@
         "input": 0.5,
         "output": 1.5
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -7001,6 +7006,7 @@
         "input": 30,
         "output": 60
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -7024,6 +7030,7 @@
         "input": 10,
         "output": 30
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -7096,6 +7103,7 @@
         "output": 0.4,
         "cache_read": 0.025
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -7143,6 +7151,7 @@
         "input": 5,
         "output": 15
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -8228,6 +8237,7 @@
         "output": 60,
         "cache_read": 7.5
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -8251,6 +8261,7 @@
         "input": 150,
         "output": 600
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -8299,6 +8310,7 @@
         "output": 4.4,
         "cache_read": 0.55
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -8370,6 +8382,7 @@
         "output": 4.4,
         "cache_read": 0.275
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
