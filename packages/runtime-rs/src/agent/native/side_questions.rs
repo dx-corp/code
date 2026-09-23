@@ -55,7 +55,7 @@ impl NativeAgentRunner {
                 .client
                 .as_ref()
                 .context("direct provider client missing for side question")?;
-            let request_id = provider_request_id("side_question", &config.model, &messages)?;
+            let request_id = provider_request_id("side_question", &config.model, messages)?;
             self.admit_provider_request("side_question", &request_id, Some(&config.model))
                 .await?;
             prepared_request.ensure_current(&credential_vault)?;
