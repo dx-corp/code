@@ -432,6 +432,9 @@ function mapCost(cost) {
  * Every entry cites the vendor source and should be deleted once upstream
  * corrects it.
  */
+// REPO_ROOT is products/maestro (see DEFAULT_OUT above), so this path is
+// relative to it. Joining the repo-relative path doubled products/maestro
+// and made every refresh fail with ENOENT.
 const VENDOR_CORRECTIONS_PATH = path.join(REPO_ROOT, "config/vendor-corrections.json");
 
 /**
@@ -610,9 +613,16 @@ function mapModel(providerId, modelId, model) {
 }
 
 function parseArgs(argv) {
-	const args = { out: DEFAULT_OUT, timeoutMs: DEFAULT_TIMEOUT_MS };
+	const args = {
+		out: DEFAULT_OUT,
+		timeoutMs: DEFAULT_TIMEOUT_MS,
+		verifyConfig: false,
+	};
 	for (let i = 0; i < argv.length; i += 1) {
-		if (argv[i] === "--out") {
+		if (argv[i] === "--verify-config") {
+			// Load the checked-in config and stop, with no network.
+			args.verifyConfig = true;
+		} else if (argv[i] === "--out") {
 			args.out = path.resolve(argv[i + 1]);
 			i += 1;
 		} else if (argv[i] === "--timeout-ms") {
@@ -630,6 +640,14 @@ function parseArgs(argv) {
 
 async function main() {
 	const args = parseArgs(process.argv.slice(2));
+
+	if (args.verifyConfig) {
+		const corrections = loadVendorCorrections();
+		console.log(
+			`${path.relative(REPO_ROOT, VENDOR_CORRECTIONS_PATH)}: ${corrections.length} correction(s)`,
+		);
+		return;
+	}
 
 	const headers = { accept: "application/json", "user-agent": "maestro-model-catalog-fetcher" };
 	const [modelsDevCatalog, openrouterPayload] = await Promise.all([

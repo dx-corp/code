@@ -290,6 +290,10 @@ impl App {
             task.abort();
         }
         self.setup_login_rx = None;
+        self.setup_login_url_rx = None;
+        if let Some(task) = self.setup_login_task.take() {
+            task.abort();
+        }
         self.ui_prefs.onboarding_seen = true;
         self.ui_prefs.onboarding_share_diagnostics = Some(self.setup_modal.share_diagnostics());
         if self.ui_prefs.save_default().is_err() {
