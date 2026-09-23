@@ -1,11 +1,5 @@
-//! Dex-derived Dex Code mark for the Maestro TUI welcome surface.
-//!
-//! The terminal mark carries the same small cues as Dex: an angular hood,
-//! narrow eyes, pointed shoulders, and a tapered lower edge. Colors
-//! come from Deixic violet (`#6857fe`). Diagonal sheen uses [`crate::shimmer`]
-//! only while Maestro is working.
-//!
-//! Responsive tiers keep the mark visible without crowding short terminals.
+//! Dex's warm orb, drawn with foreground dots so it works in ordinary terminals.
+//! The desktop SVG and this terminal mark share the same silhouette and blue orbit.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -15,8 +9,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::shimmer::{
-    DEIXIC_ACCENT, DEIXIC_LOGO_BASE, DEIXIC_LOGO_HILITE, DEIXIC_MUTED, DEIXIC_TEXT,
-    diagonal_shimmer_lines, shimmer_spans,
+    DEIXIC_LOGO_BASE, DEIXIC_LOGO_HILITE, DEIXIC_MUTED, DEIXIC_TEXT, shimmer_spans,
 };
 
 /// Product title used by the launch and onboarding surfaces.
@@ -24,55 +17,42 @@ pub const PRODUCT_TITLE: &str = "Dex Code";
 /// Empty-composer hint shared by the welcome and status surfaces.
 pub const COMPOSER_HINT: &str = "Type a message or press ? for commands.";
 
-/// Angular Dex hood and mantle. Braille cells provide finer curves than box
-/// corners; all poses occupy the same terminal columns and rows.
+/// A transparent dot silhouette: two negative-space eyes, a tiny nub at right,
+/// and a blue arc across the lower edge. Each glyph occupies one terminal cell.
 pub const LOGO_FULL: &str = r"
-      ⣀⡤⠞⠙⠦⣄⡀
-     ⡞⠁     ⠙⡆
-    ⣸⠁⠻⣄   ⣠⠟⢹⡀
-  ⣠⠞⠁⣀      ⢀⡀⠙⢦⡀
-⣠⠾⠗⠚⠉⠉⠳⣄  ⢀⡴⠋⠉⠙⠒⠿⢦⡀
-       ⠈⠳⡴⠋
+        ·••●••·
+     ·••●••●•●•••·
+   ·•●••●•●••●•●•••·
+  •••●•●••●•●••●•●••
+ •●•●••●  ●●  ●●●●•●•
+ •••●•●••●•●••●•●•••••
+  •●••●•●••●•●••●••·
+   ·•●••●•●••●•●••·
+     ·•●••●•●•••·
+        ·•••••·
 ";
 
-const LOGO_FULL_WORKING: &str = r"
-      ⣀⡤⠞⠙⠦⣄⡀
-     ⡞⠁     ⠙⡆
-    ⣸⠁ ¬   ¬ ⢹⡀
-  ⣠⠞⠁⣀      ⢀⡀⠙⢦⡀
-⣠⠾⠗⠚⠉⠉⠳⣄  ⢀⡴⠋⠉⠙⠒⠿⢦⡀
-       ⠈⠳⡴⠋
-";
+const LOGO_FULL_WORKING: &str = LOGO_FULL;
 
-/// Compact cowl retains expressive eyes in short viewports.
+/// Four-row mark for ordinary short panes.
 pub const LOGO_COMPACT: &str = r"
-   ⣀⡴⠚⠙⠲⣄⡀
-  ⠘⣅⠳   ⠞⡝
-   ⠈⠓⢦⣠⠖⠋
+    ·••●••·
+  •●●●●●●●●•
+ •●●  ●  ●●●••
+   ·•●●●●●•·
 ";
+const LOGO_COMPACT_WORKING: &str = LOGO_COMPACT;
 
-const LOGO_COMPACT_WORKING: &str = r"
-   ⣀⡴⠚⠙⠲⣄⡀
-  ⠘⣅¬   ¬⡝
-   ⠈⠓⢦⣠⠖⠋
-";
-
-/// Tiny two-line mark when vertical space is tight but not zero.
+/// Two-row mark when there is little vertical room.
 pub const LOGO_TINY: &str = r"
-  ⢠⠳ ⠞⡄
-   ⠑⣄⠔⠁
+  ·•●●●•·
+  ·•●●●•·
 ";
+const LOGO_TINY_WORKING: &str = LOGO_TINY;
 
-const LOGO_TINY_WORKING: &str = r"
-  ⢠¬ ¬⡄
-   ⠑⣄⠔⠁
-";
-
-/// One-line mark for compact terminal panes. It keeps the product visibly
-/// branded when there is room for the title and hint but not the two-line art.
-pub const LOGO_MICRO: &str = "  ⟨⠳ ⠞⟩";
-
-const LOGO_MICRO_WORKING: &str = "  ⟨¬ ¬⟩";
+/// One-line fallback that remains legible without color.
+pub const LOGO_MICRO: &str = "  ·•●•·";
+const LOGO_MICRO_WORKING: &str = LOGO_MICRO;
 
 /// Minimum area height (rows) to show the one-line mark.
 pub const MICRO_MIN_HEIGHT: u16 = 4;
@@ -83,11 +63,10 @@ pub const COMPACT_MIN_HEIGHT: u16 = 10;
 /// Minimum area height for the full mark.
 pub const FULL_MIN_HEIGHT: u16 = 14;
 
-/// Startup reserves a row above the mark for the selected accessory and rows
-/// below it for the welcome prompt and tip. Short panes keep the compact sprite.
+/// Reserve enough rows for the orb and the prompt; short panes use four dots rows.
 #[must_use]
 pub const fn welcome_logo_height(area_height: u16) -> u16 {
-    if area_height >= 9 {
+    if area_height >= FULL_MIN_HEIGHT {
         FULL_MIN_HEIGHT
     } else {
         COMPACT_MIN_HEIGHT
@@ -100,16 +79,11 @@ pub fn welcome_prompt_row(area: Rect) -> u16 {
     area.y + logo_line_count(welcome_logo_height(area.height)) + 2
 }
 
-/// Substitute an expression without changing the full portrait's cell width.
+/// Preserve the stable orb silhouette across activity states.
 #[must_use]
 pub fn portrait_expression(line: &str, eyes: &str) -> String {
-    if eyes == "• •" {
-        return line.to_owned();
-    }
-    let wide_eyes = eyes.replace(' ', "   ");
-    line.replace("⠻⣄   ⣠⠟", &format!("{wide_eyes:^7}"))
-        .replace("⠳   ⠞", &format!("{wide_eyes:^5}"))
-        .replace("⠳ ⠞", eyes)
+    let _ = eyes;
+    line.to_owned()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,39 +143,95 @@ pub fn logo_visual_width(area_height: u16) -> u16 {
         .unwrap_or(12)
 }
 
-/// Build working-state logo lines with a diagonal sheen.
+/// Keep working-state art stable while status text reports activity.
 #[must_use]
 pub fn shimmered_logo_lines(area_height: u16) -> Vec<Line<'static>> {
-    let Some(logo) = pick_logo_for_state(area_height, LaunchState::Working) else {
-        return Vec::new();
-    };
-    let lines = logo_lines(logo);
-    diagonal_shimmer_lines(&lines, DEIXIC_LOGO_BASE, DEIXIC_LOGO_HILITE)
+    static_logo_lines_for_state(area_height, LaunchState::Working)
 }
 
-/// Static idle logo lines in solid Deixic violet.
+/// Static idle orb lines.
 #[must_use]
 pub fn static_logo_lines(area_height: u16) -> Vec<Line<'static>> {
     static_logo_lines_for_state(area_height, LaunchState::Idle)
 }
 
 fn static_logo_lines_for_state(area_height: u16, state: LaunchState) -> Vec<Line<'static>> {
-    let Some(logo) = pick_logo_for_state(area_height, state) else {
+    let _ = state;
+    orb_logo_lines(area_height, None)
+}
+
+/// Render the orb with warm dots on dark surfaces and deeper ochre on light ones.
+#[must_use]
+pub fn orb_logo_lines(area_height: u16, theme: Option<maestro_ui::UiTheme>) -> Vec<Line<'static>> {
+    let Some(logo) = pick_logo(area_height) else {
         return Vec::new();
     };
     logo_lines(logo)
         .into_iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::Rgb(
-                    DEIXIC_ACCENT.0,
-                    DEIXIC_ACCENT.1,
-                    DEIXIC_ACCENT.2,
-                )),
-            ))
+        .enumerate()
+        .map(|(row, line)| {
+            let spans = line
+                .chars()
+                .enumerate()
+                .map(|(col, glyph)| {
+                    if glyph == ' ' {
+                        Span::raw(" ")
+                    } else {
+                        Span::styled(
+                            glyph.to_string(),
+                            Style::default().fg(orb_color(row, col, theme)),
+                        )
+                    }
+                })
+                .collect::<Vec<_>>();
+            Line::from(spans)
         })
         .collect()
+}
+
+fn orb_color(row: usize, col: usize, theme: Option<maestro_ui::UiTheme>) -> Color {
+    let light_surface = matches!(theme.map(|t| t.surface), Some(Color::Rgb(r, g, b)) if u16::from(r) + u16::from(g) + u16::from(b) > 480);
+    let blue_arc = (row == 6 && (2..=6).contains(&col))
+        || (row == 7 && (4..=15).contains(&col))
+        || (row == 8 && (13..=18).contains(&col));
+    if blue_arc {
+        return if light_surface {
+            Color::Rgb(23, 112, 161)
+        } else {
+            Color::Rgb(97, 206, 255)
+        };
+    }
+    if light_surface {
+        const WARM: [(u8, u8, u8); 10] = [
+            (144, 86, 10),
+            (151, 91, 10),
+            (158, 95, 12),
+            (165, 99, 15),
+            (174, 101, 17),
+            (181, 103, 18),
+            (181, 97, 17),
+            (172, 85, 17),
+            (159, 74, 20),
+            (146, 66, 22),
+        ];
+        let (r, g, b) = WARM[row.min(9)];
+        Color::Rgb(r, g, b)
+    } else {
+        const WARM: [(u8, u8, u8); 10] = [
+            (255, 236, 155),
+            (255, 227, 132),
+            (255, 217, 103),
+            (255, 207, 79),
+            (255, 199, 70),
+            (255, 185, 62),
+            (252, 167, 54),
+            (246, 150, 49),
+            (238, 134, 44),
+            (224, 119, 41),
+        ];
+        let (r, g, b) = WARM[row.min(9)];
+        Color::Rgb(r, g, b)
+    }
 }
 
 /// Canonical product title line.
@@ -354,14 +384,7 @@ pub fn render_welcome_with_theme(
     }
     if area.width >= 44 && area.height >= 5 {
         let logo_height = welcome_logo_height(area.height);
-        let logo = static_logo_lines_for_state(
-            logo_height,
-            if ready {
-                LaunchState::Idle
-            } else {
-                LaunchState::Working
-            },
-        );
+        let logo = orb_logo_lines(logo_height, theme);
         let mut summary = [
             product_title_line(false).alignment(Alignment::Left),
             facts.map_or_else(
@@ -433,13 +456,7 @@ pub fn render_welcome_with_theme(
                 );
         }
         let logo_width = logo_visual_width(logo_height) + 3;
-        for (row, mut line) in logo.into_iter().enumerate() {
-            if let Some(theme) = theme {
-                line.style = line.style.fg(theme.focus);
-                for span in &mut line.spans {
-                    span.style = span.style.fg(theme.focus);
-                }
-            }
+        for (row, line) in logo.into_iter().enumerate() {
             Paragraph::new(line).render(
                 Rect::new(area.x + 1, area.y + 1 + row as u16, logo_width, 1),
                 buf,
@@ -539,7 +556,7 @@ mod tests {
                 let mark = crate::dex_delight::welcome_portrait_area(area).unwrap();
                 assert!(mark.right() < area.right());
                 assert!(mark.bottom() <= area.bottom());
-                assert_eq!(mark.height, if height >= 9 { 6 } else { 3 });
+                assert_eq!(mark.height, if height >= FULL_MIN_HEIGHT { 10 } else { 4 });
                 let summary_row: String = (mark.right()..area.right())
                     .map(|x| buf[(x, area.y + 1)].symbol())
                     .collect();
@@ -625,11 +642,11 @@ mod tests {
     }
 
     #[test]
-    fn full_mark_is_compact_and_keeps_dex_cues() {
-        assert_eq!(logo_lines(LOGO_FULL).len(), 6);
-        assert!(LOGO_FULL.contains("⠻⣄   ⣠⠟"));
-        assert!(LOGO_FULL.contains("⠈⠳⡴⠋"));
-        assert!(LOGO_COMPACT.contains("⠳   ⠞"));
+    fn full_mark_keeps_orb_eyes_and_nub() {
+        assert_eq!(logo_lines(LOGO_FULL).len(), 10);
+        assert!(LOGO_FULL.contains("  ●●  "));
+        assert!(LOGO_FULL.contains("•••"));
+        assert_eq!(logo_lines(LOGO_COMPACT).len(), 4);
     }
 
     #[test]
@@ -663,14 +680,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(!idle_text.contains("¬   ¬"));
-        assert!(working_text.contains("¬   ¬"));
+        assert_eq!(logo_lines(LOGO_FULL), logo_lines(LOGO_FULL_WORKING));
         assert!(idle_text.contains("• ready"));
         assert!(working_text.contains("• working"));
     }
 
     #[test]
-    fn convenience_welcome_animation_uses_working_art() {
+    fn convenience_welcome_keeps_orb_stable_during_work() {
         let idle = welcome_content_lines(FULL_MIN_HEIGHT, false)
             .iter()
             .map(Line::to_string)
@@ -682,8 +698,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(!idle.contains("¬   ¬"));
-        assert!(working.contains("¬   ¬"));
+        assert!(idle.contains("·••●••·"));
+        assert!(working.contains("·••●••·"));
     }
 
     #[test]
@@ -718,7 +734,7 @@ mod tests {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("⟨⠳ ⠞⟩"));
+        assert!(text.contains("·•●•·"));
         assert!(text.contains(PRODUCT_TITLE));
         assert!(text.contains(COMPOSER_HINT));
         assert_eq!(lines.len(), 3);
