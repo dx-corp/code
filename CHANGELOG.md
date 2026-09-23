@@ -51,6 +51,13 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.95] - 2026-09-23
+
+### Fixed
+
+- Localize browser sign-in status (#10271). <!-- maestro-release-note:2c71b00a9c4f -->
+- Repair combined release and CI gates (#10278). <!-- maestro-release-note:71dfca09dfa9 -->
+
 ## [0.10.94] - 2026-09-23
 
 ### Added

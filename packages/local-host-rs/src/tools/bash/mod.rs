@@ -3574,10 +3574,9 @@ mod tests {
             .and_then(serde_json::Value::as_u64)
             .and_then(|pid| u32::try_from(pid).ok())
             .expect("background receipt should include its supervisor PID");
-        assert!(
-            super::super::process_registry::tracked_pids().contains(&process_group_id),
-            "launch must register its background process before releasing the gate"
-        );
+        // Shutdown can acquire the registration gate and unregister this PID
+        // before the launch task wakes. The assertions after shutdown verify
+        // the observable contract without racing that valid cleanup.
         shutdown
             .await
             .expect("background shutdown task should not panic");
