@@ -51,6 +51,39 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.93] - 2026-09-23
+
+### Added
+
+- Use Dex orbit across terminal and desktop (#10250). <!-- maestro-release-note:e7c1ef11ba5f -->
+
+### Changed
+
+- Refresh bundled model catalog (#10254). <!-- maestro-release-note:70af0f581dfb -->
+- Bump lucide-react in /products/maestro/desktop (#10224). <!-- maestro-release-note:35ec0f7ee3f3 -->
+- Offload small verdict jobs to desktop (#10249). <!-- maestro-release-note:995d1685aa3a -->
+- Require accepted source ref for execution workspace creation (#10245). <!-- maestro-release-note:1d300d831297 -->
+- Borrow synthetic credential fixture for scan (#10238). <!-- maestro-release-note:4cd2a32d4187 -->
+- Reject overflowing canary timeout values (#10237). <!-- maestro-release-note:2089726d64a1 -->
+- Cover execution workspace admission fencing (#10232). <!-- maestro-release-note:89c215040d84 -->
+- Create execution workspace on project task admission (#10229). <!-- maestro-release-note:e28e0907930e -->
+- Enumerate bounded state-machine histories (#10228). <!-- maestro-release-note:017f1c873668 -->
+
+### Fixed
+
+- Cap hosted retry delay after jitter (#10247). <!-- maestro-release-note:d06d8e9ffc21 -->
+- End final controller turn without retry wake (#10253). <!-- maestro-release-note:aa49bdbc2ef2 -->
+- Attest credential references at provider boundary (#10252). <!-- maestro-release-note:96e7a202a697 -->
+- Scope Mission test constructors (#10251). <!-- maestro-release-note:099e8b8f4871 -->
+- Stop retries after turn step budget exhaustion (#10246). <!-- maestro-release-note:b6ed6505c94d -->
+- Scope exact-main-SHA recovery dispatch (#10240). <!-- maestro-release-note:92967b53edfa -->
+- Install pinned Node for contract checks (#10241). <!-- maestro-release-note:457a020dfd4b -->
+- Paginate subscription history before projection (#10244). <!-- maestro-release-note:f5e6b5388694 -->
+- Bound co-located upstream requests (#10242). <!-- maestro-release-note:7bdc1e1235cc -->
+- Cover release-set Cosign envsubst prerequisite (#10243). <!-- maestro-release-note:f374ec8518d9 -->
+- Pin release tag to version bump commit (#10239). <!-- maestro-release-note:e7c91bed2c0d -->
+- Keep vault references opaque at model egress (#10236). <!-- maestro-release-note:36d84c7ce339 -->
+
 ## [0.10.92] - 2026-09-23
 
 ### Added

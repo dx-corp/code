@@ -3257,6 +3257,57 @@ async fn failed_attempt_cannot_start_a_request_past_the_turn_step_budget() {
 }
 
 #[tokio::test]
+async fn exhausted_one_step_turn_does_not_switch_to_unreachable_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let workspace = tempfile::tempdir().unwrap();
+    let config = NativeAgentConfig {
+        model: "anthropic/claude-fable-5-1".into(),
+        cwd: workspace.path().display().to_string(),
+        max_turn_steps: 1,
+        retry_config: super::super::retry::RetryConfig::no_retry(),
+        model_dynamics: ModelDynamicsConfig {
+            fallbacks: vec![ModelChoice {
+                model: "anthropic/claude-fable-5-2".into(),
+                thinking: Default::default(),
+            }],
+            ..Default::default()
+        },
+        ..NativeAgentConfig::default()
+    };
+    let client = UnifiedClient::Anthropic(
+        crate::ai::AnthropicClient::with_base_url("test-key", format!("http://{address}")).unwrap(),
+    );
+    let (agent, mut events) = NativeAgent::new_with_test_client(config, client).unwrap();
+    agent
+        .prompt("One provider step only.".into(), vec![])
+        .await
+        .unwrap();
+    let terminal = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::ModelChanged { model, .. }) => {
+                    panic!("spent turn switched to unreachable fallback {model}")
+                }
+                Some(FromAgent::Error {
+                    message,
+                    terminal: true,
+                    ..
+                }) => break message,
+                Some(FromAgent::TurnCompleted { .. }) => panic!("failed provider turn completed"),
+                Some(_) => {}
+                None => panic!("agent event channel closed before terminal"),
+            }
+        }
+    })
+    .await
+    .expect("one-step turn must terminate promptly");
+    agent.shutdown().await;
+    assert!(terminal.contains("Agent error"), "{terminal}");
+}
+
+#[tokio::test]
 async fn exhausted_one_step_turn_does_not_schedule_unreachable_provider_retry() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

@@ -521,7 +521,9 @@ impl RetryPolicy {
             capped_delay
         };
 
-        Duration::from_secs_f64(jittered_delay)
+        // Positive jitter (and the 100ms floor) must not override the
+        // configured maximum for an individual retry.
+        Duration::from_secs_f64(jittered_delay.min(self.config.max_delay.as_secs_f64()))
     }
 
     /// Create a human-readable status message for the current retry state
@@ -1000,6 +1002,48 @@ mod tests {
             policy.should_retry(ErrorKind::Transient),
             RetryDecision::GiveUp { .. }
         ));
+    }
+
+    #[test]
+    fn hosted_retry_delay_never_exceeds_its_maximum() {
+        let max_delay = RetryConfig::hosted_outage().max_delay;
+        // Six failures reach the hosted delay cap. Alternate 429 with
+        // Retry-After and transport failures, then repeat the sequence to
+        // exercise both signs of jitter without depending on an RNG seed.
+        for sample in 0..128 {
+            let mut policy = RetryPolicy::new(RetryConfig::hosted_outage());
+            for attempt in 1..=6 {
+                let error = if attempt % 2 == 0 {
+                    ErrorKind::Transient
+                } else {
+                    ErrorKind::RateLimited {
+                        retry_after: Some(Duration::from_secs(45)),
+                    }
+                };
+                let RetryDecision::Retry { delay, .. } = policy.should_retry(error) else {
+                    panic!("hosted retry {attempt} was not admitted");
+                };
+                assert!(
+                    delay <= max_delay,
+                    "hosted retry {attempt} in sample {sample} waited {delay:?} past {max_delay:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn subsecond_retry_maximum_is_respected() {
+        let mut policy = RetryPolicy::new(RetryConfig {
+            max_retries: 1,
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            jitter_factor: 0.0,
+            ..RetryConfig::default()
+        });
+        let RetryDecision::Retry { delay, .. } = policy.should_retry(ErrorKind::Transient) else {
+            panic!("first transient failure must be retryable");
+        };
+        assert_eq!(delay, Duration::from_millis(1));
     }
 
     #[test]
