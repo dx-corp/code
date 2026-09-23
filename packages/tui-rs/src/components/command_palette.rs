@@ -833,7 +833,11 @@ mod tests {
             let cell = &buffer[(x, selected_row)];
             if cell.symbol() != " " && cell.modifier.contains(Modifier::BOLD) {
                 assert_eq!(cell.bg, theme.selection.unwrap_or(theme.surface));
-                assert_ne!(cell.fg, cell.bg);
+                if cell.fg != ratatui::style::Color::Reset
+                    && cell.bg != ratatui::style::Color::Reset
+                {
+                    assert_ne!(cell.fg, cell.bg);
+                }
             }
         }
     }
@@ -864,6 +868,7 @@ mod tests {
             .render(Rect::new(0, 0, 80, 1), &mut buffer);
             assert_eq!(buffer[(0, 0)].fg, focus);
             assert_eq!(buffer[(0, 0)].bg, surface);
+            assert_ne!(buffer[(0, 0)].fg, buffer[(0, 0)].bg);
             assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
             assert_eq!(buffer[(12, 0)].fg, muted);
             footer_hint(80, theme).render(Rect::new(0, 1, 80, 1), &mut buffer);

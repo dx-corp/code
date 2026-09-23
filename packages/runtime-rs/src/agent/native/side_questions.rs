@@ -36,7 +36,13 @@ impl NativeAgentRunner {
                 content: MessageContent::text(question.clone()),
             });
             let config = self.build_config(&messages, false).await?;
-            let messages = vault_provider_history(&messages, &credential_vault)?;
+            let prepared_request = ProviderSafeRequest::prepare(
+                &Arc::new(messages),
+                config,
+                &credential_vault,
+            )?;
+            let messages = prepared_request.messages.as_ref();
+            let config = &prepared_request.config;
             let _ = self.event_tx.send(FromAgent::RequestContextPrepared { response_id: side_id.clone() });
             let _ = self.event_tx.send(FromAgent::OperationObservation {
                 observation: maestro_runtime_contracts::operation_observation::OperationObservation::Prepared {
@@ -52,7 +58,10 @@ impl NativeAgentRunner {
             let request_id = provider_request_id("side_question", &config.model, &messages)?;
             self.admit_provider_request("side_question", &request_id, Some(&config.model))
                 .await?;
-            let mut rx = client.stream_owned_config(&messages, config).await?;
+            prepared_request.ensure_current(&credential_vault)?;
+            let mut rx = client
+                .stream_owned_config(messages, config.clone())
+                .await?;
 
             while let Some(event) = rx.recv().await {
                 match event {
@@ -204,10 +213,26 @@ impl NativeAgentRunner {
             self.tool_executor.model_capabilities(&self.config.model),
         )
         .map(|text| self.credential_vault.vault_in_text(&text));
+        let prepared_request = ProviderSafeRequest::prepare(
+            &Arc::new(restored_messages),
+            RequestConfig {
+                system: instructions,
+                ..RequestConfig::default()
+            },
+            &self.credential_vault,
+        )?;
+        let instructions = prepared_request.config.system.clone();
+        let restored_messages = prepared_request.messages.as_ref();
+        let question = self.credential_vault.vault_in_text(question);
+        let vault_generation = self
+            .credential_vault
+            .attest_provider_text(&question)
+            .map_err(anyhow::Error::msg)?;
         let auth = self
             .tool_executor
             .codex_auth_context()
             .map_err(anyhow::Error::msg)?;
+        prepared_request.ensure_current(&self.credential_vault)?;
         let session =
             crate::agent::codex_app_server_turns::CodexAppServerTurnSession::connect_with_auth(
                 crate::agent::codex_app_server_turns::codex_thread_model_id(&self.config.model),
@@ -217,15 +242,19 @@ impl NativeAgentRunner {
                 crate::agent::codex_app_server_turns::CodexThreadPayload {
                     dynamic_tools: &[],
                     instructions,
-                    restored_messages: &restored_messages,
+                    restored_messages,
                 },
                 &auth,
             )
             .await
             .context("start Codex app-server side-question session")?;
+        anyhow::ensure!(
+            self.credential_vault.has_generation(vault_generation),
+            "credential vault changed before Codex side-question dispatch"
+        );
         let turn_id = session
             .start_text_turn_with_thinking(
-                question.to_owned(),
+                question,
                 self.config.thinking_enabled,
                 self.config.thinking_budget,
                 None,

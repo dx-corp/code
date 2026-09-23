@@ -812,18 +812,29 @@ impl NativeAgentRunner {
                 content: MessageContent::text(prompt),
             });
             let config = self.build_summary_config(&messages).await?;
+            let request =
+                ProviderSafeRequest::prepare(&Arc::new(messages), config, &self.credential_vault)?;
             let client = self
                 .client
                 .as_ref()
                 .context("Summary provider unavailable")?;
-            let request_id = provider_request_id("selective_summary", &config.model, &messages)?;
-            self.admit_provider_request("selective_summary", &request_id, Some(&config.model))
-                .await?;
+            let request_id = provider_request_id(
+                "selective_summary",
+                &request.config.model,
+                &request.messages,
+            )?;
+            self.admit_provider_request(
+                "selective_summary",
+                &request_id,
+                Some(&request.config.model),
+            )
+            .await?;
+            request.ensure_current(&self.credential_vault)?;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
             let mut stream = tokio::select! {
                 () = cancellation.cancelled() => anyhow::bail!("Summary cancelled"),
                 () = self.shutdown_token.cancelled() => anyhow::bail!("Summary cancelled"),
-                result = tokio::time::timeout_at(deadline, client.stream_owned_config(&messages, config)) => result.context("Summary timed out")?.map_err(|_| anyhow::anyhow!("Summary provider request failed"))?,
+                result = tokio::time::timeout_at(deadline, client.stream_owned_config(&request.messages, request.config)) => result.context("Summary timed out")?.map_err(|_| anyhow::anyhow!("Summary provider request failed"))?,
             };
             loop {
                 let event = tokio::select! {
@@ -906,15 +917,24 @@ impl NativeAgentRunner {
         saw_usage: &mut bool,
     ) -> Result<()> {
         let model = self.selected_summary_model()?;
+        let request = ProviderSafeRequest::prepare(
+            &Arc::new(messages.to_vec()),
+            RequestConfig {
+                system: Some(prompt.to_owned()),
+                ..RequestConfig::default()
+            },
+            &self.credential_vault,
+        )?;
         let auth = self
             .tool_executor
             .codex_auth_context()
             .map_err(anyhow::Error::msg)?;
+        request.ensure_current(&self.credential_vault)?;
         let (result, reported_usage) = crate::agent::codex_selective_summary::run(
             &model,
             std::path::Path::new(&self.config.cwd),
-            messages,
-            prompt,
+            request.messages.as_ref(),
+            request.config.system.as_deref().expect("summary prompt"),
             cancellation,
             &self.shutdown_token,
             &auth,
@@ -961,8 +981,22 @@ impl NativeAgentRunner {
         let Ok(config) = self.build_summary_config(&messages).await else {
             return result;
         };
-        let request_id = match provider_request_id("semantic_compaction", &config.model, &messages)
-        {
+        let request =
+            match ProviderSafeRequest::prepare(&Arc::new(messages), config, &self.credential_vault)
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = self.event_tx.send(FromAgent::Status {
+                        message: format!("Semantic summary credential preparation failed: {error}"),
+                    });
+                    return result;
+                }
+            };
+        let request_id = match provider_request_id(
+            "semantic_compaction",
+            &request.config.model,
+            &request.messages,
+        ) {
             Ok(request_id) => request_id,
             Err(error) => {
                 let _ = self.event_tx.send(FromAgent::Status {
@@ -972,7 +1006,11 @@ impl NativeAgentRunner {
             }
         };
         if let Err(error) = self
-            .admit_provider_request("semantic_compaction", &request_id, Some(&config.model))
+            .admit_provider_request(
+                "semantic_compaction",
+                &request_id,
+                Some(&request.config.model),
+            )
             .await
         {
             let _ = self.event_tx.send(FromAgent::Status {
@@ -991,9 +1029,12 @@ impl NativeAgentRunner {
         let shutdown = self.shutdown_token.clone();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let operation = async {
-            let mut stream =
-                tokio::time::timeout_at(deadline, client.stream_owned_config(&messages, config))
-                    .await??;
+            request.ensure_current(&self.credential_vault)?;
+            let mut stream = tokio::time::timeout_at(
+                deadline,
+                client.stream_owned_config(&request.messages, request.config),
+            )
+            .await??;
             loop {
                 let event = tokio::select! {
                     () = tokio::time::sleep_until(deadline) => {

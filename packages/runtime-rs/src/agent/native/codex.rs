@@ -104,16 +104,6 @@ impl NativeAgentRunner {
             })
             .collect();
         let safe_tools = vault_provider_tools(&provider_tools, &self.credential_vault)?;
-        let dynamic_tools: Vec<_> = safe_tools
-            .iter()
-            .map(
-                |tool| crate::agent::codex_app_server_turns::DynamicToolSpec {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    input_schema: tool.input_schema.clone(),
-                },
-            )
-            .collect();
         // Same standing instructions the HTTP path puts in RequestConfig.system.
         let instructions = runtime_system_prompt(
             self.config.system_prompt.as_deref(),
@@ -127,11 +117,35 @@ impl NativeAgentRunner {
             &self.messages[..restored_prefix_len.min(self.messages.len())],
             &self.credential_vault,
         )?;
+        let prepared_request = ProviderSafeRequest::prepare(
+            &Arc::new(restored_messages),
+            RequestConfig {
+                system: instructions,
+                tools: safe_tools,
+                ..RequestConfig::default()
+            },
+            &self.credential_vault,
+        )?;
+        let dynamic_tools: Vec<_> = prepared_request
+            .config
+            .tools
+            .iter()
+            .map(
+                |tool| crate::agent::codex_app_server_turns::DynamicToolSpec {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    input_schema: tool.input_schema.clone(),
+                },
+            )
+            .collect();
+        let instructions = prepared_request.config.system.clone();
+        let restored_messages = prepared_request.messages.as_ref();
         let auth = self
             .tool_executor
             .codex_auth_context()
             .map_err(anyhow::Error::msg)?;
         let session_id = self.hooks.hook_session_id().await;
+        prepared_request.ensure_current(&self.credential_vault)?;
         let session =
             crate::agent::codex_app_server_turns::CodexAppServerTurnSession::connect_persistent_with_auth(
                 model,
@@ -142,7 +156,7 @@ impl NativeAgentRunner {
                 crate::agent::codex_app_server_turns::CodexThreadPayload {
                     dynamic_tools: &dynamic_tools,
                     instructions,
-                    restored_messages: &restored_messages,
+                    restored_messages,
                 },
                 &auth,
             )
@@ -220,6 +234,11 @@ impl NativeAgentRunner {
         if user_text.is_empty() {
             bail!("No user message available for Codex app-server turn");
         }
+        let user_text = self.credential_vault.vault_in_text(&user_text);
+        let vault_generation = self
+            .credential_vault
+            .attest_provider_text(&user_text)
+            .map_err(anyhow::Error::msg)?;
 
         // `tool_search` may activate schemas while this turn is in flight,
         // but those tools are not part of the model's turn-start contract.
@@ -234,6 +253,10 @@ impl NativeAgentRunner {
 
         self.validate_codex_boost().await;
         step_budget.record_step();
+        anyhow::ensure!(
+            self.credential_vault.has_generation(vault_generation),
+            "credential vault changed before Codex turn dispatch"
+        );
         let turn_id = {
             let session = self
                 .codex_session

@@ -1703,11 +1703,15 @@ impl SubagentManager {
                 );
             }
         } else {
-            // Resolve through the current parent scope first, then re-vault into
-            // the child scope so the durable prompt never contains plaintext or
-            // an unresolvable parent-only reference.
-            let parent_resolved_task = credential_vault.resolve_all(&request.task);
-            request.task = child_credential_vault.vault_in_text(&parent_resolved_task);
+            // Transfer references between vault scopes without materializing
+            // their values in a child prompt.
+            let rekeyed = match credential_vault
+                .rekey_references_to(&child_credential_vault, &request.task)
+            {
+                Ok(task) => task,
+                Err(error) => return ToolResult::failure(error),
+            };
+            request.task = child_credential_vault.vault_in_text(&rekeyed);
         }
 
         if cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -3182,11 +3186,13 @@ impl SubagentManager {
             return ToolResult::failure(error);
         }
         // The retained child scope may predate credentials imported into the
-        // parent after the previous attempt. Resolve through the current
-        // parent scope, then re-vault into the child scope before persisting
-        // or launching the follow-up.
-        let parent_resolved_task = credential_vault.resolve_all(&request.task);
-        request.task = child_credential_vault.vault_in_text(&parent_resolved_task);
+        // parent. Rekey those references without exposing their values.
+        let rekeyed =
+            match credential_vault.rekey_references_to(&child_credential_vault, &request.task) {
+                Ok(task) => task,
+                Err(error) => return ToolResult::failure(error),
+            };
+        request.task = child_credential_vault.vault_in_text(&rekeyed);
         let prompt = request.task;
         let run_in_background = request.run_in_background;
         let session_dir = Self::session_dir(&initial);
@@ -4018,7 +4024,7 @@ impl SubagentManager {
         agent: &NativeAgent,
         recorder: &mut SessionRecorder,
         record: &SubagentRecord,
-        credential_vault: &CredentialVault,
+        _credential_vault: &CredentialVault,
         request: RuntimeControlRequest,
         already_delivered: bool,
     ) -> ChildControlOutcome {
@@ -4116,7 +4122,7 @@ impl SubagentManager {
             return ChildControlOutcome::Continue;
         }
 
-        let body = credential_vault.resolve_all(&request.body);
+        let body = request.body.clone();
         let outcome = match request.mode {
             ControlMode::Steer => agent
                 .prompt_with_kind(body, Vec::new(), PromptKind::Steer, Some(receipt.queue_id))

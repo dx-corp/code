@@ -233,8 +233,7 @@ impl SubagentManager {
                 &parent_credential_scope,
             );
         }
-        let execution_prompt = credential_vault.resolve_all(&prompt);
-        if let Err(error) = agent.prompt(execution_prompt, Vec::new()).await {
+        if let Err(error) = agent.prompt(prompt, Vec::new()).await {
             agent.shutdown().await;
             return self.finish_record(
                 record,

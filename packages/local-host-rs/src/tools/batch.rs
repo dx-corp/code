@@ -1091,7 +1091,7 @@ mod tests {
         let results = batch.execute(calls, None).await;
 
         assert_eq!(results.len(), 1);
-        assert!(results[0].result.output.contains("{{CRED:"));
+        assert!(results[0].result.output.contains("{{CRED|"));
         assert!(
             vault
                 .resolve_all(&results[0].result.output)

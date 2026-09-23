@@ -286,10 +286,10 @@ impl NativeAgentRunner {
             let (config, request_usage) = self
                 .build_config_with_usage(&provider_messages, true)
                 .await?;
-            // System prompt assembly can discover another known value after
-            // the first history scan. Reapply the vault before provider egress.
-            let provider_messages =
-                vault_provider_history_shared(&provider_messages, &self.credential_vault)?;
+            let prepared_request =
+                ProviderSafeRequest::prepare(&provider_messages, config, &self.credential_vault)?;
+            let provider_messages = &prepared_request.messages;
+            let config = &prepared_request.config;
             let estimated_input_tokens = request_usage.total();
             let should_calibrate = estimated_input_tokens.is_some_and(|estimated| {
                 !self.token_calibrated_models.contains(&config.model)
@@ -343,9 +343,10 @@ impl NativeAgentRunner {
                 .client
                 .as_ref()
                 .context("direct provider client missing for native turn")?;
+            prepared_request.ensure_current(&self.credential_vault)?;
             let mut rx = client
                 .stream_owned_config_shared_messages_observed(
-                    provider_messages,
+                    Arc::clone(provider_messages),
                     config.clone(),
                     Some(Arc::new({
                         let event_tx = self.event_tx.clone();

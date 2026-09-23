@@ -2415,7 +2415,7 @@ async fn reading_source_literals_does_not_poison_later_tool_results() {
         let args = serde_json::json!({"file_path": path.to_str().unwrap(), "lineNumbers": false, "wrapInCodeFence": false, "withDiagnostics": false});
         let result = executor.execute("read", &args, None, "source-read").await;
         assert!(result.output.contains(expected), "{}", result.output);
-        assert!(!result.output.contains("{{CRED:"), "{}", result.output);
+        assert!(!result.output.contains("{{CRED"), "{}", result.output);
     }
     assert_eq!(vault.stats().count, 0);
 }
@@ -2434,7 +2434,7 @@ async fn credential_read_events_and_result_carry_only_opaque_reference() {
         .execute_with_receipt("read", &args, Some(&tx), "credential-read")
         .await
         .to_legacy();
-    assert!(result.output.contains("{{CRED:"));
+    assert!(result.output.contains("{{CRED|"));
     assert!(!result.output.contains(raw));
     let mut saw_output = false;
     for event in std::iter::from_fn(|| rx.try_recv().ok()) {
@@ -2442,7 +2442,7 @@ async fn credential_read_events_and_result_carry_only_opaque_reference() {
             FromAgent::ToolOutput { content, .. } => {
                 saw_output = true;
                 assert!(!content.contains(raw));
-                assert!(content.contains("{{CRED:"));
+                assert!(content.contains("{{CRED|"));
             }
             FromAgent::ToolEnd {
                 result: Some(result),
@@ -2635,7 +2635,7 @@ async fn typed_bash_streaming_redacts_credentials_split_across_chunks() {
         "secret leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:password:"),
+        chunks.contains("{{CRED|password|"),
         "redacted credential marker missing: {chunks:?}"
     );
 }
@@ -2668,7 +2668,7 @@ async fn typed_bash_streaming_redacts_underscore_api_keys_split_across_chunks() 
         "API key leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:api_key:"),
+        chunks.contains("{{CRED|api_key|"),
         "redacted API key marker missing: {chunks:?}"
     );
 }
@@ -2701,7 +2701,7 @@ async fn typed_bash_streaming_redacts_split_aws_secret_access_keys() {
         "AWS secret leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:secret:"),
+        chunks.contains("{{CRED|secret|"),
         "redacted AWS secret marker missing: {chunks:?}"
     );
 }
@@ -2734,7 +2734,7 @@ async fn typed_bash_streaming_redacts_split_hyphenated_aws_secret_access_keys() 
         "AWS secret leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:secret:"),
+        chunks.contains("{{CRED|secret|"),
         "redacted AWS secret marker missing: {chunks:?}"
     );
 }
@@ -2767,7 +2767,7 @@ async fn typed_bash_streaming_redacts_split_hyphenated_api_keys() {
         "hyphenated API key leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:api_key:"),
+        chunks.contains("{{CRED|api_key|"),
         "redacted hyphenated API key marker missing: {chunks:?}"
     );
 }
@@ -2800,7 +2800,7 @@ async fn typed_bash_streaming_redacts_uri_credentials_split_across_chunks() {
         "URI credential leaked in live output: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:password:"),
+        chunks.contains("{{CRED|password|"),
         "redacted URI credential marker missing: {chunks:?}"
     );
 }
@@ -2930,7 +2930,7 @@ async fn typed_bash_streaming_keeps_stdout_and_stderr_redaction_state_separate()
         "stderr output missing: {chunks:?}"
     );
     assert!(
-        chunks.contains("{{CRED:password:"),
+        chunks.contains("{{CRED|password|"),
         "redacted credential marker missing: {chunks:?}"
     );
 }
@@ -3567,7 +3567,7 @@ async fn test_executor_vaults_credentials_from_bash_result() {
 
     assert!(result.success);
     assert!(!result.output.contains(&token));
-    assert!(result.output.contains("{{CRED:"));
+    assert!(result.output.contains("{{CRED|"));
     assert!(!result.details.unwrap().to_string().contains(&token));
 }
 
@@ -3581,7 +3581,7 @@ async fn new_executors_use_isolated_credential_vaults() {
 
     let result = first.execute("bash", &args, None, "call-1").await;
 
-    assert!(result.output.contains("{{CRED:"));
+    assert!(result.output.contains("{{CRED|"));
     assert!(
         first
             .credential_vault()

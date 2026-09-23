@@ -130,16 +130,18 @@ impl fmt::Debug for StoredCredential {
     }
 }
 
-/// Reference pattern for matching credential references in strings
-/// Matches: {{CRED:type:id}}
+/// Accept current pipe-delimited and persisted legacy colon-delimited refs.
+/// The current form cannot be mistaken for a `token: value` pair by Governance.
 static REFERENCE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\{\{CRED:(api_key|token|password|secret|private_key|connection_string|unknown):([a-f0-9]{12})\}\}",
+        r"\{\{CRED[:|](api_key|token|password|secret|private_key|connection_string|unknown)[:|]([a-f0-9]{12})\}\}",
     )
     .expect("Invalid regex pattern")
 });
 
-const REFERENCE_PREFIX: &str = "{{CRED:";
+const REFERENCE_PREFIX: &str = "{{CRED|";
+const LEGACY_REFERENCE_PREFIX: &str = "{{CRED:";
+const REFERENCE_STEM: &str = "{{CRED";
 const REFERENCE_SUFFIX: &str = "}}";
 
 fn credential_reference_like_ranges(input: &str) -> Vec<(usize, usize)> {
@@ -151,9 +153,16 @@ fn credential_reference_like_ranges_with_scan_count(input: &str) -> (Vec<(usize,
     let mut search_from = 0;
     let mut scanned_bytes = 0;
 
-    while let Some(relative_start) = input[search_from..].find(REFERENCE_PREFIX) {
-        scanned_bytes += relative_start + REFERENCE_PREFIX.len();
+    while let Some(relative_start) = input[search_from..].find(REFERENCE_STEM) {
+        scanned_bytes += relative_start + REFERENCE_STEM.len();
         let start = search_from + relative_start;
+        if !input[start..].starts_with(REFERENCE_PREFIX)
+            && !input[start..].starts_with(LEGACY_REFERENCE_PREFIX)
+        {
+            search_from = start + REFERENCE_STEM.len();
+            continue;
+        }
+        scanned_bytes += 1;
         let payload_start = start + REFERENCE_PREFIX.len();
         let remainder = &input[payload_start..];
         let (boundary, boundary_scan_bytes) = next_reference_boundary(remainder);
@@ -222,7 +231,9 @@ fn next_reference_boundary(input: &str) -> (Option<ReferenceBoundary>, usize) {
             crossed_line_boundary = true;
         }
         if character == '{' && remainder.starts_with("{{") {
-            if remainder.starts_with(REFERENCE_PREFIX) {
+            if remainder.starts_with(REFERENCE_PREFIX)
+                || remainder.starts_with(LEGACY_REFERENCE_PREFIX)
+            {
                 return (
                     Some(ReferenceBoundary::NestedTemplate(offset)),
                     scanned_bytes,
@@ -657,7 +668,7 @@ impl CredentialVault {
                 .iter()
                 .filter_map(|(id, credential)| {
                     let child_reference =
-                        format!("{{{{CRED:{}:{id}}}}}", credential.cred_type.as_str());
+                        format!("{{{{CRED|{}|{id}}}}}", credential.cred_type.as_str());
                     (!child_state.initial_references.contains(&child_reference)).then(|| {
                         (
                             child_reference,
@@ -712,6 +723,7 @@ impl CredentialVault {
     /// control message to a child whose vault was forked before the referenced
     /// credential existed.
     pub fn rekey_references_to(&self, target: &Self, input: &str) -> Result<String, String> {
+        self.attest_provider_text(input).map_err(str::to_owned)?;
         if Arc::ptr_eq(&self.0, &target.0) {
             return Ok(input.to_string());
         }
@@ -793,6 +805,31 @@ impl CredentialVault {
     #[must_use]
     pub fn has_references(input: &str) -> bool {
         CredentialStore::has_references(input)
+    }
+
+    /// Confirm that every reference-like span in provider-bound text belongs
+    /// to this live vault. A string with the right spelling is not authority.
+    pub fn attest_provider_text(&self, text: &str) -> Result<u64, &'static str> {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let references = state.store.references();
+        for (start, end) in credential_reference_like_ranges(text) {
+            if !references.contains(&text[start..end]) {
+                return Err("provider content contains an unowned credential reference");
+            }
+        }
+        Ok(state.generation)
+    }
+
+    /// A prepared provider payload is invalid after its vault is cleared.
+    pub fn has_generation(&self, generation: u64) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation
+            == generation
     }
 
     /// Vault credentials in a plain text value.
@@ -905,8 +942,33 @@ impl CredentialStore {
     fn references(&self) -> HashSet<String> {
         self.credentials
             .iter()
-            .map(|(id, credential)| format!("{{{{CRED:{}:{id}}}}}", credential.cred_type.as_str()))
+            .flat_map(|(id, credential)| {
+                let kind = credential.cred_type.as_str();
+                [
+                    format!("{{{{CRED|{kind}|{id}}}}}"),
+                    format!("{{{{CRED:{kind}:{id}}}}}"),
+                ]
+            })
             .collect()
+    }
+
+    fn canonicalize_references(&self, text: &str) -> String {
+        REFERENCE_PATTERN
+            .replace_all(text, |captures: &Captures<'_>| {
+                let matched = captures.get(0).expect("reference has full match").as_str();
+                let kind = captures.get(1).expect("reference has kind").as_str();
+                let id = captures.get(2).expect("reference has id").as_str();
+                if self
+                    .credentials
+                    .get(id)
+                    .is_some_and(|stored| stored.cred_type.as_str() == kind)
+                {
+                    format!("{{{{CRED|{kind}|{id}}}}}")
+                } else {
+                    matched.to_owned()
+                }
+            })
+            .into_owned()
     }
 
     fn fingerprint(&self, value: &str) -> [u8; 32] {
@@ -928,7 +990,7 @@ impl CredentialStore {
     ///
     /// # Returns
     ///
-    /// A reference token like `{{CRED:api_key:a1b2c3d4e5f6}}`
+    /// A reference token like `{{CRED|api_key|a1b2c3d4e5f6}}`
     pub fn store(&mut self, value: &str, cred_type: CredentialType) -> String {
         // Check if we already have this value stored
         let fingerprint = self.fingerprint(value);
@@ -938,7 +1000,7 @@ impl CredentialStore {
 
         // Generate a new reference
         let id = generate_id();
-        let reference = format!("{{{{CRED:{}:{}}}}}", cred_type.as_str(), id);
+        let reference = format!("{{{{CRED|{}|{}}}}}", cred_type.as_str(), id);
 
         // Store the credential
         self.credentials.insert(
@@ -1057,7 +1119,7 @@ impl CredentialStore {
             .filter_map(|(id, credential)| {
                 let value = credential.value.to_string();
                 (!value.is_empty()).then(|| {
-                    let reference = format!("{{{{CRED:{}:{id}}}}}", credential.cred_type.as_str());
+                    let reference = format!("{{{{CRED|{}|{id}}}}}", credential.cred_type.as_str());
                     (value, reference)
                 })
             })
@@ -1191,7 +1253,7 @@ fn vault_credentials_in_string(store: &mut CredentialStore, input: &str) -> Stri
         output = vault_pattern_preserving_references(store, &output, pattern);
     }
 
-    output
+    store.canonicalize_references(&output)
 }
 
 /// Reject source-language placeholders and type expressions before they can
@@ -1224,7 +1286,7 @@ fn is_credential_candidate(value: &str, replace: ReplaceKind) -> bool {
     {
         return false;
     }
-    if value.contains("::") || value.contains('<') || value.contains('>') || value.ends_with('(') {
+    if value == "std::string::String" || value == "Some(" {
         return false;
     }
     !["Option<", "Result<", "Vec<", "List<", "Optional<"]
@@ -1233,6 +1295,10 @@ fn is_credential_candidate(value: &str, replace: ReplaceKind) -> bool {
             value
                 .get(..prefix.len())
                 .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+                && value.trim_end_matches(',').ends_with('>')
+                && value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || "_<>,: ".contains(ch))
         })
 }
 
@@ -1903,13 +1969,39 @@ mod tests {
             github_token,
             "api_key = example-real-key-1234567890".to_owned(),
             "token: plausible-token-1234567890".to_owned(),
+            "token: abc::def-secret-1234567890".to_owned(),
+            "token: abc<def>-secret-1234567890".to_owned(),
         ] {
             let vault = CredentialVault::new();
             let vaulted = vault.vault_in_text(&case);
-            assert!(vaulted.contains("{{CRED:"), "missed {case}");
+            assert!(vaulted.contains("{{CRED|"), "missed {case}");
             assert!(!vaulted.contains(&case), "retained {case}");
             assert_eq!(vault.resolve_all(&vaulted), case);
         }
+    }
+
+    #[test]
+    fn provider_reference_attestation_requires_live_vault_ownership() {
+        let vault = CredentialVault::new();
+        let reference = vault.store("owned-value-1234567890", CredentialType::Token);
+        let generation = vault
+            .attest_provider_text(&reference)
+            .expect("owned reference");
+        assert!(vault.has_generation(generation));
+        assert!(
+            CredentialVault::new()
+                .attest_provider_text(&reference)
+                .is_err()
+        );
+        assert!(
+            vault
+                .attest_provider_text("{{CRED:token:abcdef012345}}")
+                .is_err()
+        );
+        assert!(vault.attest_provider_text("{{CRED:token:broken}}").is_err());
+        vault.clear();
+        assert!(!vault.has_generation(generation));
+        assert!(vault.attest_provider_text(&reference).is_err());
     }
 
     #[test]
@@ -1939,7 +2031,7 @@ mod tests {
         let mut store = CredentialStore::new();
         let reference = store.store("sk-ant-test123", CredentialType::ApiKey);
 
-        assert!(reference.starts_with("{{CRED:api_key:"));
+        assert!(reference.starts_with("{{CRED|api_key|"));
         assert!(reference.ends_with("}}"));
 
         let resolved = store.resolve(&reference);
@@ -2020,6 +2112,15 @@ mod tests {
     }
 
     #[test]
+    fn child_rekey_rejects_unowned_references() {
+        let parent = CredentialVault::new();
+        let child = parent.fork();
+        let foreign = CredentialVault::new().store("foreign-secret", CredentialType::Token);
+        assert!(parent.rekey_references_to(&child, &foreign).is_err());
+        assert!(parent.rekey_references_to(&parent, &foreign).is_err());
+    }
+
+    #[test]
     fn vault_replaces_arbitrary_values_already_registered_in_the_store() {
         let vault = CredentialVault::new();
         let reference = vault.store("arbitrary-password", CredentialType::Password);
@@ -2068,7 +2169,7 @@ mod tests {
         let vaulted = vault.vault_in_text(input);
 
         assert!(!vaulted.contains("new-secret"));
-        assert!(vaulted.contains("{{CRED:password:"));
+        assert!(vaulted.contains("{{CRED|password|"));
         assert_eq!(vault.resolve_all(&vaulted), input);
     }
 
@@ -2131,7 +2232,7 @@ mod tests {
         let vaulted = vault.vault_in_json(&payload);
         let header = vaulted.get("header").and_then(|v| v.as_str()).unwrap_or("");
 
-        assert!(header.contains("{{CRED:"));
+        assert!(header.contains("{{CRED|"));
         assert!(!header.contains("abc123def456"));
 
         let resolved = vault.resolve_in_json(&vaulted);
@@ -2152,7 +2253,7 @@ mod tests {
         let vaulted = vault.vault_in_json(&payload);
         let vaulted_header = vaulted["header"].as_str().unwrap_or("");
         assert!(
-            vaulted_header.contains("{{CRED:"),
+            vaulted_header.contains("{{CRED|"),
             "authorization should be vaulted"
         );
 
@@ -2160,7 +2261,7 @@ mod tests {
         let resolved_header = resolved["header"].as_str().unwrap_or("");
         assert_eq!(resolved, payload);
         assert!(
-            !resolved_header.contains("{{CRED:"),
+            !resolved_header.contains("{{CRED|"),
             "roundtrip left a nested credential reference: {resolved_header}"
         );
     }
@@ -2966,7 +3067,7 @@ mod tests {
         let vaulted = vault.vault_in_json(&payload);
         let value = vaulted.get("key").and_then(|v| v.as_str()).unwrap_or("");
 
-        assert!(value.contains("{{CRED:"));
+        assert!(value.contains("{{CRED|"));
         assert!(!value.contains("MIIEpAIB"));
         assert!(!value.contains("END RSA PRIVATE KEY"));
     }
@@ -2990,9 +3091,9 @@ mod tests {
         let header = vaulted.get("header").and_then(|v| v.as_str()).unwrap_or("");
         let token = vaulted.get("token").and_then(|v| v.as_str()).unwrap_or("");
 
-        assert!(header.contains("{{CRED:"));
+        assert!(header.contains("{{CRED|"));
         assert!(!header.contains("EXAMPLEKEY"));
-        assert!(token.contains("{{CRED:"));
+        assert!(token.contains("{{CRED|"));
         assert!(!token.contains("SflKxwRJSMeKKF2Q"));
     }
 

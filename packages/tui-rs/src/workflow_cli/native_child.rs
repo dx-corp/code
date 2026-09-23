@@ -168,7 +168,7 @@ pub(super) async fn run_native_workflow_child(
         return Err(error).context("set native workflow child output budget");
     }
 
-    let execution_prompt = credential_vault.resolve_all(&prompt);
+    let execution_prompt = prompt;
     let mut prompt_cancelled = false;
     let mut prompt_timed_out = false;
     let mut prompt_error = None;
