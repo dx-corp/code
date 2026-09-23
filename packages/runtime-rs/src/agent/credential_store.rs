@@ -1907,7 +1907,7 @@ mod tests {
             let vault = CredentialVault::new();
             let vaulted = vault.vault_in_text(&case);
             assert!(vaulted.contains("{{CRED:"), "missed {case}");
-            assert!(!vaulted.contains(case), "retained {case}");
+            assert!(!vaulted.contains(&case), "retained {case}");
             assert_eq!(vault.resolve_all(&vaulted), case);
         }
     }

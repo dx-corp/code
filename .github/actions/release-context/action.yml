@@ -14,6 +14,10 @@ inputs:
     description: Create and push the resolved tag when it does not already exist.
     required: false
     default: "false"
+  tag-target-sha:
+    description: Commit to tag when creating a missing tag; defaults to checked-out HEAD.
+    required: false
+    default: ""
   workspace:
     description: Directory containing package.json.
     required: false
@@ -68,6 +72,7 @@ runs:
       env:
         MAESTRO_RELEASE_REQUESTED_VERSION: ${{ inputs.requested-version }}
         MAESTRO_RELEASE_FALLBACK_TO_PACKAGE_VERSION: ${{ inputs.fallback-to-package-version }}
+        MAESTRO_RELEASE_TAG_TARGET_SHA: ${{ inputs.tag-target-sha }}
       run: |
         node --input-type=module <<'EOF' >> "$GITHUB_OUTPUT"
         import { execFileSync } from "node:child_process";
@@ -115,6 +120,8 @@ runs:
         const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
           encoding: "utf8",
         }).trim();
+        const requestedTagTarget =
+          (process.env.MAESTRO_RELEASE_TAG_TARGET_SHA ?? "").trim();
         let tagExists = false;
         let tagTarget = "";
         let tagMatchesHead = false;
@@ -138,6 +145,30 @@ runs:
         if (tagExists && !tagMatchesHead) {
           packageChangedSinceTag = packageChangedSinceReleaseTag({ tagTarget });
         }
+        if (!tagExists && requestedTagTarget) {
+          if (!/^[0-9a-f]{40}$/.test(requestedTagTarget)) {
+            throw new Error("tag-target-sha must be a full commit SHA");
+          }
+          const firstParent = execFileSync(
+            "git", ["rev-list", "--first-parent", "HEAD"],
+            { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          ).trim().split("\n");
+          if (!firstParent.includes(requestedTagTarget)) {
+            throw new Error("tag-target-sha is not on HEAD's first-parent history");
+          }
+          const prefix = execFileSync("git", ["rev-parse", "--show-prefix"], {
+            encoding: "utf8",
+          }).trim();
+          const targetPackage = JSON.parse(execFileSync(
+            "git", ["show", `${requestedTagTarget}:${prefix}package.json`],
+            { encoding: "utf8" },
+          ));
+          if (targetPackage.version !== releaseVersion) {
+            throw new Error(
+              `tag-target-sha package version ${targetPackage.version} does not match ${releaseVersion}`,
+            );
+          }
+        }
 
         const outputs = {
           release_tag: releaseTag,
@@ -149,6 +180,7 @@ runs:
           package_aliases_json: JSON.stringify(metadata.packageAliases),
           tag_exists: String(tagExists),
           tag_target: tagTarget,
+          tag_target_for_creation: requestedTagTarget || headSha,
           tag_matches_head: String(tagMatchesHead),
           package_changed_since_tag: String(packageChangedSinceTag),
         };
@@ -164,9 +196,10 @@ runs:
       working-directory: ${{ inputs.workspace }}
       env:
         RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        RELEASE_TAG_TARGET_SHA: ${{ steps.context.outputs.tag_target_for_creation }}
       run: |
         set -euo pipefail
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+        git tag -a "$RELEASE_TAG" "$RELEASE_TAG_TARGET_SHA" -m "Release $RELEASE_TAG"
         git push origin "$RELEASE_TAG"
