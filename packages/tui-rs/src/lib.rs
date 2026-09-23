@@ -232,6 +232,7 @@ pub mod rubber_duck;
 pub mod run_cli;
 pub mod scenario_cli;
 pub mod search_cli;
+pub mod thread_cli;
 pub mod update_cli;
 pub mod value_cli;
 pub use maestro_local_host::video;

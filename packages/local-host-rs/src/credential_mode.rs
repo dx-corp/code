@@ -437,7 +437,7 @@ fn current_verified_identity_session_with_env()
 
 /// Load and verify the current human Identity session for a product-owned
 /// child operation such as Session History ingestion.
-pub(crate) fn verified_current_identity_session() -> Result<PlatformSession> {
+pub fn verified_current_identity_session() -> Result<PlatformSession> {
     crate::safety::require_vendor_network()?;
     let env = std::env::vars().collect::<HashMap<String, String>>();
     let snapshot = if platform_session_from(None, &env).is_some() {
