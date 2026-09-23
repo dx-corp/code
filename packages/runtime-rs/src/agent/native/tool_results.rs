@@ -48,8 +48,10 @@ impl NativeAgentRunner {
         pending: maestro_runtime_contracts::ToolOperationRecord,
         execution: &ToolExecution,
     ) {
+        // The outcome journal is durable and is written before model projection.
         let outcome = maestro_runtime_contracts::ToolOperationOutcome::new(
-            execution.model_content(),
+            self.credential_vault
+                .vault_in_text(&execution.model_content()),
             execution.is_error(),
             Some(execution.receipt.clone()),
         );
@@ -637,16 +639,19 @@ impl NativeAgentRunner {
 
         let hook_outcome = if approved {
             // Execute hooks only for tools that were allowed to run.
-            // Hooks contract on raw tool output, not the model-facing
-            // envelope (see `ToolExecution::raw_content`).
+            // Hooks receive the tool body before the model-facing envelope;
+            // the shared dispatcher vaults credentials first.
             run_post_execution_hooks(
                 &self.hooks,
-                &tool_name,
-                &call_id,
-                &args,
-                &result.raw_content(),
-                is_error,
-                result.receipt.duration_ms.unwrap_or(0),
+                &self.credential_vault,
+                PostExecutionHookInput {
+                    tool_name: &tool_name,
+                    call_id: &call_id,
+                    args: &args,
+                    raw_output: &result.raw_content(),
+                    is_error,
+                    duration_ms: result.receipt.duration_ms.unwrap_or(0),
+                },
             )
             .await
         } else {
@@ -833,16 +838,19 @@ impl NativeAgentRunner {
             let content = result.model_content();
             let is_error = result.is_error();
 
-            // Hooks contract on raw tool output, not the model-facing
-            // envelope (see `ToolExecution::raw_content`).
+            // Hooks receive the tool body before the model-facing envelope;
+            // the shared dispatcher vaults credentials first.
             let hook_outcome = run_post_execution_hooks(
                 &self.hooks,
-                &call.tool_name,
-                &call.call_id,
-                &call.args,
-                &result.raw_content(),
-                is_error,
-                result.receipt.duration_ms.unwrap_or(wave_duration_ms),
+                &self.credential_vault,
+                PostExecutionHookInput {
+                    tool_name: &call.tool_name,
+                    call_id: &call.call_id,
+                    args: &call.args,
+                    raw_output: &result.raw_content(),
+                    is_error,
+                    duration_ms: result.receipt.duration_ms.unwrap_or(wave_duration_ms),
+                },
             )
             .await;
             let reported_error = is_error || hook_outcome.rejected.is_some();

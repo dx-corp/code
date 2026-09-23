@@ -21,7 +21,7 @@ use super::super::{
     DenialReason, ExecutionPhase, ExecutionSource, FromAgent, ManagedPolicyMetadata, ToolExecution,
     ToolResult,
 };
-use super::{AgentCommand, prompt_kind_starts_main_request};
+use super::{AgentCommand, CredentialVault, prompt_kind_starts_main_request};
 use crate::ai::ContentBlock;
 
 pub(super) fn normalize_post_hook_tool_args(
@@ -269,35 +269,55 @@ pub(super) struct PostExecutionHooks {
     pub(super) rejected: Option<String>,
 }
 
+pub(super) struct PostExecutionHookInput<'a> {
+    pub(super) tool_name: &'a str,
+    pub(super) call_id: &'a str,
+    pub(super) args: &'a serde_json::Value,
+    pub(super) raw_output: &'a str,
+    pub(super) is_error: bool,
+    pub(super) duration_ms: u64,
+}
+
 /// Run `PostToolUse` and then `EvalGate` for one finished tool call.
 ///
-/// `EvalGate` receives the same tool name, arguments, and raw output; its input
-/// type is shaped for exactly this point and it had no dispatch site at all, so
-/// a configured evaluation hook silently never ran. It runs after `PostToolUse`
-/// so a gate scores the result a `PostToolUse` hook has already observed.
+/// Both hooks receive the same credential-vaulted tool body before the
+/// model-facing result envelope is assembled. `EvalGate` runs after
+/// `PostToolUse`, so it scores the output the first hook observed.
 ///
 /// A gate's `block` cannot un-run the tool, so it is reported as a failed tool
 /// result rather than pretending the call was prevented.
 pub(super) async fn run_post_execution_hooks(
     hooks: &NativeExecutionHostHandle,
-    tool_name: &str,
-    call_id: &str,
-    args: &serde_json::Value,
-    raw_output: &str,
-    is_error: bool,
-    duration_ms: u64,
+    vault: &CredentialVault,
+    input: PostExecutionHookInput<'_>,
 ) -> PostExecutionHooks {
+    let PostExecutionHookInput {
+        tool_name,
+        call_id,
+        args,
+        raw_output,
+        is_error,
+        duration_ms,
+    } = input;
+    let safe_output = vault.vault_in_text(raw_output);
     let mut outcome = PostExecutionHooks {
         context: hook_injected_context(
             hooks
-                .hook_post_tool_use(tool_name, call_id, args, raw_output, is_error, duration_ms)
+                .hook_post_tool_use(
+                    tool_name,
+                    call_id,
+                    args,
+                    &safe_output,
+                    is_error,
+                    duration_ms,
+                )
                 .await,
         ),
         rejected: None,
     };
 
     match hooks
-        .hook_eval_gate(tool_name, call_id, args, raw_output)
+        .hook_eval_gate(tool_name, call_id, args, &safe_output)
         .await
     {
         NativeHookResult::Block { reason } => outcome.rejected = Some(reason),

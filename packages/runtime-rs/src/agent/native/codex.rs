@@ -601,12 +601,15 @@ impl NativeAgentRunner {
         } = outcome;
         let hook_outcome = run_post_execution_hooks(
             &self.hooks,
-            tool_name,
-            call_id,
-            args,
-            hook_output,
-            is_error,
-            duration_ms,
+            &self.credential_vault,
+            PostExecutionHookInput {
+                tool_name,
+                call_id,
+                args,
+                raw_output: hook_output,
+                is_error,
+                duration_ms,
+            },
         )
         .await;
         let mut text = append_hook_context(
