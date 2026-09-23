@@ -171,9 +171,15 @@ impl NativeAgentRunner {
             is_error,
             duration_ms,
         };
-        let mut payload = ToolResultPayload { content, is_error };
+        let mut payload = ToolResultPayload {
+            content: self.credential_vault.vault_in_text(&content),
+            is_error,
+        };
         self.extensions.on_tool_result(&cx, &mut payload);
-        (payload.content, payload.is_error)
+        (
+            self.credential_vault.vault_in_text(&payload.content),
+            payload.is_error,
+        )
     }
     /// Dispatch `on_tool_batch_end` with the batch's last result as the mutable
     /// payload, then write any tenant edits back into that result.
@@ -213,7 +219,7 @@ impl NativeAgentRunner {
             is_error: original_is_error.unwrap_or(false),
         };
         self.extensions.on_tool_batch_end(&cx, &mut payload);
-        *content = payload.content;
+        *content = self.credential_vault.vault_in_text(&payload.content);
         // Only overwrite the flag when a tenant actually changed it, so a result
         // that carried `None` keeps carrying `None`.
         if Some(payload.is_error) != original_is_error {
@@ -276,10 +282,14 @@ impl NativeAgentRunner {
                 |name, args| self.tool_executor.tool_context_effect(name, args),
             );
             let provider_messages =
-                resolve_provider_history_shared(&request_messages, &self.credential_vault)?;
+                vault_provider_history_shared(&request_messages, &self.credential_vault)?;
             let (config, request_usage) = self
                 .build_config_with_usage(&provider_messages, true)
                 .await?;
+            // System prompt assembly can discover another known value after
+            // the first history scan. Reapply the vault before provider egress.
+            let provider_messages =
+                vault_provider_history_shared(&provider_messages, &self.credential_vault)?;
             let estimated_input_tokens = request_usage.total();
             let should_calibrate = estimated_input_tokens.is_some_and(|estimated| {
                 !self.token_calibrated_models.contains(&config.model)
@@ -1135,8 +1145,6 @@ impl NativeAgentRunner {
                     }
 
                     let safe_args = self.credential_vault.vault_in_json(&args);
-                    let resolved_args =
-                        tool_args_for_execution(&tool_name, &safe_args, &self.credential_vault);
 
                     // Ask the registered extensions whether this call runs.
                     // The `doom-loop` tenant answers with the doom-loop and
@@ -1368,6 +1376,8 @@ impl NativeAgentRunner {
                     });
 
                     if can_parallelize_read_only {
+                        let resolved_args =
+                            tool_args_for_execution(&tool_name, &safe_args, &self.credential_vault);
                         pending_read_only_tool_calls.push(QueuedReadOnlyToolExecution {
                             call_id,
                             tool_name,

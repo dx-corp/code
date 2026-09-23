@@ -374,12 +374,13 @@ impl NativeAgentRunner {
         if trimmed.is_empty() {
             return;
         }
+        let safe_content = self.credential_vault.vault_in_text(trimmed);
         self.messages_mut().push(Message {
             role: Role::User,
-            content: MessageContent::text(trimmed.to_string()),
+            content: MessageContent::text(safe_content.clone()),
         });
         self.pending_user_note_consumptions.push(consumed);
-        self.pending_user_note_texts.push(trimmed.to_string());
+        self.pending_user_note_texts.push(safe_content);
     }
     pub(super) fn begin_user_note_consumption(&mut self) {
         debug_assert!(self.active_user_note_consumptions.is_empty());
@@ -713,6 +714,11 @@ impl NativeAgentRunner {
                         }
                     }
 
+                    for block in &mut blocks {
+                        if let ContentBlock::Text { text } = block {
+                            *text = self.credential_vault.vault_in_text(text);
+                        }
+                    }
                     let content = if blocks.len() == 1 {
                         match &blocks[0] {
                             ContentBlock::Text { text } => MessageContent::text(text.clone()),

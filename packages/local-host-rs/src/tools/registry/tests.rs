@@ -2400,6 +2400,63 @@ fn test_normalize_git_path_strips_cwd() {
 // ========== Cache Integration Tests ==========
 
 #[tokio::test]
+async fn reading_source_literals_does_not_poison_later_tool_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let first_path = dir.path().join("source.rs");
+    let later_path = dir.path().join("later.rs");
+    std::fs::write(&first_path, "bearer_token: None\ntoken: Option<String>").unwrap();
+    std::fs::write(&later_path, "(None, None, None)").unwrap();
+    let vault = CredentialVault::new();
+    let executor = ToolExecutor::with_credential_vault(dir.path().to_str().unwrap(), vault.clone());
+    for (path, expected) in [
+        (&first_path, "bearer_token: None"),
+        (&later_path, "(None, None, None)"),
+    ] {
+        let args = serde_json::json!({"file_path": path.to_str().unwrap(), "lineNumbers": false, "wrapInCodeFence": false, "withDiagnostics": false});
+        let result = executor.execute("read", &args, None, "source-read").await;
+        assert!(result.output.contains(expected), "{}", result.output);
+        assert!(!result.output.contains("{{CRED:"), "{}", result.output);
+    }
+    assert_eq!(vault.stats().count, 0);
+}
+
+#[tokio::test]
+async fn credential_read_events_and_result_carry_only_opaque_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("credential.txt");
+    let raw = "plausible-token-1234567890";
+    std::fs::write(&path, format!("token: {raw}")).unwrap();
+    let vault = CredentialVault::new();
+    let executor = ToolExecutor::with_credential_vault(dir.path().to_str().unwrap(), vault);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let args = serde_json::json!({"file_path": path.to_str().unwrap(), "lineNumbers": false, "wrapInCodeFence": false, "withDiagnostics": false});
+    let result = executor
+        .execute_with_receipt("read", &args, Some(&tx), "credential-read")
+        .await
+        .to_legacy();
+    assert!(result.output.contains("{{CRED:"));
+    assert!(!result.output.contains(raw));
+    let mut saw_output = false;
+    for event in std::iter::from_fn(|| rx.try_recv().ok()) {
+        match event {
+            FromAgent::ToolOutput { content, .. } => {
+                saw_output = true;
+                assert!(!content.contains(raw));
+                assert!(content.contains("{{CRED:"));
+            }
+            FromAgent::ToolEnd {
+                result: Some(result),
+                ..
+            } => {
+                assert!(!result.output.contains(raw));
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_output);
+}
+
+#[tokio::test]
 async fn stale_generation_cacheable_read_cannot_repopulate_new_vault_cache() {
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("generation-secret.txt");

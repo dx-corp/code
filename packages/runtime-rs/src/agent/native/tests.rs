@@ -2202,7 +2202,7 @@ fn goal_tools_visibility_tracks_update_goal_results() {
 }
 
 #[test]
-fn codex_wire_results_resolve_vaulted_credentials_without_mutating_input() {
+fn codex_wire_results_preserve_vaulted_credentials_without_mutating_input() {
     let vault = CredentialVault::new();
     let reference = vault.store(
         "child-discovered-secret",
@@ -2210,9 +2210,9 @@ fn codex_wire_results_resolve_vaulted_credentials_without_mutating_input() {
     );
     let vaulted = format!("child result: {reference}");
 
-    let response = resolve_codex_tool_result_for_wire(&vault, &vaulted);
+    let response = opaque_codex_tool_result_for_wire(&vaulted);
 
-    assert_eq!(response, "child result: child-discovered-secret");
+    assert_eq!(response, format!("child result: {reference}"));
     assert_eq!(vaulted, format!("child result: {reference}"));
 }
 
@@ -6882,7 +6882,7 @@ fn lifecycle_tool_args_preserve_opaque_credential_references() {
 }
 
 #[test]
-fn provider_history_resolves_references_without_mutating_durable_history() {
+fn provider_history_preserves_references_until_tool_execution() {
     let vault = CredentialVault::new();
     let reference = vault.store("secret-value", crate::agent::CredentialType::Token);
     let history = vec![Message {
@@ -6890,28 +6890,138 @@ fn provider_history_resolves_references_without_mutating_durable_history() {
         content: MessageContent::Text(format!("Use {reference} in the child")),
     }];
 
-    let resolved = resolve_provider_history(&history, &vault).expect("history should resolve");
-    let MessageContent::Text(resolved_text) = &resolved[0].content else {
-        panic!("expected resolved text message");
+    let provider = vault_provider_history(&history, &vault).expect("history should project");
+    let MessageContent::Text(provider_text) = &provider[0].content else {
+        panic!("expected provider text message");
     };
-    assert_eq!(resolved_text, "Use secret-value in the child");
+    assert_eq!(provider_text, &format!("Use {reference} in the child"));
+    assert!(!provider_text.contains("secret-value"));
 
     let MessageContent::Text(durable_text) = &history[0].content else {
         panic!("expected vaulted text message");
     };
     assert_eq!(durable_text, &format!("Use {reference} in the child"));
+    let args = serde_json::json!({"task": format!("Use {reference} in the child")});
+    assert_eq!(
+        tool_args_for_execution("bash", &args, &vault)["task"],
+        "Use secret-value in the child"
+    );
 }
 
 #[test]
-fn provider_history_without_references_reuses_shared_storage() {
+fn incident_tool_output_reaches_provider_without_invented_or_raw_credentials() {
+    let vault = CredentialVault::new();
+    let source = "bearer_token: None\n(None, None, None)";
+    let safe_source = vault.vault_in_text(source);
+    assert_eq!(safe_source, source);
+    assert_eq!(vault.stats().count, 0);
+
+    let raw = "plausible-token-1234567890";
+    let safe_credential = vault.vault_in_text(&format!("token: {raw}"));
+    assert!(safe_credential.contains("{{CRED:"));
+    assert!(!safe_credential.contains(raw));
+    let history = vec![
+        Message {
+            role: Role::User,
+            content: MessageContent::text(safe_source),
+        },
+        Message {
+            role: Role::User,
+            content: MessageContent::text(safe_credential.clone()),
+        },
+    ];
+    let provider = vault_provider_history(&history, &vault).expect("provider projection");
+    let durable_json = serde_json::to_string(&history).expect("durable history");
+    let provider_json = serde_json::to_string(&provider).expect("provider request");
+    for text in [&durable_json, &provider_json] {
+        assert!(text.contains("(None, None, None)"));
+        assert!(text.contains("{{CRED:"));
+        assert!(!text.contains(raw));
+    }
+    let args = serde_json::json!({"authorization": safe_credential});
+    assert_eq!(
+        tool_args_for_execution("bash", &args, &vault)["authorization"],
+        format!("token: {raw}")
+    );
+    assert!(!serde_json::to_string(&args).unwrap().contains(raw));
+}
+
+#[test]
+fn provider_history_without_references_preserves_content() {
     let history = Arc::new(vec![Message {
         role: Role::User,
         content: MessageContent::text("ordinary history"),
     }]);
-    let resolved = resolve_provider_history_shared(&history, &CredentialVault::new())
+    let resolved = vault_provider_history_shared(&history, &CredentialVault::new())
         .expect("history should be reusable");
 
-    assert!(Arc::ptr_eq(&history, &resolved));
+    assert_eq!(
+        serde_json::to_value(history.as_ref()).unwrap(),
+        serde_json::to_value(resolved.as_ref()).unwrap()
+    );
+}
+
+#[test]
+fn provider_projection_vaults_late_raw_credential_text() {
+    let vault = CredentialVault::new();
+    let raw = "plausible-token-1234567890";
+    let history = vec![Message {
+        role: Role::User,
+        content: MessageContent::text(format!("token: {raw}")),
+    }];
+    let provider = vault_provider_history(&history, &vault).expect("provider projection");
+    let serialized = serde_json::to_string(&provider).expect("provider serialization");
+    assert!(serialized.contains("{{CRED:"));
+    assert!(!serialized.contains(raw));
+}
+
+#[test]
+fn provider_projection_rechecks_values_discovered_in_system_prompt() {
+    let vault = CredentialVault::new();
+    let raw = "shared-value-1234567890";
+    let history = vec![Message {
+        role: Role::User,
+        content: MessageContent::text(format!("Use {raw}")),
+    }];
+    let first = vault_provider_history(&history, &vault).expect("first projection");
+    assert!(serde_json::to_string(&first).unwrap().contains(raw));
+    let safe_system = vault.vault_in_text(&format!("token: {raw}"));
+    assert!(!safe_system.contains(raw));
+    let provider = vault_provider_history(&first, &vault).expect("final projection");
+    let serialized = serde_json::to_string(&provider).unwrap();
+    assert!(serialized.contains("{{CRED:"));
+    assert!(!serialized.contains(raw));
+}
+
+#[test]
+fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema() {
+    let vault = CredentialVault::new();
+    let raw = "plausible-token-1234567890";
+    let tools = vec![Tool {
+        name: "safe_tool".to_owned(),
+        description: format!("Use token: {raw}"),
+        input_schema: serde_json::json!({"properties": {"authorization": {"default": format!("token: {raw}")}}}),
+        schema_enforcement: Default::default(),
+    }];
+    let safe = vault_provider_tools(&tools, &vault).expect("safe provider tools");
+    let serialized = serde_json::to_string(safe.as_ref()).expect("provider tools");
+    assert_eq!(safe[0].name, "safe_tool");
+    assert!(serialized.contains("{{CRED:"));
+    assert!(!serialized.contains(raw));
+    assert!(serde_json::to_string(&tools).unwrap().contains(raw));
+
+    let mut schema = serde_json::Map::new();
+    schema.insert(
+        format!("token: {raw}"),
+        serde_json::json!({"type": "string"}),
+    );
+    let unsafe_key = Tool {
+        name: "safe_tool".to_owned(),
+        description: String::new(),
+        input_schema: Value::Object(schema),
+        schema_enforcement: Default::default(),
+    };
+    assert!(vault_provider_tools(&[unsafe_key], &vault).is_err());
 }
 
 #[tokio::test]

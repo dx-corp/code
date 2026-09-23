@@ -4,6 +4,7 @@ use super::*;
 
 impl NativeAgentRunner {
     pub(super) async fn run_side_question(&mut self, question: String, standalone: bool) {
+        let question = self.credential_vault.vault_in_text(&question);
         let side_id = Uuid::new_v4().to_string();
         let _ = self.event_tx.send(FromAgent::SideQuestionStart {
             side_id: side_id.clone(),
@@ -29,12 +30,13 @@ impl NativeAgentRunner {
                     .await;
             }
 
-            let mut messages = resolve_provider_history(&self.messages, &credential_vault)?;
+            let mut messages = vault_provider_history(&self.messages, &credential_vault)?;
             messages.push(Message {
                 role: Role::User,
                 content: MessageContent::text(question.clone()),
             });
             let config = self.build_config(&messages, false).await?;
+            let messages = vault_provider_history(&messages, &credential_vault)?;
             let _ = self.event_tx.send(FromAgent::RequestContextPrepared { response_id: side_id.clone() });
             let _ = self.event_tx.send(FromAgent::OperationObservation {
                 observation: maestro_runtime_contracts::operation_observation::OperationObservation::Prepared {
@@ -180,7 +182,7 @@ impl NativeAgentRunner {
     ) -> Result<()> {
         use crate::agent::codex_app_server_turns::TurnWaitEvent;
 
-        let resolved_messages = resolve_provider_history(&self.messages, &self.credential_vault)?;
+        let safe_messages = vault_provider_history(&self.messages, &self.credential_vault)?;
         let side_question_compactor = crate::agent::compaction::ContextCompactor::new(
             crate::agent::compaction::CompactionConfig {
                 max_context_tokens: CODEX_SIDE_QUESTION_MAX_CONTEXT_TOKENS,
@@ -193,14 +195,15 @@ impl NativeAgentRunner {
             },
         );
         let restored_messages = side_question_compactor
-            .compact_with_tokens(&resolved_messages)
+            .compact_with_tokens(&safe_messages)
             .messages;
         let instructions = runtime_system_prompt(
             self.config.system_prompt.as_deref(),
             self.prompt_context.as_deref(),
             &self.config.model,
             self.tool_executor.model_capabilities(&self.config.model),
-        );
+        )
+        .map(|text| self.credential_vault.vault_in_text(&text));
         let auth = self
             .tool_executor
             .codex_auth_context()

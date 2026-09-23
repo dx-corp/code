@@ -1194,6 +1194,48 @@ fn vault_credentials_in_string(store: &mut CredentialStore, input: &str) -> Stri
     output
 }
 
+/// Reject source-language placeholders and type expressions before they can
+/// become vault entries. A stored short literal would also replace unrelated
+/// occurrences of that literal in every later tool result.
+fn is_credential_candidate(value: &str, replace: ReplaceKind) -> bool {
+    if !matches!(replace, ReplaceKind::KeyValue) {
+        return true;
+    }
+    let value = value.trim_matches(['\'', '"']);
+    if [
+        "none",
+        "null",
+        "nil",
+        "undefined",
+        "true",
+        "false",
+        "string",
+        "str",
+        "bool",
+        "usize",
+        "isize",
+        "i32",
+        "i64",
+        "u32",
+        "u64",
+    ]
+    .iter()
+    .any(|sentinel| value.eq_ignore_ascii_case(sentinel))
+    {
+        return false;
+    }
+    if value.contains("::") || value.contains('<') || value.contains('>') || value.ends_with('(') {
+        return false;
+    }
+    !["Option<", "Result<", "Vec<", "List<", "Optional<"]
+        .iter()
+        .any(|prefix| {
+            value
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        })
+}
+
 fn vault_pattern_preserving_references(
     store: &mut CredentialStore,
     input: &str,
@@ -1231,6 +1273,9 @@ fn vault_pattern_preserving_references(
         let Some(secret) = captures.get(secret_capture) else {
             continue;
         };
+        if !is_credential_candidate(&input[secret.start()..secret.end()], pattern.replace) {
+            continue;
+        }
         let secret_overlaps_reference = reference_cursor < reference_ranges.len()
             && reference_ranges[reference_cursor].0 < secret.end()
             && reference_ranges[reference_cursor].1 > secret.start();
@@ -1818,6 +1863,54 @@ pub struct CredentialStats {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn source_literals_and_types_never_enter_the_vault() {
+        let vault = CredentialVault::new();
+        let cases = [
+            "bearer_token: None",
+            "token: None",
+            "api_key: None",
+            "secret: None",
+            "token: null",
+            "token: nil",
+            "token: Option<String>",
+            "token: String",
+            "token: bool",
+            "token: std::string::String",
+            "token: Some(",
+            "let bearer_token: None",
+            "token = \"None\"",
+            "'token': 'null'",
+            "{\"token\": null}",
+            "token: Option<String>,",
+        ];
+        for case in cases {
+            assert_eq!(vault.vault_in_text(case), case, "changed {case}");
+        }
+        assert_eq!(vault.stats().count, 0);
+        assert_eq!(
+            vault.vault_in_text("(None, None, None)"),
+            "(None, None, None)"
+        );
+    }
+
+    #[test]
+    fn real_credentials_still_enter_the_vault() {
+        let github_token = ["ghp_", "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL3oR6"].concat();
+        for case in [
+            "Authorization: Bearer long-real-token-1234567890".to_owned(),
+            github_token,
+            "api_key = example-real-key-1234567890".to_owned(),
+            "token: plausible-token-1234567890".to_owned(),
+        ] {
+            let vault = CredentialVault::new();
+            let vaulted = vault.vault_in_text(&case);
+            assert!(vaulted.contains("{{CRED:"), "missed {case}");
+            assert!(!vaulted.contains(case), "retained {case}");
+            assert_eq!(vault.resolve_all(&vaulted), case);
+        }
+    }
 
     #[test]
     fn publication_detection_covers_hexadecimal_credentials_without_digits() {
