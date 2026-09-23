@@ -1003,6 +1003,63 @@ mod tests {
     }
 
     #[test]
+    fn mixed_failure_histories_keep_one_monotonic_retry_budget() {
+        // Enumerate every five-event history over transport failure, 429,
+        // context overflow, malformed request, and authentication failure.
+        // The oracle tracks only retries admitted by this operation; a
+        // terminal class ends the history rather than opening a new turn.
+        const CLASSES: usize = 5;
+        const LENGTH: u32 = 5;
+        for encoded in 0..CLASSES.pow(LENGTH) {
+            let mut history = encoded;
+            let mut expected_retries = 0;
+            let mut expected_delay = Duration::ZERO;
+            let mut policy = RetryPolicy::new(RetryConfig {
+                max_retries: 3,
+                initial_delay: Duration::from_secs(1),
+                max_delay: Duration::from_secs(30),
+                jitter_factor: 0.0,
+                ..RetryConfig::default()
+            });
+            for _ in 0..LENGTH {
+                let class = history % CLASSES;
+                history /= CLASSES;
+                let error = match class {
+                    0 => ErrorKind::Transient,
+                    1 => ErrorKind::RateLimited {
+                        retry_after: Some(Duration::from_secs(45)),
+                    },
+                    2 => ErrorKind::ContextOverflow,
+                    3 => ErrorKind::InvalidRequest,
+                    _ => ErrorKind::AuthFailure,
+                };
+                let decision = policy.should_retry(error);
+                if class < 2 && expected_retries < 3 {
+                    expected_retries += 1;
+                    let RetryDecision::Retry { delay, attempt, .. } = decision else {
+                        panic!("retryable event {class} was refused in history {encoded}");
+                    };
+                    assert_eq!(attempt, expected_retries, "history {encoded}");
+                    assert!(delay <= Duration::from_secs(30), "history {encoded}");
+                    expected_delay += delay;
+                } else {
+                    assert!(
+                        matches!(decision, RetryDecision::GiveUp { .. }),
+                        "terminal event {class} retried in history {encoded}"
+                    );
+                    break;
+                }
+                assert_eq!(
+                    policy.current_attempt(),
+                    expected_retries,
+                    "history {encoded}"
+                );
+                assert_eq!(policy.total_delay(), expected_delay, "history {encoded}");
+            }
+        }
+    }
+
+    #[test]
     fn test_status_message() {
         let mut policy = RetryPolicy::default();
         assert_eq!(policy.status_message(), "Initial request");

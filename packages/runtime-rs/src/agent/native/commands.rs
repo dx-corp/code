@@ -806,6 +806,35 @@ impl NativeAgentRunner {
                                 } else {
                                     crate::agent::retry::ErrorKind::classify(&msg)
                                 };
+                                // Failed provider attempts spend turn steps as
+                                // surely as successful ones. Once the last
+                                // step is spent, neither retry backoff nor a
+                                // context/sign-in recovery can start another
+                                // provider request.
+                                if !step_budget.can_continue()
+                                    && provider_stream_failure.is_none()
+                                    && (error_kind.is_retryable()
+                                        || request_exceeds_context_window
+                                        || matches!(
+                                            error_kind,
+                                            crate::agent::retry::ErrorKind::ContextOverflow
+                                        )
+                                        || (current_prompt_uses_codex
+                                            && !self.codex_current_prompt_started
+                                            && matches!(
+                                                error_kind,
+                                                crate::agent::retry::ErrorKind::AuthFailure
+                                            )))
+                                {
+                                    terminal_failure_event = Some(FromAgent::Error {
+                                        message: step_budget.exhausted(Vec::new()).to_string(),
+                                        fatal: false,
+                                        terminal: true,
+                                        retryable: false,
+                                    });
+                                    terminal_request_failure = true;
+                                    break;
+                                }
                                 if current_prompt_uses_codex
                                     && !self.codex_current_prompt_started
                                     && !waited_for_codex_login
