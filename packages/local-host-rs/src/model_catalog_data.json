@@ -5903,8 +5903,7 @@
         "output": 2,
         "cache_read": 0.04
       },
-      "status": "deprecated",
-      "verification": {
+            "verification": {
         "state": "catalog",
         "source": "openrouter"
       }
