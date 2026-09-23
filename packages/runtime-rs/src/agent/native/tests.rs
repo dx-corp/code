@@ -6987,6 +6987,23 @@ fn every_tool_keeps_model_authored_credential_references_opaque() {
 }
 
 #[test]
+fn codex_tool_admission_vaults_known_plaintext_before_policy_and_execution() {
+    let vault = CredentialVault::new();
+    let secret = "sk-codex-boundary-1234567890";
+    let reference = vault.store(secret, crate::agent::CredentialType::Token);
+    let input = serde_json::json!({
+        "command": format!("printf {secret}"),
+        "nested": {"authorization": secret},
+    });
+
+    let admitted = codex::codex_tool_args_for_admission(&input, &vault);
+    assert_eq!(admitted["command"], format!("printf {reference}"));
+    assert_eq!(admitted["nested"]["authorization"], reference);
+    assert!(!admitted.to_string().contains(secret));
+    assert!(input.to_string().contains(secret));
+}
+
+#[test]
 fn provider_history_and_tool_execution_preserve_references() {
     let vault = CredentialVault::new();
     let reference = vault.store("secret-value", crate::agent::CredentialType::Token);
