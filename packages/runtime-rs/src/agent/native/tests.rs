@@ -2216,6 +2216,47 @@ fn codex_wire_results_preserve_vaulted_credentials_without_mutating_input() {
     assert_eq!(vaulted, format!("child result: {reference}"));
 }
 
+#[test]
+fn codex_native_approvals_deny_unrewritable_credentials_before_disclosure() {
+    let vault = CredentialVault::new();
+    let plaintext = "sk-ant-abcdefghijklmnopqrstuvwxyz123456";
+    let reference = vault.vault_in_text(plaintext);
+    assert_ne!(reference, plaintext);
+
+    let command = json!({"command": format!("curl -H 'Authorization: Bearer {plaintext}'")});
+    assert!(codex_native_contains_plaintext_credential(&vault, &command));
+    assert!(!codex_native_contains_plaintext_credential(
+        &vault,
+        &json!({"command": "pwd", "credential": reference})
+    ));
+
+    let mut known = HashMap::new();
+    remember_codex_file_change_item_paths(
+        &json!({
+            "itemId": "credential-file",
+            "path": "src/config.rs",
+            "content": format!("const TOKEN: &str = \"{plaintext}\";")
+        }),
+        &mut known,
+    );
+    let correlated = codex_native_policy_hook_args(
+        "item/fileChange/requestApproval",
+        Some(&json!({"itemId": "credential-file"})),
+        &known,
+    );
+    assert!(codex_native_contains_plaintext_credential(
+        &vault,
+        &correlated
+    ));
+    assert!(codex_native_contains_plaintext_credential(
+        &vault,
+        &Value::Object(Map::from_iter([(
+            plaintext.to_owned(),
+            Value::String("value".to_owned()),
+        )]))
+    ));
+}
+
 #[tokio::test]
 async fn injected_user_note_acknowledges_history_application() {
     let config = NativeAgentConfig {
