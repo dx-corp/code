@@ -17,15 +17,15 @@ pub const PRODUCT_TITLE: &str = "Dex Code";
 /// Empty-composer hint shared by the welcome and status surfaces.
 pub const COMPOSER_HINT: &str = "Type a message or press ? for commands.";
 
-/// A transparent dot silhouette: two negative-space eyes, a tiny nub at right,
-/// and a blue arc across the lower edge. Each glyph occupies one terminal cell.
+/// A transparent dot silhouette with staggered negative-space eyes and a blue
+/// arc across the lower edge. Each glyph occupies one terminal cell.
 pub const LOGO_FULL: &str = r"
         ·••●••·
      ·••●••●•●•••·
    ·•●••●•●••●•●•••·
   •••●•●••●•●••●•●••
- •●•●••●  ●●  ●●●●•●•
- •••●•●••●•●••●•●•••••
+ •●•●••●  ●●●•●●●●•●•
+ •••●•●••●•●  ••●••••
   •●••●•●••●•●••●••·
    ·•●••●•●••●•●••·
      ·•●••●•●•••·
@@ -642,9 +642,10 @@ mod tests {
     }
 
     #[test]
-    fn full_mark_keeps_orb_eyes_and_nub() {
+    fn full_mark_keeps_round_orb_and_staggered_eyes() {
         assert_eq!(logo_lines(LOGO_FULL).len(), 10);
-        assert!(LOGO_FULL.contains("  ●●  "));
+        assert!(logo_lines(LOGO_FULL)[4].contains("  ●●"));
+        assert!(logo_lines(LOGO_FULL)[5].contains("●  •"));
         assert!(LOGO_FULL.contains("•••"));
         assert_eq!(logo_lines(LOGO_COMPACT).len(), 4);
     }

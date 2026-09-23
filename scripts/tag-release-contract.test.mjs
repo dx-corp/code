@@ -28,8 +28,10 @@ test("internal tag-release dispatches public-release-mirror after creating a tag
 	assert.match(internalWorkflow, /dispatch-public-release-mirror:/);
 	assert.match(internalWorkflow, /github\.repository == 'dx-corp\/mono'/);
 	assert.match(internalWorkflow, /needs\.tag-current-version\.outputs\.tag_exists != 'true'/);
-	assert.match(internalWorkflow, /gh workflow run maestro-public-release-mirror\.yml/);
-	assert.match(internalWorkflow, /--field "publish_npm=false"/);
+	assert.match(internalWorkflow, /dispatch maestro-public-release-mirror\.yml/);
+	assert.match(internalWorkflow, /dispatch maestro-release\.yml/);
+	assert.match(internalWorkflow, /curl --config - --fail-with-body/);
+	assert.match(internalWorkflow, /"publish_npm":"false"/);
 	assert.match(internalWorkflow, /resolve-maestro-version-commit\.py/);
 	assert.match(internalWorkflow, /tag-target-sha: \$\{\{ steps\.tag-target\.outputs\.commit \}\}/);
 });

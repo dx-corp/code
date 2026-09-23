@@ -193,7 +193,7 @@ fn legacy_render(scene: &Scene) -> Result<Buffer, String> {
         SessionHeaderWidget::new(Some("~/projects/maestro"), Some("main"))
             .with_context(Some(9500), Some(500000))
             .render(Rect::new(0, 0, area.width, 1), &mut buf);
-    } else if scene.id == "startup" || action.is_some() || scene.id == "pet" {
+    } else if scene.id == "startup" {
         // The startup title has no animation; the explicit clock controls the portrait.
         render_welcome_with_summary(
             area,
@@ -205,6 +205,8 @@ fn legacy_render(scene: &Scene) -> Result<Buffer, String> {
         );
         render_welcome_portrait(area, &mut buf, look, state, motion);
     } else {
+        // Appearance stories use the live companion renderer. The shared
+        // startup mark is intentionally independent of cosmetic choices.
         let companion = DexCompanion::new(state)
             .look(look)
             .personality(personality)

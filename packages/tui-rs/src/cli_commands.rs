@@ -39,6 +39,7 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
             | "openai"
             | "codex"
             | "remote"
+            | "thread"
             | "computer"
             | "orb"
             | "operating-plane"
@@ -131,6 +132,7 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
             Ok(1)
         }
         "remote" => crate::remote_cli::run_remote(&args[1..]).await,
+        "thread" => crate::thread_cli::run_thread(&args[1..]).await,
         "value" => crate::value_cli::run_value(&args[1..]).await,
         "scenario" => crate::scenario_cli::run_scenario(&args[1..]).await,
         "codex" => crate::codex_cli::run_codex(&args[1..]).await,

@@ -68,6 +68,23 @@ deixic-code serve --port 3000       # HTTP runtime gateway
 deixic-code hosted-runner
 ```
 
+To continue a hosted Dex thread from the terminal, sign in with
+`deixic-code evalops login`, then attach using its `thread:` id:
+
+```sh
+deixic-code thread attach thread:example
+deixic-code thread attach thread:example --message "Check the latest result" --json
+```
+
+The terminal reads the Platform-owned thread, submits messages through the
+same tenant-scoped owner API as the Deixic UI, and shows safe execution events.
+When a turn needs approval or input, use `/respond <request-id> <action> [text]`
+after reviewing the request. The CLI never grants an approval automatically.
+`remote attach` is a separate RunnerSession transport and does not attach to a
+Dex thread. A disconnected client can reattach without restarting the resident
+turn. The one-shot form stops following after two minutes and leaves accepted
+work running on Platform.
+
 For a multi-feature coding task, prepare a mission contract and run it through
 the native workflow scheduler. See [Run a local coding mission](docs/MISSION_RUN.md).
 
