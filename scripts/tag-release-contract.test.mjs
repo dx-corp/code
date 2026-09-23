@@ -21,9 +21,15 @@ test("internal tag-release dispatches public-release-mirror after creating a tag
 	if (!hasInternalMirror) {
 		return;
 	}
-	assert.match(workflow, /dispatch-public-release-mirror:/);
-	assert.match(workflow, /github\.repository == 'evalops\/mono'/);
-	assert.match(workflow, /needs\.tag-current-version\.outputs\.tag_exists != 'true'/);
-	assert.match(workflow, /gh workflow run public-release-mirror/);
-	assert.match(workflow, /--field "publish_npm=false"/);
+	const internalWorkflow = readFileSync(
+		new URL("../../../.github/workflows/maestro-tag-release.yml", import.meta.url),
+		"utf8",
+	);
+	assert.match(internalWorkflow, /dispatch-public-release-mirror:/);
+	assert.match(internalWorkflow, /github\.repository == 'dx-corp\/mono'/);
+	assert.match(internalWorkflow, /needs\.tag-current-version\.outputs\.tag_exists != 'true'/);
+	assert.match(internalWorkflow, /gh workflow run maestro-public-release-mirror\.yml/);
+	assert.match(internalWorkflow, /--field "publish_npm=false"/);
+	assert.match(internalWorkflow, /resolve-maestro-version-commit\.py/);
+	assert.match(internalWorkflow, /tag-target-sha: \$\{\{ steps\.tag-target\.outputs\.commit \}\}/);
 });
