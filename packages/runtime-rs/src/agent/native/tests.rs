@@ -85,6 +85,7 @@ pub(super) struct RuntimeTestHost {
     block_provider_after_tool: bool,
     block_model_after_tool: bool,
     post_tool_context: Option<String>,
+    projected_tool_outputs: Arc<Mutex<Vec<String>>>,
     post_hook_outputs: Arc<Mutex<Vec<String>>>,
     eval_hook_outputs: Arc<Mutex<Vec<String>>>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
@@ -138,6 +139,7 @@ impl RuntimeTestHost {
             block_provider_after_tool: false,
             block_model_after_tool: false,
             post_tool_context: None,
+            projected_tool_outputs: Arc::new(Mutex::new(Vec::new())),
             post_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             eval_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             checkpoint_barrier: None,
@@ -792,6 +794,10 @@ impl NativeExecutionHost for RuntimeTestHost {
         _tool: &str,
         spill_dir: Option<&Path>,
     ) -> super::super::native_host::NativeToolOutput {
+        self.projected_tool_outputs
+            .lock()
+            .unwrap()
+            .push(content.to_owned());
         let mut output = super::super::native_host::NativeToolOutput {
             content: content.to_owned(),
             saved_path: None,
@@ -8609,6 +8615,15 @@ async fn two_request_context_fixture(
 #[tokio::test]
 async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
     let workspace = tempfile::tempdir().unwrap();
+    let secret = "sk-ant-abcdefghijklmnopqrstuvwxyz123456";
+    std::fs::write(
+        workspace.path().join("Cargo.toml"),
+        format!(
+            "Authorization: Bearer {secret}\n{}",
+            "large raw read ".repeat(5000)
+        ),
+    )
+    .unwrap();
     let (client, requests, server) = two_request_context_fixture(true, false).await;
     let config = NativeAgentConfig {
         model: "openai/gpt-4o".into(),
@@ -8617,9 +8632,10 @@ async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
     };
     let mut host = RuntimeTestHost::new(config.cwd.clone(), client);
     host.post_tool_context = Some(format!(
-        "{}unique-end-marker",
+        "{}unique-end-marker {secret}",
         "large tool context ".repeat(5000)
     ));
+    let projected_outputs = Arc::clone(&host.projected_tool_outputs);
     let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
     agent
         .set_session_context(Some("output-fixture".into()), "new", true)
@@ -8650,6 +8666,7 @@ async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
         .unwrap();
     assert!(tool.len() < 40_000);
     assert!(tool.contains("Truncated"));
+    assert!(!tool.contains(secret));
     let path = workspace
         .path()
         .join(".maestro/output-fixture/full-output.txt");
@@ -8657,6 +8674,20 @@ async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
     let full = std::fs::read_to_string(path).unwrap();
     assert!(full.len() > 40_000);
     assert!(full.contains("unique-end-marker"));
+    assert!(full.contains("{{CRED|"), "{full}");
+    assert!(!full.contains(secret));
+    let projected_outputs = projected_outputs.lock().unwrap();
+    assert!(!projected_outputs.is_empty());
+    assert!(
+        projected_outputs
+            .iter()
+            .all(|output| !output.contains(secret))
+    );
+    assert!(
+        projected_outputs
+            .iter()
+            .any(|output| output.contains("{{CRED|"))
+    );
 }
 
 #[tokio::test]

@@ -612,9 +612,10 @@ impl NativeAgentRunner {
             },
         )
         .await;
+        let safe_result_text = self.credential_vault.vault_in_text(&result_text);
         let mut text = append_hook_context(
             &self.hooks,
-            result_text,
+            safe_result_text,
             NativeHookEvent::PreToolUse,
             pre_hook_context,
         );
