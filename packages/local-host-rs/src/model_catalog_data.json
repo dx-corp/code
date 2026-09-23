@@ -1,6 +1,26 @@
 {
   "generated_at": 1790113587,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
+  "vendor_corrections": [
+    {
+      "id": "claude-sonnet-4-5",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    }
+  ],
   "models": [
     {
       "id": "claude-fable-5",
@@ -419,8 +439,8 @@
         "cache_write": 3.75
       },
       "verification": {
-        "state": "catalog",
-        "source": "models.dev"
+        "state": "verified",
+        "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
       }
     },
     {
@@ -450,8 +470,8 @@
         "cache_write": 3.75
       },
       "verification": {
-        "state": "catalog",
-        "source": "models.dev"
+        "state": "verified",
+        "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows"
       }
     },
     {
@@ -2496,8 +2516,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 0.12,
@@ -2618,8 +2637,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 1.4,
@@ -2766,8 +2784,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000,
-        "output_tokens": 450000
+        "context_tokens": 500000
       },
       "cost": {
         "input": 1.6,
@@ -2910,8 +2927,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768,
-        "output_tokens": 29491
+        "context_tokens": 32768
       },
       "cost": {
         "input": 0.8,
@@ -3372,7 +3388,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000,
+        "context_tokens": 200000,
         "output_tokens": 64000
       },
       "cost": {
@@ -3382,8 +3398,8 @@
         "cache_write": 3.75
       },
       "verification": {
-        "state": "catalog",
-        "source": "openrouter"
+        "state": "verified",
+        "source": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
       }
     },
     {
@@ -3817,8 +3833,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 163840,
-        "output_tokens": 147456
+        "context_tokens": 163840
       },
       "cost": {
         "input": 0.25,
@@ -4053,8 +4068,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 0.22,
@@ -4149,8 +4163,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 512000,
-        "output_tokens": 460800
+        "context_tokens": 512000
       },
       "cost": {
         "input": 0,
@@ -4395,8 +4408,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536,
-        "output_tokens": 58982
+        "context_tokens": 65536
       },
       "cost": {
         "input": 0.5,
@@ -4443,8 +4455,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536,
-        "output_tokens": 58982
+        "context_tokens": 65536
       },
       "cost": {
         "input": 0.25,
@@ -4922,8 +4933,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 131000,
-        "output_tokens": 117900
+        "context_tokens": 131000
       },
       "cost": {
         "input": 0.017,
@@ -5347,8 +5357,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 60000,
-        "output_tokens": 54000
+        "context_tokens": 60000
       },
       "cost": {
         "input": 0.027,
@@ -5509,8 +5518,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 1.25,
@@ -5533,8 +5541,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 1.25,
@@ -5557,8 +5564,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 0.1,
@@ -5581,8 +5587,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 1.25,
@@ -5605,8 +5610,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 0.1,
@@ -6433,8 +6437,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 943718
+        "context_tokens": 1048576
       },
       "cost": {
         "input": 3,
@@ -8568,8 +8571,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 115200
+        "context_tokens": 128000
       },
       "cost": {
         "input": 2,
@@ -8637,8 +8639,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 115200
+        "context_tokens": 128000
       },
       "cost": {
         "input": 2,
@@ -8800,8 +8801,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768,
-        "output_tokens": 29491
+        "context_tokens": 32768
       },
       "cost": {
         "input": 0.1,
@@ -8823,8 +8823,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768,
-        "output_tokens": 29491
+        "context_tokens": 32768
       },
       "cost": {
         "input": 0.66,
@@ -8894,8 +8893,7 @@
         "vision": true,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 115200
+        "context_tokens": 128000
       },
       "cost": {
         "input": 0.8,
@@ -9690,8 +9688,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 262140
+        "context_tokens": 262144
       },
       "cost": {
         "input": 0.32,
@@ -10053,8 +10050,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536,
-        "output_tokens": 58982
+        "context_tokens": 65536
       },
       "cost": {
         "input": 0.1,
@@ -10522,8 +10518,7 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768,
-        "output_tokens": 29491
+        "context_tokens": 32768
       },
       "cost": {
         "input": 0.55,
@@ -10781,8 +10776,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000,
-        "output_tokens": 1800000
+        "context_tokens": 2000000
       },
       "cost": {
         "input": 1.25,
@@ -10805,8 +10799,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000,
-        "output_tokens": 1800000
+        "context_tokens": 2000000
       },
       "cost": {
         "input": 1.25,
@@ -10829,8 +10822,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000,
-        "output_tokens": 900000
+        "context_tokens": 1000000
       },
       "cost": {
         "input": 1.25,
@@ -10853,8 +10845,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000,
-        "output_tokens": 450000
+        "context_tokens": 500000
       },
       "cost": {
         "input": 2,
@@ -10877,8 +10868,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000,
-        "output_tokens": 450000
+        "context_tokens": 500000
       },
       "cost": {
         "input": 2,
@@ -10901,8 +10891,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000,
-        "output_tokens": 450000
+        "context_tokens": 500000
       },
       "cost": {
         "input": 1.6,
@@ -10925,8 +10914,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 256000,
-        "output_tokens": 230400
+        "context_tokens": 256000
       },
       "cost": {
         "input": 1,
@@ -11332,8 +11320,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 32768,
-        "output_tokens": 29491
+        "context_tokens": 32768
       },
       "cost": {
         "input": 0,
