@@ -26,7 +26,6 @@ const nativeStageHasRustToolchain =
 		/FROM\s+chef\s+AS\s+native/.test(dockerfile));
 const required = [
 	[/https:\/\/deb\.debian\.org/, "HTTPS Debian package mirror"],
-	[/COPY\s+packages\/web\/dist\s+\.\/packages\/web\/dist/, "versioned browser assets"],
 	[
 		/COPY\s+--from=native\s+\/app\/target\/release\/maestro\s+\/usr\/local\/bin\/maestro/,
 		"native Maestro binary copy",
@@ -34,7 +33,7 @@ const required = [
 	[/\bMAESTRO_CONTROL_HOST=0\.0\.0\.0\b/, "Rust server bind environment"],
 	[/\bPORT=3000\b/, "Rust server port environment"],
 	[/ENTRYPOINT\s+\["maestro"\]/, "native Maestro entrypoint"],
-	[/CMD\s+\["web"\]/, "Rust web command"],
+	[/CMD\s+\["serve"\]/, "Rust serve command"],
 ];
 
 const runtimeFacadeCopy = /COPY\s+packages\/runtime-rs\s+\.\/packages\/runtime-rs/;
@@ -42,6 +41,8 @@ const runtimeContractsCopy =
 	/COPY\s+packages\/runtime-contracts-rs\s+\.\/packages\/runtime-contracts-rs/;
 const plannerStage = stageContents("planner");
 const nativeStage = stageContents("native");
+const embeddedConfigCopy =
+	/COPY\s+config\/vendor-corrections\.json\s+\.\/config\/vendor-corrections\.json/;
 
 const missing = required
 	.filter(([pattern]) => !pattern.test(dockerfile))
@@ -60,6 +61,10 @@ if (!runtimeContractsCopy.test(plannerStage)) {
 }
 if (!runtimeContractsCopy.test(nativeStage)) {
 	missing.push("dependency-light runtime contracts crate in native Docker stage");
+}
+const nativeBuild = nativeStage.search(/^RUN\s+cargo\s+build\s+--release\s+--locked\s+-p\s+maestro\b/m);
+if (nativeBuild < 0 || !embeddedConfigCopy.test(nativeStage.slice(0, nativeBuild))) {
+	missing.push("embedded vendor corrections before native Maestro build");
 }
 if (missing.length > 0) {
 	console.error(`Dockerfile is missing native runtime contracts: ${missing.join(", ")}`);

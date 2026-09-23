@@ -12,6 +12,8 @@ const sourceDockerfile = readFileSync(join(repositoryRoot, "Dockerfile"), "utf8"
 const runtimeCopy = "COPY packages/runtime-rs ./packages/runtime-rs";
 const runtimeContractsCopy =
 	"COPY packages/runtime-contracts-rs ./packages/runtime-contracts-rs";
+const embeddedConfigCopy =
+	"COPY config/vendor-corrections.json ./config/vendor-corrections.json";
 
 const sourceCargoManifest = readFileSync(join(repositoryRoot, "Cargo.toml"), "utf8");
 
@@ -85,6 +87,24 @@ test("Docker runtime guard rejects a contracts copy missing from the native stag
 test("Docker runtime guard accepts the checked-in Dockerfile and workspace", () => {
 	const output = runChecker(sourceDockerfile);
 	assert.match(output, /Verified native-only Docker runtime contract\./);
+});
+
+test("Docker runtime guard requires embedded vendor corrections before compilation", () => {
+	assert.ok(sourceDockerfile.includes(embeddedConfigCopy));
+	assert.throws(
+		() => runChecker(sourceDockerfile.replace(`${embeddedConfigCopy}\n`, "")),
+		/embedded vendor corrections before native Maestro build/,
+	);
+	const lateCopy = sourceDockerfile
+		.replace(`${embeddedConfigCopy}\n`, "")
+		.replace(
+			"RUN cargo build --release --locked -p maestro",
+			`RUN cargo build --release --locked -p maestro\n${embeddedConfigCopy}`,
+		);
+	assert.throws(
+		() => runChecker(lateCopy),
+		/embedded vendor corrections before native Maestro build/,
+	);
 });
 
 test("Docker runtime guard rejects missing or late vendored Cargo inputs", () => {

@@ -109,11 +109,7 @@ impl NativeAgentRunner {
     ) -> ToolExecution {
         let call_id = pending.call_id.clone();
         let tool_name = pending.tool_name.clone();
-        let args = tool_args_for_execution(
-            &tool_name,
-            &pending.admitted_arguments,
-            &self.credential_vault,
-        );
+        let args = tool_args_for_execution(&pending.admitted_arguments);
         let started = Instant::now();
         let cancel = self.shutdown_token.child_token();
         let terminal_drain_required =
@@ -524,7 +520,7 @@ impl NativeAgentRunner {
         if !approved {
             // The user's refusal is remembered for the rest of this turn, so
             // an identical retry is answered without prompting again.
-            self.denial_memory.record(&tool_name, &args);
+            self.denial_memory.record(&tool_name, &safe_args);
         }
         let mut result = result;
         let caller_owns_execution = approved
@@ -564,13 +560,12 @@ impl NativeAgentRunner {
             };
         }
         if approved && result.is_none() {
-            let resolved_args =
-                tool_args_for_execution(&tool_name, &safe_args, &self.credential_vault);
+            let execution_args = tool_args_for_execution(&safe_args);
             let approved_environment = approval_inline_env
                 .as_ref()
                 .map(|context| &context.environment);
             result = Some(
-                self.execute_tool(&tool_name, &resolved_args, &call_id, approved_environment)
+                self.execute_tool(&tool_name, &execution_args, &call_id, approved_environment)
                     .await,
             );
         }
@@ -799,7 +794,7 @@ impl NativeAgentRunner {
         let mut operations = HashMap::new();
         for call in &pending_calls {
             let operation = self
-                .begin_tool_operation(&call.call_id, &call.tool_name, &call.resolved_args)
+                .begin_tool_operation(&call.call_id, &call.tool_name, &call.execution_args)
                 .await
                 .map_err(anyhow::Error::msg)?;
             operations.insert(call.call_id.clone(), operation);

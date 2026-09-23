@@ -62,6 +62,7 @@ COPY packages/a2a-ledger-rs ./packages/a2a-ledger-rs
 COPY packages/session-history-rs ./packages/session-history-rs
 COPY packages/session-rs ./packages/session-rs
 COPY proto ./proto
+COPY config/vendor-corrections.json ./config/vendor-corrections.json
 COPY scripts/install.sh ./scripts/install.sh
 COPY test/fixtures/codex/coding-tools-doctor-v1.json ./test/fixtures/codex/coding-tools-doctor-v1.json
 RUN cargo build --release --locked -p maestro

@@ -1180,7 +1180,7 @@ async fn deferred_tool_call_event_matches_refreshed_vaulted_execution_input() {
     let mut config = scripted_config(workspace.path());
     config.approval_mode = ApprovalMode::Safe;
     let secret = "sk-abc123def456ghi789jkl012mno345pqr678";
-    let refreshed = json!({"command": format!("printf '{secret}'")});
+    let refreshed = json!({"file_path": "vaulted.txt", "content": secret});
     let mut hooks = IntegratedHookSystem::new(workspace.path().to_str().unwrap());
     hooks
         .registry
@@ -1193,13 +1193,13 @@ async fn deferred_tool_call_event_matches_refreshed_vaulted_execution_input() {
             ScriptedResponse {
                 blocks: vec![ScriptedBlock::ToolUse {
                     id: "call-later".to_owned(),
-                    name: "bash".to_owned(),
-                    input: json!({"command": "echo stale"}),
+                    name: "write".to_owned(),
+                    input: json!({"file_path": "stale.txt", "content": "stale"}),
                 }],
                 stop_reason: StopReason::ToolUse,
                 error: None,
             },
-            ScriptedResponse::text("vaulted and executed"),
+            ScriptedResponse::text("vaulted and written"),
         ],
     ));
     let vault = CredentialVault::new();
@@ -1235,6 +1235,11 @@ async fn deferred_tool_call_event_matches_refreshed_vaulted_execution_input() {
     .await
     .expect("vaulted deferred call should execute");
     assert!(matches!(tool_end, FromAgent::ToolEnd { success: true, .. }));
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("vaulted.txt")).expect("approved write"),
+        event_args["content"].as_str().expect("vaulted content")
+    );
+    assert!(!workspace.path().join("stale.txt").exists());
     agent.shutdown().await;
 }
 

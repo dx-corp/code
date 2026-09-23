@@ -1588,6 +1588,72 @@ mod tests {
         );
     }
 
+    fn desktop_provider_snapshot(root: &std::path::Path) -> Result<Option<String>, String> {
+        let config = root.join("desktop/config/provider/zcode-builtin.json");
+        match std::fs::read_to_string(&config) {
+            Ok(snapshot) => return Ok(Some(snapshot)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot read {}: {error}", config.display())),
+        }
+
+        // The public Code projection intentionally omits the desktop client.
+        // A missing internal snapshot must still fail this parity test.
+        let marker_path = root.join(".repository-projection.json");
+        let marker = std::fs::read_to_string(&marker_path).map_err(|error| {
+            format!(
+                "desktop provider snapshot {} is missing and cannot read projection marker {}: {error}",
+                config.display(),
+                marker_path.display()
+            )
+        })?;
+        let marker: serde_json::Value = serde_json::from_str(&marker)
+            .map_err(|error| format!("invalid public projection marker: {error}"))?;
+        if marker["projection"] == "deixic-code"
+            && marker["sourceRepository"] == "dx-corp/mono"
+            && marker["destinationRepository"] == "dx-corp/code"
+            && marker["publicationEligible"] == true
+        {
+            Ok(None)
+        } else {
+            Err(format!(
+                "desktop provider snapshot {} is missing outside the Deixic Code public projection",
+                config.display()
+            ))
+        }
+    }
+
+    #[test]
+    fn missing_desktop_snapshot_requires_the_public_code_projection() {
+        let root = tempfile::tempdir().expect("snapshot fixture");
+        assert!(desktop_provider_snapshot(root.path()).is_err());
+
+        let marker = root.path().join(".repository-projection.json");
+        std::fs::write(
+            &marker,
+            r#"{"projection":"other","sourceRepository":"dx-corp/mono","destinationRepository":"dx-corp/code","publicationEligible":true}"#,
+        )
+        .expect("wrong projection marker");
+        assert!(desktop_provider_snapshot(root.path()).is_err());
+
+        std::fs::write(
+            &marker,
+            r#"{"projection":"deixic-code","sourceRepository":"dx-corp/mono","destinationRepository":"dx-corp/code","publicationEligible":true}"#,
+        )
+        .expect("public projection marker");
+        assert_eq!(desktop_provider_snapshot(root.path()).unwrap(), None);
+
+        let config = root
+            .path()
+            .join("desktop/config/provider/zcode-builtin.json");
+        std::fs::create_dir_all(config.parent().expect("config parent"))
+            .expect("desktop config directory");
+        std::fs::write(&config, "{}").expect("desktop config");
+        assert_eq!(
+            desktop_provider_snapshot(root.path()).unwrap().as_deref(),
+            Some("{}")
+        );
+    }
+
     /// The desktop built-in provider release derives its Claude rules from
     /// this snapshot via scripts/sync-desktop-claude-model-rules.mjs. If the
     /// two fall out of step the desktop app runs Claude models at the wrong
@@ -1595,11 +1661,14 @@ mod tests {
     /// 200,000 tokens against a 1,000,000-token catalog value.
     #[test]
     fn desktop_provider_claude_rules_match_the_bundled_catalog() {
-        let desktop: serde_json::Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../desktop/config/provider/zcode-builtin.json"
-        )))
-        .expect("desktop provider release parses");
+        let product_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Some(snapshot) =
+            desktop_provider_snapshot(&product_root).expect("desktop provider snapshot")
+        else {
+            return;
+        };
+        let desktop: serde_json::Value =
+            serde_json::from_str(&snapshot).expect("desktop provider release parses");
 
         let rules = desktop["config"]["modelConfigRules"]["modelRules"]
             .as_array()

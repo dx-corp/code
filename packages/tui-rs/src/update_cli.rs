@@ -5,7 +5,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1304,7 +1304,16 @@ fn install_context() -> Option<InstallContext> {
     }
 }
 
-fn run_with_timeout(command: &mut Command, label: &str) -> Result<()> {
+fn configure_install_stdout(command: &mut Command, json: bool) {
+    if json {
+        // The installer and package managers may print a version or progress
+        // line. Keep stdout reserved for the update lifecycle JSON document.
+        command.stdout(Stdio::null());
+    }
+}
+
+fn run_with_timeout(command: &mut Command, label: &str, json: bool) -> Result<()> {
+    configure_install_stdout(command, json);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -1357,6 +1366,7 @@ fn install_package(
     package: &str,
     prefix: Option<&Path>,
     version: &str,
+    json: bool,
 ) -> Result<()> {
     let spec = format!("{package}@{version}");
     let mut command = Command::new(manager);
@@ -1369,7 +1379,7 @@ fn install_package(
     } else if let Some(prefix) = prefix.and_then(Path::parent).and_then(Path::parent) {
         command.env("BUN_INSTALL", prefix);
     }
-    run_with_timeout(&mut command, manager)
+    run_with_timeout(&mut command, manager, json)
 }
 
 fn install_release(
@@ -1379,6 +1389,7 @@ fn install_release(
     release_url: Option<&str>,
     channel: UpdateChannel,
     show_progress: bool,
+    json: bool,
 ) -> Result<()> {
     let temporary = tempfile::tempdir().context("Failed to create updater directory")?;
     let installer = temporary.path().join("install.sh");
@@ -1399,7 +1410,7 @@ fn install_release(
     if let Some(release_url) = release_url {
         command.env("MAESTRO_RELEASE_BASE_URL", release_url);
     }
-    run_with_timeout(&mut command, "signed Deixic Code installer")
+    run_with_timeout(&mut command, "signed Deixic Code installer", json)
 }
 
 fn install(
@@ -1408,6 +1419,7 @@ fn install(
     release_url: Option<&str>,
     channel: UpdateChannel,
     show_progress: bool,
+    json: bool,
 ) -> Result<()> {
     match context {
         InstallContext::Package {
@@ -1415,7 +1427,7 @@ fn install(
             package,
             prefix,
             ..
-        } => install_package(manager, package, prefix.as_deref(), version),
+        } => install_package(manager, package, prefix.as_deref(), version, json),
         InstallContext::Release {
             install_dir,
             data_dir,
@@ -1427,6 +1439,7 @@ fn install(
             release_url,
             channel,
             show_progress,
+            json,
         ),
     }
 }
@@ -2261,6 +2274,7 @@ pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> 
         check.release_url.as_deref(),
         channel,
         false,
+        false,
     ) {
         let mut failed = attempted;
         failed.last_error = Some(format!("{error:#}"));
@@ -2937,6 +2951,7 @@ pub async fn run_update(args: &[String]) -> Result<i32> {
         check.release_url.as_deref(),
         parsed.channel,
         show_progress,
+        parsed.json,
     ) {
         Ok(()) => {
             let verification = match &context {
@@ -3005,6 +3020,34 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    #[cfg(unix)]
+    #[test]
+    fn json_update_reserves_stdout_for_its_result() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf 'installer version line'; printf 'installer progress' >&2",
+        ]);
+        configure_install_stdout(&mut command, true);
+
+        let output = command.output().expect("run installer fixture");
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty(), "installer polluted JSON stdout");
+        assert_eq!(output.stderr, b"installer progress");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interactive_update_keeps_installer_stdout() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'installer version line'"]);
+        configure_install_stdout(&mut command, false);
+
+        let output = command.output().expect("run installer fixture");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"installer version line");
+    }
 
     #[test]
     fn parses_update_options() {

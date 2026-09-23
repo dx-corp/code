@@ -7,11 +7,12 @@
 //! 1. Detect the credential in tool arguments
 //! 2. Store it securely in memory with a unique reference ID
 //! 3. Replace the raw credential with a reference token
-//! 4. Resolve references back to real values at execution time
+//! 4. Keep model-authored references opaque through tool execution
 //!
 //! This approach allows users to provide test API keys without triggering
-//! "credential leaked" errors, while still maintaining security by keeping
-//! raw credentials out of the conversation context.
+//! "credential leaked" errors while keeping raw credentials out of the
+//! conversation context and model-directed tool arguments. Resolution helpers
+//! are for trusted internal consumers, not for model-authored tool payloads.
 //!
 //! # Reference Format
 //!
@@ -602,6 +603,23 @@ struct CredentialVaultState {
     initial_references: HashSet<String>,
 }
 
+/// The credentials known when provider content was checked. A new credential
+/// can make previously harmless plaintext unsafe even without a vault clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CredentialAttestation {
+    generation: u64,
+    credential_count: usize,
+}
+
+impl CredentialVaultState {
+    fn attestation(&self) -> CredentialAttestation {
+        CredentialAttestation {
+            generation: self.generation,
+            credential_count: self.store.credentials.len(),
+        }
+    }
+}
+
 impl fmt::Debug for CredentialVault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0
@@ -728,46 +746,34 @@ impl CredentialVault {
     /// control message to a child whose vault was forked before the referenced
     /// credential existed.
     pub fn rekey_references_to(&self, target: &Self, input: &str) -> Result<String, String> {
-        self.attest_provider_text(input).map_err(str::to_owned)?;
         if Arc::ptr_eq(&self.0, &target.0) {
+            self.attest_provider_text(input).map_err(str::to_owned)?;
             return Ok(input.to_string());
         }
-        let replacements = {
+
+        // Acquire both vaults in a stable order. A clear cannot race between
+        // source attestation and importing its value into the child.
+        if (Arc::as_ptr(&self.0) as usize) < (Arc::as_ptr(&target.0) as usize) {
             let mut source = self
                 .0
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut replacements = Vec::new();
-            for captures in REFERENCE_PATTERN.captures_iter(input) {
-                let whole = captures
-                    .get(0)
-                    .expect("credential reference match must include the whole token");
-                let kind = captures
-                    .get(1)
-                    .map(|value| CredentialType::from_str(value.as_str()))
-                    .unwrap_or(CredentialType::Unknown);
-                let id = captures
-                    .get(2)
-                    .expect("credential reference match must include an id")
-                    .as_str();
-                let credential = source.store.credentials.get_mut(id).ok_or_else(|| {
-                    "credential reference is unavailable in the current parent session".to_string()
-                })?;
-                credential.resolve_count = credential.resolve_count.saturating_add(1);
-                replacements.push((
-                    whole.start(),
-                    whole.end(),
-                    credential.value.to_string(),
-                    kind,
-                ));
-            }
-            replacements
-        };
-        let mut translated = input.to_string();
-        for (start, end, value, kind) in replacements.into_iter().rev() {
-            translated.replace_range(start..end, &target.store(&value, kind));
+            let mut destination = target
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rekey_references_locked(&mut source, &mut destination, input)
+        } else {
+            let mut destination = target
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut source = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rekey_references_locked(&mut source, &mut destination, input)
         }
-        Ok(translated)
     }
 
     /// Store a credential and return its opaque reference.
@@ -814,19 +820,25 @@ impl CredentialVault {
 
     /// Confirm that every reference-like span in provider-bound text belongs
     /// to this live vault. A string with the right spelling is not authority.
-    pub fn attest_provider_text(&self, text: &str) -> Result<u64, &'static str> {
+    pub(crate) fn attest_provider_text(
+        &self,
+        text: &str,
+    ) -> Result<CredentialAttestation, &'static str> {
         let state = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         attest_provider_text_with_store(&state.store, text)?;
-        Ok(state.generation)
+        Ok(state.attestation())
     }
 
     /// Check JSON before serialization can escape credential bytes. Object
     /// keys are provider content too, even though vault_in_json leaves them
     /// intact to preserve the schema.
-    pub fn attest_provider_json(&self, value: &serde_json::Value) -> Result<u64, &'static str> {
+    pub(crate) fn attest_provider_json(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<CredentialAttestation, &'static str> {
         fn visit(store: &CredentialStore, value: &serde_json::Value) -> Result<(), &'static str> {
             match value {
                 serde_json::Value::String(text) => {
@@ -852,7 +864,17 @@ impl CredentialVault {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         visit(&state.store, value)?;
-        Ok(state.generation)
+        Ok(state.attestation())
+    }
+
+    /// A provider attestation expires on either a clear or discovery of a new
+    /// credential. Execution generations remain clear-only for tool output.
+    pub(crate) fn has_attestation(&self, attestation: CredentialAttestation) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .attestation()
+            == attestation
     }
 
     /// A prepared provider payload is invalid after its vault is cleared.
@@ -935,6 +957,38 @@ impl CredentialVault {
             .store
             .stats()
     }
+}
+
+fn rekey_references_locked(
+    source: &mut CredentialVaultState,
+    destination: &mut CredentialVaultState,
+    input: &str,
+) -> Result<String, String> {
+    attest_provider_text_with_store(&source.store, input).map_err(str::to_owned)?;
+    let mut translated = String::with_capacity(input.len());
+    let mut cursor = 0;
+    for captures in REFERENCE_PATTERN.captures_iter(input) {
+        let whole = captures
+            .get(0)
+            .expect("credential reference match must include the whole token");
+        let id = captures
+            .get(2)
+            .expect("credential reference match must include an id")
+            .as_str();
+        let credential = source.store.credentials.get_mut(id).ok_or_else(|| {
+            "credential reference is unavailable in the current parent session".to_string()
+        })?;
+        credential.resolve_count = credential.resolve_count.saturating_add(1);
+        translated.push_str(&input[cursor..whole.start()]);
+        translated.push_str(
+            &destination
+                .store
+                .store(&credential.value, credential.cred_type),
+        );
+        cursor = whole.end();
+    }
+    translated.push_str(&input[cursor..]);
+    Ok(translated)
 }
 
 fn attest_provider_text_with_store(
@@ -2044,10 +2098,10 @@ mod tests {
     fn provider_reference_attestation_requires_live_vault_ownership() {
         let vault = CredentialVault::new();
         let reference = vault.store("owned-value-1234567890", CredentialType::Token);
-        let generation = vault
+        let attestation = vault
             .attest_provider_text(&reference)
             .expect("owned reference");
-        assert!(vault.has_generation(generation));
+        assert!(vault.has_attestation(attestation));
         assert!(
             CredentialVault::new()
                 .attest_provider_text(&reference)
@@ -2060,8 +2114,20 @@ mod tests {
         );
         assert!(vault.attest_provider_text("{{CRED:token:broken}}").is_err());
         vault.clear();
-        assert!(!vault.has_generation(generation));
+        assert!(!vault.has_attestation(attestation));
         assert!(vault.attest_provider_text(&reference).is_err());
+    }
+
+    #[test]
+    fn provider_attestation_expires_when_plaintext_becomes_a_known_credential() {
+        let vault = CredentialVault::new();
+        let plaintext = "late-registered-value-1234567890";
+        let attestation = vault
+            .attest_provider_text(plaintext)
+            .expect("text is initially unvaulted");
+        vault.store(plaintext, CredentialType::Secret);
+        assert!(!vault.has_attestation(attestation));
+        assert!(vault.attest_provider_text(plaintext).is_err());
     }
 
     #[test]
@@ -2226,6 +2292,54 @@ mod tests {
         let foreign = CredentialVault::new().store("foreign-secret", CredentialType::Token);
         assert!(parent.rekey_references_to(&child, &foreign).is_err());
         assert!(parent.rekey_references_to(&parent, &foreign).is_err());
+    }
+
+    #[test]
+    fn child_rekey_cannot_import_a_reference_after_parent_clear() {
+        let parent = CredentialVault::new();
+        let child = parent.fork();
+        let reference = parent.store("late-parent-secret", CredentialType::Secret);
+        let translated = parent
+            .rekey_references_to(&child, &reference)
+            .expect("live parent reference");
+        assert_eq!(child.resolve_all(&translated), "late-parent-secret");
+
+        let later = parent.store("revoked-parent-secret", CredentialType::Secret);
+        parent.clear();
+        assert!(parent.rekey_references_to(&child, &later).is_err());
+        assert_eq!(child.resolve_all(&later), later);
+    }
+
+    #[test]
+    fn opposite_direction_rekeys_complete_without_lock_order_deadlock() {
+        let left = CredentialVault::new();
+        let right = CredentialVault::new();
+        let left_reference = left.store("left-secret", CredentialType::Secret);
+        let right_reference = right.store("right-secret", CredentialType::Secret);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut handles = Vec::new();
+        for (source, destination, reference) in [
+            (left.clone(), right.clone(), left_reference),
+            (right.clone(), left.clone(), right_reference),
+        ] {
+            let sender = sender.clone();
+            handles.push(std::thread::spawn(move || {
+                sender
+                    .send(source.rekey_references_to(&destination, &reference))
+                    .expect("send rekey result");
+            }));
+        }
+        for _ in 0..2 {
+            assert!(
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("rekeys must not deadlock")
+                    .is_ok()
+            );
+        }
+        for handle in handles {
+            handle.join().expect("rekey worker");
+        }
     }
 
     #[test]

@@ -1,5 +1,16 @@
 //! The installed command must reject unsafe input before starting an agent.
 
+macro_rules! cargo_bin {
+    ($name:literal) => {{
+        option_env!(concat!("CARGO_BIN_EXE_", $name))
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os(concat!("CARGO_BIN_EXE_", $name)).map(std::path::PathBuf::from)
+            })
+            .expect(concat!("Cargo binary path unavailable: ", $name))
+    }};
+}
+
 use std::{
     fs,
     path::PathBuf,
@@ -24,7 +35,7 @@ impl Workspace {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_maestro"))
+        let mut child = Command::new(cargo_bin!("maestro"))
             .args(args)
             .current_dir(&self.0)
             .stdin(Stdio::null())

@@ -224,7 +224,7 @@ impl NativeAgentRunner {
         let instructions = prepared_request.config.system.clone();
         let restored_messages = prepared_request.messages.as_ref();
         let question = self.credential_vault.vault_in_text(question);
-        let vault_generation = self
+        let vault_attestation = self
             .credential_vault
             .attest_provider_text(&question)
             .map_err(anyhow::Error::msg)?;
@@ -249,7 +249,7 @@ impl NativeAgentRunner {
             .await
             .context("start Codex app-server side-question session")?;
         anyhow::ensure!(
-            self.credential_vault.has_generation(vault_generation),
+            self.credential_vault.has_attestation(vault_attestation),
             "credential vault changed before Codex side-question dispatch"
         );
         let turn_id = session
