@@ -116,7 +116,8 @@ use super::op_secret;
 use super::transform::{OutboundTarget, transform_messages_for_target};
 use super::types::{
     ContentBlock, ImageSource, ManagedGatewayReceipt, Message, MessageContent,
-    ProviderStreamErrorKind, RequestConfig, Role, StreamEvent, Tool, ToolSchemaEnforcement,
+    ProviderStreamErrorKind, RequestConfig, Role, StopReason, StreamEvent, Tool,
+    ToolSchemaEnforcement,
 };
 
 // The managed gateway owns a 45-second default provider attempt, plus
@@ -2826,6 +2827,7 @@ impl OpenAiClient {
                 let mut content_started = false;
                 let mut thinking_started = false;
                 let mut content_block_stopped = false;
+                let mut terminal_reason: Option<StopReason> = None;
 
                 loop {
                     let chunk = tokio::select! {
@@ -2849,6 +2851,14 @@ impl OpenAiClient {
                                 }
 
                                 if line == "data: [DONE]" {
+                                    let Some(stop_reason) = terminal_reason else {
+                                        let _ = tx.send(StreamEvent::ProviderError {
+                                            kind: ProviderStreamErrorKind::TransientProtocol,
+                                            message: "Chat stream ended without a finish reason"
+                                                .to_string(),
+                                        });
+                                        return;
+                                    };
                                     if !content_block_stopped
                                         && (content_started || thinking_started)
                                         && current_tool_calls.is_empty()
@@ -2884,7 +2894,9 @@ impl OpenAiClient {
                                             });
                                         }
                                     }
-                                    let _ = tx.send(StreamEvent::MessageStop { stop_reason: None });
+                                    let _ = tx.send(StreamEvent::MessageStop {
+                                        stop_reason: Some(stop_reason),
+                                    });
                                     return;
                                 }
 
@@ -2899,6 +2911,32 @@ impl OpenAiClient {
                                         }
 
                                         for choice in &chunk.choices {
+                                            if let Some(reason) = choice.finish_reason.as_deref() {
+                                                let reason = match reason {
+                                                    "stop" => StopReason::EndTurn,
+                                                    "tool_calls" | "function_call" => {
+                                                        StopReason::ToolUse
+                                                    }
+                                                    "length" => StopReason::MaxTokens,
+                                                    _ => {
+                                                        let _ = tx.send(StreamEvent::ProviderError {
+                                                            kind: ProviderStreamErrorKind::TransientProtocol,
+                                                            message: "Chat stream returned an unknown finish reason".to_string(),
+                                                        });
+                                                        return;
+                                                    }
+                                                };
+                                                if terminal_reason
+                                                    .is_some_and(|existing| existing != reason)
+                                                {
+                                                    let _ = tx.send(StreamEvent::ProviderError {
+                                                        kind: ProviderStreamErrorKind::TransientProtocol,
+                                                        message: "Chat stream returned conflicting finish reasons".to_string(),
+                                                    });
+                                                    return;
+                                                }
+                                                terminal_reason = Some(reason);
+                                            }
                                             if let Some(thinking) = choice.delta.thinking_text() {
                                                 if !thinking_started {
                                                     thinking_started = true;
@@ -3065,6 +3103,10 @@ impl OpenAiClient {
                         }
                     }
                 }
+                let _ = tx.send(StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    message: "Chat stream ended before [DONE]".to_string(),
+                });
             })
         };
 
@@ -4082,6 +4124,32 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
 "#;
 
     #[tokio::test]
+    async fn managed_chat_requires_finish_reason_and_done() {
+        let delta = "data: {\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n";
+        for sse in [
+            "".to_string(),
+            delta.to_string(),
+            "data: [DONE]\n\n".to_string(),
+            format!("{delta}data: [DONE]\n\n"),
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n".to_string(),
+        ] {
+            let (mut client, _request_rx) =
+                managed_gateway_test_client(&sse, &managed_receipt_headers());
+            let mut authorization: serde_json::Value =
+                serde_json::from_str(&managed_authorization_fixture("lineage-receipt")).unwrap();
+            authorization["claims"]["endpoint"] = "chat.completions".into();
+            client.set_managed_inference_authorization(Some(authorization.to_string()));
+            let stream = client
+                .stream(&[], &RequestConfig { model: "gpt-5.6".into(), ..Default::default() })
+                .await
+                .unwrap();
+            let events = collect_stream_events(stream).await;
+            assert!(events.iter().any(|event| matches!(event, StreamEvent::ProviderError { kind: ProviderStreamErrorKind::TransientProtocol, .. })), "{events:?}");
+            assert!(!events.iter().any(|event| matches!(event, StreamEvent::MessageStop { .. })), "{events:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn managed_endpoint_selects_url_body_and_stream_parser_over_catalog() {
         for (endpoint, model, sse, path, field) in [
             (
@@ -4094,7 +4162,7 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             (
                 "chat.completions",
                 "gpt-5.6",
-                "data: {\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+                "data: {\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
                 "/v1/chat/completions",
                 "messages",
             ),
