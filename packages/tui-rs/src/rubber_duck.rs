@@ -447,7 +447,6 @@ async fn drive_review(model: &str, cwd: &str, prompt: &str) -> Result<String> {
             &mut event_rx,
             &tool_tx,
             &tool_executor,
-            &credential_vault,
             &allowed_tools,
             &workspace,
         ),
@@ -530,7 +529,6 @@ async fn drain_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<FromAgent>,
     tool_tx: &tokio::sync::mpsc::UnboundedSender<crate::agent::ToolResponseMessage>,
     tool_executor: &ToolExecutor,
-    credential_vault: &CredentialVault,
     allowed_tools: &HashSet<String>,
     workspace: &Path,
 ) -> Result<String> {
@@ -557,11 +555,7 @@ async fn drain_events(
             } => {
                 let normalized = tool.to_ascii_lowercase();
                 let prepared = if allowed_tools.contains(&normalized) {
-                    contain_tool_args(
-                        &normalized,
-                        &credential_vault.resolve_in_json(&args),
-                        workspace,
-                    )
+                    contain_tool_args(&normalized, &args, workspace)
                 } else {
                     Err(format!(
                         "Tool `{tool}` is not allowed for the rubber duck reviewer"

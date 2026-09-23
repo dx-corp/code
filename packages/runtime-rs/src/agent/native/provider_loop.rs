@@ -1211,7 +1211,7 @@ impl NativeAgentRunner {
                     } else {
                         self.tool_executor.firewall_verdict(
                             &tool_key,
-                            &args,
+                            &safe_args,
                             &workflow_snapshot,
                             annotations.as_ref(),
                             false,
@@ -1246,7 +1246,7 @@ impl NativeAgentRunner {
                         &firewall_verdict,
                         &self.tool_executor,
                         &tool_name,
-                        &args,
+                        &safe_args,
                         &self.denial_memory,
                     );
                     // The user already refused this exact call in this turn.
@@ -1377,14 +1377,13 @@ impl NativeAgentRunner {
                     });
 
                     if can_parallelize_read_only {
-                        let resolved_args =
-                            tool_args_for_execution(&tool_name, &safe_args, &self.credential_vault);
+                        let execution_args = tool_args_for_execution(&safe_args);
                         pending_read_only_tool_calls.push(QueuedReadOnlyToolExecution {
                             call_id,
                             tool_name,
                             args: safe_args.clone(),
                             safe_args,
-                            resolved_args,
+                            execution_args,
                             extra_context,
                         });
                         continue;
@@ -1393,9 +1392,8 @@ impl NativeAgentRunner {
                     // Auto-approved, execute immediately
                     // Note: ToolExecutor sends ToolStart/ToolEnd events internally
                     let result = {
-                        let resolved_args =
-                            tool_args_for_execution(&tool_name, &safe_args, &self.credential_vault);
-                        self.execute_tool(&tool_name, &resolved_args, &call_id, None)
+                        let execution_args = tool_args_for_execution(&safe_args);
+                        self.execute_tool(&tool_name, &execution_args, &call_id, None)
                             .await
                     };
                     let tool_name_for_cache = tool_name.clone();
@@ -1610,7 +1608,7 @@ impl NativeAgentRunner {
                                 let firewall_verdict = deferred_firewall_verdict(
                                     &self.tool_executor,
                                     &tool_key,
-                                    &call.args,
+                                    &call.safe_args,
                                     &workflow_snapshot,
                                     annotations.as_ref(),
                                     is_external_tool,
@@ -1817,7 +1815,7 @@ impl NativeAgentRunner {
                             let firewall_verdict = deferred_firewall_verdict(
                                 &self.tool_executor,
                                 &tool_key,
-                                &call.args,
+                                &call.safe_args,
                                 &workflow_snapshot,
                                 annotations.as_ref(),
                                 is_external_tool,
@@ -1833,7 +1831,7 @@ impl NativeAgentRunner {
                                     &firewall_verdict,
                                     &self.tool_executor,
                                     &tool_key,
-                                    &call.args,
+                                    &call.safe_args,
                                     &self.denial_memory,
                                 ) {
                                     ApprovalDecision::NotRequired => None,
@@ -1855,7 +1853,7 @@ impl NativeAgentRunner {
                                 &firewall_verdict,
                                 &self.tool_executor,
                                 &tool_key,
-                                &call.args,
+                                &call.safe_args,
                                 &self.denial_memory,
                             )
                             .requires_approval();
@@ -1917,15 +1915,11 @@ impl NativeAgentRunner {
                                 }
                             }
                             if !rejected {
-                                let resolved_args = tool_args_for_execution(
-                                    &call.tool_name,
-                                    &call.safe_args,
-                                    &self.credential_vault,
-                                );
+                                let execution_args = tool_args_for_execution(&call.safe_args);
                                 let result = self
                                     .execute_tool(
                                         &call.tool_name,
-                                        &resolved_args,
+                                        &execution_args,
                                         &call.call_id,
                                         None,
                                     )

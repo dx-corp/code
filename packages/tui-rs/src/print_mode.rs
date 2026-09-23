@@ -709,11 +709,14 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                     eprintln!("[tool] {tool}");
                 }
 
-                let mut resolved = credential_vault.resolve_in_json(&args);
+                // Model-authored references are never authority to reveal a
+                // credential to a tool. Connection transports inject their own
+                // secrets after admission.
+                let mut execution_args = args.clone();
                 let workspace_error = if limits.workspace_only_file_tools {
-                    match prepare_workspace_tool_args(&tool, &resolved, &workspace) {
+                    match prepare_workspace_tool_args(&tool, &execution_args, &workspace) {
                         Ok(prepared) => {
-                            resolved = prepared;
+                            execution_args = prepared;
                             None
                         }
                         Err(error) => Some(error.to_string()),
@@ -721,15 +724,19 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                 } else {
                     None
                 };
-                let denied =
-                    approval_denied(&tool_executor, &tool, &resolved, options.fail_on_approval);
+                let denied = approval_denied(
+                    &tool_executor,
+                    &tool,
+                    &execution_args,
+                    options.fail_on_approval,
+                );
                 let rejection = limit_error.or(workspace_error).or_else(|| {
                     // A `bypass_sandbox` request can only ever run after a
                     // human explicitly approves it, and print/exec has no
                     // approval UI to collect that approval — so it is
                     // rejected here rather than silently honored (which would
                     // let the model waive the sandbox at will).
-                    if tool_executor.requires_sandbox_bypass_approval(&tool, &resolved) {
+                    if tool_executor.requires_sandbox_bypass_approval(&tool, &execution_args) {
                         Some(format!(
                             "Tool `{tool}` requested `bypass_sandbox: true`, but running \
                              outside the native sandbox requires human approval and this \
@@ -750,7 +757,7 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                     ))
                 } else {
                     tool_executor
-                        .execute(&tool, &resolved, None, &call_id)
+                        .execute(&tool, &execution_args, None, &call_id)
                         .await
                 };
 

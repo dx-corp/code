@@ -6970,26 +6970,24 @@ fn fatal_stream_error_discards_completed_tool_calls() {
 }
 
 #[test]
-fn lifecycle_tool_args_preserve_opaque_credential_references() {
+fn every_tool_keeps_model_authored_credential_references_opaque() {
     let vault = CredentialVault::new();
-    let reference = vault.store("secret-value", crate::agent::CredentialType::Token);
+    let reference = vault.store(
+        "; touch /tmp/should-not-run",
+        crate::agent::CredentialType::Token,
+    );
     let args = serde_json::json!({
-        "task": format!("Use {reference} in the child")
+        "command": format!("echo {reference}"),
+        "authorization": reference,
     });
 
-    assert_eq!(
-        tool_args_for_execution("spawn_subagent", &args, &vault),
-        args,
-        "durable lifecycle records must retain the opaque reference"
-    );
-    assert_eq!(
-        tool_args_for_execution("bash", &args, &vault),
-        serde_json::json!({"task": "Use secret-value in the child"})
-    );
+    assert_eq!(tool_args_for_execution(&args), args);
+    assert!(!tool_args_for_execution(&args).to_string().contains("touch"));
+    assert!(vault.resolve_in_json(&args).to_string().contains("touch"));
 }
 
 #[test]
-fn provider_history_preserves_references_until_tool_execution() {
+fn provider_history_and_tool_execution_preserve_references() {
     let vault = CredentialVault::new();
     let reference = vault.store("secret-value", crate::agent::CredentialType::Token);
     let history = vec![Message {
@@ -7010,13 +7008,13 @@ fn provider_history_preserves_references_until_tool_execution() {
     assert_eq!(durable_text, &format!("Use {reference} in the child"));
     let args = serde_json::json!({"task": format!("Use {reference} in the child")});
     assert_eq!(
-        tool_args_for_execution("bash", &args, &vault)["task"],
-        "Use secret-value in the child"
+        tool_args_for_execution(&args)["task"],
+        format!("Use {reference} in the child")
     );
 }
 
 #[test]
-fn incident_tool_output_reaches_provider_without_invented_or_raw_credentials() {
+fn incident_tool_output_remains_opaque_through_tool_execution() {
     let vault = CredentialVault::new();
     let source = "bearer_token: None\n(None, None, None)";
     let safe_source = vault.vault_in_text(source);
@@ -7047,8 +7045,8 @@ fn incident_tool_output_reaches_provider_without_invented_or_raw_credentials() {
     }
     let args = serde_json::json!({"authorization": safe_credential});
     assert_eq!(
-        tool_args_for_execution("bash", &args, &vault)["authorization"],
-        format!("token: {raw}")
+        tool_args_for_execution(&args)["authorization"],
+        safe_credential
     );
     assert!(!serde_json::to_string(&args).unwrap().contains(raw));
 }
@@ -7168,6 +7166,22 @@ fn provider_request_requires_vault_attestation_for_every_surface() {
         content: MessageContent::text("{{CRED:token:abcdef012345}}"),
     }]);
     assert!(ProviderSafeRequest::prepare(&forged, RequestConfig::default(), &vault).is_err());
+}
+
+#[test]
+fn provider_request_expires_when_a_new_credential_matches_its_plaintext() {
+    let vault = CredentialVault::new();
+    let raw = "late-provider-secret-1234567890";
+    let messages = Arc::new(vec![Message {
+        role: Role::User,
+        content: MessageContent::text(format!("Use {raw}")),
+    }]);
+    let safe = ProviderSafeRequest::prepare(&messages, RequestConfig::default(), &vault)
+        .expect("initially safe request");
+    safe.ensure_current(&vault).expect("current vault");
+
+    vault.store(raw, crate::agent::CredentialType::Secret);
+    assert!(safe.ensure_current(&vault).is_err());
 }
 
 #[test]

@@ -18,8 +18,8 @@ use super::super::native_host::{
 use super::super::protocol::InlineToolApprovalContext;
 use super::super::safety::DenialMemory;
 use super::super::{
-    CredentialVault, DenialReason, ExecutionPhase, ExecutionSource, FromAgent,
-    ManagedPolicyMetadata, ToolExecution, ToolResult,
+    DenialReason, ExecutionPhase, ExecutionSource, FromAgent, ManagedPolicyMetadata, ToolExecution,
+    ToolResult,
 };
 use super::{AgentCommand, prompt_kind_starts_main_request};
 use crate::ai::ContentBlock;
@@ -169,23 +169,12 @@ pub(super) fn abort_pending_tools_after_stream_error(
     assistant_content.retain(|block| !matches!(block, ContentBlock::ToolUse { .. }));
 }
 
-/// Lifecycle managers must receive opaque credential references so child
-/// prompts and durable records never receive the parent's resolved secrets.
-/// The child receives the shared vault separately and resolves only at the
-/// admitted tool execution boundary.
-pub(super) fn tool_args_for_execution(
-    tool_name: &str,
-    safe_args: &serde_json::Value,
-    credential_vault: &CredentialVault,
-) -> serde_json::Value {
-    if tool_name.eq_ignore_ascii_case("spawn_subagent")
-        || tool_name.eq_ignore_ascii_case("resume_subagent")
-        || tool_name.eq_ignore_ascii_case("control_subagent")
-    {
-        safe_args.clone()
-    } else {
-        credential_vault.resolve_in_json(safe_args)
-    }
+/// Model-authored arguments are data, not authority to materialize a secret.
+/// Keep references opaque for every tool, including shell commands, external
+/// tools, and lifecycle managers. Trusted connection/auth transports inject
+/// their own credentials after tool admission.
+pub(super) fn tool_args_for_execution(safe_args: &serde_json::Value) -> serde_json::Value {
+    safe_args.clone()
 }
 
 /// Everything needed to finish a tool call once its execution decision is

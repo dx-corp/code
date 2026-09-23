@@ -13,8 +13,8 @@ pub(super) struct QueuedReadOnlyToolExecution {
     pub(super) tool_name: String,
     pub(super) args: serde_json::Value,
     pub(super) safe_args: serde_json::Value,
-    // Resolve before scheduling so tools receive concrete command arguments.
-    pub(super) resolved_args: serde_json::Value,
+    // Freeze the opaque arguments before scheduling the read-only wave.
+    pub(super) execution_args: serde_json::Value,
     pub(super) extra_context: Option<String>,
 }
 
@@ -91,7 +91,7 @@ pub(super) async fn execute_native_read_only_tool_wave(
         .map(|call| NativeReadOnlyToolCall {
             call_id: call.call_id.clone(),
             tool_name: call.tool_name.clone(),
-            args: call.resolved_args.clone(),
+            args: call.execution_args.clone(),
         })
         .collect();
     tool_executor

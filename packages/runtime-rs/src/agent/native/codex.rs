@@ -235,7 +235,7 @@ impl NativeAgentRunner {
             bail!("No user message available for Codex app-server turn");
         }
         let user_text = self.credential_vault.vault_in_text(&user_text);
-        let vault_generation = self
+        let vault_attestation = self
             .credential_vault
             .attest_provider_text(&user_text)
             .map_err(anyhow::Error::msg)?;
@@ -254,7 +254,7 @@ impl NativeAgentRunner {
         self.validate_codex_boost().await;
         step_budget.record_step();
         anyhow::ensure!(
-            self.credential_vault.has_generation(vault_generation),
+            self.credential_vault.has_attestation(vault_attestation),
             "credential vault changed before Codex turn dispatch"
         );
         let turn_id = {

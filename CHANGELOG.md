@@ -51,6 +51,34 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.96] - 2026-09-23
+
+### Added
+
+- Bring Dex orb to hosted web console (#10293). <!-- maestro-release-note:6f8810b989a5 -->
+- Connect desktop conversations to native Rust runtime (#10286). <!-- maestro-release-note:2fd264e18c59 -->
+
+### Changed
+
+- Allow bounded headless fixture startup under load (#10292). <!-- maestro-release-note:d4cfef81eb49 -->
+- Guard PR prerequisites and Cargo binary path lookups (#10291). <!-- maestro-release-note:a514e96910df -->
+- Wait for PTY controls and isolate background task environment (#10290). <!-- maestro-release-note:11230e9a61dd -->
+
+### Fixed
+
+- Reserve GKE lanes for required npm proxy jobs (#10299). <!-- maestro-release-note:6196d9b14927 -->
+- Bound provider usage before Meter delivery (#10297). <!-- maestro-release-note:d9b55829e52d -->
+- Route APEX readiness to GCP ARC runner (#10298). <!-- maestro-release-note:7dd60df5df1f -->
+- Require explicit control evidence in reports (#10295). <!-- maestro-release-note:0d6a4ae21bfb -->
+- Keep incomplete usage cost unknown (#10296). <!-- maestro-release-note:6cd9217c2ae5 -->
+- Include catalog in native image build (#10294). <!-- maestro-release-note:f4326e46b925 -->
+- Build Maestro product kit before APEX measurement (#10289). <!-- maestro-release-note:10be7059a473 -->
+- Declare tempfile for runtime worktree hooks (#10288). <!-- maestro-release-note:425ddfe53e5a -->
+- Reserve hook directories atomically under parallel worktrees (#10287). <!-- maestro-release-note:f8ea85c82968 -->
+- Require chat semantic terminal before success (#10269). <!-- maestro-release-note:204a3dbc5fe7 -->
+- Resolve Cargo integration-test binary paths across target modes (#10277). <!-- maestro-release-note:002869cdec9f -->
+- Install Node for Rust tooling contracts (#10276). <!-- maestro-release-note:2e049d08f70f -->
+
 ## [0.10.95] - 2026-09-23
 
 ### Fixed

@@ -278,6 +278,15 @@ impl ActionFirewall {
             return FirewallVerdict::Block { reason };
         }
 
+        // A credential reference is data, not shell syntax or authority to
+        // materialize a secret. Its delimiters contain `|`, so even an opaque
+        // reference must never be interpreted as a command fragment.
+        if command.contains("{{CRED") {
+            return FirewallVerdict::Block {
+                reason: "Credential references cannot be used in shell commands".to_string(),
+            };
+        }
+
         // Check for dangerous patterns first (highest priority)
         let patterns = check_dangerous_patterns(command);
         if let Some(pattern) = patterns.first() {
@@ -880,6 +889,23 @@ mod tests {
                 cmd,
                 desc,
                 verdict
+            );
+        }
+    }
+
+    #[test]
+    fn test_bash_blocks_opaque_credential_references_before_command_analysis() {
+        let fw = test_firewall();
+        for command in [
+            "echo {{CRED|token|123}}",
+            "curl https://example.com -H 'Authorization: {{CRED|token|123}}'",
+            "echo {{CRED:token:123}}",
+        ] {
+            let verdict = fw.check_bash(command);
+            assert!(verdict.is_blocked(), "{command}: {verdict:?}");
+            assert_eq!(
+                verdict.reason(),
+                Some("Credential references cannot be used in shell commands")
             );
         }
     }

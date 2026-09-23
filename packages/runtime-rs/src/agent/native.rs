@@ -104,6 +104,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use super::credential_store::CredentialAttestation;
 use super::extensions::{
     BatchEndContext, ExtensionRegistry, ExtensionVerdict,
     ToolCallContext as ExtensionToolCallContext, ToolResultContext as ExtensionToolResultContext,
@@ -3730,7 +3731,7 @@ fn vault_provider_history_shared(
 struct ProviderSafeRequest {
     messages: Arc<Vec<Message>>,
     config: RequestConfig,
-    vault_generation: u64,
+    vault_attestation: CredentialAttestation,
 }
 
 impl ProviderSafeRequest {
@@ -3746,36 +3747,36 @@ impl ProviderSafeRequest {
         let messages = vault_provider_history_shared(&messages, vault)?;
         config.system = config.system.map(|system| vault.vault_in_text(&system));
         let history_json = serde_json::to_value(messages.as_ref())?;
-        let generation = vault
+        let attestation = vault
             .attest_provider_json(&history_json)
             .map_err(anyhow::Error::msg)?;
         if let Some(system) = &config.system {
-            let system_generation = vault
+            let system_attestation = vault
                 .attest_provider_text(system)
                 .map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
-                generation == system_generation,
+                attestation == system_attestation,
                 "credential vault changed during provider request preparation"
             );
         }
         let tools_json = serde_json::to_value(config.tools.as_ref())?;
-        let tools_generation = vault
+        let tools_attestation = vault
             .attest_provider_json(&tools_json)
             .map_err(anyhow::Error::msg)?;
         anyhow::ensure!(
-            generation == tools_generation,
+            attestation == tools_attestation,
             "credential vault changed during provider request preparation"
         );
         Ok(Self {
             messages,
             config,
-            vault_generation: generation,
+            vault_attestation: attestation,
         })
     }
 
     fn ensure_current(&self, vault: &CredentialVault) -> Result<()> {
         anyhow::ensure!(
-            vault.has_generation(self.vault_generation),
+            vault.has_attestation(self.vault_attestation),
             "credential vault changed after provider request preparation"
         );
         Ok(())
