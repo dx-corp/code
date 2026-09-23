@@ -2734,12 +2734,10 @@ impl OpenAiClient {
                                         if let Some(usage) = resp.get("usage") {
                                             let input = usage
                                                 .get("input_tokens")
-                                                .and_then(serde_json::Value::as_u64)
-                                                .unwrap_or(0);
+                                                .and_then(serde_json::Value::as_u64);
                                             let output = usage
                                                 .get("output_tokens")
-                                                .and_then(serde_json::Value::as_u64)
-                                                .unwrap_or(0);
+                                                .and_then(serde_json::Value::as_u64);
                                             // Extract cached tokens from input_tokens_details
                                             let cache_read = usage
                                                 .get("input_tokens_details")
@@ -2768,16 +2766,18 @@ impl OpenAiClient {
                                                     details.get("cache_write_tokens")
                                                 })
                                                 .and_then(serde_json::Value::as_u64);
-                                            let _ = tx.send(StreamEvent::Usage {
-                                                input_tokens: uncached_input_tokens(
-                                                    input,
-                                                    cache_read,
-                                                    cache_write,
-                                                ),
-                                                output_tokens: output,
-                                                cache_read_tokens: cache_read,
-                                                cache_creation_tokens: cache_write,
-                                            });
+                                            if let (Some(input), Some(output)) = (input, output) {
+                                                let _ = tx.send(StreamEvent::Usage {
+                                                    input_tokens: uncached_input_tokens(
+                                                        input,
+                                                        cache_read,
+                                                        cache_write,
+                                                    ),
+                                                    output_tokens: output,
+                                                    cache_read_tokens: cache_read,
+                                                    cache_creation_tokens: cache_write,
+                                                });
+                                            }
                                         }
                                     }
                                     let _ = tx.send(StreamEvent::MessageStop { stop_reason: None });
@@ -3067,28 +3067,28 @@ impl OpenAiClient {
                                                 let _ =
                                                     tx.send(StreamEvent::ProviderCost { cost_usd });
                                             }
-                                            let _ = tx.send(StreamEvent::Usage {
-                                                input_tokens: uncached_input_tokens(
-                                                    usage.prompt_tokens.unwrap_or(0),
-                                                    usage
-                                                        .prompt_tokens_details
-                                                        .as_ref()
-                                                        .and_then(|d| d.cached_tokens),
-                                                    usage
-                                                        .prompt_tokens_details
-                                                        .as_ref()
-                                                        .and_then(|d| d.cache_write_tokens),
-                                                ),
-                                                output_tokens: usage.completion_tokens.unwrap_or(0),
-                                                cache_read_tokens: usage
+                                            if let (Some(input), Some(output)) =
+                                                (usage.prompt_tokens, usage.completion_tokens)
+                                            {
+                                                let cache_read = usage
                                                     .prompt_tokens_details
                                                     .as_ref()
-                                                    .and_then(|d| d.cached_tokens),
-                                                cache_creation_tokens: usage
+                                                    .and_then(|d| d.cached_tokens);
+                                                let cache_write = usage
                                                     .prompt_tokens_details
                                                     .as_ref()
-                                                    .and_then(|d| d.cache_write_tokens),
-                                            });
+                                                    .and_then(|d| d.cache_write_tokens);
+                                                let _ = tx.send(StreamEvent::Usage {
+                                                    input_tokens: uncached_input_tokens(
+                                                        input,
+                                                        cache_read,
+                                                        cache_write,
+                                                    ),
+                                                    output_tokens: output,
+                                                    cache_read_tokens: cache_read,
+                                                    cache_creation_tokens: cache_write,
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -4147,6 +4147,66 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
             assert!(events.iter().any(|event| matches!(event, StreamEvent::ProviderError { kind: ProviderStreamErrorKind::TransientProtocol, .. })), "{events:?}");
             assert!(!events.iter().any(|event| matches!(event, StreamEvent::MessageStop { .. })), "{events:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn managed_chat_partial_usage_does_not_become_zero_usage() {
+        for usage in ["{}", "{\"prompt_tokens\":9}", "{\"completion_tokens\":4}"] {
+            let sse = format!(
+                "data: {{\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"ok\"}},\"finish_reason\":\"stop\"}}]}}\n\ndata: {{\"id\":\"chat-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6\",\"choices\":[],\"usage\":{usage}}}\n\ndata: [DONE]\n\n"
+            );
+            let (mut client, _request_rx) =
+                managed_gateway_test_client(&sse, &managed_receipt_headers());
+            let mut authorization: serde_json::Value =
+                serde_json::from_str(&managed_authorization_fixture("lineage-receipt")).unwrap();
+            authorization["claims"]["endpoint"] = "chat.completions".into();
+            client.set_managed_inference_authorization(Some(authorization.to_string()));
+            let stream = client
+                .stream(
+                    &[],
+                    &RequestConfig {
+                        model: "gpt-5.6".into(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let events = collect_stream_events(stream).await;
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, StreamEvent::Usage { .. })),
+                "partial usage must remain unknown: {events:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_responses_partial_usage_does_not_become_zero_usage() {
+        let sse = "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":9}}}\n\n";
+        let (mut client, _request_rx) =
+            managed_gateway_test_client(sse, &managed_receipt_headers());
+        let mut authorization: serde_json::Value =
+            serde_json::from_str(&managed_authorization_fixture("lineage-receipt")).unwrap();
+        authorization["claims"]["endpoint"] = "responses".into();
+        client.set_managed_inference_authorization(Some(authorization.to_string()));
+        let stream = client
+            .stream(
+                &[],
+                &RequestConfig {
+                    model: "gpt-5.6".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let events = collect_stream_events(stream).await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Usage { .. })),
+            "partial usage must remain unknown: {events:?}"
+        );
     }
 
     #[tokio::test]

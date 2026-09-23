@@ -3304,7 +3304,7 @@ async fn exhausted_one_step_turn_does_not_switch_to_unreachable_fallback() {
     .await
     .expect("one-step turn must terminate promptly");
     agent.shutdown().await;
-    assert!(terminal.contains("Agent error"), "{terminal}");
+    assert!(terminal.contains("step_budget_exhausted"), "{terminal}");
 }
 
 #[tokio::test]

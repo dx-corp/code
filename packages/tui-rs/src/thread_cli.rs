@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 const SERVICE: &str = "/deixic.v1.DeixicService";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-const FOLLOW_LIMIT: Duration = Duration::from_secs(120);
+const FOLLOW_LIMIT: Duration = Duration::from_mins(2);
 const USAGE: &str = "Usage: deixic-code thread attach <thread-id> [--message <text>] [--json] [--base-url <url>]\n\
 The thread id is a Deixic thread id (thread:...). A managed Deixic login is required.\n\
 Interactive commands: /quit, /respond <request-id> <approve|deny|answer|retry|skip|abort> [text].";
@@ -461,7 +461,7 @@ fn emit(output: Output<'_>, json: bool) -> Result<()> {
             }
             Output::Accepted { turn_id } => println!("Accepted turn {turn_id}"),
             Output::Waiting { turn_id } => {
-                println!("Turn {turn_id} is still running. Reattach to continue watching.")
+                println!("Turn {turn_id} is still running. Reattach to continue watching.");
             }
         }
     }

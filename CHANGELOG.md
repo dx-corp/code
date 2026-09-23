@@ -51,6 +51,44 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.94] - 2026-09-23
+
+### Added
+
+- Attach CLI to hosted Dex threads (#10258). <!-- maestro-release-note:1e5e3b1e46cc -->
+- Use Dex orbit across terminal and desktop (#10250). <!-- maestro-release-note:e7c1ef11ba5f -->
+- Refine Dex orb across desktop and terminal (#10264). <!-- maestro-release-note:beac37e7ecde -->
+
+### Changed
+
+- Expect budget terminal after spent fallback turn (#10259). <!-- maestro-release-note:cca477bb3998 -->
+- Release v0.10.93 with Dex orbit (#10255). <!-- maestro-release-note:f72e07ee04fe -->
+- Update dtolnay/rust-toolchain requirement to 02cb101ec7c40f2c49e1d9714d64511d8e1b74de (#10221). <!-- maestro-release-note:ce2d3f1528e5 -->
+- Refresh bundled model catalog (#10254). <!-- maestro-release-note:70af0f581dfb -->
+- Bump lucide-react in /products/maestro/desktop (#10224). <!-- maestro-release-note:35ec0f7ee3f3 -->
+- Offload small verdict jobs to desktop (#10249). <!-- maestro-release-note:995d1685aa3a -->
+- Require accepted source ref for execution workspace creation (#10245). <!-- maestro-release-note:1d300d831297 -->
+- Borrow synthetic credential fixture for scan (#10238). <!-- maestro-release-note:4cd2a32d4187 -->
+- Reject overflowing canary timeout values (#10237). <!-- maestro-release-note:2089726d64a1 -->
+- Cover execution workspace admission fencing (#10232). <!-- maestro-release-note:89c215040d84 -->
+- Create execution workspace on project task admission (#10229). <!-- maestro-release-note:e28e0907930e -->
+- Enumerate bounded state-machine histories (#10228). <!-- maestro-release-note:017f1c873668 -->
+
+### Fixed
+
+- Repair provider request borrows (#10262). <!-- maestro-release-note:f7fa65426e74 -->
+- Dispatch Maestro release without gh CLI (#10263). <!-- maestro-release-note:feaf22d453ab -->
+- Keep incomplete provider usage unknown (#10261). <!-- maestro-release-note:be8d00b50511 -->
+- Satisfy Clippy for thread attach (#10260). <!-- maestro-release-note:bceff0b3978c -->
+- Reject chat streams without a finish reason (#10257). <!-- maestro-release-note:6370cc015330 -->
+- Remove redundant provider request borrows (#10256). <!-- maestro-release-note:e768f18de0c9 -->
+- Stop model fallback after turn budget exhaustion (#10248). <!-- maestro-release-note:5173e20182b2 -->
+- Cap hosted retry delay after jitter (#10247). <!-- maestro-release-note:d06d8e9ffc21 -->
+- End final controller turn without retry wake (#10253). <!-- maestro-release-note:aa49bdbc2ef2 -->
+- Attest credential references at provider boundary (#10252). <!-- maestro-release-note:96e7a202a697 -->
+- Scope Mission test constructors (#10251). <!-- maestro-release-note:099e8b8f4871 -->
+- Stop retries after turn step budget exhaustion (#10246). <!-- maestro-release-note:b6ed6505c94d -->
+
 ## [0.10.93] - 2026-09-23
 
 ### Added
