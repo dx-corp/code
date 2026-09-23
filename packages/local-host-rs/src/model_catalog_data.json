@@ -553,7 +553,7 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2
-      },
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -585,7 +585,7 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2
-      },
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -613,7 +613,7 @@
       "cost": {
         "input": 1.25,
         "output": 10
-      },
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -644,8 +644,9 @@
       "cost": {
         "input": 0.3,
         "output": 2.5,
-        "cache_read": 0.03
-      },
+        "cache_read": 0.03,
+                "input_audio": 1
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -676,8 +677,9 @@
       "cost": {
         "input": 0.1,
         "output": 0.4,
-        "cache_read": 0.01
-      },
+        "cache_read": 0.01,
+                "input_audio": 0.3
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -708,8 +710,13 @@
       "cost": {
         "input": 1.25,
         "output": 10,
-        "cache_read": 0.125
-      },
+        "cache_read": 0.125,
+                "above_200k": {
+                  "input": 2.5,
+                  "output": 15,
+                  "cache_read": 0.25
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -745,8 +752,9 @@
       "cost": {
         "input": 0.5,
         "output": 3,
-        "cache_read": 0.05
-      },
+        "cache_read": 0.05,
+                "input_audio": 1
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -782,8 +790,9 @@
       "cost": {
         "input": 0.25,
         "output": 1.5,
-        "cache_read": 0.025
-      },
+        "cache_read": 0.025,
+                "input_audio": 0.5
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -847,8 +856,9 @@
       ],
       "cost": {
         "input": 0.75,
-        "output": 4.5
-      },
+        "output": 4.5,
+                "input_audio": 3
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -883,8 +893,13 @@
       "cost": {
         "input": 2,
         "output": 12,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 4,
+                  "output": 18,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -919,8 +934,13 @@
       "cost": {
         "input": 2,
         "output": 12,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 4,
+                  "output": 18,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -956,8 +976,9 @@
       "cost": {
         "input": 1.5,
         "output": 9,
-        "cache_read": 0.15
-      },
+        "cache_read": 0.15,
+                "input_audio": 1.5
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1030,8 +1051,9 @@
       "cost": {
         "input": 0.75,
         "output": 3.75,
-        "cache_read": 0.075
-      },
+        "cache_read": 0.075,
+                "input_audio": 0.75
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1066,8 +1088,9 @@
       "cost": {
         "input": 0.75,
         "output": 3.75,
-        "cache_read": 0.075
-      },
+        "cache_read": 0.075,
+                "input_audio": 0.75
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1102,8 +1125,9 @@
       "cost": {
         "input": 0.75,
         "output": 3.75,
-        "cache_read": 0.075
-      },
+        "cache_read": 0.075,
+                "input_audio": 0.75
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1138,8 +1162,9 @@
       "cost": {
         "input": 0.75,
         "output": 3.75,
-        "cache_read": 0.075
-      },
+        "cache_read": 0.075,
+                "input_audio": 0.75
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1754,8 +1779,13 @@
       "cost": {
         "input": 2.5,
         "output": 15,
-        "cache_read": 0.25
-      },
+        "cache_read": 0.25,
+                "above_200k": {
+                  "input": 5,
+                  "output": 22.5,
+                  "cache_read": 0.5
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1856,8 +1886,12 @@
       ],
       "cost": {
         "input": 30,
-        "output": 180
-      },
+        "output": 180,
+                "above_200k": {
+                  "input": 60,
+                  "output": 270
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1892,8 +1926,13 @@
       "cost": {
         "input": 5,
         "output": 30,
-        "cache_read": 0.5
-      },
+        "cache_read": 0.5,
+                "above_200k": {
+                  "input": 10,
+                  "output": 45,
+                  "cache_read": 1
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1925,8 +1964,12 @@
       ],
       "cost": {
         "input": 30,
-        "output": 180
-      },
+        "output": 180,
+                "above_200k": {
+                  "input": 60,
+                  "output": 270
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1963,8 +2006,14 @@
         "input": 4,
         "output": 20,
         "cache_read": 0.4,
-        "cache_write": 5
-      },
+        "cache_write": 5,
+                "above_200k": {
+                  "input": 8,
+                  "output": 30,
+                  "cache_read": 0.8,
+                  "cache_write": 10
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2001,8 +2050,14 @@
         "input": 0.2,
         "output": 1.2,
         "cache_read": 0.02,
-        "cache_write": 0.25
-      },
+        "cache_write": 0.25,
+                "above_200k": {
+                  "input": 0.4,
+                  "output": 1.8,
+                  "cache_read": 0.04,
+                  "cache_write": 0.5
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2039,8 +2094,14 @@
         "input": 4,
         "output": 20,
         "cache_read": 0.4,
-        "cache_write": 5
-      },
+        "cache_write": 5,
+                "above_200k": {
+                  "input": 8,
+                  "output": 30,
+                  "cache_read": 0.8,
+                  "cache_write": 10
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2077,8 +2138,14 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2,
-        "cache_write": 2.5
-      },
+        "cache_write": 2.5,
+                "above_200k": {
+                  "input": 4,
+                  "output": 18,
+                  "cache_read": 0.4,
+                  "cache_write": 5
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2114,8 +2181,14 @@
         "input": 10,
         "output": 50,
         "cache_read": 1,
-        "cache_write": 12.5
-      },
+        "cache_write": 12.5,
+                "above_200k": {
+                  "input": 20,
+                  "output": 75,
+                  "cache_read": 2,
+                  "cache_write": 25
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2152,8 +2225,14 @@
         "input": 0.1,
         "output": 0.5,
         "cache_read": 0.01,
-        "cache_write": 0.125
-      },
+        "cache_write": 0.125,
+                "above_200k": {
+                  "input": 0.2,
+                  "output": 0.75,
+                  "cache_read": 0.02,
+                  "cache_write": 0.25
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2190,8 +2269,14 @@
         "input": 2,
         "output": 10,
         "cache_read": 0.2,
-        "cache_write": 2.5
-      },
+        "cache_write": 2.5,
+                "above_200k": {
+                  "input": 4,
+                  "output": 15,
+                  "cache_read": 0.4,
+                  "cache_write": 5
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2226,8 +2311,9 @@
       "cost": {
         "input": 4,
         "output": 24,
-        "cache_read": 0.4
-      },
+        "cache_read": 0.4,
+                "input_audio": 32
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11377,8 +11463,13 @@
       "cost": {
         "input": 1.25,
         "output": 2.5,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 2.5,
+                  "output": 5,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11407,8 +11498,13 @@
       "cost": {
         "input": 1.25,
         "output": 2.5,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 2.5,
+                  "output": 5,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11442,8 +11538,13 @@
       "cost": {
         "input": 1.25,
         "output": 2.5,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 2.5,
+                  "output": 5,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11475,8 +11576,13 @@
       "cost": {
         "input": 2,
         "output": 6,
-        "cache_read": 0.3
-      },
+        "cache_read": 0.3,
+                "above_200k": {
+                  "input": 4,
+                  "output": 12,
+                  "cache_read": 0.6
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11509,8 +11615,13 @@
       "cost": {
         "input": 2,
         "output": 6,
-        "cache_read": 0.5
-      },
+        "cache_read": 0.5,
+                "above_200k": {
+                  "input": 4,
+                  "output": 12,
+                  "cache_read": 1
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11543,8 +11654,13 @@
       "cost": {
         "input": 2,
         "output": 6,
-        "cache_read": 0.5
-      },
+        "cache_read": 0.5,
+                "above_200k": {
+                  "input": 4,
+                  "output": 12,
+                  "cache_read": 1
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11572,8 +11688,13 @@
       "cost": {
         "input": 1,
         "output": 2,
-        "cache_read": 0.2
-      },
+        "cache_read": 0.2,
+                "above_200k": {
+                  "input": 2,
+                  "output": 4,
+                  "cache_read": 0.4
+                }
+              },
       "verification": {
         "state": "catalog",
         "source": "models.dev"

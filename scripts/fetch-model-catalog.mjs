@@ -232,6 +232,32 @@ function mapOpenRouterCost(pricing) {
 }
 
 /**
+ * Remove a long-context tier from a model that cannot reach the threshold.
+ *
+ * models.dev is internally inconsistent for at least one row:
+ * gemini-2.5-computer-use-preview-10-2025 has a 131,072-token context and a
+ * tier that starts at 200,000, which can never apply. The block looks copied
+ * from gemini-2.5-pro, which has the same base rates and a 1M window. An
+ * unreachable tier is noise at best and a mis-copied pricing block at worst,
+ * so it is dropped and named.
+ */
+function dropUnreachableContextTiers(models) {
+	const dropped = [];
+	for (const model of models) {
+		if (!model.cost?.above_200k) continue;
+		const context = model.capabilities?.context_tokens;
+		if (typeof context === "number" && context > 200_000) continue;
+		delete model.cost.above_200k;
+		dropped.push(`${model.id} (context ${context})`);
+	}
+	if (dropped.length > 0) {
+		console.log(
+			`dropped ${dropped.length} unreachable long-context tier(s): ${dropped.join(", ")}`,
+		);
+	}
+}
+
+/**
  * Give a direct-provider row the price its OpenRouter twin publishes.
  *
  * models.dev carries no cost for some direct rows even when OpenRouter prices
@@ -268,6 +294,23 @@ function backfillMissingCosts(models) {
 	}
 }
 
+/**
+ * Cost keys models.dev emits that the catalog deliberately does not carry.
+ *
+ * Anything models.dev prices and this list does not name is a dimension the
+ * catalog would drop silently, so mapCost throws on it. That is not
+ * hypothetical: models.dev publishes `reasoning` for 149 models,
+ * `context_over_200k` for 458 and `input_audio` for 134, and every one of
+ * them was being discarded here without a word.
+ */
+const UNMAPPED_COST_FIELDS = new Map([
+	[
+		"tiers",
+		"the general form of context_over_200k; carried through that field until a consumer needs arbitrary tiers",
+	],
+	["output_audio", "no consumer bills audio output yet; add it with the consumer, not before"],
+]);
+
 function mapCost(cost) {
 	const rate = (value) =>
 		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -276,15 +319,53 @@ function mapCost(cost) {
 	if (input === undefined || output === undefined) {
 		return undefined;
 	}
+
 	const mapped = { input, output };
-	const cacheRead = rate(cost?.cache_read);
-	if (cacheRead !== undefined) {
-		mapped.cache_read = cacheRead;
+	for (const [key, target] of [
+		["cache_read", "cache_read"],
+		["cache_write", "cache_write"],
+		// models.dev prices reasoning tokens apart from output tokens where a
+		// vendor does. Perplexity publishes $3 per million for
+		// sonar-deep-research reasoning against $8 for output, so folding them
+		// into output over-bills them by 2.7x.
+		["reasoning", "reasoning"],
+		// Audio input is 2x to 8x text input on the live models.
+		["input_audio", "input_audio"],
+	]) {
+		const value = rate(cost?.[key]);
+		if (value !== undefined) {
+			mapped[target] = value;
+		}
 	}
-	const cacheWrite = rate(cost?.cache_write);
-	if (cacheWrite !== undefined) {
-		mapped.cache_write = cacheWrite;
+
+	// Long-context pricing. Anthropic, OpenAI and Google all charge more above
+	// 200k tokens: gpt-5.5 is $5/$30 below and $10/$45 above. A flat rate
+	// under-bills every request past the threshold by roughly half.
+	const over = cost?.context_over_200k;
+	if (over && typeof over === "object") {
+		const tier = {};
+		for (const key of ["input", "output", "cache_read", "cache_write"]) {
+			const value = rate(over[key]);
+			if (value !== undefined) tier[key] = value;
+		}
+		if (tier.input !== undefined || tier.output !== undefined) {
+			mapped.above_200k = tier;
+		}
 	}
+
+	const unknown = Object.keys(cost ?? {}).filter(
+		(key) =>
+			!["input", "output", "cache_read", "cache_write", "reasoning", "input_audio", "context_over_200k"].includes(
+				key,
+			) && !UNMAPPED_COST_FIELDS.has(key),
+	);
+	if (unknown.length > 0) {
+		throw new Error(
+			`models.dev prices cost dimension(s) the catalog would drop silently: ${unknown.join(", ")}. ` +
+				"Map them in mapCost or name them in UNMAPPED_COST_FIELDS with a reason.",
+		);
+	}
+
 	return mapped;
 }
 
@@ -452,6 +533,7 @@ async function main() {
 	}
 
 	backfillMissingCosts(models);
+	dropUnreachableContextTiers(models);
 
 	models.sort(
 		(left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
