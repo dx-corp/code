@@ -11,12 +11,14 @@
 //!
 //! This approach allows users to provide test API keys without triggering
 //! "credential leaked" errors while keeping raw credentials out of the
-//! conversation context and model-directed tool arguments. Resolution helpers
-//! are for trusted internal consumers, not for model-authored tool payloads.
+//! conversation context and model-directed tool arguments. Plaintext resolution
+//! is available only to tests and the explicit `test-support` feature; normal
+//! production builds keep these references opaque.
 //!
 //! # Reference Format
 //!
-//! Credentials are replaced with: `{{CRED:type:id}}`
+//! Credentials are replaced with: `{{CRED|type|id}}`.
+//! The older `{{CRED:type:id}}` form is accepted when reading stored data.
 //! - `type`: The credential type (e.g., "api_key", "token")
 //! - `id`: A unique identifier for retrieval
 //!
@@ -29,16 +31,9 @@
 //!
 //! // Store a credential and get a reference
 //! let reference = store.store("sk-ant-abc123", CredentialType::ApiKey);
-//! // Returns something like: "{{CRED:api_key:a1b2c3d4e5f6}}"
+//! // Returns something like: "{{CRED|api_key|a1b2c3d4e5f6}}"
 //!
-//! // Resolve a reference back to the real value
-//! let value = store.resolve(&reference);
-//! assert_eq!(value, Some("sk-ant-abc123".to_string()));
-//!
-//! // Resolve all references in a string
-//! let cmd = format!("curl -H 'Authorization: Bearer {}'", reference);
-//! let resolved = store.resolve_all(&cmd);
-//! // Returns: "curl -H 'Authorization: Bearer sk-ant-abc123'"
+//! assert!(reference.starts_with("{{CRED|api_key|"));
 //! ```
 //!
 //! # Thread Safety
@@ -794,7 +789,8 @@ impl CredentialVault {
             .generation
     }
 
-    /// Resolve all credential references in a string.
+    /// Resolve all credential references in a string for test assertions.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn resolve_all(&self, input: &str) -> String {
         self.0
             .lock()
@@ -803,7 +799,8 @@ impl CredentialVault {
             .resolve_all(input)
     }
 
-    /// Resolve all credential references in a JSON value.
+    /// Resolve all credential references in JSON for test assertions.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn resolve_in_json(&self, value: &serde_json::Value) -> serde_json::Value {
         self.0
             .lock()
@@ -1128,6 +1125,7 @@ impl CredentialStore {
     /// # Returns
     ///
     /// The original credential value, or None if not found
+    #[cfg(any(test, feature = "test-support"))]
     pub fn resolve(&mut self, reference: &str) -> Option<String> {
         let caps = REFERENCE_PATTERN.captures(reference)?;
         let whole = caps.get(0)?.as_str();
@@ -1153,6 +1151,7 @@ impl CredentialStore {
     /// # Returns
     ///
     /// String with all references replaced with actual values
+    #[cfg(any(test, feature = "test-support"))]
     pub fn resolve_all(&mut self, input: &str) -> String {
         let mut result = String::with_capacity(input.len());
         let mut cursor = 0;
@@ -1190,6 +1189,7 @@ impl CredentialStore {
     /// # Returns
     ///
     /// New JSON value with all references resolved
+    #[cfg(any(test, feature = "test-support"))]
     pub fn resolve_in_json(&mut self, value: &serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::String(s) => serde_json::Value::String(self.resolve_all(s)),

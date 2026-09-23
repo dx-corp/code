@@ -85,6 +85,8 @@ pub(super) struct RuntimeTestHost {
     block_provider_after_tool: bool,
     block_model_after_tool: bool,
     post_tool_context: Option<String>,
+    post_hook_outputs: Arc<Mutex<Vec<String>>>,
+    eval_hook_outputs: Arc<Mutex<Vec<String>>>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     completed_tool_executions: Arc<AtomicUsize>,
     tool_operation_records: Option<Arc<Mutex<Vec<maestro_runtime_contracts::ToolOperationRecord>>>>,
@@ -136,6 +138,8 @@ impl RuntimeTestHost {
             block_provider_after_tool: false,
             block_model_after_tool: false,
             post_tool_context: None,
+            post_hook_outputs: Arc::new(Mutex::new(Vec::new())),
+            eval_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             checkpoint_barrier: None,
             completed_tool_executions: Arc::new(AtomicUsize::new(0)),
             tool_operation_records: None,
@@ -478,10 +482,14 @@ impl NativeExecutionHost for RuntimeTestHost {
         _name: &'a str,
         _call_id: &'a str,
         _args: &'a Value,
-        _output: &'a str,
+        output: &'a str,
         _is_error: bool,
         _duration_ms: u64,
     ) -> NativeHostFuture<'a, NativeHookResult> {
+        self.post_hook_outputs
+            .lock()
+            .unwrap()
+            .push(output.to_owned());
         Box::pin(async {
             self.post_tool_context
                 .as_ref()
@@ -498,8 +506,12 @@ impl NativeExecutionHost for RuntimeTestHost {
         _name: &'a str,
         _call_id: &'a str,
         _args: &'a Value,
-        _output: &'a str,
+        output: &'a str,
     ) -> NativeHostFuture<'a, NativeHookResult> {
+        self.eval_hook_outputs
+            .lock()
+            .unwrap()
+            .push(output.to_owned());
         Box::pin(async { Self::hook_result() })
     }
 
@@ -955,6 +967,12 @@ async fn wait_for_turn_completed(events: &mut mpsc::UnboundedReceiver<FromAgent>
 #[tokio::test]
 async fn native_tool_effect_is_staged_before_execution_and_completed_after_projection() {
     let workspace = tempfile::tempdir().expect("workspace");
+    let secret = "sk-ant-abcdefghijklmnopqrstuvwxyz123456";
+    std::fs::write(
+        workspace.path().join("fixture.txt"),
+        format!("Authorization: Bearer {secret}"),
+    )
+    .expect("write credential-bearing fixture");
     let journal = Arc::new(Mutex::new(Vec::new()));
     let scripted = crate::ai::ScriptedClient::new(
         "runtime-test/durable-operation",
@@ -1012,6 +1030,17 @@ async fn native_tool_effect_is_staged_before_execution_and_completed_after_proje
             .is_some(),
         "the staged outcome must retain its governed execution receipt"
     );
+    let outcome_content = &records
+        .iter()
+        .find(|record| {
+            record.call_id == "call-durable-read"
+                && record.phase == maestro_runtime_contracts::ToolOperationPhase::OutcomeReady
+        })
+        .and_then(|record| record.outcome.as_ref())
+        .expect("persisted outcome")
+        .content;
+    assert!(outcome_content.contains("{{CRED|"), "{outcome_content}");
+    assert!(!outcome_content.contains(secret));
 }
 
 #[tokio::test]
@@ -2214,6 +2243,41 @@ fn codex_wire_results_preserve_vaulted_credentials_without_mutating_input() {
 
     assert_eq!(response, format!("child result: {reference}"));
     assert_eq!(vaulted, format!("child result: {reference}"));
+}
+
+#[tokio::test]
+async fn post_execution_hooks_receive_opaque_output() {
+    let vault = CredentialVault::new();
+    let secret = "sk-post-hook-secret-1234567890";
+    let reference = vault.store(secret, crate::agent::CredentialType::Token);
+    let raw_output = format!("Authorization: Bearer {secret}");
+    let client = UnifiedClient::Scripted(crate::ai::ScriptedClient::new(
+        "runtime-test/fixture",
+        vec![crate::ai::ScriptedResponse::text("unused")],
+    ));
+    let host = RuntimeTestHost::new(".", client);
+    let post = host.post_hook_outputs.clone();
+    let eval = host.eval_hook_outputs.clone();
+    let hooks = NativeExecutionHostHandle::new(Arc::new(host));
+
+    run_post_execution_hooks(
+        &hooks,
+        &vault,
+        PostExecutionHookInput {
+            tool_name: "read",
+            call_id: "call-1",
+            args: &json!({"path": "fixture"}),
+            raw_output: &raw_output,
+            is_error: false,
+            duration_ms: 1,
+        },
+    )
+    .await;
+
+    let expected = format!("Authorization: Bearer {reference}");
+    assert_eq!(*post.lock().unwrap(), vec![expected.clone()]);
+    assert_eq!(*eval.lock().unwrap(), vec![expected]);
+    assert!(raw_output.contains(secret));
 }
 
 #[test]

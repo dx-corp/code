@@ -424,14 +424,14 @@ use self::deferred_tool_schemas::{
 };
 
 use self::tool_execution::{
-    ApprovalDecision, DeferredToolCall, DeferredToolCallDisposition, PostExecutionHooks,
-    ToolCallContext, abort_pending_tools_after_stream_error, append_hook_context,
-    approved_inline_env_change_rejection, approved_input_change_rejection, cancel_deferred_suffix,
-    cancelled_deferred_tool, clear_stashed_prompts, deferred_approved_policy_rejection,
-    deferred_firewall_verdict, deferred_hook_block, deferred_policy_rejection_event,
-    deferred_rejection_output_event, deferred_safety_rejection_event,
-    deferred_tool_call_disposition, deferred_tool_call_event, emit_deferred_failure,
-    emit_deferred_policy_failure, invalidate_cache_after_serial_tool,
+    ApprovalDecision, DeferredToolCall, DeferredToolCallDisposition, PostExecutionHookInput,
+    PostExecutionHooks, ToolCallContext, abort_pending_tools_after_stream_error,
+    append_hook_context, approved_inline_env_change_rejection, approved_input_change_rejection,
+    cancel_deferred_suffix, cancelled_deferred_tool, clear_stashed_prompts,
+    deferred_approved_policy_rejection, deferred_firewall_verdict, deferred_hook_block,
+    deferred_policy_rejection_event, deferred_rejection_output_event,
+    deferred_safety_rejection_event, deferred_tool_call_disposition, deferred_tool_call_event,
+    emit_deferred_failure, emit_deferred_policy_failure, invalidate_cache_after_serial_tool,
     normalize_post_hook_tool_args, parse_tool_input, repeat_refusal_message,
     rerun_deferred_pre_tool_use, run_post_execution_hooks, run_pre_tool_use_hook,
     tool_args_for_execution, tool_is_visible_to_model, tool_requires_approval,
