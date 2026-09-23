@@ -1028,6 +1028,25 @@ impl NativeAgentRunner {
                     request.params.as_ref(),
                     &self.codex_correlations.file_changes,
                 );
+                if codex_native_contains_plaintext_credential(&self.credential_vault, &policy_args)
+                {
+                    discard_deferred_codex_native_completion(
+                        request.params.as_ref(),
+                        &mut self.codex_correlations.pending_completions,
+                    );
+                    let _ = self.event_tx.send(FromAgent::Status {
+                        message: format!(
+                            "Declined Codex-native {} (credential-bearing payload cannot be rewritten)",
+                            request.method
+                        ),
+                    });
+                    let _ = self.event_tx.send(FromAgent::CodexNativeDecision {
+                        method: request.method.clone(),
+                        decision: "denied_policy".to_owned(),
+                    });
+                    request.respond(approval_decision(false));
+                    return Ok(());
+                }
                 let policy_call_id = Uuid::new_v4().to_string();
                 let hook_denial = match run_pre_tool_use_hook(
                     &self.hooks,

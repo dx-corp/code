@@ -3377,6 +3377,24 @@ fn codex_native_policy_hook_args(
     Value::Object(enriched)
 }
 
+/// Codex executes native approvals from its original request. We cannot hand
+/// it vaulted arguments, so deny any payload whose strings would change under
+/// vaulting before it reaches hooks or the approval channel. Inspect object
+/// keys as well as values: vault_in_json intentionally preserves JSON keys.
+fn codex_native_contains_plaintext_credential(vault: &CredentialVault, value: &Value) -> bool {
+    match value {
+        Value::String(text) => vault.vault_in_text(text) != *text,
+        Value::Array(items) => items
+            .iter()
+            .any(|item| codex_native_contains_plaintext_credential(vault, item)),
+        Value::Object(entries) => entries.iter().any(|(key, item)| {
+            vault.vault_in_text(key) != *key
+                || codex_native_contains_plaintext_credential(vault, item)
+        }),
+        _ => false,
+    }
+}
+
 /// Build a `files`/`changes` array from the correlated path/metadata set.
 fn materialize_path_array(entries: &[(String, Value)], as_objects: bool) -> Value {
     let items: Vec<Value> = entries
