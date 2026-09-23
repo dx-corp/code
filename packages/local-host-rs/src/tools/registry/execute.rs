@@ -3981,7 +3981,7 @@ mod tests {
             ""
         );
         let tail = redactor.finish(&vault, generation);
-        assert!(tail.contains("{{CRED:password:"));
+        assert!(tail.contains("{{CRED|password|"));
         assert!(!tail.contains("uri-secret"));
     }
 
@@ -3997,7 +3997,7 @@ mod tests {
         assert_eq!(redactor.push(&vault, generation, "KLMNOPQRSTUVWXYZ"), "");
         let output = redactor.push(&vault, generation, "\ndone\n");
         assert!(!output.contains("ABCDEFGHIJ"));
-        assert!(output.contains("{{CRED:"));
+        assert!(output.contains("{{CRED|"));
         assert!(output.contains("done"));
     }
 
@@ -4013,7 +4013,7 @@ mod tests {
             "token ABCDEFGHIJKLMNOPQRSTUVWXYZ\nready\n",
         );
         assert!(!output.contains("ABCDEFGHIJ"));
-        assert!(output.contains("{{CRED:"));
+        assert!(output.contains("{{CRED|"));
         assert!(output.contains("ready"));
     }
 
@@ -4044,7 +4044,7 @@ mod tests {
             ""
         );
         let tail = redactor.finish(&vault, generation);
-        assert!(tail.contains("{{CRED:password:"));
+        assert!(tail.contains("{{CRED|password|"));
         assert!(!tail.contains("uri-secret"));
     }
 

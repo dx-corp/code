@@ -1213,7 +1213,7 @@ async fn deferred_tool_call_event_matches_refreshed_vaulted_execution_input() {
     let (call_id, event_args) = deferred_wait_for_approval(&mut events).await;
     assert_eq!(call_id, "call-later");
     assert!(!event_args.to_string().contains(secret));
-    assert!(event_args.to_string().contains("{{CRED:"));
+    assert!(event_args.to_string().contains("{{CRED|"));
     assert_eq!(inspection_vault.resolve_in_json(&event_args), refreshed);
 
     let event = FromAgent::ToolCall {

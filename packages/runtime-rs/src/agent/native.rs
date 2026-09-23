@@ -3724,6 +3724,56 @@ fn vault_provider_history_shared(
     )?))
 }
 
+/// The only direct-provider payload constructed by the native turn loop.
+/// Its fields stay private so another path cannot pass an unexamined history
+/// or config to a provider by accident.
+struct ProviderSafeRequest {
+    messages: Arc<Vec<Message>>,
+    config: RequestConfig,
+    vault_generation: u64,
+}
+
+impl ProviderSafeRequest {
+    fn prepare(
+        messages: &Arc<Vec<Message>>,
+        mut config: RequestConfig,
+        vault: &CredentialVault,
+    ) -> Result<Self> {
+        let messages = vault_provider_history_shared(messages, vault)?;
+        config.system = config.system.map(|system| vault.vault_in_text(&system));
+        config.tools = vault_provider_tools(config.tools.as_ref(), vault)?;
+        // Config preparation may discover a credential present in history.
+        let messages = vault_provider_history_shared(&messages, vault)?;
+        config.system = config.system.map(|system| vault.vault_in_text(&system));
+        let history_json = serde_json::to_string(messages.as_ref())?;
+        let generation = vault
+            .attest_provider_text(&history_json)
+            .map_err(anyhow::Error::msg)?;
+        if let Some(system) = &config.system {
+            vault
+                .attest_provider_text(system)
+                .map_err(anyhow::Error::msg)?;
+        }
+        let tools_json = serde_json::to_string(config.tools.as_ref())?;
+        vault
+            .attest_provider_text(&tools_json)
+            .map_err(anyhow::Error::msg)?;
+        Ok(Self {
+            messages,
+            config,
+            vault_generation: generation,
+        })
+    }
+
+    fn ensure_current(&self, vault: &CredentialVault) -> Result<()> {
+        anyhow::ensure!(
+            vault.has_generation(self.vault_generation),
+            "credential vault changed after provider request preparation"
+        );
+        Ok(())
+    }
+}
+
 fn vault_provider_tools(
     tools: &[Tool],
     credential_vault: &CredentialVault,

@@ -6974,7 +6974,7 @@ fn incident_tool_output_reaches_provider_without_invented_or_raw_credentials() {
 
     let raw = "plausible-token-1234567890";
     let safe_credential = vault.vault_in_text(&format!("token: {raw}"));
-    assert!(safe_credential.contains("{{CRED:"));
+    assert!(safe_credential.contains("{{CRED|"));
     assert!(!safe_credential.contains(raw));
     let history = vec![
         Message {
@@ -6991,7 +6991,7 @@ fn incident_tool_output_reaches_provider_without_invented_or_raw_credentials() {
     let provider_json = serde_json::to_string(&provider).expect("provider request");
     for text in [&durable_json, &provider_json] {
         assert!(text.contains("(None, None, None)"));
-        assert!(text.contains("{{CRED:"));
+        assert!(text.contains("{{CRED|"));
         assert!(!text.contains(raw));
     }
     let args = serde_json::json!({"authorization": safe_credential});
@@ -7027,7 +7027,7 @@ fn provider_projection_vaults_late_raw_credential_text() {
     }];
     let provider = vault_provider_history(&history, &vault).expect("provider projection");
     let serialized = serde_json::to_string(&provider).expect("provider serialization");
-    assert!(serialized.contains("{{CRED:"));
+    assert!(serialized.contains("{{CRED|"));
     assert!(!serialized.contains(raw));
 }
 
@@ -7045,7 +7045,7 @@ fn provider_projection_rechecks_values_discovered_in_system_prompt() {
     assert!(!safe_system.contains(raw));
     let provider = vault_provider_history(&first, &vault).expect("final projection");
     let serialized = serde_json::to_string(&provider).unwrap();
-    assert!(serialized.contains("{{CRED:"));
+    assert!(serialized.contains("{{CRED|"));
     assert!(!serialized.contains(raw));
 }
 
@@ -7062,7 +7062,7 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
     let safe = vault_provider_tools(&tools, &vault).expect("safe provider tools");
     let serialized = serde_json::to_string(safe.as_ref()).expect("provider tools");
     assert_eq!(safe[0].name, "safe_tool");
-    assert!(serialized.contains("{{CRED:"));
+    assert!(serialized.contains("{{CRED|"));
     assert!(!serialized.contains(raw));
     assert!(serde_json::to_string(&tools).unwrap().contains(raw));
 
@@ -7078,6 +7078,65 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
         schema_enforcement: Default::default(),
     };
     assert!(vault_provider_tools(&[unsafe_key], &vault).is_err());
+}
+
+#[test]
+fn provider_request_requires_vault_attestation_for_every_surface() {
+    let vault = CredentialVault::new();
+    let raw = "plausible-token-1234567890";
+    let reference = vault.store(raw, crate::agent::CredentialType::Token);
+    let messages = Arc::new(vec![Message {
+        role: Role::User,
+        content: MessageContent::text(format!("Use {raw}")),
+    }]);
+    let config = RequestConfig {
+        system: Some(format!("token: {raw}")),
+        tools: Arc::new(vec![Tool {
+            name: "safe_tool".to_owned(),
+            description: format!("Credential {raw}"),
+            input_schema: serde_json::json!({"properties": {"key": {"default": raw}}}),
+            schema_enforcement: Default::default(),
+        }]),
+        ..RequestConfig::default()
+    };
+    let safe = ProviderSafeRequest::prepare(&messages, config, &vault).expect("safe request");
+    let wire = format!(
+        "{}{}{}",
+        serde_json::to_string(safe.messages.as_ref()).unwrap(),
+        safe.config.system.as_deref().unwrap(),
+        serde_json::to_string(safe.config.tools.as_ref()).unwrap()
+    );
+    assert!(wire.contains(&reference));
+    assert!(!wire.contains(raw));
+    safe.ensure_current(&vault).expect("current vault");
+    vault.clear();
+    assert!(safe.ensure_current(&vault).is_err());
+
+    let forged = Arc::new(vec![Message {
+        role: Role::User,
+        content: MessageContent::text("{{CRED:token:abcdef012345}}"),
+    }]);
+    assert!(ProviderSafeRequest::prepare(&forged, RequestConfig::default(), &vault).is_err());
+}
+
+#[test]
+fn provider_request_rechecks_system_after_tool_credential_discovery() {
+    let vault = CredentialVault::new();
+    let raw = "late-tool-value-1234567890";
+    let config = RequestConfig {
+        system: Some(format!("Use {raw}")),
+        tools: Arc::new(vec![Tool {
+            name: "safe_tool".to_owned(),
+            description: format!("token: {raw}"),
+            input_schema: serde_json::json!({"type": "object"}),
+            schema_enforcement: Default::default(),
+        }]),
+        ..RequestConfig::default()
+    };
+    let request = ProviderSafeRequest::prepare(&Arc::new(Vec::new()), config, &vault).unwrap();
+    let system = request.config.system.unwrap();
+    assert!(!system.contains(raw));
+    assert!(system.contains("{{CRED|"));
 }
 
 #[tokio::test]

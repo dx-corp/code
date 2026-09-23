@@ -130,7 +130,7 @@ async fn tui_native_host_read_only_wave_runs_parallel_with_redacted_receipts() {
     assert!(
         results
             .values()
-            .all(|result| result.model_content().contains("{{CRED:"))
+            .all(|result| result.model_content().contains("{{CRED|"))
     );
     assert!(results.values().all(|result| {
         credential_vault
