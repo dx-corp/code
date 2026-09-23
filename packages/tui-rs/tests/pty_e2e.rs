@@ -989,6 +989,7 @@ fn pty_confirmed_new_session_stops_tool_and_excludes_parent_history() {
         assert_eq!(mock.request_count(), 1, "fork must not submit a prompt");
         save_continuity_frame(&session, &format!("busy-fork-{columns}"));
         submit_continuity_prompt(&mut session, "/new", "Change conversation");
+        session.wait_for_text("Esc:", READY_TIMEOUT);
         save_continuity_frame(&session, &format!("new-confirm-{columns}"));
         let visible = session
             .output

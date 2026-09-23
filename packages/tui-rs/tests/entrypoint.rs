@@ -52,6 +52,7 @@ fn every_native_utility_command_routes_to_the_utility_handler() {
     );
 
     assert!(NATIVE_UTILITY_COMMANDS.contains(&"stealth-models"));
+    assert!(NATIVE_UTILITY_COMMANDS.contains(&"thread"));
     let stealth_args = argv(&["stealth-models", "status"]);
     assert_eq!(
         native_utility_tokens(&stealth_args[1..]),

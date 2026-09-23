@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
@@ -25,7 +25,8 @@ use std::os::unix::ffi::OsStringExt;
 use anyhow::{Context, Result, anyhow, bail};
 
 const GIT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
-const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+// Readers run on separate threads and can be delayed after Git exits on a busy host.
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Sanitize a user-supplied worktree name into a valid git branch name.
 ///
@@ -165,24 +166,14 @@ impl WorktreeSession {
         }
         let initial_head = String::from_utf8(initial_head.stdout)?.trim().to_owned();
 
-        let hooks_path = isolated_hooks_path();
-        fs::create_dir(&hooks_path)
-            .with_context(|| format!("create isolated hooks path {}", hooks_path.display()))?;
-        let hooks_config = format!("core.hooksPath={}", hooks_path.display());
+        let hooks_dir = isolated_hooks_dir()?;
+        let hooks_config = format!("core.hooksPath={}", hooks_dir.path().display());
         let mut add = Command::new("git");
         add.args(["-c", &hooks_config, "worktree", "add", "-b", &branch])
             .arg(&worktree_path)
             .arg(&initial_head)
             .current_dir(&repo_root);
-        let add_out = match output_with_deadline(&mut add).context("failed to run git worktree add")
-        {
-            Ok(output) => output,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&hooks_path);
-                return Err(error);
-            }
-        };
-        let _ = fs::remove_dir_all(&hooks_path);
+        let add_out = output_with_deadline(&mut add).context("failed to run git worktree add")?;
         if !add_out.status.success() {
             let stderr = String::from_utf8_lossy(&add_out.stderr).trim().to_string();
             bail!("git worktree add failed: {stderr}");
@@ -273,24 +264,14 @@ impl WorktreeSession {
             bail!("git returned an empty pinned worktree revision");
         }
 
-        let hooks_path = isolated_hooks_path();
-        fs::create_dir(&hooks_path)
-            .with_context(|| format!("create isolated hooks path {}", hooks_path.display()))?;
-        let hooks_config = format!("core.hooksPath={}", hooks_path.display());
+        let hooks_dir = isolated_hooks_dir()?;
+        let hooks_config = format!("core.hooksPath={}", hooks_dir.path().display());
         let mut add = Command::new("git");
         add.args(["-c", &hooks_config, "worktree", "add", "-b", &branch])
             .arg(&worktree_path)
             .arg(&initial_head)
             .current_dir(&repo_root);
-        let add_out = match output_with_deadline(&mut add).context("failed to run git worktree add")
-        {
-            Ok(output) => output,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&hooks_path);
-                return Err(error);
-            }
-        };
-        let _ = fs::remove_dir_all(&hooks_path);
+        let add_out = output_with_deadline(&mut add).context("failed to run git worktree add")?;
         if !add_out.status.success() {
             let stderr = String::from_utf8_lossy(&add_out.stderr).trim().to_string();
             bail!("git worktree add failed: {stderr}");
@@ -372,25 +353,15 @@ impl WorktreeSession {
         }
         let initial_head = String::from_utf8(expected_head.stdout)?.trim().to_owned();
         if !worktree_path.exists() {
-            let hooks_path = isolated_hooks_path();
-            fs::create_dir(&hooks_path)
-                .with_context(|| format!("create isolated hooks path {}", hooks_path.display()))?;
-            let hooks_config = format!("core.hooksPath={}", hooks_path.display());
+            let hooks_dir = isolated_hooks_dir()?;
+            let hooks_config = format!("core.hooksPath={}", hooks_dir.path().display());
             let mut add = Command::new("git");
             add.args(["-c", &hooks_config, "worktree", "add"])
                 .arg(&worktree_path)
                 .arg(&branch)
                 .current_dir(&repo_root);
-            let add_out = match output_with_deadline(&mut add)
-                .context("failed to run git worktree add for child recovery")
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&hooks_path);
-                    return Err(error);
-                }
-            };
-            let _ = fs::remove_dir_all(&hooks_path);
+            let add_out = output_with_deadline(&mut add)
+                .context("failed to run git worktree add for child recovery")?;
             if !add_out.status.success() {
                 bail!(
                     "git worktree add failed while reopening child: {}",
@@ -630,15 +601,11 @@ impl WorktreeSession {
     }
 }
 
-fn isolated_hooks_path() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "maestro-worktree-hooks-{}-{nonce}",
-        std::process::id()
-    ))
+fn isolated_hooks_dir() -> Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix("maestro-worktree-hooks-")
+        .tempdir()
+        .context("create isolated hooks path")
 }
 
 fn output_with_deadline(command: &mut Command) -> Result<Output> {
@@ -990,8 +957,37 @@ fn remove_existing_path(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::fs;
     use std::process::Command;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn isolated_hooks_dirs_are_unique_and_cleaned_up_under_parallel_creation() {
+        const WORKERS: usize = 16;
+        const DIRS_PER_WORKER: usize = 8;
+        let start = Arc::new(Barrier::new(WORKERS));
+        let workers: Vec<_> = (0..WORKERS)
+            .map(|_| {
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    (0..DIRS_PER_WORKER)
+                        .map(|_| isolated_hooks_dir().expect("reserve an isolated hooks directory"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let dirs: Vec<_> = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("hooks directory worker"))
+            .collect();
+        let paths: HashSet<_> = dirs.iter().map(|dir| dir.path().to_path_buf()).collect();
+        assert_eq!(paths.len(), WORKERS * DIRS_PER_WORKER);
+        assert!(paths.iter().all(|path| path.is_dir()));
+        drop(dirs);
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
 
     #[test]
     fn sanitize_keeps_valid_names() {

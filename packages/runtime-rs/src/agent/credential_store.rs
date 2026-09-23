@@ -139,6 +139,11 @@ static REFERENCE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     .expect("Invalid regex pattern")
 });
 
+fn is_well_formed_reference(reference: &str, kind: &str, id: &str) -> bool {
+    reference == format!("{{{{CRED|{kind}|{id}}}}}")
+        || reference == format!("{{{{CRED:{kind}:{id}}}}}")
+}
+
 const REFERENCE_PREFIX: &str = "{{CRED|";
 const LEGACY_REFERENCE_PREFIX: &str = "{{CRED:";
 const REFERENCE_STEM: &str = "{{CRED";
@@ -814,12 +819,39 @@ impl CredentialVault {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let references = state.store.references();
-        for (start, end) in credential_reference_like_ranges(text) {
-            if !references.contains(&text[start..end]) {
-                return Err("provider content contains an unowned credential reference");
+        attest_provider_text_with_store(&state.store, text)?;
+        Ok(state.generation)
+    }
+
+    /// Check JSON before serialization can escape credential bytes. Object
+    /// keys are provider content too, even though vault_in_json leaves them
+    /// intact to preserve the schema.
+    pub fn attest_provider_json(&self, value: &serde_json::Value) -> Result<u64, &'static str> {
+        fn visit(store: &CredentialStore, value: &serde_json::Value) -> Result<(), &'static str> {
+            match value {
+                serde_json::Value::String(text) => {
+                    attest_provider_text_with_store(store, text)?;
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        visit(store, value)?;
+                    }
+                }
+                serde_json::Value::Object(entries) => {
+                    for (key, value) in entries {
+                        attest_provider_text_with_store(store, key)?;
+                        visit(store, value)?;
+                    }
+                }
+                _ => {}
             }
+            Ok(())
         }
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        visit(&state.store, value)?;
         Ok(state.generation)
     }
 
@@ -905,6 +937,22 @@ impl CredentialVault {
     }
 }
 
+fn attest_provider_text_with_store(
+    store: &CredentialStore,
+    text: &str,
+) -> Result<(), &'static str> {
+    let references = store.references();
+    for (start, end) in credential_reference_like_ranges(text) {
+        if !references.contains(&text[start..end]) {
+            return Err("provider content contains an unowned credential reference");
+        }
+    }
+    if store.vault_known_values(text, &[]) != text {
+        return Err("provider content contains a plaintext vaulted credential");
+    }
+    Ok(())
+}
+
 impl fmt::Debug for CredentialStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -958,10 +1006,11 @@ impl CredentialStore {
                 let matched = captures.get(0).expect("reference has full match").as_str();
                 let kind = captures.get(1).expect("reference has kind").as_str();
                 let id = captures.get(2).expect("reference has id").as_str();
-                if self
-                    .credentials
-                    .get(id)
-                    .is_some_and(|stored| stored.cred_type.as_str() == kind)
+                if is_well_formed_reference(matched, kind, id)
+                    && self
+                        .credentials
+                        .get(id)
+                        .is_some_and(|stored| stored.cred_type.as_str() == kind)
                 {
                     format!("{{{{CRED|{kind}|{id}}}}}")
                 } else {
@@ -1027,9 +1076,16 @@ impl CredentialStore {
     /// The original credential value, or None if not found
     pub fn resolve(&mut self, reference: &str) -> Option<String> {
         let caps = REFERENCE_PATTERN.captures(reference)?;
+        let whole = caps.get(0)?.as_str();
+        let kind = caps.get(1)?.as_str();
         let id = caps.get(2)?.as_str();
-
+        if whole != reference || !is_well_formed_reference(whole, kind, id) {
+            return None;
+        }
         let credential = self.credentials.get_mut(id)?;
+        if credential.cred_type.as_str() != kind {
+            return None;
+        }
         credential.resolve_count += 1;
         Some(credential.value.to_string())
     }
@@ -1044,26 +1100,30 @@ impl CredentialStore {
     ///
     /// String with all references replaced with actual values
     pub fn resolve_all(&mut self, input: &str) -> String {
-        let mut result = input.to_string();
-
-        // Find all matches and resolve them
-        // We need to collect matches first to avoid borrow issues
-        let matches: Vec<_> = REFERENCE_PATTERN
-            .captures_iter(input)
-            .filter_map(|caps| {
-                let full_match = caps.get(0)?.as_str().to_string();
-                let id = caps.get(2)?.as_str().to_string();
-                Some((full_match, id))
-            })
-            .collect();
-
-        for (full_match, id) in matches {
-            if let Some(credential) = self.credentials.get_mut(&id) {
-                credential.resolve_count += 1;
-                result = result.replace(&full_match, &credential.value);
+        let mut result = String::with_capacity(input.len());
+        let mut cursor = 0;
+        for captures in REFERENCE_PATTERN.captures_iter(input) {
+            let whole = captures.get(0).expect("reference has full match");
+            let kind = captures.get(1).expect("reference has kind").as_str();
+            let id = captures.get(2).expect("reference has id").as_str();
+            result.push_str(&input[cursor..whole.start()]);
+            if is_well_formed_reference(whole.as_str(), kind, id) {
+                if let Some(credential) = self
+                    .credentials
+                    .get_mut(id)
+                    .filter(|credential| credential.cred_type.as_str() == kind)
+                {
+                    credential.resolve_count = credential.resolve_count.saturating_add(1);
+                    result.push_str(&credential.value);
+                } else {
+                    result.push_str(whole.as_str());
+                }
+            } else {
+                result.push_str(whole.as_str());
             }
+            cursor = whole.end();
         }
-
+        result.push_str(&input[cursor..]);
         result
     }
 
@@ -2002,6 +2062,54 @@ mod tests {
         vault.clear();
         assert!(!vault.has_generation(generation));
         assert!(vault.attest_provider_text(&reference).is_err());
+    }
+
+    #[test]
+    fn provider_attestation_rejects_plaintext_even_after_json_escaping() {
+        let vault = CredentialVault::new();
+        let raw = "line one\nquoted \"credential\"";
+        let reference = vault.store(raw, CredentialType::Secret);
+        assert!(vault.attest_provider_text(raw).is_err());
+        assert!(
+            vault
+                .attest_provider_json(&json!({"nested": [{"value": raw}]}))
+                .is_err()
+        );
+        let key_payload =
+            serde_json::Value::Object(serde_json::Map::from_iter([(raw.to_owned(), json!(true))]));
+        assert!(vault.attest_provider_json(&key_payload).is_err());
+        assert!(
+            vault
+                .attest_provider_json(&json!({"nested": [{"value": reference}]}))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn resolver_requires_exact_reference_spelling_and_kind() {
+        let mut store = CredentialStore::new();
+        let reference = store.store("vaulted-secret", CredentialType::Secret);
+        let wrong_kind = reference.replace("|secret|", "|token|");
+        let mixed_delimiters = reference.replacen("|secret|", ":secret|", 1);
+        let legacy = reference.replace('|', ":");
+        assert_eq!(store.resolve(&wrong_kind), None);
+        assert_eq!(store.resolve(&mixed_delimiters), None);
+        assert_eq!(store.resolve(&format!("prefix {reference}")), None);
+        assert_eq!(store.resolve_all(&wrong_kind), wrong_kind);
+        assert_eq!(store.resolve_all(&mixed_delimiters), mixed_delimiters);
+        assert_eq!(store.resolve_all(&legacy), "vaulted-secret");
+        assert_eq!(store.resolve_all(&reference), "vaulted-secret");
+    }
+
+    #[test]
+    fn resolver_does_not_recursively_expand_reference_text_in_a_secret() {
+        let mut store = CredentialStore::new();
+        let inner = store.store("inner-secret", CredentialType::Secret);
+        let outer = store.store(&inner, CredentialType::Token);
+        assert_eq!(
+            store.resolve_all(&format!("{outer} {inner}")),
+            format!("{inner} inner-secret")
+        );
     }
 
     #[test]
