@@ -115,6 +115,48 @@ function limitTokens(model, field) {
 	return Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * Vendor-published lifecycle and thinking controls, keyed the way an
+ * OpenRouter id is spelled.
+ *
+ * mapStatus and mapThinkingControls only run on the models.dev path, so an
+ * OpenRouter row never received either. #10199 put a status on 13 OpenRouter
+ * rows by hand and the generator emits null for all 13, which means the next
+ * refresh strips them. Same for the thinking controls.
+ *
+ * The keying follows indexModelsDevTokenLimits exactly: a non-OpenRouter
+ * provider is indexed as `${providerId}/${modelId}`, which is how OpenRouter
+ * spells the same model. That resolves openai/o1 to models.dev's openai.o1
+ * without a hand-written alias table, and it inherits the same limitation:
+ * where OpenRouter's namespace differs from models.dev's provider key, such as
+ * mistralai against mistral, the row simply does not resolve and carries no
+ * status. Absent is the honest answer there.
+ */
+function indexModelsDevModelFacts(modelsDevCatalog) {
+	const entries = new Map();
+	const indexProvider = (providerId, providerModels) => {
+		if (!providerModels || typeof providerModels !== "object") return;
+		for (const [modelId, model] of Object.entries(providerModels)) {
+			const key = providerId === "openrouter" ? modelId : `${providerId}/${modelId}`;
+			// First writer wins, and the loop below makes that the vendor.
+			if (entries.has(key)) continue;
+			entries.set(key, model);
+		}
+	};
+	// Vendors first, openrouter last, exactly as indexModelsDevTokenLimits does.
+	// models.dev's own openrouter provider keys its models by the namespaced id,
+	// so `openrouter.models["openai/o1"]` produces the same key as
+	// `openai.models["o1"]`. Indexed the other way round, OpenRouter's row wins
+	// and carries no status: that ordering mistake cost 10 of 13 rows on the
+	// first attempt, and the diff against the real generator is what found it.
+	for (const [providerId, provider] of Object.entries(modelsDevCatalog)) {
+		if (providerId === "openrouter") continue;
+		indexProvider(providerId, provider?.models);
+	}
+	indexProvider("openrouter", modelsDevCatalog.openrouter?.models);
+	return entries;
+}
+
 function indexModelsDevTokenLimits(modelsDevCatalog) {
 	const entries = new Map();
 	const push = (key, context, output) => {
@@ -162,7 +204,7 @@ function resolveOpenRouterOutput(entries, id, context, advertised) {
 	return undefined;
 }
 
-function mapOpenRouterModel(model, tokenLimits) {
+function mapOpenRouterModel(model, tokenLimits, vendorFacts) {
 	const id = typeof model?.id === "string" ? model.id.trim() : "";
 	if (id === "" || id.endsWith(":batch")) {
 		return null;
@@ -211,6 +253,11 @@ function mapOpenRouterModel(model, tokenLimits) {
 				: {}),
 		},
 		cost: mapOpenRouterCost(model.pricing),
+		// The vendor's own row, not OpenRouter's, answers whether a model is
+		// retired. OpenRouter does not publish a lifecycle at all.
+		...(mapStatus(vendorFacts?.get(id)) === undefined
+			? {}
+			: { status: mapStatus(vendorFacts.get(id)) }),
 		verification: {
 			state: "catalog",
 			source: "openrouter",
@@ -691,8 +738,9 @@ async function main() {
 		throw new Error("OpenRouter payload is missing a data array");
 	}
 	const tokenLimits = indexModelsDevTokenLimits(modelsDevCatalog);
+	const vendorFacts = indexModelsDevModelFacts(modelsDevCatalog);
 	for (const model of openrouterModels) {
-		const mapped = mapOpenRouterModel(model, tokenLimits);
+		const mapped = mapOpenRouterModel(model, tokenLimits, vendorFacts);
 		if (mapped) {
 			models.push(mapped);
 		}
