@@ -172,7 +172,7 @@ pub(super) fn abort_pending_tools_after_stream_error(
 /// Lifecycle managers must receive opaque credential references so child
 /// prompts and durable records never receive the parent's resolved secrets.
 /// The child receives the shared vault separately and resolves only at the
-/// provider/tool execution boundary.
+/// admitted tool execution boundary.
 pub(super) fn tool_args_for_execution(
     tool_name: &str,
     safe_args: &serde_json::Value,

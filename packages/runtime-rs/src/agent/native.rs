@@ -3702,63 +3702,80 @@ where
     T::from(messages)
 }
 
-fn resolve_provider_history(
+fn vault_provider_history(
     messages: &[Message],
     credential_vault: &CredentialVault,
 ) -> Result<Vec<Message>> {
+    // Scan the final provider projection as a last boundary check. This also
+    // catches raw material introduced by prompts, hooks, or extensions after
+    // tool output was first vaulted. Existing references remain opaque.
     let serialized = serde_json::to_value(messages).context("serialize provider history")?;
-    let resolved = credential_vault.resolve_in_json(&serialized);
-    serde_json::from_value(resolved).context("deserialize resolved provider history")
+    let safe = credential_vault.vault_in_json(&serialized);
+    serde_json::from_value(safe).context("deserialize vaulted provider history")
 }
 
-fn json_contains_credential_reference(value: &Value) -> bool {
-    match value {
-        Value::String(value) => CredentialVault::has_references(value),
-        Value::Array(values) => values.iter().any(json_contains_credential_reference),
-        Value::Object(values) => values.values().any(json_contains_credential_reference),
-        _ => false,
-    }
-}
-
-fn message_contains_credential_reference(message: &Message) -> bool {
-    match &message.content {
-        MessageContent::Text(text) => CredentialVault::has_references(text),
-        MessageContent::Blocks(blocks) => blocks.iter().any(|block| match block {
-            ContentBlock::Text { text }
-            | ContentBlock::Thinking { thinking: text, .. }
-            | ContentBlock::ToolResult { content: text, .. } => {
-                CredentialVault::has_references(text)
-            }
-            ContentBlock::ToolUse { input, .. } => json_contains_credential_reference(input),
-            ContentBlock::Image { source } => match source {
-                ImageSource::Base64 { media_type, data } => {
-                    CredentialVault::has_references(media_type)
-                        || CredentialVault::has_references(data)
-                }
-                ImageSource::Url { url } => CredentialVault::has_references(url),
-            },
-        }),
-    }
-}
-
-fn resolve_provider_history_shared(
+fn vault_provider_history_shared(
     messages: &Arc<Vec<Message>>,
     credential_vault: &CredentialVault,
 ) -> Result<Arc<Vec<Message>>> {
-    if !messages.iter().any(message_contains_credential_reference) {
-        return Ok(Arc::clone(messages));
-    }
-    Ok(Arc::new(resolve_provider_history(
+    Ok(Arc::new(vault_provider_history(
         messages,
         credential_vault,
     )?))
 }
 
-fn resolve_codex_tool_result_for_wire(
+fn vault_provider_tools(
+    tools: &[Tool],
     credential_vault: &CredentialVault,
-    vaulted_content: &str,
-) -> String {
-    credential_vault.resolve_all(vaulted_content)
+) -> Result<Arc<Vec<Tool>>> {
+    let mut safe_tools = Vec::with_capacity(tools.len());
+    for tool in tools {
+        if credential_vault.vault_in_text(&tool.name) != tool.name {
+            anyhow::bail!("credential detected in provider tool name");
+        }
+        let mut safe = tool.clone();
+        safe.description = credential_vault.vault_in_text(&tool.description);
+        safe.input_schema = vault_provider_schema(&tool.input_schema, credential_vault)?;
+        safe_tools.push(safe);
+    }
+    // A later description can introduce a known value that appeared earlier
+    // only as a schema key or tool name. Validate structural names again with
+    // the complete vault before handing the definitions to the provider.
+    for safe in &mut safe_tools {
+        if credential_vault.vault_in_text(&safe.name) != safe.name {
+            anyhow::bail!("credential detected in provider tool name");
+        }
+        safe.description = credential_vault.vault_in_text(&safe.description);
+        safe.input_schema = vault_provider_schema(&safe.input_schema, credential_vault)?;
+    }
+    Ok(Arc::new(safe_tools))
+}
+
+fn vault_provider_schema(value: &Value, credential_vault: &CredentialVault) -> Result<Value> {
+    match value {
+        Value::String(text) => Ok(Value::String(credential_vault.vault_in_text(text))),
+        Value::Array(values) => Ok(Value::Array(
+            values
+                .iter()
+                .map(|value| vault_provider_schema(value, credential_vault))
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        Value::Object(entries) => {
+            let mut safe = serde_json::Map::new();
+            for (key, value) in entries {
+                if credential_vault.vault_in_text(key) != *key {
+                    anyhow::bail!("credential detected in provider tool schema key");
+                }
+                safe.insert(key.clone(), vault_provider_schema(value, credential_vault)?);
+            }
+            Ok(Value::Object(safe))
+        }
+        _ => Ok(value.clone()),
+    }
+}
+
+fn opaque_codex_tool_result_for_wire(vaulted_content: &str) -> String {
+    vaulted_content.to_owned()
 }
 
 fn user_message_text(message: &Message) -> Option<String> {

@@ -452,6 +452,7 @@ impl NativeAgentRunner {
                     .collect(),
             )
         };
+        let tools = vault_provider_tools(&tools, &self.credential_vault)?;
         self.tool_executor.set_subagent_parent_model(
             self.config.model.clone(),
             crate::agent::model_dynamics::thinking_level(
@@ -476,7 +477,8 @@ impl NativeAgentRunner {
             },
             &self.config.model,
             self.tool_executor.model_capabilities(&self.config.model),
-        );
+        )
+        .map(|text| self.credential_vault.vault_in_text(&text));
         self.refresh_runtime_audit_with_prompt(system.clone());
 
         let configured_model = self.config.model.trim();
@@ -614,7 +616,7 @@ impl NativeAgentRunner {
         &mut self,
         previous_config: &RequestConfig,
     ) -> Result<()> {
-        let messages = resolve_provider_history_shared(&self.messages, &self.credential_vault)?;
+        let messages = vault_provider_history_shared(&self.messages, &self.credential_vault)?;
         let mut config = previous_config.clone();
         let namespace = self
             .client
@@ -665,7 +667,7 @@ impl NativeAgentRunner {
         // Prepare and install the checkpoint before acknowledging adoption. A
         // manual summary must not wait for the next primary call to advance.
         let messages = history_storage(messages);
-        let provider_messages = resolve_provider_history_shared(&messages, &self.credential_vault)?;
+        let provider_messages = vault_provider_history_shared(&messages, &self.credential_vault)?;
         self.build_config(&provider_messages, true).await?;
         self.semantic_continuation = None;
         self.reset_tool_response_state();
@@ -723,7 +725,8 @@ impl NativeAgentRunner {
                 self.prompt_context.as_deref(),
                 &model,
                 self.tool_executor.model_capabilities(&model),
-            );
+            )
+            .map(|text| self.credential_vault.vault_in_text(&text));
             let context_tokens = self
                 .tool_executor
                 .model_context_window(&model)

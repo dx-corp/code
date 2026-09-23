@@ -125,6 +125,7 @@ use super::types::{
 // only; streaming still has its separate idle/cancellation controls.
 pub(crate) const MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(60);
+const LOCAL_MODEL_RESPONSE_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 const MANAGED_GATEWAY_RECEIPT_ID_MAX_LEN: usize = 256;
 const MANAGED_GATEWAY_RECEIPT_LINEAGE_MAX_LEN: usize = 256;
 const MANAGED_GATEWAY_RECEIPT_STATUS_MAX_LEN: usize = 64;
@@ -220,12 +221,13 @@ const RESPONSES_MISSING_TERMINAL_EVENT_ERROR: &str =
 async fn send_with_response_open_timeout(
     request: reqwest::RequestBuilder,
     timeout: Option<std::time::Duration>,
+    provider_kind: &'static str,
 ) -> Result<reqwest::Response> {
     let send = request.send();
     match timeout {
         Some(timeout) => tokio::time::timeout(timeout, send)
             .await
-            .map_err(|_| anyhow::anyhow!("managed gateway response headers timed out"))?,
+            .map_err(|_| anyhow::anyhow!("{provider_kind} response headers timed out"))?,
         None => send.await,
     }
     .context("Failed to send request to OpenAI API")
@@ -1307,8 +1309,16 @@ impl OpenAiClient {
         if let Some(timeout) = self.response_open_timeout_override {
             return Some(timeout);
         }
-        self.managed_gateway
-            .then_some(MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT)
+        if self.managed_gateway {
+            Some(MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT)
+        } else if matches!(
+            self.route_provider.as_deref(),
+            Some("llamacpp" | "lmstudio" | "ollama")
+        ) {
+            Some(LOCAL_MODEL_RESPONSE_OPEN_TIMEOUT)
+        } else {
+            None
+        }
     }
 
     #[cfg(test)]
@@ -2346,8 +2356,14 @@ impl OpenAiClient {
             .post(&api_url)
             .headers(self.headers())
             .json(&body);
+        let provider_kind = if self.managed_gateway {
+            "managed gateway"
+        } else {
+            "local model"
+        };
         let response =
-            send_with_response_open_timeout(request, self.response_open_timeout()).await?;
+            send_with_response_open_timeout(request, self.response_open_timeout(), provider_kind)
+                .await?;
 
         // Classify the provider response before enforcing success-only receipt
         // headers. Managed gateways may legitimately omit receipts on an
@@ -6133,6 +6149,57 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         assert!(events.recv().await.is_none());
     }
 
+    #[test]
+    fn local_model_response_open_has_a_deadline() {
+        for provider in ["ollama", "lmstudio", "llamacpp"] {
+            let client = OpenAiClient::with_base_url("", "http://127.0.0.1:11434/v1")
+                .expect("local client")
+                .with_route_provider(provider);
+            assert_eq!(
+                client.response_open_timeout(),
+                Some(LOCAL_MODEL_RESPONSE_OPEN_TIMEOUT),
+                "provider {provider}"
+            );
+        }
+        let direct = OpenAiClient::with_base_url("fixture", "https://api.openai.com/v1")
+            .expect("direct client")
+            .with_route_provider("openai");
+        assert_eq!(direct.response_open_timeout(), None);
+    }
+
+    #[tokio::test]
+    async fn local_model_response_open_timeout_stops_stalled_headers() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock local model");
+        let address = listener.local_addr().expect("mock local model address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept local model request");
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).expect("read local model request");
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+
+        let request = reqwest::Client::new().get(format!("http://{address}/chat/completions"));
+        let error = send_with_response_open_timeout(
+            request,
+            Some(std::time::Duration::from_millis(25)),
+            "local model",
+        )
+        .await
+        .expect_err("stalled local model response must time out");
+        assert!(
+            error
+                .to_string()
+                .contains("local model response headers timed out"),
+            "unexpected error: {error:#}"
+        );
+        server.join().expect("mock local model server");
+    }
+
     #[tokio::test]
     async fn managed_gateway_open_waits_for_its_provider_attempt_to_finish() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -6155,6 +6222,7 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         let client = tokio::spawn(send_with_response_open_timeout(
             request,
             Some(MANAGED_GATEWAY_RESPONSE_OPEN_TIMEOUT),
+            "managed gateway",
         ));
         received.await.unwrap();
         tokio::time::pause();
@@ -6184,10 +6252,13 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         });
 
         let request = reqwest::Client::new().get(format!("http://{address}/responses"));
-        let error =
-            send_with_response_open_timeout(request, Some(std::time::Duration::from_millis(25)))
-                .await
-                .expect_err("stalled response opening must time out");
+        let error = send_with_response_open_timeout(
+            request,
+            Some(std::time::Duration::from_millis(25)),
+            "managed gateway",
+        )
+        .await
+        .expect_err("stalled response opening must time out");
 
         assert!(
             error
@@ -6217,10 +6288,13 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         });
 
         let request = reqwest::Client::new().get(format!("http://{address}/responses"));
-        let response =
-            send_with_response_open_timeout(request, Some(std::time::Duration::from_millis(50)))
-                .await
-                .expect("response headers should arrive within the open timeout");
+        let response = send_with_response_open_timeout(
+            request,
+            Some(std::time::Duration::from_millis(50)),
+            "managed gateway",
+        )
+        .await
+        .expect("response headers should arrive within the open timeout");
         let body = response
             .text()
             .await

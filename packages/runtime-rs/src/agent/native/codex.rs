@@ -94,15 +94,36 @@ impl NativeAgentRunner {
         };
         let dynamic_tools =
             crate::agent::codex_app_server_turns::dynamic_tools_from_native(&self.tools);
+        let provider_tools: Vec<Tool> = dynamic_tools
+            .iter()
+            .map(|tool| Tool {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                input_schema: tool.input_schema.clone(),
+                schema_enforcement: Default::default(),
+            })
+            .collect();
+        let safe_tools = vault_provider_tools(&provider_tools, &self.credential_vault)?;
+        let dynamic_tools: Vec<_> = safe_tools
+            .iter()
+            .map(
+                |tool| crate::agent::codex_app_server_turns::DynamicToolSpec {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    input_schema: tool.input_schema.clone(),
+                },
+            )
+            .collect();
         // Same standing instructions the HTTP path puts in RequestConfig.system.
         let instructions = runtime_system_prompt(
             self.config.system_prompt.as_deref(),
             self.prompt_context.as_deref(),
             &self.config.model,
             self.tool_executor.model_capabilities(&self.config.model),
-        );
+        )
+        .map(|text| self.credential_vault.vault_in_text(&text));
         let restored_prefix_len = self.codex_history_restore_prefix_len.unwrap_or(0);
-        let restored_messages = resolve_provider_history(
+        let restored_messages = vault_provider_history(
             &self.messages[..restored_prefix_len.min(self.messages.len())],
             &self.credential_vault,
         )?;
@@ -523,6 +544,7 @@ impl NativeAgentRunner {
         content: String,
         is_error: bool,
     ) {
+        let content = self.credential_vault.vault_in_text(&content);
         append_codex_tool_result(self.messages_mut(), call_id, content, is_error);
     }
     /// Run `PostToolUse` for a Codex tool call, fold in any injected context,
@@ -583,8 +605,9 @@ impl NativeAgentRunner {
             reported_error,
             None,
         );
-        let response = resolve_codex_tool_result_for_wire(&self.credential_vault, &text);
-        self.record_codex_tool_result(call_id, text, reported_error);
+        let safe_text = self.credential_vault.vault_in_text(&text);
+        let response = opaque_codex_tool_result_for_wire(&safe_text);
+        self.record_codex_tool_result(call_id, safe_text, reported_error);
         (response, reported_error)
     }
     /// Pull file-change item notifications into the correlation map.
