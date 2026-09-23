@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { omitUnverifiedSonarOutput } from "./catalog-output-limits.mjs";
+
 /**
  * Regenerate the bundled model catalog snapshot consumed by
  * `packages/local-host-rs/src/model_catalog.rs` via `include_str!`.
@@ -244,7 +246,7 @@ function mapOpenRouterModel(model, tokenLimits, vendorFacts) {
 				(model.reasoning != null && typeof model.reasoning === "object"),
 			streaming: true,
 			context_tokens: context,
-			output_tokens: resolveOpenRouterOutput(tokenLimits, id, context, advertised),
+			output_tokens: omitUnverifiedSonarOutput(id, resolveOpenRouterOutput(tokenLimits, id, context, advertised)),
 			// OpenRouter lists `temperature` in `supported_parameters` for
 			// routes that accept it. Omitted when the route lists no
 			// parameters at all.

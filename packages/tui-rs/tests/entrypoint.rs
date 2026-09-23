@@ -29,9 +29,19 @@ fn argv(words: &[&str]) -> Vec<OsString> {
 fn every_native_utility_command_routes_to_the_utility_handler() {
     assert_eq!(
         NATIVE_UTILITY_COMMANDS.len(),
-        45,
-        "this test's evidence baseline is 45 utility commands; update it deliberately \
+        46,
+        "this test's evidence baseline is 46 utility commands; update it deliberately \
          if the canonical table changes size"
+    );
+
+    let thread_args = argv(&["thread", "attach", "thread-id"]);
+    assert_eq!(
+        native_utility_tokens(&thread_args[1..]),
+        Some(vec![
+            "thread".to_owned(),
+            "attach".to_owned(),
+            "thread-id".to_owned()
+        ])
     );
 
     assert!(NATIVE_UTILITY_COMMANDS.contains(&"experiments"));

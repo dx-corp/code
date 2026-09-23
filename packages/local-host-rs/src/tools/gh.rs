@@ -1218,6 +1218,11 @@ pub(crate) async fn gh_repo(
 mod tests {
     use super::*;
 
+    // Process scheduling on a loaded CI runner can outlast the command's own
+    // shutdown bound. Wait for the fake command to start before testing it.
+    #[cfg(unix)]
+    const GH_TEST_PROCESS_START_TIMEOUT: Duration = Duration::from_secs(10);
+
     #[cfg(unix)]
     struct TestGhOverride;
 
@@ -1260,7 +1265,7 @@ mod tests {
         let execution =
             tokio::spawn(async move { run_command_output(command, Some(&cancel_for_task)).await });
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
             while !pid_path.exists() {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
@@ -1325,7 +1330,7 @@ mod tests {
             )
             .await
         });
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
             while !pid_path.exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -1388,7 +1393,7 @@ mod tests {
             )
             .await
         });
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
             while !pid_path.exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
