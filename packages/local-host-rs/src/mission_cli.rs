@@ -2256,6 +2256,7 @@ Commands:
   set-state <mission-id> <state> [message...]
                                  Transition mission state
   validate <mission-id>          Validate required mission artifacts
+  run <mission-id> [options]     Execute admitted mission features with native workflow
 
 States: awaiting-input | ready | running | blocked | completed | failed
 

@@ -68,6 +68,9 @@ deixic-code serve --port 3000       # HTTP runtime gateway
 deixic-code hosted-runner
 ```
 
+For a multi-feature coding task, prepare a mission contract and run it through
+the native workflow scheduler. See [Run a local coding mission](docs/MISSION_RUN.md).
+
 Sign in with `deixic-code evalops login` to use managed inference.
 The default model is GLM-5.3 through Deixic's LLM gateway. Your organization
 must have model access enabled; signing in alone does not grant paid inference.
