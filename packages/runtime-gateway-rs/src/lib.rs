@@ -614,7 +614,10 @@ pub async fn serve(config: RuntimeGatewayConfig) -> anyhow::Result<()> {
     )?;
     let listen_addr = config.listen_addr();
     let listener = TcpListener::bind(&listen_addr).await?;
-    println!("maestro rust server listening on http://{}", listen_addr);
+    println!(
+        "maestro rust server listening on http://{}",
+        listener.local_addr()?
+    );
     serve_listener(listener, config).await
 }
 

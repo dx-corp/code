@@ -27,7 +27,8 @@ use thiserror::Error;
 
 const RECEIPT_SCHEMA_VERSION: u8 = 1;
 const GIT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
-const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+// Readers run on separate threads and can be delayed after Git exits on a busy host.
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const ZERO_OID_SHA1: &str = "0000000000000000000000000000000000000000";
 const ZERO_OID_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -397,7 +398,7 @@ impl IntegrationCoordinator {
         }
 
         WorktreeSession::create_in_at(&self.repo_root, &branch, &base_sha)
-            .map_err(|error| IntegrationError::Worktree(error.to_string()))
+            .map_err(|error| IntegrationError::Worktree(format!("{error:#}")))
     }
 
     /// Integrate one clean child commit into the serialized workflow aggregate.

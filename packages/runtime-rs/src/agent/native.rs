@@ -3745,19 +3745,27 @@ impl ProviderSafeRequest {
         // Config preparation may discover a credential present in history.
         let messages = vault_provider_history_shared(&messages, vault)?;
         config.system = config.system.map(|system| vault.vault_in_text(&system));
-        let history_json = serde_json::to_string(messages.as_ref())?;
+        let history_json = serde_json::to_value(messages.as_ref())?;
         let generation = vault
-            .attest_provider_text(&history_json)
+            .attest_provider_json(&history_json)
             .map_err(anyhow::Error::msg)?;
         if let Some(system) = &config.system {
-            vault
+            let system_generation = vault
                 .attest_provider_text(system)
                 .map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                generation == system_generation,
+                "credential vault changed during provider request preparation"
+            );
         }
-        let tools_json = serde_json::to_string(config.tools.as_ref())?;
-        vault
-            .attest_provider_text(&tools_json)
+        let tools_json = serde_json::to_value(config.tools.as_ref())?;
+        let tools_generation = vault
+            .attest_provider_json(&tools_json)
             .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            generation == tools_generation,
+            "credential vault changed during provider request preparation"
+        );
         Ok(Self {
             messages,
             config,

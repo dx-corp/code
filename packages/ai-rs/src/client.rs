@@ -1129,8 +1129,8 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                         events_forwarded,
                     );
                     let message = if committed_content {
-                        "Provider stream closed mid-response without a terminal event; \
-                         not retrying because partial content was already streamed"
+                        "Provider stream closed without a terminal event; \
+                         not retrying because provider output or metering was already observed"
                             .to_string()
                     } else {
                         format!(
@@ -1175,8 +1175,8 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     );
                     let message = if committed_content {
                         format!(
-                            "Provider stream stalled: no data received for {}s mid-response; \
-                             not retrying because partial content was already streamed",
+                            "Provider stream stalled: no data received for {}s; \
+                             not retrying because provider output or metering was already observed",
                             idle_timeout.as_secs()
                         )
                     } else {
@@ -1194,7 +1194,7 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                 }
             };
             events_forwarded = events_forwarded.saturating_add(1);
-            committed_content |= stream_event_commits_content(&event);
+            committed_content |= stream_event_prevents_retry(&event);
             if let StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
@@ -1311,12 +1311,11 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
     }
 }
 
-/// Whether forwarding this event commits partial response content to the
-/// consumer. A retried attempt replays events from the beginning, so a retry
-/// is only safe while nothing contentful has been forwarded. Marker events
-/// (`MessageStart`, `Usage`) are idempotent for consumers and do not block a
-/// retry.
-fn stream_event_commits_content(event: &StreamEvent) -> bool {
+/// Whether this event makes replay of the provider attempt unsafe. Output is
+/// visible to the consumer; metering confirms that the provider performed
+/// work even if no content arrived. Only an unmetered `MessageStart` can be
+/// replayed without evidence of completed provider work.
+fn stream_event_prevents_retry(event: &StreamEvent) -> bool {
     matches!(
         event,
         StreamEvent::ContentBlockStart { .. }
@@ -1325,6 +1324,9 @@ fn stream_event_commits_content(event: &StreamEvent) -> bool {
             | StreamEvent::ThinkingDelta { .. }
             | StreamEvent::ThinkingSignature { .. }
             | StreamEvent::InputJsonDelta { .. }
+            | StreamEvent::Usage { .. }
+            | StreamEvent::ProviderCost { .. }
+            | StreamEvent::ReasoningUsage { .. }
     )
 }
 
@@ -2365,6 +2367,60 @@ mod stream_idle_policy_tests {
         ));
     }
 
+    #[tokio::test]
+    async fn usage_followed_by_transient_error_cannot_replay_provider_work() {
+        let attempts = Attempts::new(AtomicU32::new(0));
+        let (first_tx, first_rx) = mpsc::unbounded_channel();
+        first_tx
+            .send(StreamEvent::Usage {
+                input_tokens: 7,
+                output_tokens: 3,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            })
+            .unwrap();
+        first_tx
+            .send(StreamEvent::ProviderError {
+                kind: ProviderStreamErrorKind::TransientProtocol,
+                message: "provider closed after metered work".to_string(),
+            })
+            .unwrap();
+        drop(first_tx);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        forward_stream_with_idle_policy(
+            Some(first_rx),
+            || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                let (attempt_tx, attempt_rx) = mpsc::unbounded_channel();
+                attempt_tx
+                    .send(StreamEvent::MessageStop { stop_reason: None })
+                    .unwrap();
+                async move { Ok(attempt_rx) }
+            },
+            IDLE,
+            RETRIES,
+            tx,
+        )
+        .await;
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            drain(&mut rx).as_slice(),
+            [
+                StreamEvent::Usage {
+                    input_tokens: 7,
+                    output_tokens: 3,
+                    ..
+                },
+                StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    ..
+                }
+            ]
+        ));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn transient_502_recovers_after_backoff_without_forwarding_failed_attempts() {
         let started = tokio::time::Instant::now();
@@ -2742,7 +2798,7 @@ mod stream_idle_policy_tests {
                 kind: ProviderStreamErrorKind::TransientProtocol,
                 message,
             } => assert!(
-                message.contains("closed mid-response"),
+                message.contains("provider output or metering was already observed"),
                 "error should explain why no retry happened: {message}"
             ),
             other => panic!("expected terminal error event, got {other:?}"),
@@ -2831,7 +2887,7 @@ mod stream_idle_policy_tests {
                 message,
             } => {
                 assert!(
-                    message.contains("mid-response"),
+                    message.contains("provider output or metering was already observed"),
                     "error should explain why no retry happened: {message}"
                 );
             }

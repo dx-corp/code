@@ -1842,6 +1842,7 @@ mod tests {
 
     #[tokio::test]
     async fn natural_completion_drains_output_before_removing_monitors() {
+        let _env_guard = crate::config::test_process_env_lock_async().await;
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path().to_string_lossy().to_string();
         let task = start(
