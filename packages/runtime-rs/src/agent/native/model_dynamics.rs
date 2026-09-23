@@ -283,6 +283,7 @@ impl NativeAgentRunner {
                     )
             });
             if !eligible
+                || !step_budget.can_continue()
                 || self.model_route.uses_app_server()
                 || self
                     .client

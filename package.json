@@ -1,7 +1,7 @@
 {
   "name": "@evalops/deixic-code",
   "description": "Deixic Code — native Rust coding agent, CLI, TUI, and runtime gateway",
-  "version": "0.10.92",
+  "version": "0.10.93",
   "private": false,
   "type": "module",
   "bin": {

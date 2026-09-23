@@ -1,5 +1,5 @@
 {
-  "generated_at": 1790113587,
+  "generated_at": 1790149043,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -34,7 +34,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -71,7 +72,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -108,7 +110,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -139,7 +142,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -170,7 +174,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -205,7 +210,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -240,7 +246,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -276,7 +283,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -313,7 +321,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -366,7 +375,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -419,7 +429,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -472,7 +483,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -503,7 +515,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -534,7 +547,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -570,7 +584,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -607,7 +622,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -621,7 +637,7 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2
-              },
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -639,7 +655,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -653,7 +670,7 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2
-              },
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -671,7 +688,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -681,7 +699,7 @@
       "cost": {
         "input": 1.25,
         "output": 10
-              },
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -699,7 +717,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -713,8 +732,8 @@
         "input": 0.3,
         "output": 2.5,
         "cache_read": 0.03,
-                "input_audio": 1
-              },
+        "input_audio": 1
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -732,7 +751,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -746,8 +766,8 @@
         "input": 0.1,
         "output": 0.4,
         "cache_read": 0.01,
-                "input_audio": 0.3
-              },
+        "input_audio": 0.3
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -765,7 +785,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -779,12 +800,12 @@
         "input": 1.25,
         "output": 10,
         "cache_read": 0.125,
-                "above_200k": {
-                  "input": 2.5,
-                  "output": 15,
-                  "cache_read": 0.25
-                }
-              },
+        "above_200k": {
+          "input": 2.5,
+          "output": 15,
+          "cache_read": 0.25
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -802,7 +823,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -821,8 +843,8 @@
         "input": 0.5,
         "output": 3,
         "cache_read": 0.05,
-                "input_audio": 1
-              },
+        "input_audio": 1
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -840,7 +862,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -859,8 +882,8 @@
         "input": 0.25,
         "output": 1.5,
         "cache_read": 0.025,
-                "input_audio": 0.5
-              },
+        "input_audio": 0.5
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -877,7 +900,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536
+        "context_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -908,7 +932,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -925,8 +950,8 @@
       "cost": {
         "input": 0.75,
         "output": 4.5,
-                "input_audio": 3
-              },
+        "input_audio": 3
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -944,7 +969,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -962,12 +988,12 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 4,
-                  "output": 18,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -985,7 +1011,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1003,12 +1030,12 @@
         "input": 2,
         "output": 12,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 4,
-                  "output": 18,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1026,7 +1053,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1045,8 +1073,8 @@
         "input": 1.5,
         "output": 9,
         "cache_read": 0.15,
-                "input_audio": 1.5
-              },
+        "input_audio": 1.5
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1064,7 +1092,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1101,7 +1130,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1120,8 +1150,8 @@
         "input": 0.75,
         "output": 3.75,
         "cache_read": 0.075,
-                "input_audio": 0.75
-              },
+        "input_audio": 0.75
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1139,7 +1169,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1157,8 +1188,8 @@
         "input": 0.75,
         "output": 3.75,
         "cache_read": 0.075,
-                "input_audio": 0.75
-              },
+        "input_audio": 0.75
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1176,7 +1207,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1194,8 +1226,8 @@
         "input": 0.75,
         "output": 3.75,
         "cache_read": 0.075,
-                "input_audio": 0.75
-              },
+        "input_audio": 0.75
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1213,7 +1245,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1231,8 +1264,8 @@
         "input": 0.75,
         "output": 3.75,
         "cache_read": 0.075,
-                "input_audio": 0.75
-              },
+        "input_audio": 0.75
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1250,7 +1283,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1287,19 +1321,20 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "input_modalities": [
         "text",
         "image"
       ],
       "reasoning_efforts": [],
-      "open_weights": true,
       "cost": {
         "input": 0.09,
         "output": 0.3,
         "cache_read": 0.05
       },
+      "open_weights": true,
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1317,19 +1352,20 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "input_modalities": [
         "text",
         "image"
       ],
       "reasoning_efforts": [],
-      "open_weights": true,
       "cost": {
         "input": 0.09,
         "output": 0.34,
         "cache_read": 0.05
       },
+      "open_weights": true,
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1347,7 +1383,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1047576,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1377,7 +1414,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1047576,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1407,7 +1445,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1437,7 +1476,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1466,7 +1506,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1495,7 +1536,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1525,7 +1567,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1559,7 +1602,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1593,7 +1637,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1627,7 +1672,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 272000
+        "output_tokens": 272000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1657,7 +1703,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1691,7 +1738,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1726,7 +1774,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1758,7 +1807,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1794,7 +1844,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1830,7 +1881,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1848,12 +1900,12 @@
         "input": 2.5,
         "output": 15,
         "cache_read": 0.25,
-                "above_200k": {
-                  "input": 5,
-                  "output": 22.5,
-                  "cache_read": 0.5
-                }
-              },
+        "above_200k": {
+          "input": 5,
+          "output": 22.5,
+          "cache_read": 0.5
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 5,
@@ -1883,7 +1935,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1930,7 +1983,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -1965,7 +2019,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -1979,11 +2034,11 @@
       "cost": {
         "input": 30,
         "output": 180,
-                "above_200k": {
-                  "input": 60,
-                  "output": 270
-                }
-              },
+        "above_200k": {
+          "input": 60,
+          "output": 270
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2001,7 +2056,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2019,12 +2075,12 @@
         "input": 5,
         "output": 30,
         "cache_read": 0.5,
-                "above_200k": {
-                  "input": 10,
-                  "output": 45,
-                  "cache_read": 1
-                }
-              },
+        "above_200k": {
+          "input": 10,
+          "output": 45,
+          "cache_read": 1
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 12.5,
@@ -2054,7 +2110,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2069,11 +2126,11 @@
       "cost": {
         "input": 30,
         "output": 180,
-                "above_200k": {
-                  "input": 60,
-                  "output": 270
-                }
-              },
+        "above_200k": {
+          "input": 60,
+          "output": 270
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2091,7 +2148,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2111,13 +2169,13 @@
         "output": 20,
         "cache_read": 0.4,
         "cache_write": 5,
-                "above_200k": {
-                  "input": 8,
-                  "output": 30,
-                  "cache_read": 0.8,
-                  "cache_write": 10
-                }
-              },
+        "above_200k": {
+          "input": 8,
+          "output": 30,
+          "cache_read": 0.8,
+          "cache_write": 10
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 8,
@@ -2148,7 +2206,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2168,13 +2227,13 @@
         "output": 1.2,
         "cache_read": 0.02,
         "cache_write": 0.25,
-                "above_200k": {
-                  "input": 0.4,
-                  "output": 1.8,
-                  "cache_read": 0.04,
-                  "cache_write": 0.5
-                }
-              },
+        "above_200k": {
+          "input": 0.4,
+          "output": 1.8,
+          "cache_read": 0.04,
+          "cache_write": 0.5
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 0.4,
@@ -2205,7 +2264,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2225,13 +2285,13 @@
         "output": 20,
         "cache_read": 0.4,
         "cache_write": 5,
-                "above_200k": {
-                  "input": 8,
-                  "output": 30,
-                  "cache_read": 0.8,
-                  "cache_write": 10
-                }
-              },
+        "above_200k": {
+          "input": 8,
+          "output": 30,
+          "cache_read": 0.8,
+          "cache_write": 10
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 8,
@@ -2262,7 +2322,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2282,13 +2343,13 @@
         "output": 12,
         "cache_read": 0.2,
         "cache_write": 2.5,
-                "above_200k": {
-                  "input": 4,
-                  "output": 18,
-                  "cache_read": 0.4,
-                  "cache_write": 5
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4,
+          "cache_write": 5
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 4,
@@ -2319,7 +2380,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2338,13 +2400,13 @@
         "output": 50,
         "cache_read": 1,
         "cache_write": 12.5,
-                "above_200k": {
-                  "input": 20,
-                  "output": 75,
-                  "cache_read": 2,
-                  "cache_write": 25
-                }
-              },
+        "above_200k": {
+          "input": 20,
+          "output": 75,
+          "cache_read": 2,
+          "cache_write": 25
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 20,
@@ -2375,7 +2437,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2395,13 +2458,13 @@
         "output": 0.5,
         "cache_read": 0.01,
         "cache_write": 0.125,
-                "above_200k": {
-                  "input": 0.2,
-                  "output": 0.75,
-                  "cache_read": 0.02,
-                  "cache_write": 0.25
-                }
-              },
+        "above_200k": {
+          "input": 0.2,
+          "output": 0.75,
+          "cache_read": 0.02,
+          "cache_write": 0.25
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 0.2,
@@ -2432,7 +2495,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2452,13 +2516,13 @@
         "output": 10,
         "cache_read": 0.2,
         "cache_write": 2.5,
-                "above_200k": {
-                  "input": 4,
-                  "output": 15,
-                  "cache_read": 0.4,
-                  "cache_write": 5
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 15,
+          "cache_read": 0.4,
+          "cache_write": 5
+        }
+      },
       "request_modes": {
         "fast": {
           "input": 4,
@@ -2489,7 +2553,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2507,8 +2572,8 @@
         "input": 4,
         "output": 24,
         "cache_read": 0.4,
-                "input_audio": 32
-              },
+        "input_audio": 32
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2526,7 +2591,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2560,7 +2626,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "input_modalities": [
         "text",
@@ -2592,7 +2659,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -2617,7 +2685,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -2642,7 +2711,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 4,
@@ -2667,7 +2737,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -2691,12 +2762,13 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "temperature": true
       },
       "cost": {
-        "input": 0.12,
-        "output": 0.48,
-        "cache_read": 0.0036
+        "input": 0.039,
+        "output": 0.6,
+        "cache_read": 0.038
       },
       "verification": {
         "state": "catalog",
@@ -2715,12 +2787,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216
+        "output_tokens": 384000,
+        "temperature": true
       },
       "cost": {
-        "input": 0.39996,
-        "output": 1.19988,
-        "cache_read": 0.012726
+        "input": 0.4,
+        "output": 4.3,
+        "cache_read": 0.033
       },
       "verification": {
         "state": "catalog",
@@ -2739,7 +2812,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 943718,
+        "temperature": true
       },
       "cost": {
         "input": 0.03,
@@ -2763,7 +2837,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.75,
@@ -2788,7 +2863,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -2812,11 +2888,12 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "temperature": true
       },
       "cost": {
-        "input": 1.4,
-        "output": 13,
+        "input": 1.4989,
+        "output": 10.758,
         "cache_read": 0.3
       },
       "verification": {
@@ -2836,7 +2913,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -2861,7 +2939,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.1,
@@ -2886,7 +2965,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.75,
@@ -2910,7 +2990,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -2935,7 +3016,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -2959,7 +3041,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "cost": {
         "input": 1.6,
@@ -2983,7 +3066,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.075,
@@ -3007,12 +3091,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
-        "input": 0.6538,
-        "output": 2.0548,
-        "cache_read": 0.12142
+        "input": 0.5625,
+        "output": 2.5,
+        "cache_read": 0.125
       },
       "verification": {
         "state": "catalog",
@@ -3031,7 +3116,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -3055,7 +3141,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -3079,7 +3166,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.7,
@@ -3102,7 +3190,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -3125,7 +3214,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65535
+        "output_tokens": 65535,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -3148,7 +3238,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 300000,
-        "output_tokens": 5120
+        "output_tokens": 5120,
+        "temperature": true
       },
       "cost": {
         "input": 0.06,
@@ -3171,7 +3262,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 5120
+        "output_tokens": 5120,
+        "temperature": true
       },
       "cost": {
         "input": 0.035,
@@ -3194,7 +3286,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -3218,7 +3311,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 300000,
-        "output_tokens": 5120
+        "output_tokens": 5120,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -3241,7 +3335,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -3264,7 +3359,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -3289,7 +3385,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -3314,7 +3411,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -3339,7 +3437,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -3364,7 +3463,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": true
       },
       "cost": {
         "input": 15,
@@ -3389,7 +3489,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 5,
@@ -3414,7 +3515,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 5,
@@ -3439,7 +3541,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 5,
@@ -3464,7 +3567,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 5,
@@ -3489,7 +3593,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 5,
@@ -3514,7 +3619,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 4,
@@ -3539,7 +3645,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -3564,7 +3671,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -3589,7 +3697,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -3614,7 +3723,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -3639,7 +3749,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 80000
+        "output_tokens": 80000,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -3663,7 +3774,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 123000,
-        "output_tokens": 16000
+        "output_tokens": 16000,
+        "temperature": true
       },
       "cost": {
         "input": 0.42,
@@ -3686,7 +3798,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -3709,7 +3822,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.075,
@@ -3732,7 +3846,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -3755,7 +3870,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -3778,7 +3894,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -3801,7 +3918,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -3824,7 +3942,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 2048
+        "output_tokens": 2048,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -3848,7 +3967,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -3871,11 +3991,37 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
         "output": 10
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "cohere/command-a-plus",
+      "name": "Cohere: Command A+",
+      "provider": "openrouter",
+      "description": "Command A+ is Cohere's flagship model for enterprise agentic workflows. It accepts text and image inputs with a 192K…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 192000,
+        "output_tokens": 64000,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 1.5,
+        "cache_read": 0.15
       },
       "verification": {
         "state": "catalog",
@@ -3894,7 +4040,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4000
+        "output_tokens": 4000,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -3917,7 +4064,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4000
+        "output_tokens": 4000,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -3940,7 +4088,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4000
+        "output_tokens": 4000,
+        "temperature": true
       },
       "cost": {
         "input": 0.0375,
@@ -3963,7 +4112,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -3986,7 +4136,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.32,
@@ -4008,7 +4159,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 163840
+        "context_tokens": 163840,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -4031,7 +4183,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -4055,7 +4208,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 64000,
-        "output_tokens": 16000
+        "output_tokens": 16000,
+        "temperature": true
       },
       "cost": {
         "input": 0.7,
@@ -4078,7 +4232,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -4102,7 +4257,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 7372
+        "output_tokens": 7372,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -4125,7 +4281,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.27,
@@ -4149,7 +4306,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.269,
@@ -4173,7 +4331,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.27,
@@ -4196,12 +4355,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 384000,
+        "temperature": true
       },
       "cost": {
-        "input": 0.049,
-        "output": 0.098,
-        "cache_read": 0.0098
+        "input": 0.088606,
+        "output": 0.177212,
+        "cache_read": 0.017721
       },
       "status": "deprecated",
       "verification": {
@@ -4221,7 +4381,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 943718,
+        "temperature": true
       },
       "cost": {
         "input": 0.04,
@@ -4244,7 +4405,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 384000,
+        "temperature": true
       },
       "cost": {
         "input": 0.22,
@@ -4269,12 +4432,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 384000,
+        "temperature": true
       },
       "cost": {
-        "input": 0.871914,
-        "output": 1.743828,
-        "cache_read": 0.07266
+        "input": 0.95526,
+        "output": 1.91052,
+        "cache_read": 0.079605
       },
       "verification": {
         "state": "catalog",
@@ -4293,12 +4457,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "output_tokens": 384000,
+        "temperature": true
       },
       "cost": {
-        "input": 0.66,
-        "output": 1.98,
-        "cache_read": 0.022
+        "input": 1.32,
+        "output": 3.96,
+        "cache_read": 0.044
       },
       "verification": {
         "state": "catalog",
@@ -4317,12 +4482,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000
+        "temperature": true
       },
       "cost": {
-        "input": 0.15,
+        "input": 0.039,
         "output": 0.6,
-        "cache_read": 0.003
+        "cache_read": 0.038
       },
       "verification": {
         "state": "catalog",
@@ -4340,7 +4505,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 512000
+        "context_tokens": 512000,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -4363,7 +4529,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65535
+        "output_tokens": 65535,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -4388,7 +4555,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -4413,7 +4581,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65535
+        "output_tokens": 65535,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -4438,7 +4607,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -4463,7 +4633,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -4488,7 +4659,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -4513,7 +4685,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -4538,7 +4711,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 65536,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -4563,7 +4737,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -4585,7 +4760,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536
+        "context_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -4608,7 +4784,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -4632,7 +4809,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536
+        "context_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -4655,7 +4833,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -4681,7 +4860,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -4706,7 +4886,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -4731,7 +4912,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 1.5,
@@ -4756,7 +4938,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -4781,7 +4964,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.75,
@@ -4806,7 +4990,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.75,
@@ -4831,7 +5016,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.75,
@@ -4856,7 +5042,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 2048
+        "output_tokens": 2048,
+        "temperature": true
       },
       "cost": {
         "input": 0.65,
@@ -4879,7 +5066,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -4902,7 +5090,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.08,
@@ -4926,7 +5115,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -4949,7 +5139,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.09,
@@ -4973,7 +5164,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -4996,7 +5188,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.09,
@@ -5020,7 +5213,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5043,7 +5237,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5066,7 +5261,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5089,7 +5285,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 3686
+        "output_tokens": 3686,
+        "temperature": true
       },
       "cost": {
         "input": 0.08,
@@ -5111,7 +5308,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 131000
+        "context_tokens": 131000,
+        "temperature": true
       },
       "cost": {
         "input": 0.017,
@@ -5134,7 +5332,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.06,
@@ -5158,7 +5357,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 50000
+        "output_tokens": 50000,
+        "temperature": true
       },
       "cost": {
         "input": 0.25,
@@ -5182,7 +5382,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 260000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.04,
@@ -5206,7 +5407,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.021,
@@ -5230,7 +5432,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.06,
@@ -5254,7 +5457,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5277,7 +5481,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5300,7 +5505,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.06,
@@ -5324,7 +5530,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5347,7 +5554,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -5371,7 +5579,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.03,
@@ -5395,7 +5604,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.74,
@@ -5419,7 +5629,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 65536,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -5442,7 +5653,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8000,
-        "output_tokens": 6000
+        "output_tokens": 6000,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -5465,7 +5677,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048756,
-        "output_tokens": 262144
+        "output_tokens": 262144,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -5489,7 +5702,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -5512,7 +5726,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -5535,7 +5750,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 60000
+        "context_tokens": 60000,
+        "temperature": true
       },
       "cost": {
         "input": 0.027,
@@ -5558,7 +5774,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -5581,7 +5798,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -5604,7 +5822,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.1875,
@@ -5627,7 +5846,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -5650,7 +5870,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.18,
@@ -5673,7 +5894,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -5696,7 +5918,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -5719,7 +5943,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -5742,7 +5968,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -5765,7 +5993,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -5788,7 +6018,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -5812,7 +6044,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 16384,
-        "output_tokens": 14745
+        "output_tokens": 14745,
+        "temperature": true
       },
       "cost": {
         "input": 0.07,
@@ -5835,7 +6068,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 65535,
-        "output_tokens": 8000
+        "output_tokens": 8000,
+        "temperature": true
       },
       "cost": {
         "input": 0.62,
@@ -5858,7 +6092,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000192,
-        "output_tokens": 900172
+        "output_tokens": 900172,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -5881,7 +6116,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 40000
+        "output_tokens": 40000,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -5904,7 +6140,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.255,
@@ -5927,7 +6164,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 65536,
-        "output_tokens": 2048
+        "output_tokens": 2048,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -5951,7 +6189,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -5975,7 +6214,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 0.27,
@@ -5999,7 +6239,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -6023,7 +6264,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 512000
+        "output_tokens": 512000,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -6047,7 +6289,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 204800
+        "output_tokens": 204800,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -6071,14 +6314,15 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 209715
+        "output_tokens": 209715,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
         "output": 2,
         "cache_read": 0.04
       },
-            "verification": {
+      "verification": {
         "state": "catalog",
         "source": "openrouter"
       }
@@ -6095,7 +6339,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 209715
+        "output_tokens": 209715,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -6119,7 +6364,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 104857
+        "output_tokens": 104857,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -6143,7 +6389,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 209715
+        "output_tokens": 209715,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -6167,7 +6414,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 102400
+        "output_tokens": 102400,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -6191,7 +6439,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 104857
+        "output_tokens": 104857,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -6215,7 +6464,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 104857
+        "output_tokens": 104857,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -6239,7 +6489,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 209715
+        "output_tokens": 209715,
+        "temperature": true
       },
       "cost": {
         "input": 1.5,
@@ -6262,7 +6513,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 104857
+        "output_tokens": 104857,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -6286,7 +6538,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.019,
@@ -6309,7 +6562,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 26214
+        "output_tokens": 26214,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -6333,7 +6587,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -6356,7 +6611,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 209715
+        "output_tokens": 209715,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -6380,7 +6636,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 102400
+        "output_tokens": 102400,
+        "temperature": true
       },
       "cost": {
         "input": 0.351,
@@ -6403,7 +6660,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.09375,
@@ -6426,7 +6684,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 65536,
-        "output_tokens": 52428
+        "output_tokens": 52428,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -6450,7 +6709,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 26214
+        "output_tokens": 26214,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -6474,7 +6734,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 98304
+        "output_tokens": 98304,
+        "temperature": true
       },
       "cost": {
         "input": 0.57,
@@ -6497,7 +6758,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 98304
+        "output_tokens": 98304,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -6520,7 +6782,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 98304
+        "output_tokens": 98304,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -6544,7 +6807,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.45,
@@ -6568,7 +6832,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.95,
@@ -6592,7 +6857,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.7062,
@@ -6615,7 +6881,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -6639,7 +6907,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 81920,
-        "output_tokens": 38000
+        "output_tokens": 38000,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -6662,7 +6931,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.9,
@@ -6685,7 +6955,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.025,
@@ -6709,7 +6980,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -6732,7 +7004,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.075,
@@ -6756,7 +7029,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -6779,7 +7053,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -6802,7 +7077,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.7,
@@ -6825,7 +7101,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -6848,7 +7125,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.05,
@@ -6872,7 +7150,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -6895,7 +7174,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.08,
@@ -6918,7 +7198,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -6941,7 +7222,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 182520
+        "output_tokens": 182520,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -6965,7 +7247,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -6988,7 +7271,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -7011,7 +7295,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -7034,7 +7319,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.07,
@@ -7058,7 +7344,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -7081,7 +7368,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 16385,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.5,
@@ -7105,7 +7393,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 4095,
-        "output_tokens": 3685
+        "output_tokens": 3685,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -7128,7 +7417,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 16385,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -7151,7 +7441,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 4095,
-        "output_tokens": 3685
+        "output_tokens": 3685,
+        "temperature": true
       },
       "cost": {
         "input": 1.5,
@@ -7174,7 +7465,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8191,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 30,
@@ -7198,7 +7490,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 10,
@@ -7222,7 +7515,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1047576,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -7246,7 +7540,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1047576,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -7270,7 +7565,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1047576,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -7295,7 +7591,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -7319,7 +7616,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 5,
@@ -7343,7 +7641,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -7367,7 +7666,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -7391,7 +7691,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -7415,7 +7716,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -7439,7 +7741,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.25,
@@ -7463,7 +7766,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 10,
@@ -7487,7 +7791,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -7511,7 +7816,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.25,
@@ -7535,7 +7841,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.05,
@@ -7559,7 +7866,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 15,
@@ -7582,7 +7890,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.25,
@@ -7606,7 +7915,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.25,
@@ -7630,7 +7940,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.25,
@@ -7654,7 +7965,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.25,
@@ -7678,7 +7990,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.75,
@@ -7702,7 +8015,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": false
       },
       "cost": {
         "input": 1.75,
@@ -7726,7 +8040,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.75,
@@ -7750,7 +8065,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 21,
@@ -7773,7 +8089,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 1.75,
@@ -7797,7 +8114,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2.5,
@@ -7821,7 +8139,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 272000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 8,
@@ -7845,7 +8164,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.75,
@@ -7869,7 +8189,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.2,
@@ -7893,7 +8214,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 30,
@@ -7916,7 +8238,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 5,
@@ -7940,7 +8263,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 30,
@@ -7963,7 +8287,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.2,
@@ -7988,7 +8313,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.2,
@@ -8013,7 +8339,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8038,7 +8365,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8063,7 +8391,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8088,7 +8417,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8113,7 +8443,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -8138,7 +8469,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 10,
@@ -8163,7 +8495,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.1,
@@ -8188,7 +8521,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.1,
@@ -8213,7 +8547,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8238,7 +8573,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8263,7 +8599,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -8286,7 +8623,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -8309,7 +8647,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 400000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 5,
@@ -8333,7 +8672,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -8357,7 +8697,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.018,
@@ -8380,7 +8721,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.075,
@@ -8404,7 +8746,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 15,
@@ -8429,7 +8772,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 150,
@@ -8453,7 +8797,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -8477,7 +8822,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 1.1,
@@ -8502,7 +8848,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 1.1,
@@ -8526,7 +8873,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 20,
@@ -8549,7 +8897,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 1.1,
@@ -8574,7 +8923,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 100000
+        "output_tokens": 100000,
+        "temperature": false
       },
       "cost": {
         "input": 1.1,
@@ -8597,7 +8947,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000
+        "context_tokens": 2000000,
+        "temperature": true
       },
       "verification": {
         "state": "catalog",
@@ -8615,7 +8966,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000
+        "context_tokens": 2000000,
+        "temperature": true
       },
       "verification": {
         "state": "catalog",
@@ -8633,7 +8985,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 128000
+        "context_tokens": 128000,
+        "temperature": false
       },
       "verification": {
         "state": "catalog",
@@ -8652,7 +9005,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 8000
+        "output_tokens": 8000,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -8675,7 +9029,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "verification": {
         "state": "catalog",
@@ -8694,7 +9049,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 2000000,
-        "output_tokens": 200000
+        "output_tokens": 200000,
+        "temperature": false
       },
       "verification": {
         "state": "catalog",
@@ -8713,7 +9069,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -8736,7 +9093,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 127072,
-        "output_tokens": 114364
+        "output_tokens": 114364,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -8758,7 +9116,9 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 128000
+        "context_tokens": 128000,
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -8781,7 +9141,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 8000
+        "output_tokens": 8000,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -8804,7 +9165,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 8000
+        "output_tokens": 8000,
+        "temperature": true
       },
       "cost": {
         "input": 3,
@@ -8826,7 +9188,9 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 128000
+        "context_tokens": 128000,
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -8849,7 +9213,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.09,
@@ -8873,7 +9238,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -8896,7 +9262,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.06,
@@ -8920,7 +9287,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -8943,7 +9311,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.075,
@@ -8966,7 +9335,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 32768,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.36,
@@ -8988,7 +9358,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -9010,7 +9381,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.66,
@@ -9033,7 +9405,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.26,
@@ -9058,7 +9431,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.26,
@@ -9080,7 +9454,8 @@
         "vision": true,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 128000
+        "context_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 0.8,
@@ -9104,7 +9479,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.12,
@@ -9127,7 +9503,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.455,
@@ -9150,7 +9527,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.0875,
@@ -9174,7 +9552,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.23,
@@ -9197,7 +9576,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.12,
@@ -9220,7 +9600,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32000
+        "output_tokens": 32000,
+        "temperature": true
       },
       "cost": {
         "input": 0.04815,
@@ -9243,7 +9624,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 81920,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -9266,7 +9648,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.08,
@@ -9289,7 +9672,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.117,
@@ -9312,7 +9696,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -9336,7 +9721,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.07,
@@ -9359,7 +9745,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.195,
@@ -9384,7 +9771,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.12,
@@ -9408,7 +9796,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.65,
@@ -9433,7 +9822,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.78,
@@ -9458,7 +9848,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.78,
@@ -9481,7 +9872,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.09,
@@ -9504,7 +9896,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -9527,7 +9920,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.21,
@@ -9551,7 +9945,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -9574,7 +9969,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.13,
@@ -9597,7 +9993,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -9620,7 +10017,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.104,
@@ -9643,7 +10041,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.117,
@@ -9666,7 +10065,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.18,
@@ -9689,7 +10089,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.26,
@@ -9712,7 +10113,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.195,
@@ -9735,7 +10137,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.3125,
@@ -9759,7 +10162,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.55,
@@ -9783,7 +10187,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -9806,7 +10211,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.065,
@@ -9829,7 +10235,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.26,
@@ -9852,7 +10259,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -9875,7 +10283,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144
+        "context_tokens": 262144,
+        "temperature": true
       },
       "cost": {
         "input": 0.32,
@@ -9899,7 +10308,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -9923,7 +10333,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.1875,
@@ -9947,7 +10358,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 1.027,
@@ -9971,7 +10383,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.325,
@@ -9995,7 +10408,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.03,
@@ -10020,7 +10434,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.475,
@@ -10045,7 +10460,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.32,
@@ -10070,7 +10486,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -10094,7 +10511,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.42,
@@ -10118,7 +10536,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -10141,7 +10560,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -10166,7 +10586,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -10191,7 +10612,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -10215,7 +10637,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 16384,
-        "output_tokens": 14745
+        "output_tokens": 14745,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -10237,7 +10660,8 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536
+        "context_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -10260,7 +10684,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 0.85,
@@ -10283,7 +10708,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -10306,7 +10732,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 2,
@@ -10330,7 +10757,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 5,
@@ -10354,7 +10782,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": false
       },
       "cost": {
         "input": 5,
@@ -10378,7 +10807,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": false
       },
       "cost": {
         "input": 0.95,
@@ -10402,7 +10832,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 7372
+        "output_tokens": 7372,
+        "temperature": true
       },
       "cost": {
         "input": 0.04,
@@ -10425,7 +10856,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.85,
@@ -10448,7 +10880,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.65,
@@ -10471,7 +10904,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536
+        "output_tokens": 65536,
+        "temperature": true
       },
       "cost": {
         "input": 0.1,
@@ -10494,7 +10928,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 230400
+        "output_tokens": 230400,
+        "temperature": true
       },
       "cost": {
         "input": 0.2,
@@ -10518,7 +10953,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.14,
@@ -10541,7 +10977,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.044,
@@ -10564,7 +11001,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.074,
@@ -10587,7 +11025,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 4096
+        "output_tokens": 4096,
+        "temperature": true
       },
       "cost": {
         "input": 0.074,
@@ -10610,12 +11049,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
-        "input": 0.0825,
-        "output": 0.33,
-        "cache_read": 0.020625
+        "input": 0.132,
+        "output": 0.528,
+        "cache_read": 0.033
       },
       "verification": {
         "state": "catalog",
@@ -10634,7 +11074,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929
+        "output_tokens": 235929,
+        "temperature": true
       },
       "cost": {
         "input": 0.18,
@@ -10658,7 +11099,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 64000
+        "output_tokens": 64000,
+        "temperature": true
       },
       "cost": {
         "input": 0.834,
@@ -10682,7 +11124,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -10705,7 +11148,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.55,
@@ -10729,7 +11173,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1024000,
-        "output_tokens": 819200
+        "output_tokens": 819200,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -10752,7 +11197,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 471859
+        "output_tokens": 471859,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -10776,7 +11222,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 262144
+        "output_tokens": 262144,
+        "temperature": true
       },
       "cost": {
         "input": 0.45,
@@ -10800,7 +11247,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 262144
+        "output_tokens": 262144,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -10823,7 +11271,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 262144
+        "output_tokens": 262144,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -10846,7 +11295,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 2.5,
@@ -10870,7 +11320,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 6144,
-        "output_tokens": 5529
+        "output_tokens": 5529,
+        "temperature": true
       },
       "cost": {
         "input": 0.35,
@@ -10893,7 +11344,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -10917,7 +11369,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 524288,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.09,
@@ -10941,7 +11394,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1040000,
-        "output_tokens": 8192
+        "output_tokens": 8192,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -10963,7 +11417,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000
+        "context_tokens": 2000000,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -10986,7 +11441,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 2000000
+        "context_tokens": 2000000,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -11009,7 +11465,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000
+        "context_tokens": 1000000,
+        "temperature": true
       },
       "cost": {
         "input": 1.25,
@@ -11032,7 +11489,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -11055,7 +11513,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "cost": {
         "input": 2,
@@ -11078,7 +11537,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "cost": {
         "input": 1.6,
@@ -11101,7 +11561,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 256000
+        "context_tokens": 256000,
+        "temperature": true
       },
       "cost": {
         "input": 1,
@@ -11125,7 +11586,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.14,
@@ -11149,7 +11611,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1050000,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.435,
@@ -11173,7 +11636,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.14,
@@ -11197,7 +11661,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.435,
@@ -11221,7 +11686,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 4.35,
@@ -11245,7 +11711,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 98304
+        "output_tokens": 98304,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -11269,7 +11736,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 98304
+        "output_tokens": 98304,
+        "temperature": true
       },
       "cost": {
         "input": 0.13,
@@ -11293,7 +11761,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 65536,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -11317,7 +11786,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 16384
+        "output_tokens": 16384,
+        "temperature": true
       },
       "cost": {
         "input": 0.43,
@@ -11341,7 +11811,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768
+        "output_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0.3,
@@ -11365,7 +11836,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.4,
@@ -11389,7 +11861,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 117964
+        "output_tokens": 117964,
+        "temperature": true
       },
       "cost": {
         "input": 0.0605,
@@ -11412,7 +11885,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 0.6,
@@ -11436,7 +11910,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 202752,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.2,
@@ -11460,7 +11935,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000
+        "output_tokens": 128000,
+        "temperature": true
       },
       "cost": {
         "input": 0.966,
@@ -11484,7 +11960,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.6496,
@@ -11507,7 +11984,8 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 32768
+        "context_tokens": 32768,
+        "temperature": true
       },
       "cost": {
         "input": 0,
@@ -11530,12 +12008,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
-        "input": 0.6538,
-        "output": 2.0548,
-        "cache_read": 0.12142
+        "input": 0.84,
+        "output": 2.64,
+        "cache_read": 0.156
       },
       "verification": {
         "state": "catalog",
@@ -11554,7 +12033,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718
+        "output_tokens": 943718,
+        "temperature": true
       },
       "cost": {
         "input": 0.15,
@@ -11578,7 +12058,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 0.37,
@@ -11602,7 +12083,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 202752,
-        "output_tokens": 131072
+        "output_tokens": 131072,
+        "temperature": true
       },
       "cost": {
         "input": 1.2,
@@ -11626,7 +12108,8 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 30000
+        "output_tokens": 30000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11638,12 +12121,12 @@
         "input": 1.25,
         "output": 2.5,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 2.5,
-                  "output": 5,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 2.5,
+          "output": 5,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11661,7 +12144,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 30000
+        "output_tokens": 30000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11673,12 +12157,12 @@
         "input": 1.25,
         "output": 2.5,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 2.5,
-                  "output": 5,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 2.5,
+          "output": 5,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11696,7 +12180,8 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 30000
+        "output_tokens": 30000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11713,12 +12198,12 @@
         "input": 1.25,
         "output": 2.5,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 2.5,
-                  "output": 5,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 2.5,
+          "output": 5,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11735,7 +12220,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11751,12 +12237,12 @@
         "input": 2,
         "output": 6,
         "cache_read": 0.3,
-                "above_200k": {
-                  "input": 4,
-                  "output": 12,
-                  "cache_read": 0.6
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 12,
+          "cache_read": 0.6
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11773,7 +12259,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11790,12 +12277,12 @@
         "input": 2,
         "output": 6,
         "cache_read": 0.5,
-                "above_200k": {
-                  "input": 4,
-                  "output": 12,
-                  "cache_read": 1
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 12,
+          "cache_read": 1
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11812,7 +12299,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 500000
+        "context_tokens": 500000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11829,12 +12317,12 @@
         "input": 2,
         "output": 6,
         "cache_read": 0.5,
-                "above_200k": {
-                  "input": 4,
-                  "output": 12,
-                  "cache_read": 1
-                }
-              },
+        "above_200k": {
+          "input": 4,
+          "output": 12,
+          "cache_read": 1
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -11851,7 +12339,8 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 256000
+        "context_tokens": 256000,
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -11863,12 +12352,12 @@
         "input": 1,
         "output": 2,
         "cache_read": 0.2,
-                "above_200k": {
-                  "input": 2,
-                  "output": 4,
-                  "cache_read": 0.4
-                }
-              },
+        "above_200k": {
+          "input": 2,
+          "output": 4,
+          "cache_read": 0.4
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
