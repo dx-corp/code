@@ -849,21 +849,15 @@ impl Executor {
     }
 }
 
+/// Whether the direct Anthropic route accepts `temperature` for `model`.
+///
+/// Delegates to the one rule in `maestro-ai`. This crate kept its own copy,
+/// which excluded only the Opus 4 family, so the frontier default
+/// (`claude-opus-5-5`) and the Sonnet 5 / Fable 5 tiers were sent
+/// `temperature: 0.0`; models.dev lists all of them as rejecting it.
 fn supports_anthropic_temperature(model: &str) -> bool {
-    let model = model
-        .strip_prefix("~anthropic/")
-        .or_else(|| model.strip_prefix("anthropic/"))
-        .unwrap_or(model);
-    let model = model.to_ascii_lowercase();
-
-    !(is_anthropic_opus_4_family(&model) || model == "claude-opus-latest")
-}
-
-fn is_anthropic_opus_4_family(model: &str) -> bool {
-    model == "claude-opus-4"
-        || model
-            .strip_prefix("claude-opus-4")
-            .is_some_and(|suffix| suffix.starts_with(['-', '.']))
+    let model = model.strip_prefix("~anthropic/").unwrap_or(model);
+    maestro_ai::anthropic_request_capabilities(Some("anthropic"), model).temperature
 }
 
 #[cfg(test)]
@@ -980,6 +974,16 @@ fn main() {
 
     #[test]
     fn anthropic_temperature_support_matches_opus_4_family() {
+        for model in [
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "anthropic/claude-opus-5.5",
+            "~anthropic/claude-sonnet-5",
+        ] {
+            assert!(!supports_anthropic_temperature(model), "{model}");
+        }
         assert!(!supports_anthropic_temperature("claude-opus-4"));
         assert!(!supports_anthropic_temperature("claude-opus-4-7"));
         assert!(!supports_anthropic_temperature("claude-opus-4.7"));

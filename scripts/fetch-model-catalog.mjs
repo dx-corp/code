@@ -162,6 +162,12 @@ function mapOpenRouterModel(model, tokenLimits) {
 			streaming: true,
 			context_tokens: correctedContextWindow(id, context),
 			output_tokens: resolveOpenRouterOutput(tokenLimits, id, context, advertised),
+			// OpenRouter lists `temperature` in `supported_parameters` for
+			// routes that accept it. Omitted when the route lists no
+			// parameters at all.
+			...(Array.isArray(model.supported_parameters)
+				? { temperature: supportedParameter(model, "temperature") }
+				: {}),
 		},
 		cost: mapOpenRouterCost(model.pricing),
 		verification: {
@@ -342,6 +348,11 @@ function mapModel(providerId, modelId, model) {
 			// models.dev `limit.output`. Omitted when the source lacks it or
 			// copies the context window into output.
 			output_tokens: distinctOutputTokens(model.limit?.context, model.limit?.output),
+			// Whether the model accepts the `temperature` parameter, from
+			// models.dev. Sending it to a model that rejects it returns 400,
+			// so the Rust request-capability guards compare against this.
+			// Omitted when the source does not state it.
+			...(typeof model.temperature === "boolean" ? { temperature: model.temperature } : {}),
 		},
 		// Input modalities and the effort ladder, carried so consumers that
 		// need them (the desktop built-in provider rules) derive from this
