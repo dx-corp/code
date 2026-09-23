@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// Freeze the app-server tool call into the same opaque form used by native
+/// provider tool calls before any policy decision or execution.
+pub(super) fn codex_tool_args_for_admission(args: &Value, vault: &CredentialVault) -> Value {
+    vault.vault_in_json(args)
+}
+
 /// Hosted AgentRun / A2A ids the worker injects into Maestro's environment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct HostedCodexTurnCorrelation {
@@ -754,6 +760,11 @@ impl NativeAgentRunner {
                             return Ok(());
                         }
                     };
+
+                // The app-server model and PreToolUse hook can both supply
+                // plaintext. Policy, approval events, hooks, and execution
+                // must all see the same vaulted arguments.
+                let args = codex_tool_args_for_admission(&args, &self.credential_vault);
 
                 let is_external_tool = self.external_tools.contains(&tool_key);
                 let annotations = self.tool_executor.tool_annotations(&tool_key);
