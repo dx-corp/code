@@ -51,6 +51,54 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.92] - 2026-09-23
+
+### Added
+
+- Carry the lifecycle status the vendor publishes (#10199). <!-- maestro-release-note:a53bf0c0d4b3 -->
+- Make vendor corrections cover any field and prove they still bite (#10185). <!-- maestro-release-note:f95ef6a1a165 -->
+- Carry every cost dimension models.dev prices (#10190). <!-- maestro-release-note:2a7fb1464e42 -->
+- Rust model-fact binding, resolution fixture, and hardened refresh (#10173). <!-- maestro-release-note:8941567487ab -->
+- Check declared model VALUES against the catalog, not just ids (#10174). <!-- maestro-release-note:afb24b3633d1 -->
+- Generate model-fact bindings for every language from one catalog (#10158). <!-- maestro-release-note:5eea3b34c562 -->
+- Put every default model id behind one enum (#10155). <!-- maestro-release-note:b5e2094a7097 -->
+- Check declared model ids against the catalog in every language (#10157). <!-- maestro-release-note:7688b5a0b296 -->
+- Economy model selection over an operator allowlist (#10153). <!-- maestro-release-note:ab22d9e341de -->
+- Accept the xhigh thinking level over the headless protocol (#10144). <!-- maestro-release-note:2f746194b762 -->
+- Support Claude Opus 5.5 and refresh every Anthropic registry (#10140). <!-- maestro-release-note:895f0059f7af -->
+- Curate Anthropic's full model lineup for the model gateway (#10142). <!-- maestro-release-note:1cd81c3b4793 -->
+- Carry the priced request modes a model bills at (#10200). <!-- maestro-release-note:da5c30557307 -->
+
+### Changed
+
+- Correct where conductor's registry test runs (#10197). <!-- maestro-release-note:df1d116838cf -->
+- Fail when the generated web protocol drifts from the Rust crate (#10194). <!-- maestro-release-note:85c412404731 -->
+- Prove the output cap never leaks across routes (#10183). <!-- maestro-release-note:9f9217656b94 -->
+- Drop the dead conductor tokenBudget model-id source (#10162). <!-- maestro-release-note:ec35cb471258 -->
+- Pin the Anthropic request-capability matrix and its catalog coverage (#10147). <!-- maestro-release-note:5e191ec213e9 -->
+- Bump vite from 8.0.8 to 8.0.16 in /products/maestro/desktop (#10135). <!-- maestro-release-note:c208e39a2fb5 -->
+- Bump undici in /products/maestro/desktop (#10137). <!-- maestro-release-note:0946dbded0fc -->
+- Bump esbuild in /products/maestro/desktop (#10134). <!-- maestro-release-note:780dd04f669a -->
+- Bump esbuild in /scripts/dev/surface-captures (#10133). <!-- maestro-release-note:870f348737b3 -->
+- Bump ws from 8.20.0 to 8.21.0 in /products/maestro/desktop (#10138). <!-- maestro-release-note:e7fe950261ad -->
+- Refresh bundled model catalog (#10129). <!-- maestro-release-note:074deb9cdfe3 -->
+- Bump form-data in /products/maestro/desktop (#10034). <!-- maestro-release-note:53148b65a9a8 -->
+
+### Fixed
+
+- Reopen recurring main verdict history issue (#10214). <!-- maestro-release-note:63089f700a72 -->
+- Preserve vendor lifecycle on OpenRouter rows (#10213). <!-- maestro-release-note:6ac0b29b8e58 -->
+- Keep browser sign-in inside setup TUI (#10210). <!-- maestro-release-note:10fed9aa70cb -->
+- Run maestro's internal tests here, and guard the default config path (#10208). <!-- maestro-release-note:dfe776e687dc -->
+- Keep catalog refresh and tagged releases correct (#10202). <!-- maestro-release-note:18015c36bb69 -->
+- Desktop Sonnet 4.5 back to 200k, and check it after merge (#10196). <!-- maestro-release-note:b28302f1a4df -->
+- Guard request size on every route, not just Anthropic (#10195). <!-- maestro-release-note:cb6994310bc0 -->
+- Guard public projection and binding writes (#10193). <!-- maestro-release-note:a58c7f60180a -->
+- Drop output limits the aggregator computed rather than published (#10192). <!-- maestro-release-note:eed6b4642207 -->
+- Sonnet 4.5 is 200k on every route, including OpenRouter (#10191). <!-- maestro-release-note:53e6ed78357a -->
+- Make a thinking level pick a model that exists (#10187). <!-- maestro-release-note:c8e05662c1d7 -->
+- Stop forcing thinking off on models that can reason (#10188). <!-- maestro-release-note:2842ef524c70 -->
+
 ## [0.10.91] - 2026-09-18
 
 ### Added
