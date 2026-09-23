@@ -1900,13 +1900,16 @@ impl OpenAiClient {
             body["cache_prompt"] = serde_json::json!(true);
         }
 
-        // GPT-5.1 supports reasoning_effort for adaptive thinking
+        // Reasoning models take `reasoning_effort`; a model with no effort
+        // ladder (GPT-4 generation, grok-build) rejects the field, so the
+        // capability decides whether it is sent at all.
         if let Some(thinking) = &config.thinking {
-            // Map thinking budget to reasoning effort
             let capabilities =
                 crate::openai_request_capabilities(self.route_provider.as_deref(), &config.model);
-            let effort = capabilities.reasoning_effort(thinking.budget_tokens);
-            body["reasoning_effort"] = serde_json::json!(effort);
+            if capabilities.reasoning_effort_supported {
+                let effort = capabilities.reasoning_effort(thinking.budget_tokens);
+                body["reasoning_effort"] = serde_json::json!(effort);
+            }
         }
 
         body
@@ -2114,11 +2117,13 @@ impl OpenAiClient {
         if let Some(thinking) = &config.thinking {
             let capabilities =
                 crate::openai_request_capabilities(self.route_provider.as_deref(), &config.model);
-            let effort = capabilities.reasoning_effort(thinking.budget_tokens);
-            body["reasoning"] = serde_json::json!({
-                "effort": effort,
-                "summary": "auto"  // Request reasoning summaries
-            });
+            if capabilities.reasoning_effort_supported {
+                let effort = capabilities.reasoning_effort(thinking.budget_tokens);
+                body["reasoning"] = serde_json::json!({
+                    "effort": effort,
+                    "summary": "auto"  // Request reasoning summaries
+                });
+            }
         }
 
         // Always include reasoning content for visibility
