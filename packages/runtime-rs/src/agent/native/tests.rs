@@ -3210,6 +3210,53 @@ async fn request_retry_preserves_the_turn_step_budget() {
 }
 
 #[tokio::test]
+async fn failed_attempt_cannot_start_a_request_past_the_turn_step_budget() {
+    let scripted = crate::ai::ScriptedClient::new(
+        "one-step-retry",
+        vec![
+            crate::ai::ScriptedResponse::stream_error("429 rate limit retry-after: 0 seconds"),
+            crate::ai::ScriptedResponse::text("must not be requested"),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeAgentConfig {
+        model: "scripted/one-step-retry".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        max_turn_steps: 1,
+        ..NativeAgentConfig::default()
+    };
+    let (agent, mut events) =
+        NativeAgent::new_with_test_client(config, UnifiedClient::Scripted(scripted.clone()))
+            .expect("scripted agent");
+
+    agent
+        .prompt("One model attempt only.".to_owned(), vec![])
+        .await
+        .unwrap();
+    let terminal = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::Error {
+                    message,
+                    terminal: true,
+                    ..
+                }) => break message,
+                Some(FromAgent::TurnCompleted { .. }) => panic!("retry exceeded the turn budget"),
+                Some(_) => {}
+                None => panic!("agent event channel closed before a terminal receipt"),
+            }
+        }
+    })
+    .await
+    .expect("turn terminal timeout");
+    agent.shutdown().await;
+
+    assert!(terminal.contains("step_budget_exhausted"), "{terminal}");
+    assert_eq!(scripted.remaining(), 1, "retry called provider past budget");
+}
+
+#[tokio::test]
 async fn request_retry_preserves_denials_until_the_next_user_turn() {
     let denied_args = serde_json::json!({ "command": "printf denied" });
     let scripted = crate::ai::ScriptedClient::new(

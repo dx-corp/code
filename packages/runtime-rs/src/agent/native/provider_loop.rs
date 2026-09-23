@@ -221,6 +221,12 @@ impl NativeAgentRunner {
         }
     }
     pub(super) async fn run_loop_inner(&mut self, step_budget: &mut TurnStepBudget) -> Result<()> {
+        // The caller may re-enter after a failed provider attempt. Those
+        // attempts spent steps too, so refuse another request before either
+        // provider route starts it.
+        if !step_budget.can_continue() {
+            return Err(step_budget.exhausted(Vec::new()).into());
+        }
         if self.model_route.uses_app_server() {
             return self.run_loop_via_codex_app_server(step_budget).await;
         }

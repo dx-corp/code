@@ -104,6 +104,9 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
         "update" => crate::update_cli::run_update(&args[1..]).await,
         "modes" => crate::mode_cli::run_modes(&args[1..]).await,
         "memory" => crate::memory_cli::run_memory(&args[1..]).await,
+        "mission" if args.get(1).is_some_and(|arg| arg == "run") => {
+            crate::mission_run::run(&args[2..]).await
+        }
         "mission" => crate::mission_cli::run_mission(&args[1..]).await,
         "init" => crate::init_cli::run_init(&args[1..]).await,
         "login" if args.get(1).is_some_and(|arg| is_help(arg)) => {

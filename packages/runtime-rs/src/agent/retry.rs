@@ -356,7 +356,9 @@ impl ErrorKind {
             1.0 // default to seconds
         };
 
-        Some(Duration::from_secs_f64(num * multiplier))
+        // A provider can return a value larger than Duration can represent.
+        // Keep it as an upper bound so calculate_delay applies max_delay.
+        Some(Duration::try_from_secs_f64(num * multiplier).unwrap_or(Duration::MAX))
     }
 
     /// Check if this error kind is retryable
@@ -796,6 +798,40 @@ mod tests {
             assert_eq!(retry_after, Some(Duration::from_mins(2)));
         } else {
             panic!("Expected RateLimited");
+        }
+    }
+
+    #[test]
+    fn oversized_retry_after_does_not_panic() {
+        // 2^64 seconds is the first whole-second value Duration cannot hold.
+        let error = "rate limit; retry after 18446744073709551616 seconds";
+        let kind = ErrorKind::classify(error);
+        let mut policy = RetryPolicy::new(RetryConfig {
+            jitter_factor: 0.0,
+            ..RetryConfig::default()
+        });
+        assert!(matches!(
+            policy.should_retry(kind),
+            RetryDecision::Retry { delay, .. } if delay <= Duration::from_mins(1)
+        ));
+    }
+
+    #[test]
+    fn generated_retry_after_magnitudes_stay_bounded() {
+        for digits in 1..=400 {
+            let error = format!("rate limit; retry after {} seconds", "9".repeat(digits));
+            let kind = ErrorKind::classify(&error);
+            let mut policy = RetryPolicy::new(RetryConfig {
+                jitter_factor: 0.0,
+                ..RetryConfig::default()
+            });
+            assert!(
+                matches!(
+                    policy.should_retry(kind),
+                    RetryDecision::Retry { delay, attempt: 1, .. } if delay <= Duration::from_mins(1)
+                ),
+                "digits={digits}"
+            );
         }
     }
 
