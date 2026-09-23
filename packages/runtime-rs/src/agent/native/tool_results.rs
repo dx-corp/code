@@ -599,11 +599,10 @@ impl NativeAgentRunner {
             session_id.as_deref(),
             self.owns_persistent_tool_spills,
         );
-        let content = self.tool_executor.clamp_tool_output(
-            &result.model_content(),
-            &tool_name,
-            spill_dir.as_deref(),
-        );
+        let safe_content = self.credential_vault.vault_in_text(&result.model_content());
+        let content =
+            self.tool_executor
+                .clamp_tool_output(&safe_content, &tool_name, spill_dir.as_deref());
         let is_error = result.is_error();
 
         // Bash bounds its own model projection before the outer clamp runs.
@@ -734,9 +733,12 @@ impl NativeAgentRunner {
                 continue;
             };
             // No prose-based dispatch: the name is only a safe spill-file label.
-            let output =
-                self.tool_executor
-                    .clamp_tool_output(content, "tool-result", spill_dir.as_deref());
+            let safe_content = self.credential_vault.vault_in_text(content);
+            let output = self.tool_executor.clamp_tool_output(
+                &safe_content,
+                "tool-result",
+                spill_dir.as_deref(),
+            );
             *content = output.content;
             if let Some(path) = output.saved_path {
                 let reference = crate::agent::compaction::ToolOutputReference {
@@ -835,7 +837,7 @@ impl NativeAgentRunner {
             if let Some(operation) = operations.remove(&call.call_id) {
                 self.record_tool_operation_outcome(operation, &result).await;
             }
-            let content = result.model_content();
+            let content = self.credential_vault.vault_in_text(&result.model_content());
             let is_error = result.is_error();
 
             // Hooks receive the tool body before the model-facing envelope;
