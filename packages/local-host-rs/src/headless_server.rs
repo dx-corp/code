@@ -5343,6 +5343,9 @@ mod tests {
 
     #[tokio::test]
     async fn steer_message_reaches_codex_as_turn_steer_not_turn_start() {
+        // Starting a second test binary and its Node app-server fixture can take
+        // more than five seconds when the full workspace suite saturates the host.
+        const FIXTURE_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
         if std::env::var_os("MAESTRO_HEADLESS_STEER_FIXTURE").is_some() {
             assert_eq!(
                 run_headless_server(None).await.expect("headless fixture"),
@@ -5431,7 +5434,16 @@ else if(x.method==='turn/steer'){send({id:x.id,result:{turn:{id:'turn-active'}}}
             .contains(r#""method":"turn/start""#)
         {
             assert!(
-                turn_started.elapsed() < std::time::Duration::from_secs(5),
+                fixture
+                    .child
+                    .try_wait()
+                    .expect("headless fixture status")
+                    .is_none(),
+                "headless fixture exited before turn/start: {}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            );
+            assert!(
+                turn_started.elapsed() < FIXTURE_READY_TIMEOUT,
                 "headless prompt never reached turn/start: {}\nheadless output: {}",
                 std::fs::read_to_string(&log).unwrap_or_default(),
                 std::fs::read_to_string(&output).unwrap_or_default()
@@ -5451,9 +5463,19 @@ else if(x.method==='turn/steer'){send({id:x.id,result:{turn:{id:'turn-active'}}}
             .contains(r#""method":"turn/steer""#)
         {
             assert!(
-                steer_started.elapsed() < std::time::Duration::from_secs(5),
-                "headless steer did not reach turn/steer: {}",
-                std::fs::read_to_string(&log).unwrap_or_default()
+                fixture
+                    .child
+                    .try_wait()
+                    .expect("headless fixture status")
+                    .is_none(),
+                "headless fixture exited before turn/steer: {}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            );
+            assert!(
+                steer_started.elapsed() < FIXTURE_READY_TIMEOUT,
+                "headless steer did not reach turn/steer: {}\nheadless output: {}",
+                std::fs::read_to_string(&log).unwrap_or_default(),
+                std::fs::read_to_string(&output).unwrap_or_default()
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
