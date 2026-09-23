@@ -427,15 +427,12 @@ function mapCost(cost) {
  * API rejects it at 200k with "prompt is too long". The conservative value
  * fails safe; the optimistic one fails the request.
  *
- * Keyed by the exact catalog id. Only direct-provider ids belong here. An
- * OpenRouter id names a route, not the vendor default: OpenRouter sends the
- * 1M-context beta header on its own account, so `anthropic/claude-sonnet-4.5`
- * genuinely accepts the 1,000,000 tokens its /api/v1/models entry advertises.
- * Overriding that id down to 200,000 would discard 80% of a window the route
- * accepts. Every entry needs a comment naming the vendor source, and entries
- * should be deleted once upstream corrects them.
+ * Corrections are keyed by exact catalog id, including provider routes when
+ * the route's advertised limit contradicts the vendor's published limit.
+ * Every entry cites the vendor source and should be deleted once upstream
+ * corrects it.
  */
-const VENDOR_CORRECTIONS_PATH = path.join(REPO_ROOT, "products/maestro/config/vendor-corrections.json");
+const VENDOR_CORRECTIONS_PATH = path.join(REPO_ROOT, "config/vendor-corrections.json");
 
 /**
  * Documented vendor facts that override what the aggregators report.
@@ -701,7 +698,7 @@ async function main() {
 	if (noops.length > 0) {
 		console.log(
 			`${noops.length} vendor correction(s) now agree with upstream and should be deleted from ` +
-				`products/maestro/config/vendor-corrections.json:`,
+				`config/vendor-corrections.json:`,
 		);
 		for (const correction of noops) {
 			console.log(`  ${correction.id} ${correction.field}`);
