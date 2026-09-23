@@ -1582,6 +1582,30 @@ impl App {
             KeyCode::Esc if self.setup_modal.back() => {
                 self.close_onboarding(false);
             }
+            KeyCode::Enter
+                if before == SetupPage::WaitingEvalops && self.setup_login_rx.is_none() =>
+            {
+                self.start_setup_evalops_login();
+            }
+            KeyCode::Char('c') if before == SetupPage::WaitingEvalops => {
+                if let Some(url) = self.setup_modal.login_url().map(str::to_owned) {
+                    let status = if self.clipboard.copy(&url).is_ok() {
+                        "Sign-in link copied."
+                    } else {
+                        "Clipboard unavailable. Press u to show the sign-in link."
+                    };
+                    self.setup_modal
+                        .set_status(self.state.locale.translate(status));
+                }
+            }
+            KeyCode::Char('o') if before == SetupPage::WaitingEvalops => {
+                if let Some(url) = self.setup_modal.login_url() {
+                    crate::init_cli::open_browser(url);
+                }
+            }
+            KeyCode::Char('u') if before == SetupPage::WaitingEvalops => {
+                self.setup_modal.toggle_login_url();
+            }
             KeyCode::Enter => match self.setup_modal.confirm() {
                 Some(SetupAdvance::StartEvalops) => self.start_setup_evalops_login(),
                 Some(SetupAdvance::SaveKey {
@@ -1640,20 +1664,17 @@ impl App {
             return;
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let result = crate::init_cli::perform_evalops_login()
+        let (url_tx, url_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let result = crate::init_cli::perform_evalops_login_in_tui(url_tx)
                 .await
                 .map_err(|error| format!("{error:#}"));
             let _ = tx.send(result);
         });
         self.setup_login_rx = Some(rx);
+        self.setup_login_url_rx = Some(url_rx);
+        self.setup_login_task = Some(task);
         self.setup_modal.set_waiting_evalops();
-        self.state.add_system_message(
-            self.state
-                .locale
-                .translate("Opening EvalOps login in the browser.")
-                .to_string(),
-        );
     }
 
     fn finish_setup_api_key(&mut self, provider_id: &str, secret: &str) {

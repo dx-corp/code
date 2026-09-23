@@ -763,6 +763,8 @@ pub struct App {
     /// `/setup` modal for mandatory EvalOps Identity and optional local API keys.
     setup_modal: SetupModal,
     setup_login_rx: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    setup_login_url_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    setup_login_task: Option<tokio::task::JoinHandle<()>>,
     onboarding: onboarding::OnboardingSession,
     pending_agent_spawn: bool,
     /// True when `current_model` was chosen by `/setup` or `/model`, so a
@@ -1742,6 +1744,8 @@ impl App {
             config_selector: crate::components::ConfigSelector::experiments(),
             setup_modal: SetupModal::new(),
             setup_login_rx: None,
+            setup_login_url_rx: None,
+            setup_login_task: None,
             onboarding: onboarding::OnboardingSession::default(),
             pending_agent_spawn: false,
             current_model_user_set: false,
@@ -3243,12 +3247,20 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     }
 
     fn poll_setup_login(&mut self) -> bool {
+        if let Some(url_rx) = self.setup_login_url_rx.as_mut() {
+            if let Ok(url) = url_rx.try_recv() {
+                self.setup_modal.set_login_url(url);
+                return true;
+            }
+        }
         let Some(rx) = self.setup_login_rx.as_mut() else {
             return false;
         };
         match rx.try_recv() {
             Ok(Ok(())) => {
                 self.setup_login_rx = None;
+                self.setup_login_url_rx = None;
+                self.setup_login_task = None;
                 if let Err(error) = self.refresh_managed_setup_after_identity_login() {
                     self.setup_modal.set_status(error.clone());
                     self.state.add_system_message(error);
@@ -3270,12 +3282,16 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             }
             Ok(Err(error)) => {
                 self.setup_login_rx = None;
+                self.setup_login_url_rx = None;
+                self.setup_login_task = None;
                 self.setup_modal.set_status(error);
                 true
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                 self.setup_login_rx = None;
+                self.setup_login_url_rx = None;
+                self.setup_login_task = None;
                 self.setup_modal.set_status(
                     self.state
                         .locale

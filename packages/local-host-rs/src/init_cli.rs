@@ -686,13 +686,14 @@ async fn ensure_login(options: &InitOptions, client: &Client) -> Result<OAuthCre
 }
 
 async fn login(options: &InitOptions, client: &Client) -> Result<OAuthCredentials> {
-    login_with_scopes(options, client, REQUIRED_LOGIN_SCOPES).await
+    login_with_scopes(options, client, REQUIRED_LOGIN_SCOPES, None).await
 }
 
 async fn login_with_scopes(
     options: &InitOptions,
     client: &Client,
     requested_scopes: &str,
+    authorization_url_sender: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<OAuthCredentials> {
     let identity = identity_base_from_env();
     let callback_port = callback_port();
@@ -748,8 +749,14 @@ async fn login_with_scopes(
                 .append_pair("workspace_id", &workspace_id);
         }
     }
-    status(options, "Waiting for EvalOps identity callback...");
-    if options.json {
+    if let Some(sender) = authorization_url_sender {
+        // The alternate-screen TUI owns all terminal output. Give it the link
+        // before launching the browser so it can offer a manual fallback.
+        sender
+            .send(authorization_url.to_string())
+            .map_err(|_| anyhow::anyhow!("EvalOps login screen closed"))?;
+    } else if options.json {
+        status(options, "Waiting for EvalOps identity callback...");
         eprintln!(
             "{}",
             crate::localization::cli_locale().format(
@@ -759,6 +766,7 @@ async fn login_with_scopes(
         );
         eprintln!("{}", authorization_url.as_str());
     } else {
+        status(options, "Waiting for EvalOps identity callback...");
         println!(
             "{}",
             crate::localization::cli_locale().format(
@@ -2106,7 +2114,9 @@ fn response_detail(body: &str) -> String {
         .unwrap_or_else(|| "no response body".to_owned())
 }
 
-fn open_browser(url: &str) {
+/// Open the already constructed Identity authorization URL without writing it
+/// to the terminal. The TUI uses this for its explicit reopen action.
+pub fn open_browser(url: &str) {
     if open_browser_disabled() {
         let url = url.to_owned();
         std::thread::spawn(move || {
@@ -2427,7 +2437,7 @@ pub(crate) async fn perform_code_authority_login() -> Result<()> {
         ..InitOptions::default()
     };
     let scopes = format!("{REQUIRED_LOGIN_SCOPES} code:tools:execute");
-    let credentials = login_with_scopes(&options, &client, &scopes).await?;
+    let credentials = login_with_scopes(&options, &client, &scopes, None).await?;
     save_credentials(&credentials)?;
     Ok(())
 }
@@ -2444,6 +2454,31 @@ pub async fn perform_evalops_login() -> Result<()> {
     };
     status(&options, "Opening EvalOps login");
     let credentials = login(&options, &client).await?;
+    save_credentials(&credentials)?;
+    Ok(())
+}
+
+/// Interactive login for the alternate-screen TUI. The caller renders the
+/// authorization link; this path never writes status or URLs to the terminal.
+pub async fn perform_evalops_login_in_tui(
+    authorization_url_sender: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<()> {
+    crate::safety::require_vendor_network()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("build EvalOps HTTP client")?;
+    let options = InitOptions {
+        force_login: true,
+        ..InitOptions::default()
+    };
+    let credentials = login_with_scopes(
+        &options,
+        &client,
+        REQUIRED_LOGIN_SCOPES,
+        Some(&authorization_url_sender),
+    )
+    .await?;
     save_credentials(&credentials)?;
     Ok(())
 }
@@ -3459,7 +3494,10 @@ mod tests {
         std::env::remove_var("MAESTRO_EVALOPS_ORG_ID");
         std::env::set_var("MAESTRO_EVALOPS_WORKSPACE_ID", "workspace_from_stub");
 
-        let result = perform_evalops_login().await;
+        let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = perform_evalops_login_in_tui(url_tx).await;
+        let authorization_url = url_rx.try_recv().expect("TUI receives the login link");
+        assert!(authorization_url.starts_with(&format!("{identity}/authorize?")));
         identity_task.abort();
         let snapshot = match result {
             Ok(()) => load_evalops_snapshot()

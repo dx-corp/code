@@ -66,6 +66,8 @@ pub struct SetupModal {
     provider_index: usize,
     secret: String,
     status: Option<String>,
+    login_url: Option<String>,
+    show_login_url: bool,
     continue_to_byok_after_identity: bool,
 }
 
@@ -93,6 +95,8 @@ impl SetupModal {
             provider_index: 0,
             secret: String::new(),
             status: None,
+            login_url: None,
+            show_login_url: false,
             continue_to_byok_after_identity: false,
         }
     }
@@ -109,6 +113,8 @@ impl SetupModal {
         self.provider_index = 0;
         self.secret.clear();
         self.status = None;
+        self.login_url = None;
+        self.show_login_url = false;
         self.continue_to_byok_after_identity = false;
     }
 
@@ -116,6 +122,8 @@ impl SetupModal {
         self.visible = false;
         self.secret.clear();
         self.status = None;
+        self.login_url = None;
+        self.show_login_url = false;
         self.continue_to_byok_after_identity = false;
     }
 
@@ -252,8 +260,22 @@ impl SetupModal {
 
     pub fn set_waiting_evalops(&mut self) {
         self.page = SetupPage::WaitingEvalops;
-        self.status =
-            Some(maestro_ui::localization::tr("Waiting for the browser callback…").to_owned());
+        self.login_url = None;
+        self.show_login_url = false;
+        self.status = Some(maestro_ui::localization::tr("Preparing browser sign-in…").to_owned());
+    }
+
+    pub fn set_login_url(&mut self, url: String) {
+        self.login_url = Some(url);
+        self.status = Some(maestro_ui::localization::tr("Waiting for browser sign-in…").to_owned());
+    }
+
+    pub fn login_url(&self) -> Option<&str> {
+        self.login_url.as_deref()
+    }
+
+    pub fn toggle_login_url(&mut self) {
+        self.show_login_url = !self.show_login_url;
     }
 
     /// Continue a BYOK setup only after the required Identity login succeeds.
@@ -861,24 +883,38 @@ impl SetupModal {
     }
 
     fn waiting_lines(&self, theme: maestro_ui::UiTheme) -> Vec<Line<'static>> {
-        vec![
+        let mut lines = vec![
             Line::from(Span::raw(maestro_ui::localization::tr(
-                "A browser window opens for the required EvalOps Identity login.",
+                "Complete Deixic sign-in in your browser.",
             ))),
             Line::from(Span::styled(
-                maestro_ui::localization::tr(
-                    "This session stays here until the callback finishes.",
-                ),
+                maestro_ui::localization::tr("The session will continue when sign-in finishes."),
                 Style::default().fg(theme.muted),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 self.status.clone().unwrap_or_else(|| {
-                    maestro_ui::localization::tr("Waiting for the browser callback…").to_owned()
+                    maestro_ui::localization::tr("Waiting for browser sign-in…").to_owned()
                 }),
                 Style::default().fg(theme.attention),
             )),
-        ]
+        ];
+        if self.login_url.is_some() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                maestro_ui::localization::tr(
+                    "Press c to copy the link or o to open the browser again.",
+                ),
+                Style::default().fg(theme.muted),
+            )));
+        }
+        if self.show_login_url {
+            if let Some(url) = &self.login_url {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::raw(url.clone())));
+            }
+        }
+        lines
     }
 
     fn choice(
@@ -938,7 +974,9 @@ impl SetupModal {
                 maestro_ui::localization::tr("↑↓ select   enter next   esc back")
             }
             SetupPage::Key => maestro_ui::localization::tr("enter save   esc back"),
-            SetupPage::WaitingEvalops => maestro_ui::localization::tr("esc close"),
+            SetupPage::WaitingEvalops => maestro_ui::localization::tr(
+                "c copy   o open   u show link   enter retry   esc close",
+            ),
         }
     }
 }

@@ -138,6 +138,33 @@ fn setup_modal_starts_hidden_on_mode() {
 }
 
 #[test]
+fn login_link_stays_inside_modal_and_clears_on_close() {
+    let mut modal = SetupModal::new();
+    modal.show();
+    modal.set_waiting_evalops();
+    let url = "https://identity.evalops.dev/authorize?state=private-login-state";
+    modal.set_login_url(url.to_owned());
+    assert_eq!(modal.login_url(), Some(url));
+    let text = modal
+        .waiting_lines(crate::themes::current_ui_theme())
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains(url));
+    modal.toggle_login_url();
+    let text = modal
+        .waiting_lines(crate::themes::current_ui_theme())
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains(url));
+    modal.hide();
+    assert_eq!(modal.login_url(), None);
+}
+
+#[test]
 fn setup_modal_byok_starts_evalops_identity_before_provider_setup() {
     let mut modal = SetupModal::new();
     modal.show();
