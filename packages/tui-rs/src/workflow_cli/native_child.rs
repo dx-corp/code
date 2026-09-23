@@ -93,7 +93,8 @@ pub(super) async fn run_native_workflow_child(
         thinking_config(request.model.reasoning_effort.as_deref())?;
     let allowed_tools = allowed_tool_set(&request.allowed_tools)?;
     let baseline_policy = sandbox_policy_for_scopes(&working_directory, write_scopes);
-    let (managed_mcp_policy, sandbox_policy) = managed_policy(&working_directory, baseline_policy)?;
+    let (managed_mcp_policy, sandbox_policy) =
+        managed_policy_off_runtime(working_directory.clone(), baseline_policy).await?;
     let credential_vault = CredentialVault::new();
     let config = NativeAgentConfig {
         model,
@@ -413,6 +414,20 @@ fn sandbox_policy_for_scopes(
             exclude_slash_tmp: true,
         })
     }
+}
+
+async fn managed_policy_off_runtime(
+    working_directory: PathBuf,
+    baseline: Option<SandboxPolicy>,
+) -> Result<(
+    Option<maestro_local_host::mcp::ManagedMcpPolicy>,
+    Option<SandboxPolicy>,
+)> {
+    // Managed setup constructs a synchronous reqwest client. Dropping its
+    // private runtime on a Tokio worker panics during native child dispatch.
+    tokio::task::spawn_blocking(move || managed_policy(&working_directory, baseline))
+        .await
+        .context("join managed native workflow setup")?
 }
 
 fn managed_policy(
