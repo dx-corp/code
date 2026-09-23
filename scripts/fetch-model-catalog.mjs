@@ -567,6 +567,50 @@ function applyVendorCorrections(models, corrections) {
 }
 
 /**
+ * A faster tier a vendor bills at a higher rate, from models.dev's
+ * `experimental.modes`. Each mode carries its own rates and the request fields
+ * that activate it. A mode is kept only when it has both an input and output
+ * rate and a non-empty trigger: a rate nobody can activate, or a trigger with
+ * no price (models.dev's `pro` modes today), cannot be billed correctly.
+ */
+function mapRequestModes(model) {
+	const modes = model?.experimental?.modes;
+	if (modes === null || typeof modes !== "object") {
+		return undefined;
+	}
+	const rate = (value) =>
+		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+	const mapped = {};
+	for (const [name, mode] of Object.entries(modes)) {
+		const input = rate(mode?.cost?.input);
+		const output = rate(mode?.cost?.output);
+		if (input === undefined || output === undefined) {
+			continue;
+		}
+		const trigger = {};
+		for (const key of ["headers", "body"]) {
+			const value = mode?.provider?.[key];
+			if (value !== null && typeof value === "object" && Object.keys(value).length > 0) {
+				trigger[key] = value;
+			}
+		}
+		if (Object.keys(trigger).length === 0) {
+			continue;
+		}
+		const entry = { input, output };
+		for (const key of ["cache_read", "cache_write"]) {
+			const value = rate(mode.cost[key]);
+			if (value !== undefined) {
+				entry[key] = value;
+			}
+		}
+		entry.trigger = trigger;
+		mapped[name] = entry;
+	}
+	return Object.keys(mapped).length > 0 ? mapped : undefined;
+}
+
+/**
  * The lifecycle models.dev publishes for a model, when it publishes one.
  *
  * 125 upstream rows are marked `deprecated` and 28 `beta`, and the catalog was
@@ -651,6 +695,9 @@ function mapModel(providerId, modelId, model) {
 		// has no vendor rate; without this flag a missing `cost` cannot be
 		// told apart from a rate that should be there and is not.
 		...(model.open_weights === true ? { open_weights: true } : {}),
+		...(mapRequestModes(model) === undefined
+			? {}
+			: { request_modes: mapRequestModes(model) }),
 		...(mapStatus(model) === undefined ? {} : { status: mapStatus(model) }),
 		verification: {
 			state: "catalog",
