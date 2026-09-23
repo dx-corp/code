@@ -333,6 +333,22 @@
         "cache_read": 0.5,
         "cache_write": 6.25
       },
+      "request_modes": {
+        "fast": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 1,
+          "cache_write": 12.5,
+          "trigger": {
+            "headers": {
+              "anthropic-beta": "fast-mode-2026-02-01"
+            },
+            "body": {
+              "speed": "fast"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -370,6 +386,22 @@
         "cache_read": 0.5,
         "cache_write": 6.25
       },
+      "request_modes": {
+        "fast": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 1,
+          "cache_write": 12.5,
+          "trigger": {
+            "headers": {
+              "anthropic-beta": "fast-mode-2026-02-01"
+            },
+            "body": {
+              "speed": "fast"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -406,6 +438,22 @@
         "output": 20,
         "cache_read": 0.2,
         "cache_write": 5
+      },
+      "request_modes": {
+        "fast": {
+          "input": 8,
+          "output": 40,
+          "cache_read": 0.4,
+          "cache_write": 10,
+          "trigger": {
+            "headers": {
+              "anthropic-beta": "fast-mode-2026-02-01"
+            },
+            "body": {
+              "speed": "fast"
+            }
+          }
+        }
       },
       "verification": {
         "state": "catalog",
@@ -1806,6 +1854,18 @@
                   "cache_read": 0.5
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 5,
+          "output": 30,
+          "cache_read": 0.5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -1840,6 +1900,18 @@
         "input": 0.75,
         "output": 4.5,
         "cache_read": 0.075
+      },
+      "request_modes": {
+        "fast": {
+          "input": 1.5,
+          "output": 9,
+          "cache_read": 0.15,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
       },
       "verification": {
         "state": "catalog",
@@ -1953,6 +2025,18 @@
                   "cache_read": 1
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 12.5,
+          "output": 75,
+          "cache_read": 1.25,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2034,6 +2118,19 @@
                   "cache_write": 10
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 8,
+          "output": 40,
+          "cache_read": 0.8,
+          "cache_write": 10,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2078,6 +2175,19 @@
                   "cache_write": 0.5
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 0.4,
+          "output": 2.4,
+          "cache_read": 0.04,
+          "cache_write": 0.5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2122,6 +2232,19 @@
                   "cache_write": 10
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 8,
+          "output": 40,
+          "cache_read": 0.8,
+          "cache_write": 10,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2166,6 +2289,19 @@
                   "cache_write": 5
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 4,
+          "output": 24,
+          "cache_read": 0.4,
+          "cache_write": 5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2209,6 +2345,19 @@
                   "cache_write": 25
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 20,
+          "output": 100,
+          "cache_read": 2,
+          "cache_write": 25,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2253,6 +2402,19 @@
                   "cache_write": 0.25
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 0.2,
+          "output": 1,
+          "cache_read": 0.02,
+          "cache_write": 0.25,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
@@ -2297,6 +2459,19 @@
                   "cache_write": 5
                 }
               },
+      "request_modes": {
+        "fast": {
+          "input": 4,
+          "output": 20,
+          "cache_read": 0.4,
+          "cache_write": 5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
       "verification": {
         "state": "catalog",
         "source": "models.dev"
