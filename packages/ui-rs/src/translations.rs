@@ -6667,6 +6667,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Complete Deixic sign-in in your browser.",
+        [
+            "Completa el inicio de sesión de Deixic en el navegador.",
+            "Terminez la connexion à Deixic dans votre navigateur.",
+            "Schließen Sie die Deixic-Anmeldung im Browser ab.",
+            "ブラウザーで Deixic へのサインインを完了してください。",
+            "브라우저에서 Deixic 로그인을 완료하세요.",
+            "请在浏览器中完成 Deixic 登录。",
+        ],
+    ),
+    (
         "Complete setup to start.",
         [
             "Configuración completa para empezar.",
@@ -15693,6 +15704,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Preparing browser sign-in…",
+        [
+            "Preparando el inicio de sesión en el navegador…",
+            "Préparation de la connexion dans le navigateur…",
+            "Browser-Anmeldung wird vorbereitet…",
+            "ブラウザーでのサインインを準備しています…",
+            "브라우저 로그인을 준비하는 중…",
+            "正在准备浏览器登录…",
+        ],
+    ),
+    (
         "Preparing workspace search",
         [
             "Preparando la búsqueda del espacio de trabajo",
@@ -15767,6 +15789,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "保持制御を承認するために押します。",
             "자주 묻는 질문",
             "按 a 以批准控股。",
+        ],
+    ),
+    (
+        "Press c to copy the link or o to open the browser again.",
+        [
+            "Pulsa c para copiar el enlace u o para abrir el navegador de nuevo.",
+            "Appuyez sur c pour copier le lien ou sur o pour rouvrir le navigateur.",
+            "Drücken Sie c, um den Link zu kopieren, oder o, um den Browser erneut zu öffnen.",
+            "c でリンクをコピーするか、o でブラウザーを再度開いてください。",
+            "c를 눌러 링크를 복사하거나 o를 눌러 브라우저를 다시 여세요.",
+            "按 c 复制链接，或按 o 再次打开浏览器。",
         ],
     ),
     (
@@ -20739,6 +20772,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "The session will continue when sign-in finishes.",
+        [
+            "La sesión continuará cuando finalice el inicio de sesión.",
+            "La session reprendra une fois la connexion terminée.",
+            "Die Sitzung wird fortgesetzt, sobald die Anmeldung abgeschlossen ist.",
+            "サインインが完了するとセッションが続行されます。",
+            "로그인이 완료되면 세션이 계속됩니다.",
+            "登录完成后，会话将继续。",
+        ],
+    ),
+    (
         "The test sends a small fixed request to your selected model and may incur usage charges. It does not send repository contents.",
         [
             "La prueba envía una pequeña solicitud fija a su modelo seleccionado y puede incurrir en cargos de uso. No envía contenido de repositorio.",
@@ -23843,6 +23887,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Waiting for browser sign-in…",
+        [
+            "Esperando el inicio de sesión en el navegador…",
+            "En attente de la connexion dans le navigateur…",
+            "Warten auf die Browser-Anmeldung…",
+            "ブラウザーでのサインインを待っています…",
+            "브라우저 로그인을 기다리는 중…",
+            "正在等待浏览器登录…",
+        ],
+    ),
+    (
         "Waiting for the browser callback…",
         [
             "Esperando el callback del navegador...",
@@ -24742,6 +24797,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "組み込みのスペシャリストプロファイルは、コンパイルされた指示から来なければなりません",
             "내장된 전문 프로파일은 컴파일된 지침에서 옵니다.",
             "内置专家简介必须来自汇编的指令",
+        ],
+    ),
+    (
+        "c copy   o open   u show link   enter retry   esc close",
+        [
+            "c copiar   o abrir   u mostrar enlace   enter reintentar   esc cerrar",
+            "c copier   o ouvrir   u afficher le lien   enter réessayer   esc fermer",
+            "c kopieren   o öffnen   u Link anzeigen   enter erneut versuchen   esc schließen",
+            "c コピー   o 開く   u リンク表示   enter 再試行   esc 閉じる",
+            "c 복사   o 열기   u 링크 표시   enter 재시도   esc 닫기",
+            "c 复制   o 打开   u 显示链接   enter 重试   esc 关闭",
         ],
     ),
     (

@@ -9189,7 +9189,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4096,
         "temperature": true
       },
       "cost": {

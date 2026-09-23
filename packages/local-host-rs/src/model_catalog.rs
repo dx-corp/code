@@ -822,6 +822,18 @@ fn distinct_output_tokens(context: Option<u32>, output: Option<u32>) -> Option<u
     }
 }
 
+fn omit_unverified_sonar_output(id: &str, output: Option<u32>) -> Option<u32> {
+    // Perplexity publishes a 128K context for Sonar Reasoning Pro but no
+    // 4,096-token output ceiling. The models.dev Perplexity row supplies 4,096
+    // for OpenRouter's fallback after its derived 90% value is rejected.
+    // Keep this exact disputed value unknown until the vendor
+    // publishes a cap: https://docs.perplexity.ai/docs/sonar/models/sonar-reasoning-pro
+    if id == "perplexity/sonar-reasoning-pro" && output == Some(4_096) {
+        return None;
+    }
+    output
+}
+
 fn parse_limit_tokens(model: &serde_json::Value, field: &str) -> Option<u32> {
     model
         .get("limit")
@@ -1058,9 +1070,12 @@ fn map_openrouter_model(
         .and_then(serde_json::Value::as_u64)
         .and_then(|output| u32::try_from(output).ok())
         .filter(|output| *output > 0);
-    let output_tokens = limits.map_or_else(
-        || distinct_output_tokens(Some(context_tokens), advertised_output),
-        |limits| limits.distinct_output(id, context_tokens, advertised_output),
+    let output_tokens = omit_unverified_sonar_output(
+        id,
+        limits.map_or_else(
+            || distinct_output_tokens(Some(context_tokens), advertised_output),
+            |limits| limits.distinct_output(id, context_tokens, advertised_output),
+        ),
     );
     let name = model
         .get("name")
@@ -1650,6 +1665,35 @@ mod tests {
             last_modified: None,
             models,
         }
+    }
+
+    #[test]
+    fn unverified_sonar_output_limit_stays_unknown_after_refresh() {
+        assert_eq!(
+            catalog_model("perplexity/sonar-reasoning-pro")
+                .capabilities
+                .output_tokens,
+            None
+        );
+        let models_dev = serde_json::json!({
+            "perplexity": {"models": {
+                "sonar-reasoning-pro": {"limit": {"context": 128_000, "output": 4_096}}
+            }}
+        });
+        let openrouter = serde_json::json!({"data": [
+            {"id": "perplexity/sonar-reasoning-pro", "context_length": 128_000,
+             "top_provider": {"max_completion_tokens": 115_200}},
+            {"id": "perplexity/another-model", "context_length": 128_000,
+             "top_provider": {"max_completion_tokens": 4_096}}
+        ]});
+        let limits = DevTokenLimits::from_models_dev(&models_dev);
+        let refreshed = map_openrouter_catalog_with_limits(&openrouter, Some(&limits)).unwrap();
+        assert_eq!(refreshed[0].capabilities.output_tokens, None);
+        assert_eq!(refreshed[1].capabilities.output_tokens, Some(4_096));
+        assert_eq!(
+            omit_unverified_sonar_output("perplexity/sonar-reasoning-pro", Some(8_192)),
+            Some(8_192)
+        );
     }
 
     #[test]

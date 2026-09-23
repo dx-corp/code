@@ -127,7 +127,11 @@ fn read_http_request(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     loop {
         let mut chunk = [0_u8; 4096];
-        let bytes = stream.read(&mut chunk).expect("read test request");
+        let bytes = match stream.read(&mut chunk) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => panic!("read test request: {error}"),
+        };
         if bytes == 0 {
             break;
         }
