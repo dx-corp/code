@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "maestro.vendor-corrections.v1",
+  "note": "Documented vendor facts that override what models.dev or OpenRouter report. Both of those are third-party aggregators, and both have been wrong. Every entry cites the vendor's own page. An entry whose upstream now agrees is dead weight and vendor_corrections_are_all_load_bearing fails until it is deleted.",
+  "corrections": [
+    {
+      "id": "claude-sonnet-4-5",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+      "reason": "models.dev reports 1,000,000. Anthropic's context-windows page names the models that have a 1M window and then states that other Claude models, including Sonnet 4.5, have a 200K window. A too-large window is the dangerous direction: the overflow detector compacts at a fraction of it and the API rejects the oversized request instead."
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://docs.anthropic.com/en/docs/build-with-claude/context-windows",
+      "reason": "The dated snapshot of the same model; same correction, same reason."
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "field": "capabilities.context_tokens",
+      "value": 200000,
+      "source": "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+      "reason": "OpenRouter advertises context_length 1000000 for this route. #10159 removed this correction on the reasoning that OpenRouter sends the 1M-context beta header on its own account, so the route genuinely served 1M. That reasoning is wrong: Anthropic's context-windows page says \"For every model with a 1M-token context window, 1M is the default: you don't need a beta header\", and lists the 1M models by name without Sonnet 4.5, then says \"Other Claude models, including Claude Sonnet 4.5, have a 200k-token context window\". There is no beta path to 1M for this model, so no route can serve it. A 1M declaration lets a conversation grow past 200k input and the API returns 400 invalid_request_error, prompt is too long."
+    }
+  ]
+}

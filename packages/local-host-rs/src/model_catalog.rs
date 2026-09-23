@@ -1712,7 +1712,22 @@ mod tests {
                     model.id
                 );
                 assert_eq!(model.capabilities.protocol, ModelProtocol::OpenAiChat);
-                assert_eq!(model.verification.source, "openrouter");
+                // An OpenRouter row normally records OpenRouter as its source.
+                // A vendor correction replaces the value and the provenance
+                // together, so a Verified row carries the vendor page instead:
+                // anthropic/claude-sonnet-4.5 is corrected to 200k against
+                // OpenRouter's advertised 1M. What matters is that the row says
+                // where its number came from, not that it always says the same
+                // thing.
+                match model.verification.state {
+                    VerificationState::Verified => assert!(
+                        model.verification.source.starts_with("https://"),
+                        "corrected OpenRouter row {} must cite a vendor URL, got {}",
+                        model.id,
+                        model.verification.source
+                    ),
+                    _ => assert_eq!(model.verification.source, "openrouter"),
+                }
                 continue;
             }
             assert!(

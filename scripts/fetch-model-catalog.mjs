@@ -16,6 +16,7 @@
  *   node scripts/fetch-model-catalog.mjs [--out <path>] [--timeout-ms <ms>]
  */
 
+import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,11 +60,51 @@ function supportedParameter(model, parameter) {
 	return Array.isArray(model?.supported_parameters) && model.supported_parameters.includes(parameter);
 }
 
+/**
+ * An output limit, or nothing when the number is really the context window.
+ *
+ * Aggregators conflate the two. LiteLLM's own schema says of `max_tokens`:
+ * "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not
+ * set to max_input_tokens" - so a consumer reading it can get an input limit
+ * and send it as an output cap. 1,067 of LiteLLM's 4,179 entries have no
+ * max_output_tokens at all.
+ *
+ * Rejecting `output >= context` caught the exact-equality case. It did not
+ * catch near-equality: OpenRouter reports qwen/qwen3.6-27b with a 262,144
+ * context and a 262,140 output limit, which leaves four tokens for the prompt
+ * and cannot be a real limit.
+ *
+ * Within 1% of the window is treated as the same mistake. The threshold is
+ * deliberately tight rather than a tidy fraction, because real limits go
+ * higher than intuition suggests: o3 publishes 100,000 output against a
+ * 200,000 window, exactly half, and the xAI models sit at 0.9. A rule at
+ * either of those would discard published numbers.
+ */
 function distinctOutputTokens(context, output) {
 	if (!Number.isInteger(output) || output <= 0) {
 		return undefined;
 	}
-	if (Number.isInteger(context) && context > 0 && output >= context) {
+	if (Number.isInteger(context) && context > 0 && output >= context * 0.99) {
+		return undefined;
+	}
+	// Exactly 90% of the context window is OpenRouter's fallback, not a vendor's
+	// limit. 32 rows match it to six significant figures and every one is an
+	// OpenRouter row, spread across 17 vendor namespaces: x-ai, meta, qwen,
+	// google, perplexity, deepseek, moonshotai, ibm-granite and more.
+	// Seventeen vendors do not independently choose the same ratio.
+	//
+	// xAI's own agent settles it for their models. xai-org/grok-build declares
+	// `max_tokens: Option<u32>` with skip_serializing_if = "Option::is_none",
+	// defaults it to None, and the only reference to its `set_max_tokens`
+	// builder is the definition, so the field is never sent. Its model config
+	// carries `context_window` and no output limit at all, and its docs say a
+	// model defined without one defaults to a 200,000 context. There is no
+	// per-model output cap for xAI to publish, so 900,000 for grok-4.3 is a
+	// number OpenRouter computed.
+	//
+	// Dropping it leaves the field absent, which is the honest state, and
+	// conductor's resolveMaxOutputTokens falls back to each provider's floor.
+	if (Number.isInteger(context) && context > 0 && output === Math.round(context * 0.9)) {
 		return undefined;
 	}
 	return output;
@@ -160,7 +201,7 @@ function mapOpenRouterModel(model, tokenLimits) {
 				supportedParameter(model, "include_reasoning") ||
 				(model.reasoning != null && typeof model.reasoning === "object"),
 			streaming: true,
-			context_tokens: correctedContextWindow(id, context),
+			context_tokens: context,
 			output_tokens: resolveOpenRouterOutput(tokenLimits, id, context, advertised),
 			// OpenRouter lists `temperature` in `supported_parameters` for
 			// routes that accept it. Omitted when the route lists no
@@ -394,15 +435,88 @@ function mapCost(cost) {
  * accepts. Every entry needs a comment naming the vendor source, and entries
  * should be deleted once upstream corrects them.
  */
-const CONTEXT_WINDOW_OVERRIDES = new Map([
-	// https://docs.anthropic.com/en/docs/about-claude/models/overview - 200K context
-	["claude-sonnet-4-5", 200_000],
-	["claude-sonnet-4-5-20250929", 200_000],
-]);
+const VENDOR_CORRECTIONS_PATH = path.join(REPO_ROOT, "products/maestro/config/vendor-corrections.json");
 
-/** Apply a documented vendor correction to an upstream context window. */
-function correctedContextWindow(id, context) {
-	return CONTEXT_WINDOW_OVERRIDES.get(id) ?? context;
+/**
+ * Documented vendor facts that override what the aggregators report.
+ *
+ * This used to be a two-entry map of context windows written into this file.
+ * It covers any field now, because the aggregators are not selectively wrong:
+ * models.dev reported Sonnet 4.5 with a 1,000,000-token window against
+ * Anthropic's published 200,000, and nothing about that failure mode is
+ * specific to context windows.
+ *
+ * Applied after mapping, so a correction is expressed once and reaches both
+ * the models.dev and OpenRouter paths. A corrected row records where its
+ * number came from, so a reader can tell a vendor-checked value from a
+ * scraped one without going to the generator.
+ */
+function loadVendorCorrections() {
+	const parsed = JSON.parse(readFileSync(VENDOR_CORRECTIONS_PATH, "utf8"));
+	if (parsed.schemaVersion !== "maestro.vendor-corrections.v1") {
+		throw new Error(`unsupported vendor-corrections schema ${parsed.schemaVersion}`);
+	}
+	for (const correction of parsed.corrections ?? []) {
+		for (const key of ["id", "field", "source", "reason"]) {
+			if (typeof correction[key] !== "string" || correction[key] === "") {
+				throw new Error(`vendor correction is missing ${key}: ${JSON.stringify(correction)}`);
+			}
+		}
+		if (correction.value === undefined || correction.value === null) {
+			throw new Error(`vendor correction has no value: ${correction.id} ${correction.field}`);
+		}
+	}
+	return parsed.corrections ?? [];
+}
+
+/** Read or write a dotted path such as `capabilities.context_tokens`. */
+function atPath(model, field) {
+	const parts = field.split(".");
+	let cursor = model;
+	for (const part of parts.slice(0, -1)) {
+		if (cursor === null || typeof cursor !== "object") return undefined;
+		cursor = cursor[part];
+	}
+	if (cursor === null || typeof cursor !== "object") return undefined;
+	return { container: cursor, key: parts[parts.length - 1] };
+}
+
+/**
+ * Apply every correction and report what each one did.
+ *
+ * A correction upstream already agrees with is reported as a no-op rather than
+ * silently succeeding: it is dead weight, and leaving it in place means the
+ * next reader cannot tell which corrections are still holding a wrong value
+ * down.
+ */
+function applyVendorCorrections(models, corrections) {
+	const byId = new Map(models.map((model) => [model.id, model]));
+	const applied = [];
+	const noops = [];
+	const missing = [];
+	for (const correction of corrections) {
+		const model = byId.get(correction.id);
+		if (!model) {
+			missing.push(correction);
+			continue;
+		}
+		const slot = atPath(model, correction.field);
+		if (!slot) {
+			missing.push(correction);
+			continue;
+		}
+		if (slot.container[slot.key] === correction.value) {
+			noops.push(correction);
+			continue;
+		}
+		slot.container[slot.key] = correction.value;
+		// `verified` is the tier the snapshot schema already has for a value
+		// checked against something better than an aggregator; the source
+		// carries the vendor page it was checked against.
+		model.verification = { state: "verified", source: correction.source };
+		applied.push(correction);
+	}
+	return { applied, noops, missing };
 }
 
 function mapModel(providerId, modelId, model) {
@@ -424,7 +538,7 @@ function mapModel(providerId, modelId, model) {
 			vision: Array.isArray(model.modalities?.input) && model.modalities.input.includes("image"),
 			reasoning: model.reasoning === true,
 			streaming: true,
-			context_tokens: correctedContextWindow(modelId, model.limit.context),
+			context_tokens: model.limit.context,
 			// Per-response output ceiling (reasoning included) from
 			// models.dev `limit.output`. Omitted when the source lacks it or
 			// copies the context window into output.
@@ -535,6 +649,28 @@ async function main() {
 	backfillMissingCosts(models);
 	dropUnreachableContextTiers(models);
 
+	const corrections = loadVendorCorrections();
+	const { applied, noops, missing } = applyVendorCorrections(models, corrections);
+	for (const correction of applied) {
+		console.log(`corrected ${correction.id} ${correction.field} -> ${correction.value}`);
+	}
+	if (noops.length > 0) {
+		console.log(
+			`${noops.length} vendor correction(s) now agree with upstream and should be deleted from ` +
+				`products/maestro/config/vendor-corrections.json:`,
+		);
+		for (const correction of noops) {
+			console.log(`  ${correction.id} ${correction.field}`);
+		}
+	}
+	if (missing.length > 0) {
+		throw new Error(
+			`vendor corrections target models or fields the catalog does not have: ${missing
+				.map((correction) => `${correction.id} ${correction.field}`)
+				.join(", ")}`,
+		);
+	}
+
 	models.sort(
 		(left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
 	);
@@ -542,6 +678,15 @@ async function main() {
 	const snapshot = {
 		generated_at: Math.floor(Date.now() / 1000),
 		source: `${MODELS_DEV_API_URL}+${OPENROUTER_MODELS_API_URL}`,
+		// The corrections that actually changed something this run. Recording
+		// them here is what lets a checker verify every correction is still
+		// load-bearing without keeping a second copy of the list.
+		vendor_corrections: applied.map((correction) => ({
+			id: correction.id,
+			field: correction.field,
+			value: correction.value,
+			source: correction.source,
+		})),
 		models,
 	};
 
