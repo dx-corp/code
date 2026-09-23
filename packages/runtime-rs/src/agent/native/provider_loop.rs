@@ -304,7 +304,7 @@ impl NativeAgentRunner {
                     (self.client.as_ref(), estimated_input_tokens)
                 {
                     if let Ok(Some(observed)) = client
-                        .count_input_tokens(provider_messages.as_slice(), &config)
+                        .count_input_tokens(provider_messages.as_slice(), config)
                         .await
                     {
                         self.compactor.calibrate_counter(estimated, observed);
@@ -331,7 +331,7 @@ impl NativeAgentRunner {
             let request_id = provider_request_id_with_tail(
                 "primary",
                 &config.model,
-                &provider_messages,
+                provider_messages,
                 config
                     .cache_topology
                     .as_ref()
@@ -2102,7 +2102,7 @@ impl NativeAgentRunner {
                         self.semantic_continuation = Some(record);
                     }
                     self.messages = Arc::new(result.messages);
-                    self.prepare_compacted_checkpoint(&config)?;
+                    self.prepare_compacted_checkpoint(config)?;
                     self.emit_conversation_snapshot();
                 }
             }
