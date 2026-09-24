@@ -78,3 +78,5 @@ pub mod hosted_runner;
 pub mod hosted_runner_cli;
 pub mod hosted_runner_conformance;
 pub mod subagents;
+
+pub mod hosted_thread;
