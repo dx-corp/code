@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:f009e58adacc2d460b21c9e14aa69470e85b966f633bca5c51be132e323820da",
+  "compatibilityDigest": "sha256:f5e8e7ac8d9e165b854eeae3baa063030fa269c8f847c86490c63d263b5426ce",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -38,7 +38,7 @@
       ],
       "schemaDeclaredVersion": "2026-08-08",
       "schemaContractDigest": "sha256:6f861ccdc76c8f85150a6a2aeceb99a0da5847f04ffd3d0b39011d94c81dbc53",
-      "runtimeContractDigest": "sha256:7d6fdd19ccfa036f0441b06e6d02bc2188302f6f9b805ee6c518cecb53b589dd",
+      "runtimeContractDigest": "sha256:cea8cf73427930169aa188ee8eca2ccee0bb020f7d379150b44dbd0c6de0952a",
       "messages": {
         "toRuntime": [
           "managed_authorization_result",
@@ -176,7 +176,7 @@
       }
     },
     "thread": {
-      "contractDigest": "sha256:1f273f544becbd6282a4be89bf1d557a5e16ee731e577d0040f535b1794b346f",
+      "contractDigest": "sha256:35857c90fd6276c1bd20def22e3e6c8c29c0686dc56de4424853fbc6d0e73bdb",
       "supportedVersions": [
         {
           "version": "evalops.maestro.thread.v1",
