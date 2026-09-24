@@ -1,227 +1,205 @@
 //! Tenant-scoped Platform operating-thread client shared by the terminal and desktop gateway.
 
 use crate::credential_mode::PlatformSession;
+use crate::public_protocol as wire;
 use anyhow::{Context, Result, bail};
 use prost::Message;
 use reqwest::{Client, Url};
 use std::time::Duration;
 use uuid::Uuid;
 
-const SERVICE: &str = "/deixic.v1.DeixicService";
+const SERVICE: &str = "/deixicpublic.v1.DeixicPublicService";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-// A narrow wire projection of console.v1. Field numbers and kinds mirror the
-// canonical protobuf contract; unknown fields are ignored by prost.
-#[derive(Clone, PartialEq, Message)]
+// Native-friendly view models. Only `wire` types are serialized on the public
+// connection; these views do not mirror any internal protobuf field numbers.
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Query {
-    #[prost(string, tag = "1")]
     pub workspace_id: String,
-    #[prost(string, tag = "13")]
     pub organization_id: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct GetRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(int32, tag = "3")]
     pub limit: i32,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Channel {
-    #[prost(string, tag = "1")]
     pub id: String,
-    #[prost(string, tag = "2")]
     pub label: String,
-    #[prost(int32, tag = "5")]
     pub unread_count: i32,
-    #[prost(int32, tag = "6")]
     pub open_count: i32,
-    #[prost(bool, tag = "11")]
     pub archived: bool,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ListChannelsRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(int32, tag = "2")]
     pub archive_filter: i32,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ListChannelsResponse {
-    #[prost(message, repeated, tag = "1")]
     pub channels: Vec<Channel>,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct RenameThreadRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(string, tag = "3")]
     pub title: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct RenameThreadResponse {
-    #[prost(message, optional, tag = "1")]
     pub channel: Option<Channel>,
-    #[prost(bool, tag = "2")]
     pub changed: bool,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ArchiveThreadRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(bool, tag = "3")]
     pub archived: bool,
-    #[prost(string, tag = "4")]
     pub idempotency_key: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ArchiveThreadResponse {
-    #[prost(message, optional, tag = "1")]
     pub channel: Option<Channel>,
-    #[prost(bool, tag = "2")]
     pub changed: bool,
-    #[prost(bool, tag = "3")]
     pub replayed: bool,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct OperatingMessage {
-    #[prost(string, tag = "1")]
     pub id: String,
-    #[prost(string, tag = "3")]
     pub role: String,
-    #[prost(string, tag = "5")]
     pub body: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct GetResponse {
-    #[prost(message, optional, tag = "1")]
     pub channel: Option<Channel>,
-    #[prost(message, repeated, tag = "2")]
     pub messages: Vec<OperatingMessage>,
-    #[prost(int64, tag = "7")]
     pub replay_cursor: i64,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ListRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(int64, tag = "3")]
     pub after_cursor: i64,
-    #[prost(int32, tag = "4")]
     pub limit: i32,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Event {
-    #[prost(int64, tag = "1")]
     pub cursor: i64,
-    #[prost(string, tag = "2")]
     pub event_id: String,
-    #[prost(string, tag = "3")]
     pub turn_id: String,
-    #[prost(int32, tag = "4")]
     pub kind: i32,
-    #[prost(string, tag = "5")]
     pub safe_text: String,
-    #[prost(string, tag = "9")]
     pub request_id: String,
-    #[prost(int32, tag = "10")]
     pub request_type: i32,
-    #[prost(string, tag = "12")]
     pub request_call_id: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ListResponse {
-    #[prost(message, repeated, tag = "1")]
     pub events: Vec<Event>,
-    #[prost(int64, tag = "2")]
     pub next_cursor: i64,
-    #[prost(bool, tag = "3")]
     pub has_more: bool,
-    #[prost(bool, tag = "4")]
     pub reset_required: bool,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct SubmitRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(string, tag = "3")]
     pub body: String,
-    #[prost(string, tag = "4")]
     pub idempotency_key: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Turn {
-    #[prost(string, tag = "1")]
     pub turn_id: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct SubmitResponse {
-    #[prost(message, optional, tag = "6")]
     pub accepted_turn: Option<Turn>,
-    #[prost(int64, tag = "7")]
     pub replay_cursor: i64,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ThreadResponse {
-    #[prost(string, tag = "1")]
     pub request_id: String,
-    #[prost(string, tag = "2")]
     pub call_id: String,
-    #[prost(int32, tag = "3")]
     pub request_type: i32,
-    #[prost(int32, tag = "4")]
     pub action: i32,
-    #[prost(string, tag = "5")]
     pub text: String,
-    #[prost(string, tag = "7")]
     pub idempotency_key: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct RespondRequest {
-    #[prost(message, optional, tag = "1")]
     pub query: Option<Query>,
-    #[prost(string, tag = "2")]
     pub channel_id: String,
-    #[prost(string, tag = "3")]
     pub turn_id: String,
-    #[prost(message, optional, tag = "4")]
     pub response: Option<ThreadResponse>,
-    #[prost(string, tag = "5")]
     pub idempotency_key: String,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct RespondResponse {
-    #[prost(int64, tag = "5")]
     pub replay_cursor: i64,
+}
+
+impl From<wire::Thread> for Channel {
+    fn from(value: wire::Thread) -> Self {
+        Self {
+            id: value.id,
+            label: value.title,
+            unread_count: value.unread_count,
+            open_count: value.open_count,
+            archived: value.archived,
+        }
+    }
+}
+
+impl From<wire::TaskMessage> for OperatingMessage {
+    fn from(value: wire::TaskMessage) -> Self {
+        let role = match value.role {
+            1 => "user",
+            2 => "assistant",
+            3 => "system",
+            _ => "unknown",
+        };
+        Self {
+            id: value.id,
+            role: role.into(),
+            body: value.body,
+        }
+    }
+}
+
+impl From<wire::TaskEvent> for Event {
+    fn from(value: wire::TaskEvent) -> Self {
+        Self {
+            cursor: value.cursor,
+            event_id: value.id,
+            turn_id: value.turn_id,
+            kind: value.kind,
+            safe_text: value.text,
+            request_id: value.request_id,
+            request_type: value.request_kind,
+            request_call_id: value.call_id,
+        }
+    }
 }
 
 pub struct ThreadClient {
@@ -267,6 +245,14 @@ impl ThreadClient {
         })
     }
 
+    fn scope(&self) -> Result<wire::Scope> {
+        let query = self.query()?;
+        Ok(wire::Scope {
+            organization_id: query.organization_id,
+            workspace_id: query.workspace_id,
+        })
+    }
+
     async fn call<Req: Message, Resp: Message + Default>(
         &self,
         method: &str,
@@ -308,16 +294,22 @@ impl ThreadClient {
     }
 
     pub async fn get(&self) -> Result<GetResponse> {
-        let result: GetResponse = self
+        let result: wire::GetThreadResponse = self
             .call(
-                "GetOperatingThread",
-                GetRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
+                "GetThread",
+                wire::GetThreadRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
                     limit: 50,
+                    ..Default::default()
                 },
             )
             .await?;
+        let result = GetResponse {
+            channel: result.thread.map(Into::into),
+            messages: result.messages.into_iter().map(Into::into).collect(),
+            replay_cursor: result.replay_cursor,
+        };
         if result
             .channel
             .as_ref()
@@ -329,27 +321,35 @@ impl ThreadClient {
     }
 
     pub async fn list_channels(&self, archived: bool) -> Result<ListChannelsResponse> {
-        self.call(
-            "ListOperatingChannels",
-            ListChannelsRequest {
-                query: Some(self.query()?),
-                archive_filter: if archived { 2 } else { 1 },
-            },
-        )
-        .await
+        let result: wire::ListThreadsResponse = self
+            .call(
+                "ListThreads",
+                wire::ListThreadsRequest {
+                    scope: Some(self.scope()?),
+                    archived,
+                },
+            )
+            .await?;
+        Ok(ListChannelsResponse {
+            channels: result.threads.into_iter().map(Into::into).collect(),
+        })
     }
 
     pub async fn rename(&self, title: String) -> Result<RenameThreadResponse> {
-        let result: RenameThreadResponse = self
+        let result: wire::RenameThreadResponse = self
             .call(
-                "RenameOperatingThread",
-                RenameThreadRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
+                "RenameThread",
+                wire::RenameThreadRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
                     title,
                 },
             )
             .await?;
+        let result = RenameThreadResponse {
+            channel: result.thread.map(Into::into),
+            changed: result.changed,
+        };
         if result
             .channel
             .as_ref()
@@ -361,17 +361,22 @@ impl ThreadClient {
     }
 
     pub async fn archive(&self, archived: bool) -> Result<ArchiveThreadResponse> {
-        let result: ArchiveThreadResponse = self
+        let result: wire::ArchiveThreadResponse = self
             .call(
-                "ArchiveOperatingThread",
-                ArchiveThreadRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
+                "ArchiveThread",
+                wire::ArchiveThreadRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
                     archived,
                     idempotency_key: Uuid::new_v4().to_string(),
                 },
             )
             .await?;
+        let result = ArchiveThreadResponse {
+            channel: result.thread.map(Into::into),
+            changed: result.changed,
+            replayed: result.replayed,
+        };
         if result
             .channel
             .as_ref()
@@ -383,33 +388,47 @@ impl ThreadClient {
     }
 
     pub async fn events(&self, cursor: i64) -> Result<ListResponse> {
-        self.call(
-            "ListOperatingThreadEvents",
-            ListRequest {
-                query: Some(self.query()?),
-                channel_id: self.channel_id.clone(),
-                after_cursor: cursor,
-                limit: 200,
-            },
-        )
-        .await
+        let result: wire::ListEventsResponse = self
+            .call(
+                "ListEvents",
+                wire::ListEventsRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
+                    after_cursor: cursor,
+                    limit: 200,
+                },
+            )
+            .await?;
+        Ok(ListResponse {
+            events: result.events.into_iter().map(Into::into).collect(),
+            next_cursor: result.next_cursor,
+            has_more: result.has_more,
+            reset_required: result.reset_required,
+        })
     }
 
     pub async fn submit(&self, body: String) -> Result<SubmitResponse> {
         if body.trim().is_empty() || body.len() > 20_000 {
             bail!("message must contain 1 to 20000 bytes");
         }
-        let result: SubmitResponse = self
+        let result: wire::SubmitTaskResponse = self
             .call(
-                "SubmitOperatingMessage",
-                SubmitRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
+                "SubmitTask",
+                wire::SubmitTaskRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
                     body,
                     idempotency_key: Uuid::new_v4().to_string(),
+                    ..Default::default()
                 },
             )
             .await?;
+        let result = SubmitResponse {
+            accepted_turn: result.accepted_turn.map(|turn| Turn {
+                turn_id: turn.turn_id,
+            }),
+            replay_cursor: result.replay_cursor,
+        };
         if result
             .accepted_turn
             .as_ref()
@@ -427,23 +446,25 @@ impl ThreadClient {
         text: String,
     ) -> Result<RespondResponse> {
         let key = Uuid::new_v4().to_string();
-        self.call(
-            "RespondOperatingThread",
-            RespondRequest {
-                query: Some(self.query()?),
-                channel_id: self.channel_id.clone(),
-                turn_id: pending.turn_id.clone(),
-                response: Some(ThreadResponse {
+        let result: wire::RespondToRequestResponse = self
+            .call(
+                "RespondToRequest",
+                wire::RespondToRequestRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
+                    turn_id: pending.turn_id.clone(),
                     request_id: pending.request_id.clone(),
                     call_id: pending.request_call_id.clone(),
-                    request_type: pending.request_type,
+                    request_kind: pending.request_type,
                     action,
                     text,
-                    idempotency_key: key.clone(),
-                }),
-                idempotency_key: key,
-            },
-        )
-        .await
+                    idempotency_key: key,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(RespondResponse {
+            replay_cursor: result.replay_cursor,
+        })
     }
 }

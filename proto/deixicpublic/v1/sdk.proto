@@ -1,0 +1,604 @@
+syntax = "proto3";
+
+package deixicpublic.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/dx-corp/deixic-go/deixicpublic/v1;deixicpublicv1";
+
+// This is the complete application SDK wire contract. Public messages are
+// projections owned by this service, not aliases of implementation records.
+service DeixicPublicService {
+  rpc GetThread(GetThreadRequest) returns (GetThreadResponse);
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+  rpc RenameThread(RenameThreadRequest) returns (RenameThreadResponse);
+  rpc ArchiveThread(ArchiveThreadRequest) returns (ArchiveThreadResponse);
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+  rpc SubmitTask(SubmitTaskRequest) returns (SubmitTaskResponse);
+  rpc InterruptTask(InterruptTaskRequest) returns (InterruptTaskResponse);
+  rpc RespondToRequest(RespondToRequestRequest) returns (RespondToRequestResponse);
+  rpc GetReceipt(GetReceiptRequest) returns (GetReceiptResponse);
+  rpc ResolveReceiptAction(ResolveReceiptActionRequest) returns (ResolveReceiptActionResponse);
+  rpc GetModelReadiness(GetModelReadinessRequest) returns (GetModelReadinessResponse);
+  rpc GetClientSetup(GetClientSetupRequest) returns (GetClientSetupResponse);
+  rpc SubmitIssueReport(SubmitIssueReportRequest) returns (SubmitIssueReportResponse);
+  rpc CreateBusinessObject(CreateBusinessObjectRequest) returns (CreateBusinessObjectResponse);
+  rpc GetBusinessObject(GetBusinessObjectRequest) returns (GetBusinessObjectResponse);
+  rpc UpdateBusinessObject(UpdateBusinessObjectRequest) returns (UpdateBusinessObjectResponse);
+  rpc DeleteBusinessObject(DeleteBusinessObjectRequest) returns (DeleteBusinessObjectResponse);
+}
+
+message Scope {
+  string organization_id = 1;
+  string workspace_id = 2;
+}
+
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  string request_id = 3;
+  bool retryable = 4;
+}
+
+enum TurnState {
+  TURN_STATE_UNSPECIFIED = 0;
+  TURN_STATE_ACCEPTED = 1;
+  TURN_STATE_RUNNING = 2;
+  TURN_STATE_WAITING = 3;
+  TURN_STATE_RESPONDED = 4;
+  TURN_STATE_COMPLETED = 5;
+  TURN_STATE_FAILED = 6;
+  TURN_STATE_INTERRUPTED = 7;
+}
+
+enum WaitingReason {
+  WAITING_REASON_UNSPECIFIED = 0;
+  WAITING_REASON_APPROVAL = 1;
+  WAITING_REASON_USER_INPUT = 2;
+  WAITING_REASON_CLIENT_TOOL = 3;
+  WAITING_REASON_EXTERNAL_RETRY = 4;
+}
+
+message TaskTurn {
+  string turn_id = 1;
+  int64 sequence = 2;
+  string user_message_id = 3;
+  string assistant_message_id = 4;
+  TurnState state = 5;
+  WaitingReason waiting_reason = 6;
+  int64 first_cursor = 7;
+  int64 last_cursor = 8;
+  ErrorDetail terminal_error = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp completed_at = 12;
+}
+
+message Thread {
+  string id = 1;
+  string title = 2;
+  int64 replay_cursor = 3;
+  int64 active_turn_sequence = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  int32 unread_count = 6;
+  int32 open_count = 7;
+  bool archived = 8;
+}
+
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_SYSTEM = 3;
+}
+
+message TaskMessage {
+  string id = 1;
+  MessageRole role = 2;
+  string body = 3;
+  google.protobuf.Timestamp created_at = 4;
+  repeated string receipt_ids = 5;
+}
+
+enum EventKind {
+  EVENT_KIND_UNSPECIFIED = 0;
+  EVENT_KIND_TURN_ACCEPTED = 1;
+  EVENT_KIND_TURN_STARTED = 2;
+  EVENT_KIND_PROGRESS = 3;
+  EVENT_KIND_APPROVAL_REQUIRED = 4;
+  EVENT_KIND_INPUT_REQUIRED = 5;
+  EVENT_KIND_ARTIFACT_RECORDED = 6;
+  EVENT_KIND_TURN_COMPLETED = 7;
+  EVENT_KIND_TURN_FAILED = 8;
+  EVENT_KIND_TURN_INTERRUPTED = 9;
+  EVENT_KIND_CLIENT_TOOL_REQUIRED = 10;
+  EVENT_KIND_EXTERNAL_RETRY_REQUIRED = 11;
+}
+
+enum RequestKind {
+  REQUEST_KIND_UNSPECIFIED = 0;
+  REQUEST_KIND_APPROVAL = 1;
+  REQUEST_KIND_USER_INPUT = 2;
+  REQUEST_KIND_CLIENT_TOOL = 3;
+  REQUEST_KIND_EXTERNAL_RETRY = 4;
+}
+
+message EvidenceReference {
+  string kind = 1;
+  string id = 2;
+  string label = 3;
+  string uri = 4;
+}
+
+message TaskEvent {
+  int64 cursor = 1;
+  string id = 2;
+  string turn_id = 3;
+  EventKind kind = 4;
+  string text = 5;
+  repeated EvidenceReference evidence = 6;
+  google.protobuf.Timestamp created_at = 7;
+  string request_id = 8;
+  RequestKind request_kind = 9;
+  string tool_name = 10;
+  string call_id = 11;
+  ErrorDetail terminal_error = 12;
+}
+
+enum ReceiptState {
+  RECEIPT_STATE_UNSPECIFIED = 0;
+  RECEIPT_STATE_UNKNOWN = 1;
+  RECEIPT_STATE_PROPOSED = 2;
+  RECEIPT_STATE_QUEUED = 3;
+  RECEIPT_STATE_WAITING_APPROVAL = 4;
+  RECEIPT_STATE_BLOCKED = 5;
+  RECEIPT_STATE_NEEDS_INPUT = 6;
+  RECEIPT_STATE_UNAVAILABLE = 7;
+  RECEIPT_STATE_RUNNING = 8;
+  RECEIPT_STATE_SUCCEEDED = 9;
+  RECEIPT_STATE_VERIFIED = 10;
+  RECEIPT_STATE_DENIED = 11;
+  RECEIPT_STATE_CANCELLED = 12;
+  RECEIPT_STATE_FAILED = 13;
+}
+
+message ReceiptAction {
+  string id = 1;
+  string label = 2;
+  string kind = 3;
+  bool requires_confirmation = 4;
+  string disabled_reason = 5;
+}
+
+message CodingOutput {
+  string path = 1;
+  string object_id = 2;
+  string version_id = 3;
+  string sha256 = 4;
+  uint64 size_bytes = 5;
+  // Included only in an explicitly requested receipt read by the authorized actor.
+  bytes content = 6;
+}
+
+message CodingAcceptance {
+  bool accepted = 1;
+  string contract_digest = 2;
+  string submission_digest = 3;
+  repeated string reasons = 4;
+  string revision = 5;
+  repeated CodingOutput outputs = 6;
+}
+
+message Receipt {
+  string id = 1;
+  string kind = 2;
+  string title = 3;
+  string summary = 4;
+  ReceiptState state = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  repeated ReceiptAction allowed_actions = 7;
+  repeated EvidenceReference evidence = 8;
+  CodingAcceptance coding_acceptance = 9;
+}
+
+message ModelSelection {
+  string provider = 1;
+  string model = 2;
+}
+
+message AvailableModel {
+  string provider = 1;
+  string model = 2;
+  bool ready = 3;
+  string display_name = 4;
+}
+
+message SetupReadiness {
+  bool accessible = 1;
+  repeated string missing_requirements = 2;
+  ModelSelection selection = 3;
+  AvailableModel default_model = 4;
+  repeated AvailableModel available_models = 5;
+  string next_action = 6;
+}
+
+// Model readiness is an application-level decision; billing and routing
+// implementation details stay behind this projection.
+enum ModelReadinessState {
+  MODEL_READINESS_STATE_UNSPECIFIED = 0;
+  MODEL_READINESS_STATE_READY = 1;
+  MODEL_READINESS_STATE_ACTIVATION_REQUIRED = 2;
+  MODEL_READINESS_STATE_FUNDING_REQUIRED = 3;
+  MODEL_READINESS_STATE_LIMIT_REACHED = 4;
+  MODEL_READINESS_STATE_ACCESS_SUSPENDED = 5;
+  MODEL_READINESS_STATE_TEMPORARILY_UNAVAILABLE = 6;
+}
+
+enum ModelNextAction {
+  MODEL_NEXT_ACTION_UNSPECIFIED = 0;
+  MODEL_NEXT_ACTION_CONTACT_ADMINISTRATOR = 1;
+  MODEL_NEXT_ACTION_VIEW_FUNDING = 2;
+  MODEL_NEXT_ACTION_RETRY = 3;
+}
+
+message GetModelReadinessRequest {
+  Scope scope = 1;
+  ModelSelection selection = 2;
+  string environment = 3;
+}
+
+message GetModelReadinessResponse {
+  Scope scope = 1;
+  ModelSelection selection = 2;
+  string environment = 3;
+  ModelReadinessState state = 4;
+  repeated ModelNextAction next_actions = 5;
+  google.protobuf.Timestamp evaluated_at = 6;
+}
+
+enum ClientRuleScope {
+  CLIENT_RULE_SCOPE_UNSPECIFIED = 0;
+  CLIENT_RULE_SCOPE_ORGANIZATION = 1;
+  CLIENT_RULE_SCOPE_WORKSPACE = 2;
+}
+
+message ClientRule {
+  string id = 1;
+  string title = 2;
+  string body_markdown = 3;
+  ClientRuleScope scope = 4;
+}
+
+message ClientSkill {
+  string id = 1;
+  string source = 2;
+  string version = 3;
+  bool required = 4;
+}
+
+enum ClientMcpMode {
+  CLIENT_MCP_MODE_UNSPECIFIED = 0;
+  CLIENT_MCP_MODE_OPEN = 1;
+  CLIENT_MCP_MODE_ALLOWLIST = 2;
+  CLIENT_MCP_MODE_DENYLIST = 3;
+}
+
+message ClientMcpServer {
+  string name = 1;
+  string url_pattern = 2;
+  string transport = 3;
+}
+
+message ClientMcpPolicy {
+  ClientMcpMode mode = 1;
+  repeated ClientMcpServer servers = 2;
+}
+
+message GetClientSetupRequest {
+  Scope scope = 1;
+}
+
+message GetClientSetupResponse {
+  Scope scope = 1;
+  uint64 version = 2;
+  google.protobuf.Timestamp issued_at = 3;
+  repeated ClientRule rules = 4;
+  repeated ClientSkill skills = 5;
+  ClientMcpPolicy mcp = 6;
+  string sandbox_policy_toml = 7;
+}
+
+message IssueEvidence {
+  string kind = 1;
+  string source_id = 2;
+  string text = 3;
+}
+
+message IssueContext {
+  string reproduction_steps = 1;
+  string model = 2;
+  repeated IssueEvidence evidence = 3;
+}
+
+message SubmitIssueReportRequest {
+  Scope scope = 1;
+  string description = 2;
+  string expected_behavior = 3;
+  string app_version = 4;
+  bool include_diagnostics = 5;
+  string idempotency_key = 6;
+  IssueContext context = 7;
+}
+
+message IssueReport {
+  string id = 1;
+  string reference = 2;
+}
+
+message SubmitIssueReportResponse {
+  IssueReport report = 1;
+}
+
+// This resource is the supported Terraform provider contract. Source authority,
+// connector state and recovery coordinates belong to the implementation.
+message BusinessMoney {
+  string amount = 1;
+  string currency = 2;
+}
+message BusinessObjectReference {
+  string object_id = 1;
+}
+message BusinessArtifactReference {
+  string artifact_version_id = 1;
+}
+message BusinessTextList {
+  repeated string values = 1;
+}
+message BusinessFieldValue {
+  string field_id = 1;
+  oneof value {
+    string text = 2;
+    int64 integer = 3;
+    bool boolean = 4;
+    string decimal = 5;
+    BusinessMoney money = 6;
+    string enum_value = 7;
+    string date = 8;
+    string timestamp = 9;
+    BusinessObjectReference reference = 10;
+    BusinessArtifactReference artifact = 11;
+    BusinessTextList text_list = 12;
+  }
+}
+message BusinessObject {
+  string object_id = 1;
+  string type_id = 2;
+  int64 schema_revision = 3;
+  int64 revision = 4;
+  repeated BusinessFieldValue values = 5;
+  bool deleted = 6;
+  reserved 7, 8;
+  string updated_at = 9;
+  string created_at = 10;
+}
+message CreateBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string type_id = 4;
+  int64 schema_revision = 5;
+  repeated BusinessFieldValue values = 6;
+}
+message CreateBusinessObjectResponse {
+  BusinessObject object = 1;
+}
+message GetBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  reserved 3;
+  string object_id = 4;
+  reserved 5;
+}
+message GetBusinessObjectResponse {
+  BusinessObject object = 1;
+}
+message UpdateBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string object_id = 4;
+  int64 expected_revision = 5;
+  repeated BusinessFieldValue values = 6;
+  int64 schema_revision = 7;
+}
+message UpdateBusinessObjectResponse {
+  BusinessObject object = 1;
+}
+message DeleteBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string object_id = 4;
+  int64 expected_revision = 5;
+}
+message DeleteBusinessObjectResponse {
+  BusinessObject object = 1;
+}
+
+message GetThreadRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  int32 limit = 3;
+  string page_token = 4;
+}
+
+message GetThreadResponse {
+  Thread thread = 1;
+  repeated TaskMessage messages = 2;
+  repeated Receipt receipts = 3;
+  repeated TaskTurn turns = 4;
+  int64 replay_cursor = 5;
+  string next_page_token = 6;
+  SetupReadiness setup = 7;
+}
+
+message ListThreadsRequest {
+  Scope scope = 1;
+  bool archived = 2;
+}
+
+message ListThreadsResponse {
+  repeated Thread threads = 1;
+}
+
+message RenameThreadRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  string title = 3;
+}
+
+message RenameThreadResponse {
+  Thread thread = 1;
+  bool changed = 2;
+}
+
+message ArchiveThreadRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  bool archived = 3;
+  string idempotency_key = 4;
+}
+
+message ArchiveThreadResponse {
+  Thread thread = 1;
+  bool changed = 2;
+  bool replayed = 3;
+}
+
+message ListEventsRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  int64 after_cursor = 3;
+  int32 limit = 4;
+}
+
+message ListEventsResponse {
+  repeated TaskEvent events = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+  bool reset_required = 4;
+  Thread snapshot = 5;
+  repeated TaskTurn snapshot_turns = 6;
+}
+
+message WatchEventsRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  int64 after_cursor = 3;
+}
+
+message WatchEventsResponse {
+  repeated TaskEvent events = 1;
+  int64 next_cursor = 2;
+  bool reset_required = 3;
+  Thread snapshot = 4;
+  repeated TaskTurn snapshot_turns = 5;
+}
+
+message CodingContract {
+  string repository_id = 1;
+  uint64 generation = 2;
+  repeated string required_assertion_ids = 3;
+  bool require_review = 4;
+  bool require_behavior = 5;
+  repeated string readiness_requirements = 6;
+  repeated string authorized_skips = 7;
+  repeated string authorized_dispositions = 8;
+  repeated string output_paths = 9;
+}
+
+message SubmitTaskRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  string body = 3;
+  string idempotency_key = 4;
+  string continuation_task_id = 5;
+  repeated string reference_task_ids = 6;
+  ModelSelection model_selection = 7;
+  CodingContract coding_contract = 8;
+  string project_resource_id = 9;
+}
+
+message SubmitTaskResponse {
+  TaskMessage message = 1;
+  TaskTurn accepted_turn = 2;
+  int64 replay_cursor = 3;
+  repeated Receipt receipts = 4;
+}
+
+message InterruptTaskRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  string turn_id = 3;
+  string idempotency_key = 4;
+  string reason = 5;
+}
+
+message InterruptTaskResponse {
+  string turn_id = 1;
+  bool replayed = 2;
+  repeated TaskTurn turns = 3;
+  int64 replay_cursor = 4;
+}
+
+enum ResponseAction {
+  RESPONSE_ACTION_UNSPECIFIED = 0;
+  RESPONSE_ACTION_APPROVE = 1;
+  RESPONSE_ACTION_DENY = 2;
+  RESPONSE_ACTION_ANSWER = 3;
+  RESPONSE_ACTION_RETRY = 4;
+  RESPONSE_ACTION_SKIP = 5;
+  RESPONSE_ACTION_ABORT = 6;
+}
+
+message RespondToRequestRequest {
+  Scope scope = 1;
+  string thread_id = 2;
+  string turn_id = 3;
+  string request_id = 4;
+  string call_id = 5;
+  RequestKind request_kind = 6;
+  ResponseAction action = 7;
+  string text = 8;
+  bool is_error = 9;
+  string idempotency_key = 10;
+}
+
+message RespondToRequestResponse {
+  bool replayed = 1;
+  repeated TaskTurn turns = 2;
+  int64 replay_cursor = 3;
+}
+
+message GetReceiptRequest {
+  Scope scope = 1;
+  string receipt_id = 2;
+  string thread_id = 3;
+  bool include_coding_output_content = 4;
+}
+
+message GetReceiptResponse {
+  Receipt receipt = 1;
+}
+
+message ResolveReceiptActionRequest {
+  Scope scope = 1;
+  string receipt_id = 2;
+  string action_id = 3;
+  string idempotency_key = 4;
+}
+
+message ResolveReceiptActionResponse {
+  Receipt receipt = 1;
+}

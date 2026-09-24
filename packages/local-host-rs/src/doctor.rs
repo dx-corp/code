@@ -1694,16 +1694,17 @@ mod tests {
             .build()
             .expect("runtime")
             .block_on(async {
-                // Independently encode the canonical response tags (version=1,
-                // organization_id=7, workspace_id=8, MCP policy=5).
+                // Independently encode the public response: scope=1, version=2, MCP=6.
                 for (organization, expected) in [
                     ("org-test", CheckStatus::Pass),
                     ("other-org", CheckStatus::Warning),
                 ] {
-                    let mut body = vec![0x08, 1, 0x3a, organization.len() as u8];
-                    body.extend_from_slice(organization.as_bytes());
-                    body.extend_from_slice(b"\x42\x0eworkspace-test");
-                    body.extend_from_slice(&[0x2a, 2, 0x08, 2]);
+                    let mut scope = vec![0x0a, organization.len() as u8];
+                    scope.extend_from_slice(organization.as_bytes());
+                    scope.extend_from_slice(b"\x12\x0eworkspace-test");
+                    let mut body = vec![0x0a, scope.len() as u8];
+                    body.extend_from_slice(&scope);
+                    body.extend_from_slice(&[0x10, 1, 0x32, 2, 0x08, 2]);
                     let (base, server) =
                         test_server_bytes(200, body, "application/proto", Duration::ZERO).await;
                     std::env::set_var("MAESTRO_MANAGED_SETUP_URL", base);
@@ -1717,7 +1718,9 @@ mod tests {
                     assert_eq!(report.status, expected, "{report:?}");
                     assert!(report.live);
                     let request = server.await.expect("server");
-                    assert!(request.contains("/console.v1.ManagedSetupService/GetManagedSetup"));
+                    assert!(
+                        request.contains("/deixicpublic.v1.DeixicPublicService/GetClientSetup")
+                    );
                     assert!(
                         !serde_json::to_string(&report)
                             .expect("report")

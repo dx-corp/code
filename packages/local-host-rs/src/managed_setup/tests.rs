@@ -752,8 +752,10 @@ fn protobuf_fixture() -> wire::ManagedSetup {
             seconds: 1_800_000_000,
             nanos: 123,
         }),
-        organization_id: "org-a".into(),
-        workspace_id: "workspace-a".into(),
+        scope: Some(crate::public_protocol::Scope {
+            organization_id: "org-a".into(),
+            workspace_id: "workspace-a".into(),
+        }),
         rules: vec![wire::ManagedRule {
             id: "rule".into(),
             title: "Review".into(),
@@ -805,7 +807,7 @@ fn protobuf_server_for(
             }
         };
         let headers = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
-        assert!(headers.starts_with("post /console.v1.managedsetupservice/getmanagedsetup "));
+        assert!(headers.starts_with("post /deixicpublic.v1.deixicpublicservice/getclientsetup "));
         assert!(headers.contains("content-type: application/proto\r\n"));
         assert!(headers.contains("accept: application/proto\r\n"));
         assert!(headers.contains("authorization: bearer access-token\r\n"));
@@ -828,17 +830,17 @@ fn protobuf_server_for(
             request.extend_from_slice(&buffer[..count]);
         }
         let expected: &[u8] = if workspace_bound {
-            b"\x0a\x05org-a\x12\x0bworkspace-a"
+            b"\x0a\x14\x0a\x05org-a\x12\x0bworkspace-a"
         } else {
-            b"\x0a\x05org-a"
+            b"\x0a\x07\x0a\x05org-a"
         };
         assert_eq!(&request[header_end..], expected);
         // Decode the actual bytes crossing the HTTP boundary, not the request builder.
         let decoded =
             wire::GetManagedSetupRequest::decode(&request[header_end..]).expect("protobuf request");
-        assert_eq!(decoded.organization_id, "org-a");
+        assert_eq!(decoded.scope.as_ref().unwrap().organization_id, "org-a");
         assert_eq!(
-            decoded.workspace_id,
+            decoded.scope.as_ref().unwrap().workspace_id,
             if workspace_bound { "workspace-a" } else { "" }
         );
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/proto\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).expect("headers");
@@ -901,17 +903,20 @@ fn protobuf_transport_preserves_every_policy_field_and_cache_timestamp() {
 #[test]
 fn protobuf_transport_rejects_malformed_foreign_and_unknown_policy() {
     let mut foreign_org = protobuf_fixture();
-    foreign_org.organization_id = "other".into();
+    foreign_org.scope.as_mut().unwrap().organization_id = "other".into();
     let mut foreign_workspace = protobuf_fixture();
-    foreign_workspace.workspace_id = "other".into();
+    foreign_workspace.scope.as_mut().unwrap().workspace_id = "other".into();
     let mut unknown_mode = protobuf_fixture();
     unknown_mode.mcp.as_mut().unwrap().mode = 99;
     let mut unknown_scope = protobuf_fixture();
     unknown_scope.rules[0].scope = 99;
+    let mut missing_scope = protobuf_fixture();
+    missing_scope.scope = None;
     let mut invalid_timestamp = protobuf_fixture();
     invalid_timestamp.issued_at.as_mut().unwrap().nanos = -1;
     for body in [
         vec![0x80],
+        missing_scope.encode_to_vec(),
         foreign_org.encode_to_vec(),
         foreign_workspace.encode_to_vec(),
         unknown_mode.encode_to_vec(),
@@ -936,7 +941,7 @@ fn protobuf_transport_rejects_malformed_foreign_and_unknown_policy() {
 fn protobuf_transport_accepts_organization_policy_for_both_selectors() {
     for workspace_bound in [false, true] {
         let mut policy = protobuf_fixture();
-        policy.workspace_id.clear();
+        policy.scope.as_mut().unwrap().workspace_id.clear();
         let (base, server) = protobuf_server_for(policy.encode_to_vec(), workspace_bound);
         let session = session_for("org-a", workspace_bound.then_some("workspace-a"));
         let setup = fetch_managed_setup_from(&session, &base).expect("organization policy");

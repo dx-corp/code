@@ -94,3 +94,9 @@ test('Code device capability must be a typed per-platform receipt', t => {
   const {dir,seal}=fixture(t); writeFileSync(join(dir,'code-device-darwin-arm64.json'),JSON.stringify({schemaVersion:1,platform:'darwin-arm64',enabled:'false'})); seal();
   assert.throws(() => verifyStagedFiles(dir,'0.10.72',dir), /Invalid Code device/);
 });
+
+test('rejects a sealed native binary containing a private protocol', t => {
+  const {dir,seal}=fixture(t);
+  writeFileSync(join(dir,'maestro-linux-x64'), 'binary\0console.v1\0'); seal();
+  assert.throws(() => verifyStagedFiles(dir,'0.10.72',dir), /Private protocol/);
+});

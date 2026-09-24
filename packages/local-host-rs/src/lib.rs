@@ -79,4 +79,8 @@ pub mod hosted_runner_cli;
 pub mod hosted_runner_conformance;
 pub mod subagents;
 
+/// Generated bindings for the independently owned public application contract.
+pub mod public_protocol {
+    include!(concat!(env!("OUT_DIR"), "/deixicpublic.v1.rs"));
+}
 pub mod hosted_thread;
