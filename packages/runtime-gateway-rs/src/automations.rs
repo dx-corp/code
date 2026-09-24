@@ -301,8 +301,31 @@ impl AutomationStore {
         }))
     }
 
-    pub(crate) fn delete(&mut self, id: &str) -> Result<bool, AutomationStoreError> {
-        self.mutate(|state| Ok(state.definitions.remove(id).is_some()))
+    pub(crate) fn delete(&mut self, id: &str, now_ms: u64) -> Result<bool, AutomationStoreError> {
+        let key = self.signing_key.clone();
+        self.mutate(|state| {
+            let removed = state.definitions.remove(id).is_some();
+            if removed {
+                for run in state.runs.iter_mut().filter(|run| {
+                    run.automation_id == id && run.status == AutomationRunStatus::RetryScheduled
+                }) {
+                    run.status = AutomationRunStatus::Failed;
+                    run.finished_at_ms = Some(now_ms);
+                    run.next_retry_at_ms = None;
+                    run.last_error_type = Some("automation_deleted".to_string());
+                    let receipt = signed_receipt(
+                        &key,
+                        run,
+                        now_ms,
+                        None,
+                        0,
+                        Some("automation_deleted".to_string()),
+                    );
+                    append_receipt(run, receipt);
+                }
+            }
+            Ok(removed)
+        })
     }
 
     pub(crate) fn claim_manual(
@@ -349,7 +372,27 @@ impl AutomationStore {
     ) -> Result<Option<ClaimedAutomationRun>, AutomationStoreError> {
         let owner = owner.to_owned();
         let fallback_model = fallback_model.to_owned();
+        let key = self.signing_key.clone();
         self.mutate(|state| {
+            let known = state.definitions.keys().cloned().collect::<HashSet<_>>();
+            for run in state.runs.iter_mut().filter(|run| {
+                run.status == AutomationRunStatus::RetryScheduled
+                    && !known.contains(&run.automation_id)
+            }) {
+                run.status = AutomationRunStatus::Failed;
+                run.finished_at_ms = Some(now_ms);
+                run.next_retry_at_ms = None;
+                run.last_error_type = Some("automation_deleted".to_string());
+                let receipt = signed_receipt(
+                    &key,
+                    run,
+                    now_ms,
+                    None,
+                    0,
+                    Some("automation_deleted".to_string()),
+                );
+                append_receipt(run, receipt);
+            }
             if let Some(index) = state.runs.iter().position(|run| {
                 run.status == AutomationRunStatus::RetryScheduled
                     && run.next_retry_at_ms.is_some_and(|at| at <= now_ms)
@@ -494,14 +537,11 @@ impl AutomationStore {
                     "run lease is no longer held".to_string(),
                 ));
             }
-            let definition = state
-                .definitions
-                .get(&run.automation_id)
-                .cloned()
-                .ok_or_else(|| {
-                    AutomationStoreError::Invalid("automation definition removed".to_string())
-                })?;
-            let retryable = !result.succeeded && run.attempt < definition.max_attempts;
+            let definition = state.definitions.get(&run.automation_id).cloned();
+            let retryable = !result.succeeded
+                && definition
+                    .as_ref()
+                    .is_some_and(|definition| run.attempt < definition.max_attempts);
             run.status = if result.succeeded {
                 AutomationRunStatus::Succeeded
             } else if retryable {
@@ -513,11 +553,10 @@ impl AutomationStore {
             run.lease_owner = None;
             run.lease_expires_at_ms = None;
             run.last_error_type = result.error_type.clone();
-            run.next_retry_at_ms = if retryable {
-                Some(now_ms + retry_delay_ms(&definition, run.attempt))
-            } else {
-                None
-            };
+            run.next_retry_at_ms = definition
+                .as_ref()
+                .filter(|_| retryable)
+                .map(|definition| now_ms + retry_delay_ms(definition, run.attempt));
             let receipt = signed_receipt(
                 &key,
                 run,
@@ -564,6 +603,35 @@ fn parse_definition(
     let object = body.as_object().ok_or_else(|| {
         AutomationStoreError::Invalid("automation must be a JSON object".to_string())
     })?;
+    if [
+        "cron",
+        "cronExpr",
+        "scheduleRule",
+        "rrule",
+        "remoteEndpoint",
+        "endpoint",
+    ]
+    .iter()
+    .any(|field| object.contains_key(*field))
+    {
+        return Err(AutomationStoreError::Invalid(
+            "cron and remote automation targets are not supported".to_string(),
+        ));
+    }
+    if let Some(schedule) = object.get("schedule") {
+        let Some(schedule) = schedule.as_object() else {
+            return Err(AutomationStoreError::Invalid(
+                "schedule must contain intervalSeconds".to_string(),
+            ));
+        };
+        if !schedule.contains_key("intervalSeconds")
+            || schedule.keys().any(|field| field != "intervalSeconds")
+        {
+            return Err(AutomationStoreError::Invalid(
+                "only intervalSeconds schedules are supported".to_string(),
+            ));
+        }
+    }
     let prompt = object
         .get("prompt")
         .or_else(|| object.get("task"))
@@ -611,15 +679,27 @@ fn parse_definition(
             "automation model is too large".to_string(),
         ));
     }
-    let interval_seconds = number_field(object, "intervalSeconds")
-        .or_else(|| {
-            object
-                .get("schedule")
-                .and_then(Value::as_object)
-                .and_then(|schedule| number_field(schedule, "intervalSeconds"))
-        })
-        .or_else(|| existing.and_then(|definition| definition.interval_seconds))
-        .map(|value| value.clamp(1, MAX_INTERVAL_SECONDS));
+    let interval_input = object.get("intervalSeconds").or_else(|| {
+        object
+            .get("schedule")
+            .and_then(Value::as_object)
+            .and_then(|schedule| schedule.get("intervalSeconds"))
+    });
+    let interval_seconds = match interval_input {
+        Some(Value::Null) => None,
+        Some(value) => {
+            let seconds = value.as_u64().ok_or_else(|| {
+                AutomationStoreError::Invalid("intervalSeconds must be an integer".to_string())
+            })?;
+            if !(1..=MAX_INTERVAL_SECONDS).contains(&seconds) {
+                return Err(AutomationStoreError::Invalid(
+                    "intervalSeconds must be 1..86400".to_string(),
+                ));
+            }
+            Some(seconds)
+        }
+        None => existing.and_then(|definition| definition.interval_seconds),
+    };
     let max_attempts = number_field(object, "maxAttempts")
         .or_else(|| existing.map(|definition| u64::from(definition.max_attempts)))
         .unwrap_or(3)
@@ -634,9 +714,13 @@ fn parse_definition(
     let next_run_at_ms = if !enabled || interval_seconds.is_none() {
         None
     } else if let Some(existing) = existing {
-        existing
-            .next_run_at_ms
-            .or_else(|| interval_seconds.map(|interval| now_ms + interval * 1_000))
+        if existing.interval_seconds != interval_seconds {
+            interval_seconds.map(|interval| now_ms + interval * 1_000)
+        } else {
+            existing
+                .next_run_at_ms
+                .or_else(|| interval_seconds.map(|interval| now_ms + interval * 1_000))
+        }
     } else {
         interval_seconds.map(|interval| now_ms + interval * 1_000)
     };
@@ -1258,6 +1342,69 @@ mod tests {
     }
 
     #[test]
+    fn clearing_or_changing_interval_updates_the_next_run() {
+        let (_dir, mut store) = store();
+        store.upsert(None, &definition_body(), 1_000).unwrap();
+        let cleared = store
+            .upsert(
+                Some("nightly"),
+                &serde_json::json!({ "intervalSeconds": null }),
+                2_000,
+            )
+            .unwrap();
+        assert!(cleared["intervalSeconds"].is_null());
+        assert!(cleared["nextRunAtMs"].is_null());
+        let scheduled = store
+            .upsert(
+                Some("nightly"),
+                &serde_json::json!({ "intervalSeconds": 120 }),
+                3_000,
+            )
+            .unwrap();
+        assert_eq!(scheduled["nextRunAtMs"], 123_000);
+        let rescheduled = store
+            .upsert(
+                Some("nightly"),
+                &serde_json::json!({ "intervalSeconds": 30 }),
+                4_000,
+            )
+            .unwrap();
+        assert_eq!(rescheduled["nextRunAtMs"], 34_000);
+    }
+
+    #[test]
+    fn invalid_interval_is_rejected_instead_of_silently_clamped() {
+        let (_dir, mut store) = store();
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(86_401),
+            serde_json::json!("60"),
+        ] {
+            let mut body = definition_body();
+            body["intervalSeconds"] = invalid;
+            assert!(store.upsert(None, &body, 1_000).is_err());
+        }
+        assert!(store.list_definitions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unsupported_schedules_fail_instead_of_creating_manual_definitions() {
+        let (_dir, mut store) = store();
+        for extra in [
+            serde_json::json!({ "cronExpr": "0 9 * * *" }),
+            serde_json::json!({ "schedule": { "cron": "0 9 * * *" } }),
+            serde_json::json!({ "remoteEndpoint": "https://example.com/run" }),
+        ] {
+            let mut body = definition_body();
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(store.upsert(None, &body, 1_000).is_err());
+        }
+        assert!(store.list_definitions().unwrap().is_empty());
+    }
+
+    #[test]
     fn legacy_lock_file_is_not_stolen_from_a_live_writer() {
         let (dir, _store) = store();
         let lock_path = dir.path().join("automations.json.lock");
@@ -1422,6 +1569,105 @@ mod tests {
             run.receipts[0].error_type.as_deref(),
             Some("provider_error")
         );
+    }
+
+    #[test]
+    fn deleting_definition_finalizes_retry_without_blocking_other_schedules() {
+        let (_dir, mut store) = store();
+        store.upsert(None, &definition_body(), 1_000).unwrap();
+        let claim = match store
+            .claim_manual(
+                "nightly",
+                Some("retry-to-delete"),
+                "owner-a",
+                "model",
+                2_000,
+            )
+            .unwrap()
+        {
+            RunClaim::Claimed(claim) => claim,
+            _ => panic!("claim should be new"),
+        };
+        store
+            .complete(&claim, failed_run("provider_error"), 2_100)
+            .unwrap();
+        assert!(store.delete("nightly", 3_000).unwrap());
+        let run: AutomationRun =
+            serde_json::from_value(store.list_runs("nightly").unwrap()[0].clone()).unwrap();
+        assert_eq!(run.status, AutomationRunStatus::Failed);
+        assert_eq!(run.next_retry_at_ms, None);
+        assert_eq!(run.last_error_type.as_deref(), Some("automation_deleted"));
+        assert_eq!(run.receipts.len(), 2);
+        assert!(store.verify_receipt(&run.receipts[1]));
+
+        let mut other = definition_body();
+        other["id"] = serde_json::json!("other");
+        store.upsert(None, &other, 4_000).unwrap();
+        let due = store.claim_due("scheduler", "model", 65_000).unwrap();
+        assert_eq!(due.unwrap().automation_id, "other");
+    }
+
+    #[test]
+    fn active_run_can_record_its_outcome_after_definition_deletion() {
+        let (_dir, mut store) = store();
+        store.upsert(None, &definition_body(), 1_000).unwrap();
+        let claim = match store
+            .claim_manual("nightly", Some("active-delete"), "owner-a", "model", 2_000)
+            .unwrap()
+        {
+            RunClaim::Claimed(claim) => claim,
+            _ => panic!("claim should be new"),
+        };
+        assert!(store.delete("nightly", 3_000).unwrap());
+        store
+            .complete(
+                &claim,
+                AutomationRunResult {
+                    succeeded: true,
+                    output_sha256: None,
+                    output_bytes: 0,
+                    error_type: None,
+                },
+                4_000,
+            )
+            .unwrap();
+        let run: AutomationRun =
+            serde_json::from_value(store.list_runs("nightly").unwrap()[0].clone()).unwrap();
+        assert_eq!(run.status, AutomationRunStatus::Succeeded);
+        assert!(store.verify_receipt(&run.receipts[0]));
+    }
+
+    #[test]
+    fn scheduler_repairs_orphaned_retries_from_old_state() {
+        let (_dir, mut store) = store();
+        store.upsert(None, &definition_body(), 1_000).unwrap();
+        let claim = match store
+            .claim_manual("nightly", Some("old-orphan"), "owner-a", "model", 2_000)
+            .unwrap()
+        {
+            RunClaim::Claimed(claim) => claim,
+            _ => panic!("claim should be new"),
+        };
+        store
+            .complete(&claim, failed_run("provider_error"), 2_100)
+            .unwrap();
+        // A previous version removed definitions without closing retries.
+        store
+            .mutate(|state| {
+                state.definitions.remove("nightly");
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            store
+                .claim_due("scheduler", "model", 10_000)
+                .unwrap()
+                .is_none()
+        );
+        let run: AutomationRun =
+            serde_json::from_value(store.list_runs("nightly").unwrap()[0].clone()).unwrap();
+        assert_eq!(run.status, AutomationRunStatus::Failed);
+        assert!(store.verify_receipt(run.receipts.last().unwrap()));
     }
 
     #[test]

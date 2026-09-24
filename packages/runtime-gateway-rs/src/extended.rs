@@ -398,7 +398,7 @@ pub(crate) async fn handle_extended_endpoint(
                 );
             };
             if method == "DELETE" {
-                return match store.delete(id) {
+                return match store.delete(id, now_millis()) {
                     Ok(removed) => json_response(200, &serde_json::json!({ "success": removed })),
                     Err(error) => {
                         json_response(500, &serde_json::json!({ "error": error.to_string() }))
