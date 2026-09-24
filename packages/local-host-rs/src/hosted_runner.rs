@@ -89,6 +89,10 @@ pub(super) const HOSTED_RUNNER_DRAIN_FINALIZATION_PENDING_STATUS: &str =
 const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 15_000;
 const CONNECTION_IDLE_MS: i64 = (DEFAULT_HEARTBEAT_INTERVAL_MS as i64) * 3;
 const MAINTENANCE_PUMP_INTERVAL: Duration = Duration::from_millis(100);
+// Connected transports notify the pump after enqueueing every event. Keep a
+// slower safety drain for missed notifications without waking 10 times a
+// second throughout an otherwise idle hosted session.
+const NOTIFIED_MAINTENANCE_PUMP_INTERVAL: Duration = Duration::from_secs(5);
 const THREAD_PERSISTENCE_RECOVERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_EVENTS: usize = 1024;
 // Response retries are short-lived transport retries; retain enough completed
@@ -577,6 +581,12 @@ pub trait HostedRunnerHeadlessMessageExecutor: Send + Sync {
     /// executors maintenance-driven.
     fn event_notification(&self) -> Result<Option<Arc<Notify>>, HostedRunnerError> {
         Ok(None)
+    }
+
+    /// Pending response acknowledgements and failed ledger writes need the
+    /// short maintenance cadence even when transport events are notified.
+    fn has_pending_maintenance_work(&self) -> bool {
+        false
     }
 
     /// Report whether a runtime that was previously connected has lost its
@@ -1133,6 +1143,24 @@ impl HostedRunnerHeadlessMessageExecutor for AgentSupervisorHostedRunnerMessageE
             .lock()
             .map_err(|_| HostedRunnerError::internal("agent supervisor mutex poisoned"))?;
         Ok(supervisor.event_notification())
+    }
+
+    fn has_pending_maintenance_work(&self) -> bool {
+        !self
+            .queued_responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+            || !self
+                .queued_unkeyed_responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+            || !self
+                .memory_completed_responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
     }
 
     fn disconnected_after_ready(&self) -> Result<bool, HostedRunnerError> {
@@ -1982,37 +2010,47 @@ async fn pump_agent_events(
     cancelled: CancellationToken,
     maintenance_interval: Duration,
 ) {
-    let mut interval = tokio::time::interval(maintenance_interval);
+    let mut first_tick = true;
     loop {
-        let should_pump = tokio::select! {
-            () = cancelled.cancelled() => break,
-            _ = interval.tick() => true,
-            result = wait_for_event_notification(&shared) => {
-                if let Err(error) = result {
-                    shared.publish_runtime_error("event_pump_failed", error);
-                    break;
-                }
-                true
+        let notification = match shared.message_executor.event_notification() {
+            Ok(notification) => notification,
+            Err(error) => {
+                shared.publish_runtime_error("event_pump_failed", error);
+                break;
             }
         };
+        let can_use_safety_tick = notification.is_some()
+            && !shared
+                .thread_persistence_retry_pending
+                .load(Ordering::Acquire)
+            && !shared.message_executor.has_pending_maintenance_work();
+        let tick_interval = if first_tick {
+            Duration::ZERO
+        } else if can_use_safety_tick {
+            NOTIFIED_MAINTENANCE_PUMP_INTERVAL.max(maintenance_interval)
+        } else {
+            maintenance_interval
+        };
+        first_tick = false;
+        tokio::select! {
+            () = cancelled.cancelled() => break,
+            () = tokio::time::sleep(tick_interval) => {},
+            () = async {
+                if let Some(notification) = notification {
+                    notification.notified().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {},
+        }
         let lifecycle = shared.mutation_lifecycle.clone();
         let _lifecycle = tokio::select! {
             () = cancelled.cancelled() => break,
             lifecycle = lifecycle.lock() => lifecycle,
         };
-        if should_pump && matches!(pump_tick(&shared), PumpTick::Stop) {
+        if matches!(pump_tick(&shared), PumpTick::Stop) {
             break;
         }
-    }
-}
-
-async fn wait_for_event_notification(shared: &SharedRunner) -> Result<(), HostedRunnerError> {
-    let notification = shared.message_executor.event_notification()?;
-    if let Some(notification) = notification {
-        notification.notified().await;
-        Ok(())
-    } else {
-        std::future::pending().await
     }
 }
 

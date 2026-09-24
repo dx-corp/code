@@ -2592,6 +2592,9 @@ impl HostedRunnerHeadlessMessageExecutor for PumpOnlyRuntimeExecutor {
 struct NotifyingPumpRuntimeExecutor {
     queued: Arc<Mutex<Vec<FromAgentMessage>>>,
     notification: Arc<Notify>,
+    drain_count: AtomicUsize,
+    expose_notification: bool,
+    pending_maintenance: AtomicBool,
 }
 
 impl Default for NotifyingPumpRuntimeExecutor {
@@ -2599,6 +2602,9 @@ impl Default for NotifyingPumpRuntimeExecutor {
         Self {
             queued: Arc::new(Mutex::new(Vec::new())),
             notification: Arc::new(Notify::new()),
+            drain_count: AtomicUsize::new(0),
+            expose_notification: true,
+            pending_maintenance: AtomicBool::new(false),
         }
     }
 }
@@ -2631,6 +2637,7 @@ impl HostedRunnerHeadlessMessageExecutor for NotifyingPumpRuntimeExecutor {
     }
 
     fn drain(&self) -> Result<HostedRunnerDrainResult, HostedRunnerError> {
+        self.drain_count.fetch_add(1, Ordering::Relaxed);
         Ok(HostedRunnerDrainResult {
             messages: std::mem::take(&mut *self.queued.lock().expect("queued ready event")),
             consumed_response_keys: Vec::new(),
@@ -2639,7 +2646,13 @@ impl HostedRunnerHeadlessMessageExecutor for NotifyingPumpRuntimeExecutor {
     }
 
     fn event_notification(&self) -> Result<Option<Arc<Notify>>, HostedRunnerError> {
-        Ok(Some(Arc::clone(&self.notification)))
+        Ok(self
+            .expose_notification
+            .then(|| Arc::clone(&self.notification)))
+    }
+
+    fn has_pending_maintenance_work(&self) -> bool {
+        self.pending_maintenance.load(Ordering::Relaxed)
     }
 }
 
@@ -7774,6 +7787,160 @@ async fn transport_notification_publishes_ready_before_maintenance_tick() {
     assert_eq!(ready, "ready");
 
     handle.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn notified_event_pump_has_a_bounded_idle_drain_rate() {
+    let workspace = tempdir().expect("workspace");
+    let executor = Arc::new(NotifyingPumpRuntimeExecutor::default());
+    let shared = SharedRunner::new_with_message_executor_and_restore(
+        test_config(workspace.path().to_path_buf()),
+        executor.clone(),
+        None,
+    );
+    let cancelled = CancellationToken::new();
+    let pump = tokio::spawn(pump_agent_events(
+        shared,
+        cancelled.clone(),
+        MAINTENANCE_PUMP_INTERVAL,
+    ));
+    tokio::task::yield_now().await;
+    let initial_drains = executor.drain_count.load(Ordering::Relaxed);
+    assert_eq!(initial_drains, 1, "the pump must drain on startup");
+
+    // Advance in small steps so Tokio cannot collapse a missed interval into
+    // one callback. This measures the work a real idle minute would schedule.
+    for _ in 0..600 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+    }
+    let idle_drains = executor.drain_count.load(Ordering::Relaxed) - initial_drains;
+    assert!(
+        idle_drains <= 12,
+        "notified transport drained {idle_drains} times in one idle minute"
+    );
+
+    executor.queue_ready_event();
+    tokio::task::yield_now().await;
+    assert_eq!(
+        executor.drain_count.load(Ordering::Relaxed),
+        initial_drains + idle_drains + 1,
+        "a real event must wake the pump without waiting for maintenance"
+    );
+    cancelled.cancel();
+    pump.await.expect("pump task");
+}
+
+#[tokio::test(start_paused = true)]
+async fn executor_without_notification_keeps_short_maintenance_fallback() {
+    let workspace = tempdir().expect("workspace");
+    let executor = Arc::new(NotifyingPumpRuntimeExecutor {
+        expose_notification: false,
+        ..Default::default()
+    });
+    let shared = SharedRunner::new_with_message_executor_and_restore(
+        test_config(workspace.path().to_path_buf()),
+        executor.clone(),
+        None,
+    );
+    let cancelled = CancellationToken::new();
+    let pump = tokio::spawn(pump_agent_events(
+        shared,
+        cancelled.clone(),
+        MAINTENANCE_PUMP_INTERVAL,
+    ));
+    tokio::task::yield_now().await;
+    let initial_drains = executor.drain_count.load(Ordering::Relaxed);
+    assert_eq!(initial_drains, 1);
+    for _ in 0..10 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        executor.drain_count.load(Ordering::Relaxed),
+        initial_drains + 10
+    );
+    cancelled.cancel();
+    pump.await.expect("pump task");
+}
+
+#[tokio::test(start_paused = true)]
+async fn notified_event_pump_keeps_short_retry_while_work_is_pending() {
+    let workspace = tempdir().expect("workspace");
+    let executor = Arc::new(NotifyingPumpRuntimeExecutor::default());
+    executor.pending_maintenance.store(true, Ordering::Relaxed);
+    let shared = SharedRunner::new_with_message_executor_and_restore(
+        test_config(workspace.path().to_path_buf()),
+        executor.clone(),
+        None,
+    );
+    let cancelled = CancellationToken::new();
+    let pump = tokio::spawn(pump_agent_events(
+        shared,
+        cancelled.clone(),
+        MAINTENANCE_PUMP_INTERVAL,
+    ));
+    tokio::task::yield_now().await;
+    let initial_drains = executor.drain_count.load(Ordering::Relaxed);
+    assert_eq!(initial_drains, 1);
+    for _ in 0..10 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        executor.drain_count.load(Ordering::Relaxed),
+        initial_drains + 10,
+        "pending acknowledgements and persistence retries need the 100 ms cadence"
+    );
+    cancelled.cancel();
+    pump.await.expect("pump task");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "manual one-minute process CPU sample; use --ignored --nocapture"]
+async fn notified_event_pump_idle_cpu_probe() {
+    fn process_cpu() -> Duration {
+        let mut clock = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        // SAFETY: clock points to writable timespec storage and the clock ID
+        // is a Linux process CPU clock.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, clock.as_mut_ptr()) },
+            0,
+            "read process CPU clock"
+        );
+        // SAFETY: a successful clock_gettime initialized the whole timespec.
+        let clock = unsafe { clock.assume_init() };
+        Duration::new(clock.tv_sec as u64, clock.tv_nsec as u32)
+    }
+
+    let workspace = tempdir().expect("workspace");
+    let executor = Arc::new(NotifyingPumpRuntimeExecutor::default());
+    let shared = SharedRunner::new_with_message_executor_and_restore(
+        test_config(workspace.path().to_path_buf()),
+        executor.clone(),
+        None,
+    );
+    let cancelled = CancellationToken::new();
+    let pump = tokio::spawn(pump_agent_events(
+        shared,
+        cancelled.clone(),
+        MAINTENANCE_PUMP_INTERVAL,
+    ));
+    tokio::task::yield_now().await;
+    let before_drains = executor.drain_count.load(Ordering::Relaxed);
+    let before_cpu = process_cpu();
+    tokio::time::sleep(Duration::from_mins(1)).await;
+    let cpu = process_cpu()
+        .checked_sub(before_cpu)
+        .expect("process CPU clock is monotonic");
+    let drains = executor.drain_count.load(Ordering::Relaxed) - before_drains;
+    println!(
+        "idle_60s_process_cpu_ms={} drain_calls={drains}",
+        cpu.as_millis()
+    );
+    cancelled.cancel();
+    pump.await.expect("pump task");
 }
 
 #[tokio::test]
