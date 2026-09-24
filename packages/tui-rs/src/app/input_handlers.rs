@@ -1671,8 +1671,14 @@ impl App {
                 .map_err(|error| format!("{error:#}"));
             let _ = tx.send(result);
         });
-        self.setup_login_rx = Some(rx);
-        self.setup_login_url_rx = Some(url_rx);
+        self.setup_login_rx = Some(crate::loop_wake::forward_oneshot(
+            rx,
+            self.loop_wake.clone(),
+        ));
+        self.setup_login_url_rx = Some(crate::loop_wake::forward_unbounded(
+            url_rx,
+            self.loop_wake.clone(),
+        ));
         self.setup_login_task = Some(task);
         self.setup_modal.set_waiting_evalops();
     }

@@ -92,6 +92,38 @@ use crate::git;
 use crate::goal::GoalStore;
 use crate::harness::HarnessStore;
 use crate::keybindings::load_rust_tui_keybindings;
+use crate::loop_wake::{
+    LoopWake, LoopWakeCause, TerminalPollInput, await_loop_wake, terminal_poll_timeout,
+};
+
+struct LoopWakeHookGuard;
+
+impl Drop for LoopWakeHookGuard {
+    fn drop(&mut self) {
+        maestro_local_host::ui_wake::set_hook(None);
+    }
+}
+
+/// Interrupts a blocking uncurses poll if the async wait is cancelled
+/// (signal shutdown drops the run future at this await point).
+struct UncursesPollGuard {
+    wake: LoopWake,
+    armed: bool,
+}
+
+impl UncursesPollGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for UncursesPollGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.wake.signal();
+        }
+    }
+}
 use crate::keybindings::{is_keybindings_config_path, summarize_keybindings_config_issues};
 use crate::mailbox::MailboxStore;
 #[cfg(test)]
@@ -656,6 +688,17 @@ pub struct App {
     /// Protocol-aware terminal input. Falls back to crossterm when unavailable.
     terminal_events: Option<TerminalEventReader>,
 
+    /// Wakes the main loop when a drained channel receives an item.
+    loop_wake: LoopWake,
+
+    /// Crossterm fallback reader. Unused while [`Self::terminal_events`] is set.
+    crossterm_events: Option<crossterm::event::EventStream>,
+
+    /// Keep polling subagent lifecycle briefly after the last observed worker
+    /// so a completion that lands inside the 250 ms mailbox gate is not held
+    /// until the idle safety tick.
+    subagent_followup_until: Option<Instant>,
+
     /// Flag to exit the main loop.
     should_quit: bool,
     /// Relaunch in the saved workspace after this agent and writer shut down.
@@ -1197,6 +1240,7 @@ impl App {
         app.state.textarea = startup.textarea;
         // Keep the reader and its buffered input across the startup handoff.
         app.terminal_events = terminal_events;
+        app.attach_terminal_waker();
         app.initialize_terminal_events();
         app.note_goal_paused_on_restart_if_needed();
         app.note_orphan_background_tasks_if_any();
@@ -1705,6 +1749,9 @@ impl App {
             terminal_clear_supported,
             terminal_size,
             terminal_events: None,
+            loop_wake: LoopWake::new(),
+            crossterm_events: None,
+            subagent_followup_until: None,
             should_quit: false,
             resume_target: None,
             capabilities,
@@ -1981,14 +2028,182 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         }
     }
 
-    fn poll_terminal_event(&mut self, timeout: Duration) -> Result<Option<AppTerminalEvent>> {
-        if let Some(reader) = &mut self.terminal_events {
+    fn attach_terminal_waker(&self) {
+        if let Some(reader) = &self.terminal_events {
+            self.loop_wake.install_terminal_waker(reader.waker());
+        }
+    }
+
+    fn install_loop_wake_hook(&self) -> LoopWakeHookGuard {
+        let wake = self.loop_wake.clone();
+        maestro_local_host::ui_wake::set_hook(Some(std::sync::Arc::new(move || wake.signal())));
+        LoopWakeHookGuard
+    }
+
+    /// Uncurses blocks in `EventSource::poll`. Producers interrupt that wait
+    /// through [`LoopWake::signal`]. The crossterm fallback selects on the
+    /// same notify, the event stream, and the timeout.
+    async fn poll_terminal_event(&mut self, timeout: Duration) -> Result<Option<AppTerminalEvent>> {
+        if self.terminal_events.is_some() {
+            return self.poll_uncurses_event(timeout).await;
+        }
+        self.poll_crossterm_event(timeout).await
+    }
+
+    async fn poll_uncurses_event(&mut self, timeout: Duration) -> Result<Option<AppTerminalEvent>> {
+        // Short waits match the previous inline poll, including shutdown
+        // latency. Longer waits run on a blocking thread so dropping the run
+        // future can interrupt them through the uncurses waker.
+        if timeout <= crate::loop_wake::SHORT_MAINTENANCE_POLL {
+            let reader = self
+                .terminal_events
+                .as_mut()
+                .expect("uncurses reader checked");
             return reader.poll(timeout).map_err(Into::into);
         }
-        if event::poll(timeout)? {
-            return Ok(AppTerminalEvent::from_crossterm(event::read()?));
+
+        let mut reader = self
+            .terminal_events
+            .take()
+            .expect("uncurses reader checked");
+        let mut guard = UncursesPollGuard {
+            wake: self.loop_wake.clone(),
+            armed: true,
+        };
+        let joined = tokio::task::spawn_blocking(move || {
+            let event = reader.poll(timeout);
+            (event, reader)
+        })
+        .await;
+        guard.disarm();
+        match joined {
+            Ok((event, reader)) => {
+                self.terminal_events = Some(reader);
+                event.map_err(Into::into)
+            }
+            Err(error) => Err(anyhow::anyhow!("terminal poll task failed: {error}")),
         }
-        Ok(None)
+    }
+
+    async fn poll_crossterm_event(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<AppTerminalEvent>> {
+        use tokio_stream::StreamExt;
+
+        let wake = self.loop_wake.clone();
+        let stream = self
+            .crossterm_events
+            .get_or_insert_with(crossterm::event::EventStream::new);
+        match await_loop_wake(timeout, &wake, stream.next()).await {
+            LoopWakeCause::Terminal(Some(Ok(event))) => Ok(AppTerminalEvent::from_crossterm(event)),
+            LoopWakeCause::Terminal(Some(Err(error))) => Err(error.into()),
+            LoopWakeCause::Terminal(None) | LoopWakeCause::Producer | LoopWakeCause::Tick => {
+                Ok(None)
+            }
+        }
+    }
+
+    fn terminal_poll_budget(&mut self, agent_activity: bool, needs_redraw: bool) -> Duration {
+        self.note_subagent_followup();
+        let mut timeout = terminal_poll_timeout(TerminalPollInput {
+            agent_activity,
+            busy: self.state.busy,
+            pending_redraw: needs_redraw,
+            short_cadence: self.needs_short_cadence(),
+        });
+        if let Some(remaining) = self.next_wait_cap() {
+            timeout = timeout.min(remaining);
+        }
+        timeout
+    }
+
+    fn note_subagent_followup(&mut self) {
+        let workers_live = !self.state.busy
+            && matches!(
+                self.tool_executor.worker_activity(),
+                Ok((running, waiting)) if running.saturating_add(waiting) > 0
+            );
+        if self.state.busy || workers_live {
+            self.subagent_followup_until = Some(Instant::now() + Duration::from_millis(250));
+        }
+    }
+
+    fn needs_short_cadence(&self) -> bool {
+        self.presentation_animation_active()
+            || self.theme_query_outstanding()
+            || self.config_watcher.has_pending_debounce()
+            || self.session_switcher.content_search_pending()
+            || self.selective_summary_in_flight()
+            || self.session_transition_waiting()
+            || self.session_cleanup_pending()
+            || self.agent_note_ack_pending()
+            || self.subagent_followup_remaining().is_some()
+    }
+
+    fn presentation_animation_active(&self) -> bool {
+        self.dex_hop_active() || self.dex_pet_active() || self.onboarding_animation_active()
+    }
+
+    fn dex_hop_active(&self) -> bool {
+        self.dex_terminal == Some(crate::components::dex_companion::DexCompanionState::Finished)
+            && self.dex_pose_started.elapsed() < Duration::from_millis(800)
+            && self
+                .ui_prefs
+                .animations
+                .unwrap_or(self.configured_animations)
+            && self.ui_prefs.dex_personality()
+                != crate::components::dex_companion::DexPersonality::Quiet
+    }
+
+    fn theme_query_outstanding(&self) -> bool {
+        self.terminal_events.is_some()
+            && self.state.theme_follower.is_some()
+            && !self.state.theme_reporting_available
+            && self.state.last_theme_query.is_some()
+    }
+
+    fn agent_note_ack_pending(&self) -> bool {
+        !self.pending_agent_note_applications.is_empty()
+            || !self.pending_agent_note_consumptions.is_empty()
+    }
+
+    fn subagent_followup_remaining(&self) -> Option<Duration> {
+        let until = self.subagent_followup_until?;
+        let now = Instant::now();
+        if now >= until {
+            None
+        } else {
+            Some(until.saturating_duration_since(now))
+        }
+    }
+
+    fn next_wait_cap(&self) -> Option<Duration> {
+        let mut nearest: Option<Duration> = None;
+        let consider = |nearest: &mut Option<Duration>, until: Duration| {
+            *nearest = Some(nearest.map_or(until, |current| current.min(until)));
+        };
+        if let Some(schedule) = &self.loop_schedule {
+            let until = schedule
+                .next_fire
+                .saturating_duration_since(Instant::now())
+                .max(crate::loop_wake::SHORT_MAINTENANCE_POLL);
+            consider(&mut nearest, until);
+        }
+        if self.goal_auto_continue_armed
+            && !self.state.busy
+            && self.queued_prompts.is_empty()
+            && self.loop_schedule.is_none()
+            && self.queued_prompt_inflight.is_none()
+            && self.queued_prompt_active.is_none()
+            && !self.session_cleanup_pending()
+        {
+            consider(&mut nearest, Duration::ZERO);
+        }
+        if let Some(remaining) = self.subagent_followup_remaining() {
+            consider(&mut nearest, remaining);
+        }
+        nearest
     }
 
     fn poll_terminal_theme(&mut self) {
@@ -2076,6 +2291,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     }
 
     async fn run_inner(&mut self) -> Result<i32> {
+        let _loop_wake_hook = self.install_loop_wake_hook();
         self.record_configuration_visibility();
         // Optional Jane Street magic-trace slow-frame snapshots (Linux/Intel PT).
         if crate::magic_trace::init_from_env() {
@@ -2182,11 +2398,13 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 }
             }
 
-            // Poll faster while busy so the working-state sheen and spinners
-            // advance. Idle welcome screens stay still on the normal cadence.
-            let poll_timeout = terminal_poll_timeout(self.state.busy, agent_activity);
+            // Busy frames stay at 33 ms. Queued agent output and a pending
+            // redraw do not wait. A quiescent screen blocks until input, a
+            // producer signal, or the 5 s safety tick. Animations, an
+            // outstanding theme query, and other timer-driven UI keep 100 ms.
+            let poll_timeout = self.terminal_poll_budget(agent_activity, needs_redraw);
             self.poll_terminal_theme();
-            if let Some(event) = self.poll_terminal_event(poll_timeout)? {
+            if let Some(event) = self.poll_terminal_event(poll_timeout).await? {
                 match event {
                     AppTerminalEvent::Key(key) if should_handle_key_event(key.kind) => {
                         self.handle_key(key.code, key.modifiers).await?;
@@ -2581,15 +2799,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             }
 
             // Paint when dirty, or continuously while busy (thinking/spinner).
-            let dex_hop_active = self.dex_terminal
-                == Some(crate::components::dex_companion::DexCompanionState::Finished)
-                && self.dex_pose_started.elapsed() < Duration::from_millis(800)
-                && self
-                    .ui_prefs
-                    .animations
-                    .unwrap_or(self.configured_animations)
-                && self.ui_prefs.dex_personality()
-                    != crate::components::dex_companion::DexPersonality::Quiet;
+            let dex_hop_active = self.dex_hop_active();
             if needs_redraw
                 || self.state.busy
                 || dex_hop_active
@@ -2673,12 +2883,14 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     /// via `poll_workspace_scan` and applies the result when it arrives.
     fn spawn_workspace_scan(&mut self) {
         let (workspace_tx, workspace_rx) = std::sync::mpsc::channel();
+        let wake = self.loop_wake.clone();
         std::thread::Builder::new()
             .name("maestro-workspace-scan".into())
             .spawn(move || {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 let files = get_workspace_files(&cwd, 10_000);
                 let _ = workspace_tx.send(files);
+                wake.signal();
             })
             .ok();
         self.workspace_scan_rx = Some(workspace_rx);
@@ -2792,7 +3004,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 self.restore_request_cache(&agent);
                 let tool_tx = agent.tool_response_sender();
                 self.native_agent = Some(agent);
-                self.native_event_rx = Some(event_rx);
+                self.native_event_rx = Some(crate::loop_wake::forward_unbounded(
+                    event_rx,
+                    self.loop_wake.clone(),
+                ));
                 self.tool_response_tx = Some(tool_tx);
 
                 // A session restored at startup exists before the runner does,
@@ -3579,8 +3794,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         self.mcp_status_refresh_in_flight = true;
         let executor = Arc::clone(&self.tool_executor);
         let tx = self.mcp_status_tx.clone();
+        let wake = self.loop_wake.clone();
         tokio::spawn(async move {
             let _ = tx.send(executor.mcp_status().await);
+            wake.signal();
         });
         false
     }
@@ -4707,11 +4924,13 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         };
         let guardian_tx = self.guardian_tx.clone();
         let request = request.clone();
+        let wake = self.loop_wake.clone();
         self.pending_guardian_reviews
             .insert(request.call_id.clone());
         tokio::spawn(async move {
             let verdict = guardian.evaluate(context).await;
             let _ = guardian_tx.send((request, verdict));
+            wake.signal();
         });
         true
     }
@@ -5551,16 +5770,6 @@ fn policy_model_id(model: &str) -> String {
 /// Handle presses and repeats (so held keys auto-repeat); ignore releases.
 fn should_handle_key_event(kind: KeyEventKind) -> bool {
     matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat)
-}
-
-fn terminal_poll_timeout(busy: bool, agent_activity: bool) -> Duration {
-    if agent_activity {
-        Duration::ZERO
-    } else if busy {
-        Duration::from_millis(33)
-    } else {
-        Duration::from_millis(100)
-    }
 }
 
 /// Combine an action-firewall reason and a sandbox-bypass warning into the

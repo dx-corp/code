@@ -713,6 +713,7 @@ impl SubagentManager {
                     record.id
                 )
             })?;
+        crate::ui_wake::wake();
         record.lifecycle_notification_published = true;
         self.write_record(record)
     }

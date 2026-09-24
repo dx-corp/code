@@ -37,6 +37,7 @@ impl App {
         computer_package: Option<A2aComputerHandoffSelection>,
     ) {
         let tx = self.a2a_handoff_tx.clone();
+        let wake = self.loop_wake.clone();
         let tool_executor = Arc::clone(&self.tool_executor);
         let requested_peer = peer
             .clone()
@@ -46,11 +47,15 @@ impl App {
             std::slice::from_ref(&(requested_peer)),
         ));
         tokio::spawn(async move {
+            let emit = |event| {
+                let _ = tx.send(event);
+                wake.signal();
+            };
             let package = match computer_package {
                 Some(selection) => match create_computer_package(tool_executor, selection).await {
                     Ok(package) => Some(package),
                     Err(error) => {
-                        let _ = tx.send(A2aHandoffEvent::Failed {
+                        emit(A2aHandoffEvent::Failed {
                             peer: requested_peer,
                             task_id: None,
                             error: format!("could not create Computer package: {error:#}"),
@@ -64,7 +69,7 @@ impl App {
             let pending = match start_handoff(peer.clone(), text, package.as_ref()).await {
                 Ok(pending) => pending,
                 Err(error) => {
-                    let _ = tx.send(A2aHandoffEvent::Failed {
+                    emit(A2aHandoffEvent::Failed {
                         peer: requested_peer,
                         task_id: None,
                         error: format!("could not send A2A handoff: {error:#}"),
@@ -74,7 +79,7 @@ impl App {
             };
             let peer = pending.peer.clone();
             let task_id = pending.task.id.clone();
-            let _ = tx.send(A2aHandoffEvent::Accepted {
+            emit(A2aHandoffEvent::Accepted {
                 peer: peer.clone(),
                 task_id: task_id.clone(),
                 package_id: package.as_ref().map(|package| package.package_id.clone()),
@@ -89,14 +94,14 @@ impl App {
             .await
             {
                 Ok(completed) => {
-                    let _ = tx.send(A2aHandoffEvent::Finished {
+                    emit(A2aHandoffEvent::Finished {
                         peer,
                         task: Box::new(completed.task),
                         ledger_warning: completed.ledger_warning,
                     });
                 }
                 Err(error) => {
-                    let _ = tx.send(A2aHandoffEvent::Failed {
+                    emit(A2aHandoffEvent::Failed {
                         peer,
                         task_id: Some(task_id),
                         error: format!("could not follow A2A handoff: {error:#}"),

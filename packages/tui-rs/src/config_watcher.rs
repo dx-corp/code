@@ -142,6 +142,7 @@ impl ConfigWatcher {
                                 _ => continue,
                             };
                             let _ = tx.send(config_event);
+                            maestro_local_host::ui_wake::wake();
                         }
                     }
                 },
@@ -263,6 +264,14 @@ impl ConfigWatcher {
         !self.watched_paths.is_empty()
     }
 
+    /// A debounced change is waiting out its quiet period.
+    #[must_use]
+    pub fn has_pending_debounce(&self) -> bool {
+        self.debounce_states
+            .values()
+            .any(|state| state.pending_event.is_some())
+    }
+
     /// Clear all pending events
     pub fn clear_pending(&mut self) {
         while self.event_rx.try_recv().is_ok() {}
@@ -283,6 +292,7 @@ impl Default for ConfigWatcher {
             let _ = event_tx.send(ConfigEvent::Error(format!(
                 "Failed to initialize config watcher: {err}"
             )));
+            maestro_local_host::ui_wake::wake();
             Self {
                 watched_paths: HashSet::new(),
                 event_rx,

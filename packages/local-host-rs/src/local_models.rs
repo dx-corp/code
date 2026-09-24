@@ -283,6 +283,7 @@ fn spawn_local_model_discovery_with_client_factory(
                 {
                     break;
                 }
+                crate::ui_wake::wake();
             }
         })
         .expect("local model discovery thread should start");

@@ -115,6 +115,7 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let tx = self.exec_command_tx.clone();
+        let wake = self.loop_wake.clone();
         self.state.status = Some(format!("Running /{name} ..."));
 
         let outcome_name = name.to_string();
@@ -130,6 +131,7 @@ impl App {
                     source,
                     result,
                 });
+                wake.signal();
             });
         if let Err(err) = spawned {
             self.state.error = Some(self.state.locale.format(

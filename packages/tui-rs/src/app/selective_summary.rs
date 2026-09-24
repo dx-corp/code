@@ -108,6 +108,13 @@ impl App {
         }
     }
 
+    pub(super) fn selective_summary_in_flight(&self) -> bool {
+        matches!(
+            self.selective_summary.as_ref().map(|dialog| &dialog.stage),
+            Some(Stage::Loading(_) | Stage::Running { .. })
+        )
+    }
+
     pub(super) fn poll_selective_summary(&mut self) -> bool {
         let Some(mut dialog) = self.selective_summary.take() else {
             return false;
