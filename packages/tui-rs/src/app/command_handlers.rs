@@ -1875,10 +1875,12 @@ impl App {
                             .to_string(),
                     );
                     let tx = self.mcp_config_tx.clone();
+                    let wake = self.loop_wake.clone();
                     tokio::spawn(async move {
                         let result =
                             crate::mcp_config_cli::apply_mcp_config_async_quiet(&args).await;
                         let _ = tx.send(result.map_err(|error| error.to_string()));
+                        wake.signal();
                     });
                 } else {
                     match crate::mcp_config_cli::apply_mcp_config_async(&args).await {

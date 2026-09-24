@@ -466,6 +466,7 @@ pub use maestro_swarm as swarm;
 /// Main application struct and event loop.
 /// This is the top-level coordinator that ties everything together.
 mod app;
+mod loop_wake;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS

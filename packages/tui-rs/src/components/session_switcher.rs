@@ -106,6 +106,16 @@ impl SessionSwitcher {
         self.visible
     }
 
+    /// The content search has not caught up with the visible query.
+    ///
+    /// The 150 ms debounce and the worker thread both need another loop turn.
+    #[must_use]
+    pub fn content_search_pending(&self) -> bool {
+        self.visible
+            && !self.query.trim().is_empty()
+            && self.content_query.as_deref() != Some(self.query.as_str())
+    }
+
     /// Refresh metadata off the input thread, coalescing repeated opens.
     pub fn refresh_async(&mut self) {
         if self.pending.is_some() {
@@ -129,6 +139,7 @@ impl SessionSwitcher {
             .name("maestro-session-list".into())
             .spawn(move || {
                 let _ = tx.send(load());
+                maestro_local_host::ui_wake::wake();
             }) {
             Ok(_) => self.pending = Some(rx),
             Err(error) => {
@@ -391,6 +402,7 @@ impl SessionSwitcher {
                     let documents = collect_documents(&root, cache.as_deref());
                     let results = search_documents(&documents, &query, None, documents.len());
                     let _ = tx.send((query, results));
+                    maestro_local_host::ui_wake::wake();
                 }) {
                 Ok(_) => self.content_pending = Some(rx),
                 Err(error) => {

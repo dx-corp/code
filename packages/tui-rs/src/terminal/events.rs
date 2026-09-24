@@ -209,6 +209,11 @@ impl TerminalEventReader {
         })
     }
 
+    /// Cloneable handle that interrupts a blocking [`Self::poll`].
+    pub(crate) fn waker(&self) -> uncurses::event::Waker {
+        self.source.waker()
+    }
+
     /// Poll for one application event.
     ///
     /// Query replies unsupported by the application are deliberately consumed

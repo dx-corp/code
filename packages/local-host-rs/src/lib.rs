@@ -70,6 +70,7 @@ pub mod tool_output;
 pub mod tools;
 pub mod transcript;
 pub mod ui_prefs;
+pub mod ui_wake;
 pub mod video;
 pub mod workflow_runtime;
 pub use sandbox::SandboxPolicy;

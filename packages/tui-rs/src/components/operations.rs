@@ -540,6 +540,7 @@ impl OperationsModal {
         std::thread::spawn(move || {
             let manager = SessionManager::with_sessions_dir(cwd, sessions_dir);
             let _ = tx.send(load_operations(&manager));
+            maestro_local_host::ui_wake::wake();
         });
     }
 

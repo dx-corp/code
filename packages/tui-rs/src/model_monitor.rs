@@ -53,6 +53,7 @@ pub fn spawn_model_monitor() -> (ModelMonitor, mpsc::Receiver<ModelVerificationE
                 {
                     break;
                 }
+                maestro_local_host::ui_wake::wake();
             }
         })
         .expect("model monitor thread should start");

@@ -388,6 +388,7 @@ pub async fn run_review(
         },
     };
     let _ = tx.send(event);
+    maestro_local_host::ui_wake::wake();
 }
 
 /// Drive the review agent to completion and return its final assistant text.

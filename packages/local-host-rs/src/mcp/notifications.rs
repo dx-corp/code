@@ -41,6 +41,7 @@ impl NotificationQueue {
             .position(|method| *method == notification.method)
         {
             self.0.lock().unwrap().invalidated[index] = true;
+            crate::ui_wake::wake();
             return true;
         }
         let Ok(serialized) = serde_json::to_vec(&notification) else {
@@ -58,6 +59,8 @@ impl NotificationQueue {
         }
         pending.bytes += bytes;
         pending.events.push_back((notification, bytes));
+        drop(pending);
+        crate::ui_wake::wake();
         true
     }
 

@@ -5550,15 +5550,54 @@ fn signal_shutdown_only_ends_a_started_terminal_session() {
 
 #[test]
 fn queued_agent_activity_skips_the_terminal_poll_delay() {
-    assert_eq!(terminal_poll_timeout(true, true), Duration::ZERO);
-    assert_eq!(terminal_poll_timeout(false, true), Duration::ZERO);
     assert_eq!(
-        terminal_poll_timeout(true, false),
+        terminal_poll_timeout(TerminalPollInput {
+            agent_activity: true,
+            busy: true,
+            pending_redraw: false,
+            short_cadence: false,
+        }),
+        Duration::ZERO
+    );
+    assert_eq!(
+        terminal_poll_timeout(TerminalPollInput {
+            agent_activity: false,
+            busy: true,
+            pending_redraw: false,
+            short_cadence: false,
+        }),
         Duration::from_millis(33)
     );
     assert_eq!(
-        terminal_poll_timeout(false, false),
+        terminal_poll_timeout(TerminalPollInput {
+            agent_activity: false,
+            busy: true,
+            pending_redraw: true,
+            short_cadence: true,
+        }),
+        Duration::from_millis(33)
+    );
+    assert_eq!(
+        terminal_poll_timeout(TerminalPollInput {
+            agent_activity: false,
+            busy: false,
+            pending_redraw: true,
+            short_cadence: false,
+        }),
+        Duration::ZERO
+    );
+    assert_eq!(
+        terminal_poll_timeout(TerminalPollInput {
+            agent_activity: false,
+            busy: false,
+            pending_redraw: false,
+            short_cadence: true,
+        }),
         Duration::from_millis(100)
+    );
+    assert_eq!(
+        terminal_poll_timeout(TerminalPollInput::idle()),
+        Duration::from_secs(5)
     );
 }
 

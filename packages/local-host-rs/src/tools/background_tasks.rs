@@ -341,6 +341,7 @@ fn emit_task_lifecycle(task_id: &str, command: &str, status: &str, exit_code: Op
         });
     }
     persist_running_snapshot();
+    crate::ui_wake::wake();
 }
 
 /// Drain process exit/stop notifications for the UI (and optional agent nudge).
@@ -564,6 +565,7 @@ fn emit_monitor_matches(task_id: &str, stream: &'static str, line: &str) {
             });
         }
     }
+    let had_events = !matched.is_empty();
     for event in matched {
         if let Ok(mut events) = MONITOR_EVENTS.write() {
             if events.len() >= MAX_MONITOR_EVENTS {
@@ -577,6 +579,9 @@ fn emit_monitor_matches(task_id: &str, stream: &'static str, line: &str) {
             }
             history.push_back(event);
         }
+    }
+    if had_events {
+        crate::ui_wake::wake();
     }
 }
 

@@ -101,7 +101,7 @@ impl App {
                     tick,
                 );
             })?;
-            if let Some(event) = self.poll_terminal_event(Duration::from_millis(30))? {
+            if let Some(event) = self.poll_terminal_event(Duration::from_millis(30)).await? {
                 match event {
                     AppTerminalEvent::Key(key) if should_handle_key_event(key.kind) => {
                         if key.code == KeyCode::Char('c')
@@ -169,6 +169,7 @@ impl App {
             self.onboarding.attempts.saturating_sub(1).min(1_000),
         );
         let tx = self.onboarding.collection_tx.clone();
+        let wake = self.loop_wake.clone();
         let origin = if matches!(
             stage,
             OnboardingStage::ChecksCompleted | OnboardingStage::Completed
@@ -180,6 +181,7 @@ impl App {
         tokio::spawn(async move {
             let status = crate::telemetry::record_onboarding_event(event, origin).await;
             let _ = tx.send(status);
+            wake.signal();
         });
     }
 
@@ -202,8 +204,11 @@ impl App {
         self.onboarding.attempts = self.onboarding.attempts.saturating_add(1);
         self.onboarding.transition = Instant::now();
         self.setup_modal.set_checking();
+        let wake = self.loop_wake.clone();
         self.onboarding.checks = Some(tokio::spawn(async move {
-            crate::onboarding_checks::run_checks(model.as_deref(), &cwd).await
+            let report = crate::onboarding_checks::run_checks(model.as_deref(), &cwd).await;
+            wake.signal();
+            report
         }));
     }
 
