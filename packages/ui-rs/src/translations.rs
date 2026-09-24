@@ -1344,17 +1344,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "  Plan mode:  {0}",
-        [
-            "  Modo de planificación:  {0}",
-            "  Mode plan:  {0}",
-            "  Planungsmodus:  {0}",
-            "  計画モード:  {0}",
-            "  계획 모드:  {0}",
-            "  规划模式:  {0}",
-        ],
-    ),
-    (
         "  Requests:      {0}",
         [
             "  Solicitudes:      {0}",
@@ -2059,28 +2048,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        " · /plan off to act",
-        [
-            " · /plan para actuar",
-            " · /plan off pour agir",
-            " · /plan off to act",
-            " · 行為への/planオフ",
-            " · /plan",
-            " · /plan开始行动",
-        ],
-    ),
-    (
-        " · /plan to plan",
-        [
-            " · /plan para planificar",
-            " · /plan à prévoir",
-            " · /plan zu planen",
-            " · 計画する/plan",
-            " · /plan 계획",
-            " /plan人计划",
-        ],
-    ),
-    (
         " · Live: ",
         [
             " · Vida: ",
@@ -2210,17 +2177,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "## 会話まとめ\n\n",
             "## 대화 요약\n\n",
             "□ 对话摘要\n\n",
-        ],
-    ),
-    (
-        "## Current plan\n\n{0}",
-        [
-            "## Plan actual\n\n{0}",
-            "Plan actuel\n\n{0}",
-            "## Aktueller Plan\n\n{0}",
-            "## 現在の計画\n\n{0}",
-            "## 현재 계획\n\n{0}",
-            "□ 当前计划\n\n{0}",
         ],
     ),
     (
@@ -2408,17 +2364,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "## 保留アタッチメント({0})\n\n",
             "## Pending 첨부 파일 ({0})\n\n",
             "□ 待补附件({0}) (中文(中国大陆)\n\n",
-        ],
-    ),
-    (
-        "## Plan review comments\n\n",
-        [
-            "## Plan review comments\n\n",
-            "## Commentaires sur l'examen du plan\n\n",
-            "## Bemerkungen zur Planüberprüfung\n\n",
-            "## プランレビューコメント\n\n",
-            "## 계획 리뷰 의견\n\n",
-            "□ 计划评论\n\n",
         ],
     ),
     (
@@ -4518,17 +4463,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "追加済み",
             "추가됨",
             "已添加",
-        ],
-    ),
-    (
-        "Added plan comment #{0}.",
-        [
-            "Añadido el plan comentario #{0}.",
-            "Ajouté le commentaire du plan #{0}.",
-            "Plan Kommentar #{0} hinzugefügt.",
-            "プランコメント #{0} を追加しました。",
-            "추가 플랜 댓글 #{0}.",
-            "新增计划评论#{0}.",
         ],
     ),
     (
@@ -7730,17 +7664,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "現在のコンテキスト推定; これらのツールスキーマは、ディスパッチ使用としてカウントされていない。",
             "현재 상황 추정; 이 도구 스키마는 파견 된 사용으로 계산되지 않았습니다.",
             "当前上下文估计;这些工具计划未算作已发送使用.",
-        ],
-    ),
-    (
-        "Current plan artifact",
-        [
-            "artefacto del plan actual",
-            "Artefact actuel du plan",
-            "Aktueller Plan-Artefakt",
-            "現在の計画のアーティファクト",
-            "현재 계획 artifact",
-            "目前计划文物",
         ],
     ),
     (
@@ -14278,28 +14201,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "No plan is available for review.",
-        [
-            "No hay plan disponible para su examen.",
-            "Aucun plan n'est disponible pour examen.",
-            "Es steht kein Plan zur Überprüfung zur Verfügung.",
-            "プランはありません。",
-            "리뷰는 없습니다.",
-            "没有任何计划可供审查。",
-        ],
-    ),
-    (
-        "No plan written yet. In plan mode, write to `.maestro/plan.md` (session copy: `{0}`).",
-        [
-            "Todavía no hay plan escrito. En modo de plan, escriba a `.maestro/plan.md` (copia de sesión: `{0}`).",
-            "Pas encore de plan écrit. En mode plan, écrivez au `.maestro/plan.md` (copie de session : `{0}`).",
-            "Noch kein Plan geschrieben. Schreiben Sie im Planmodus an `.maestro/plan.md` (Sitzungskopie: `{0}`).",
-            "未定のプランです。 プランモードでは`.maestro/plan.md`(セッションコピー`{0}`)に書きます。",
-            "아직 작성되지 않았습니다. 계획 모드에서는 `.maestro/plan.md` (저장 사본: `{0}`)로 작성합니다.",
-            "还没有写计划 在计划模式下,写到`.maestro/plan.md`(会议副本:`{0}`).",
-        ],
-    ),
-    (
         "No plugins discovered. Install under .maestro/plugins/<name>/.",
         [
             "No hay plugins descubiertos. Instala bajo .maestro/plugins/<name>/.",
@@ -14878,17 +14779,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "Open review comments prevent leaving plan mode: {0}. Use `/plan comments`.",
-        [
-            "Comentarios pendientes que impiden salir del modo de planificación: {0}. Usa `/plan comments`.",
-            "Commentaires ouverts empêchant de quitter le mode plan : {0}. Utilisez `/plan comments`.",
-            "Offene Kommentare verhindern das Verlassen des Planmodus: {0}. Verwende `/plan comments`.",
-            "未解決のレビューコメントが {0} 件あるため、計画モードを終了できません。`/plan comments` を使用してください。",
-            "해결되지 않은 검토 댓글 {0}개로 인해 계획 모드를 종료할 수 없습니다. `/plan comments`를 사용하세요.",
-            "有 {0} 条未解决的审阅评论，无法退出规划模式。请使用 `/plan comments`。",
-        ],
-    ),
-    (
         "Open session switcher",
         [
             "Interruptor de sesión abierta",
@@ -15363,197 +15253,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     ("Phase", ["Fase", "Phase", "Phase", "段階", "단계", "阶段"]),
-    (
-        "Plan",
-        ["Planificar", "Planifier", "Planen", "計画", "계획", "规划"],
-    ),
-    (
-        "Plan approved (empty plan). Leaving plan mode so you can implement.",
-        [
-            "Plan aprobado (plan vacío). Dejar el modo de plan para que pueda implementar.",
-            "Plan approuvé (plan vide). Quitter le mode plan pour que vous puissiez implémenter.",
-            "Plan genehmigt (leerer Plan). Verlassen Sie den Planmodus, damit Sie ihn implementieren können.",
-            "プラン承認(空プラン) 計画モードを離れるので、実装できます。",
-            "승인 된 계획 (empty plan). Leaving 계획 모드를 구현할 수 있습니다.",
-            "计划获得批准(空计划)。 离开计划模式后, 您可以执行 。",
-        ],
-    ),
-    (
-        "Plan approved. Implementation tools are enabled.",
-        [
-            "Plan aprobado. Los instrumentos de aplicación están habilitados.",
-            "Plan approuvé. Les outils de mise en œuvre sont activés.",
-            "Plan genehmigt. Implementierungstools sind aktiviert.",
-            "承認される計画。 実装ツールが有効になっています。",
-            "승인 된 계획. 구현 도구가 활성화됩니다.",
-            "计划获得批准。 启用了执行工具。",
-        ],
-    ),
-    (
-        "Plan approved. Leaving plan mode. Summary of approved plan:\n\n{0}",
-        [
-            "Plan aprobado. Dejar el modo de plan. Resumen del plan aprobado:\n\n{0}",
-            "Plan approuvé. Quitter le mode plan. Résumé du plan approuvé :\n\n{0}",
-            "Plan genehmigt. Planmodus verlassen. Zusammenfassung des genehmigten Plans:\n\n{0}",
-            "承認される計画。 リースプランモード。 承認された計画の概要:\n\n{0}",
-            "승인 된 계획. Leaving 계획 형태. 승인 된 계획의 요약 :\n\n{0}",
-            "计划获得批准。 离开计划模式。 核定计划摘要:\n\n{0}",
-        ],
-    ),
-    (
-        "Plan changed after {0} review comment{1} were created. Recreate stale comments before leaving plan mode.",
-        [
-            "Plan cambiado después de {0} comentario revisión{1} fueron creados. Recrear los comentarios de los puestos antes de dejar el modo plan.",
-            "Plan modifié après {0} commentaire de révision{1} ont été créés. Recréer les commentaires stalles avant de quitter le mode plan.",
-            "Plan geändert, nachdem {0} review Kommentar{1} erstellt wurden. Erstellen Sie veraltete Kommentare, bevor Sie den Planmodus verlassen.",
-            "{0}レビューコメント{1}が作成された後に計画が変更されました。 プランモードを離れる前に、階段コメントを再作成します。",
-            "계획 변경 후 {0} 검토 코멘트{1} 만든. 계획 모드를 떠나기 전에 stale 의견을 다시 작성하십시오.",
-            "{0}审查评论{1}创建后,计划有所改变. 在离开计划模式前重建 stale 注释 。",
-        ],
-    ),
-    (
-        "Plan comment #{0} does not exist.",
-        [
-            "Plan comentario #{0} no existe.",
-            "Le commentaire n°{0} du plan n'existe pas.",
-            "Plan Kommentar #{0} existiert nicht.",
-            "計画コメント #{0} は存在しません。",
-            "계획 댓글 #{0} 존재하지 않습니다.",
-            "计划评论#{0}不存在.",
-        ],
-    ),
-    (
-        "Plan comment #{0} is stale. Recreate it against the current plan.",
-        [
-            "Plan comentario #{0} está estancado. Recrear contra el plan actual.",
-            "Le commentaire n°{0} est inexistant. Recréer contre le plan actuel.",
-            "Plan Kommentar #{0} ist veraltet. Stellen Sie es gegen den aktuellen Plan wieder her.",
-            "プランコメント #{0} 現在の計画に対して再作成します。",
-            "계획 댓글 #{0}는 stale입니다. 현재 계획에 대해 다시 작성합니다.",
-            "计划评论#{0}已停滞. 根据目前的计划再造它.",
-        ],
-    ),
-    (
-        "Plan comment #{0} reopened.",
-        [
-            "Plan comentario #{0} reabierto.",
-            "Plan de commentaire #{0} rouvert.",
-            "Plankommentar #{0} wiedereröffnet.",
-            "計画コメント #{0} 再開.",
-            "계획 댓글 #{0} 재개.",
-            "计划评论#{0}重新开放.",
-        ],
-    ),
-    (
-        "Plan comment #{0} resolved.",
-        [
-            "Plan comentario #{0} resuelto.",
-            "Planifier le commentaire #{0} résolu.",
-            "Plan Kommentar #{0} gelöst.",
-            "計画コメント #{0} 解決しました。",
-            "계획 댓글 #{0} 해결.",
-            "计划评论#{0}解决.",
-        ],
-    ),
-    (
-        "Plan comment id must be a number",
-        [
-            "Plan comentario id debe ser un número",
-            "Plan commentaire id doit être un nombre",
-            "Plan Kommentar ID muss eine Zahl sein",
-            "プランコメント ID は番号でなければなりません",
-            "계획 댓글 ID는 숫자이어야한다",
-            "计划注释编号必须是数字",
-        ],
-    ),
-    (
-        "Plan comment range must be LINE or START-END",
-        [
-            "El rango de comentarios del plan debe ser LINE o START-END",
-            "La plage de commentaires du plan doit être LINE ou START-END",
-            "Plan Kommentarbereich muss LINE oder START-END sein",
-            "プランのコメント範囲はLINEまたはSTART-ENDでなければなりません",
-            "계획 코멘트 범위는 LINE 또는 START-END이어야 합니다.",
-            "计划评论范围必须是LINE或START-END",
-        ],
-    ),
-    (
-        "Plan comment range must be positive and ordered",
-        [
-            "El rango de comentarios del plan debe ser positivo y ordenado",
-            "La plage de commentaires du plan doit être positive et ordonnée.",
-            "Plan Kommentarbereich muss positiv und geordnet sein",
-            "計画コメントの範囲は肯定的で、発注されなければなりません",
-            "계획 코멘트 범위는 긍정적이어야하며 명령해야합니다.",
-            "计划注释范围必须是正的并命令",
-        ],
-    ),
-    (
-        "Plan exit blocked by {0} open review comment{1}. Use `/plan comments`.",
-        [
-            "Plan de salida bloqueado por {0} comentario de revisión abierta{1}. Use `/plan comments`.",
-            "Plan sortie bloquée par {0} avis ouvert commentaire{1}. Utiliser `/plan comments`.",
-            "Plan Exit blockiert durch {0} Open Review Kommentar{1}. Verwenden Sie `/plan comments`.",
-            "{0} オープンレビュー{1}でブロックされた出口を計画する。 使用 `/plan comments`.",
-            "{0}에 의해 차단되는 계획 출구는 의견{1}를 엽니다. 사용 `/plan comments`.",
-            "计划出口被{0}公开评论{1}封锁. 使用`/plan comments`号机车.",
-        ],
-    ),
-    (
-        "Plan has {0} lines; comment range ends at {1}.",
-        [
-            "Plan tiene {0} líneas; rango de comentarios termina en {1}.",
-            "Plan a {0} lignes; la plage de commentaires se termine à {1}.",
-            "Plan hat {0} Zeilen; Kommentarbereich endet bei {1}.",
-            "プランには{0}行、コメント範囲は{1}で終了します。",
-            "계획에는 {0} 선이 있습니다; 코멘트 범위는 {1}에 끝납니다.",
-            "计划有{0}行;评论范围以{1}结束.",
-        ],
-    ),
-    (
-        "Plan mode enabled. Changes are limited to the plan until you approve it. Use /plan view to review.",
-        [
-            "Modo de plan habilitado. Los cambios se limitan al plan hasta que lo apruebe. Utilice la vista /plan para revisar.",
-            "Mode plan activé. Les changements sont limités au plan jusqu'à ce que vous l'approuviez. Utilisez la vue /plan pour examiner.",
-            "Planmodus aktiviert. Änderungen sind auf den Plan beschränkt, bis Sie ihn genehmigen. Verwenden Sie die Ansicht /plan zur Überprüfung.",
-            "プランモードを有効にします。 変更は、承認するまでプランに限られます。 /planビューを使用してレビューを行います。",
-            "계획 모드 활성화. 변경은 플랜으로 제한됩니다. 사용 /plan 리뷰보기.",
-            "计划模式启用 。 修改仅限于计划,直到你批准。 使用/plan视图进行审查.",
-        ],
-    ),
-    (
-        "Plan mode off.",
-        [
-            "Modo de plan apagado.",
-            "Mode de planification désactivé.",
-            "Planmodus ausgeschaltet.",
-            "プランモードオフ。",
-            "계획 모드 오프.",
-            "计划模式关闭。",
-        ],
-    ),
-    (
-        "Plan mode on. Use /plan view to review, then /plan approve.",
-        [
-            "Modo de plan encendido. Utilice la vista /plan para revisar, luego /plan aprobar.",
-            "En mode plan. Utilisez la vue /plan pour examiner, puis /plan approuver.",
-            "Planmodus eingeschaltet. Verwenden Sie /plan Ansicht zu überprüfen, dann /plan genehmigen.",
-            "プランモード /planビューを使用してレビューし、/plan承認します。",
-            "계획 모드. /plan보기를 사용하여 검토, 다음 /plan 찬성.",
-            "计划模式开始 。 使用/plan视图进行审查,然后/plan批准.",
-        ],
-    ),
-    (
-        "Plan mode: explore + write plan.md only until approved",
-        [
-            "Modo de plan: explorar + plan de escritura.md sólo hasta aprobado",
-            "Mode plan: explorer + écrire plan.md seulement jusqu'à approbation",
-            "Planmodus: explore + write plan.md nur bis genehmigt",
-            "計画モード:承認されるまでだけ+書くplan.mdを探検して下さい",
-            "계획 모드: + 쓰기 plan.md 승인 때까지만",
-            "计划模式: 探索 + 写入计划. md 仅待批准",
-        ],
-    ),
     (
         "Planning, TDD, debugging, and delivery workflows for coding agents.",
         [
@@ -17832,17 +17531,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "Review comments on an earlier plan: {0}. Recreate stale comments before leaving plan mode.",
-        [
-            "Comentarios sobre un plan anterior: {0}. Vuelve a crear los comentarios obsoletos antes de salir del modo de planificación.",
-            "Commentaires sur un plan précédent : {0}. Recréez les commentaires obsolètes avant de quitter le mode plan.",
-            "Kommentare zu einem früheren Plan: {0}. Erstelle veraltete Kommentare vor dem Verlassen des Planmodus neu.",
-            "以前の計画に対するレビューコメント: {0} 件。計画モードを終了する前に、古いコメントを作成し直してください。",
-            "이전 계획에 대한 검토 댓글: {0}개. 계획 모드를 종료하기 전에 오래된 댓글을 다시 작성하세요.",
-            "旧版计划的审阅评论：{0} 条。退出规划模式前，请重新创建过时的评论。",
-        ],
-    ),
-    (
         "Review summary · Enter saves a new conversation",
         [
             "Resumen de revisión · Enter ahorra una nueva conversación",
@@ -19558,17 +19246,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "Show the current session plan.md",
-        [
-            "Mostrar el plan actual de sesión.md",
-            "Afficher le plan de session actuel.md",
-            "Zeigen Sie die aktuelle Session plan.md",
-            "現在のセッションプランを表示します。md",
-            "현재 세션 계획 표시.md",
-            "显示当前会话计划( M)",
-        ],
-    ),
-    (
         "Show the interactive sandbox policy for this session",
         [
             "Mostrar la política interactiva de sandbox para esta sesión",
@@ -19632,17 +19309,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "バージョン情報を表示する",
             "쇼 버전 정보",
             "显示版本信息",
-        ],
-    ),
-    (
-        "Showing plan.md",
-        [
-            "Mostrando plan.md",
-            "Affichage plan.md",
-            "Anzeige plan.md",
-            "見る plan.md",
-            "전시 plan.md",
-            "显示plan.md",
         ],
     ),
     (
@@ -22768,39 +22434,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "使用方法: /output [summary|compact|expanded]",
             "제품 정보: /output [summary|compact|expanded]",
             "使用量: /output [summary|compact|expanded]",
-        ],
-    ),
-    (
-        "Usage: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-        [
-            "Usage: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-            "Utilisation: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-            "Verwendung: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-            "使用方法: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-            "제품 정보: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-            "使用量: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]",
-        ],
-    ),
-    (
-        "Usage: /plan comment <line|start-end> <text>",
-        [
-            "Usage: /plan comment <line|start-end> <text>",
-            "Utilisation: /plan comment <line|start-end> <text>",
-            "Verwendung: /plan comment <line|start-end> <text>",
-            "使用方法: /plan comment <line|start-end> <text>",
-            "제품 정보: /plan comment <line|start-end> <text>",
-            "使用量: /plan comment <line|start-end> <text>",
-        ],
-    ),
-    (
-        "Usage: /plan resolve|reopen <id>",
-        [
-            "Usage: /plan resolve|reopen <id>",
-            "Utilisation: /plan resolve|reopen <id>",
-            "Verwendung: /plan resolve|reopen <id>",
-            "使用方法: /plan resolve|reopen <id>",
-            "제품 정보: /plan resolve|reopen <id>",
-            "使用量: /plan resolve|reopen <id>",
         ],
     ),
     (

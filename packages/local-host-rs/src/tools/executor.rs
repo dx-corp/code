@@ -52,7 +52,7 @@ pub enum OutputStream {
 /// The list is deliberately short and closed. A tool qualifies only when its
 /// entire effect is filesystem or network I/O that a child process can
 /// perform on the parent's behalf. Anything that reads or writes agent state
-/// -- approvals, hooks, `ask_user`, `todo`, plan mode, subagent lifecycle,
+/// -- approvals, hooks, `ask_user`, `todo`, subagent lifecycle,
 /// MCP sessions, mailbox, goal and harness context -- is absent from this
 /// list and stays in-process regardless of configuration.
 pub const PROCESS_ISOLATABLE_TOOLS: [&str; 8] = [

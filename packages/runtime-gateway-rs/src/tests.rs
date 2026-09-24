@@ -12,6 +12,19 @@ use std::io::{Read, Write};
 use std::net::TcpListener as StdTcpListener;
 
 static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[test]
+fn plan_endpoint_is_not_registered() {
+    for method in ["GET", "POST"] {
+        let head = RequestHead {
+            method: method.to_string(),
+            path: "/api/plan".to_string(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+        };
+        assert!(!is_extended_endpoint(&head));
+    }
+}
 const A2A_PLATFORM_ENV_NAMES: &[&str] = &[
     "MAESTRO_A2A_PLATFORM_REGISTER",
     "MAESTRO_A2A_PLATFORM_AUTO_REGISTER",
@@ -4796,7 +4809,6 @@ fn capsule_deadline_cannot_leave_an_ambient_validator_process_running() {
         .env(ROOT_ENV, root.path())
         .env(SENTINEL_ENV, &sentinel)
         .env("MAESTRO_SAFE_MODE", "1")
-        .env("MAESTRO_SAFE_REQUIRE_PLAN", "0")
         .env(
             "MAESTRO_SAFE_VALIDATORS",
             format!("sleep 5; printf escaped > {quoted_sentinel}"),

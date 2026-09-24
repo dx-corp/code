@@ -108,12 +108,11 @@ While the agent is running:
 | Mode | How | Behavior |
 |------|-----|----------|
 | Normal | default | Selective approvals for risky tools |
-| Plan | `/plan` or Shift+Tab cycle | Prefer a plan before mutating tools |
 | Always-approve | `/always-approve` (`/yolo`) | Auto-approve tool executions |
 | Ask-all | `/ask` | Require approval for all tools |
 | Auto (selective) | `/auto` | Safe tools free, risky tools prompt |
 
-See [Plan Mode](10-plan-mode.md) and [Sandbox and Safety](12-sandbox-and-safety.md).
+See [Sandbox and Safety](12-sandbox-and-safety.md).
 
 ---
 

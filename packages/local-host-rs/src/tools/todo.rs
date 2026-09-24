@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::ToolResult;
-use crate::safety::set_plan_satisfied;
 
 async fn begin_mutation_commit(cancellation: Option<&CancellationToken>) -> bool {
     match cancellation {
@@ -322,8 +321,6 @@ pub async fn todo_with_cancellation(
     if let Err(err) = save_store(&store).await {
         return ToolResult::failure(err);
     }
-
-    set_plan_satisfied(true);
 
     let record = store.get(&goal).cloned().unwrap_or(TodoRecord {
         goal: goal.clone(),

@@ -802,11 +802,6 @@ impl App {
                         .translate("Search previous prompts")
                         .into(),
                 );
-                add(
-                    "view-plan",
-                    self.state.locale.translate("View plan"),
-                    self.state.locale.translate("Current plan artifact").into(),
-                );
                 self.state.locale.translate("Session actions").into()
             }
         };

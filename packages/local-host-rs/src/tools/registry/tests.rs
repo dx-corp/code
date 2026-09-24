@@ -279,7 +279,6 @@ fn governed_executor_disables_configured_ambient_validators_without_global_env_m
         .env(ROOT_ENV, dir.path())
         .env(SENTINEL_ENV, &sentinel)
         .env("MAESTRO_SAFE_MODE", "1")
-        .env("MAESTRO_SAFE_REQUIRE_PLAN", "0")
         .env(
             "MAESTRO_SAFE_VALIDATORS",
             format!("sleep 0.2; printf validator-ran > {quoted_sentinel}"),

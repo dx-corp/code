@@ -29,8 +29,7 @@ pub use maestro_runtime::{ToolCallContract, mcp_server_id, schema_digest, valida
 /// tool name is what dispatch resolves, and the tool name is what must still
 /// mean the same thing.
 ///
-/// Process-global for the same reason `plan_mode`'s active session id is: the
-/// resume happens in the TUI event loop and the check happens inside the tool
+/// Process-global because resume happens in the TUI event loop and the check happens inside the tool
 /// executor, and there is no owned channel between them.
 static RESTORED_CONTRACTS: OnceLock<Mutex<Vec<ToolCallContract>>> = OnceLock::new();
 

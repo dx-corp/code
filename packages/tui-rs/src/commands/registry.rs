@@ -80,8 +80,8 @@ use super::types::{
     Command, CommandAction, CommandArgument, CommandCategory, CommandContext, CommandError,
     CommandErrorKind, CommandOutput, CommandResult, ControlPanel, ExportAction, FooterStyle,
     GoalAction, HarnessAction, HistoryAction, HooksAction, LoopAction, MailboxAction, McpAction,
-    ModalType, OrbAction, PlanReviewAction, PluginsAction, QueueAction, QueueModeKind,
-    QueueMoveDirection, RlmAction, SessionAction, SkillsAction, ToolHistoryAction, UsageAction,
+    ModalType, OrbAction, PluginsAction, QueueAction, QueueModeKind, QueueMoveDirection, RlmAction,
+    SessionAction, SkillsAction, ToolHistoryAction, UsageAction,
 };
 use crate::git;
 use crate::keybindings::{
@@ -1269,29 +1269,6 @@ fn parse_rewind_args(raw: &str, usage: &str) -> Result<SessionAction, CommandErr
     })
 }
 
-fn parse_plan_range(raw: &str) -> Result<(usize, usize), CommandError> {
-    let (start, end) = raw
-        .split_once('-')
-        .or_else(|| raw.split_once(':'))
-        .unwrap_or((raw, raw));
-    let start = start.parse::<usize>().map_err(|_| {
-        CommandError::new(maestro_ui::localization::tr(
-            "Plan comment range must be LINE or START-END",
-        ))
-    })?;
-    let end = end.parse::<usize>().map_err(|_| {
-        CommandError::new(maestro_ui::localization::tr(
-            "Plan comment range must be LINE or START-END",
-        ))
-    })?;
-    if start == 0 || end < start {
-        return Err(CommandError::new(maestro_ui::localization::tr(
-            "Plan comment range must be positive and ordered",
-        )));
-    }
-    Ok((start, end))
-}
-
 /// Build the default command registry with all built-in commands
 ///
 /// Constructs and returns a fully populated `CommandRegistry` containing all
@@ -1305,7 +1282,7 @@ fn parse_plan_range(raw: &str) -> Result<(usize, usize), CommandError> {
 /// - **UI**: clear, theme, zen, copy, footer
 /// - **Session**: session, sessions, continue, resume
 /// - **Config**: model, thinking, approvals
-/// - **Context**: compact, context, memory, plan
+/// - **Context**: compact, context, memory
 /// - **Tools**: tools, mcp
 /// - **Diagnostics**: status, diag, version
 /// - **Safety**: approvals
@@ -3303,84 +3280,7 @@ fn build_builtin_registry() -> CommandRegistry {
         .usage("/memory [list|review|save <proposal-id>|edit <entry-id> <text>|forget <entry-id>|reject <proposal-id>]"),
     );
 
-    // Plan mode (Grok-style: plan.md + approve)
-    registry.register(
-        Command::new(
-            "plan",
-            maestro_ui::localization::tr("Plan mode: explore + write plan.md only until approved"),
-            CommandCategory::Context,
-            Box::new(|ctx| {
-                let raw = ctx.raw_args.trim();
-                let mut parts = raw.split_whitespace();
-                let subcommand = parts.next().unwrap_or("").to_lowercase();
-                match subcommand.as_str() {
-                    "" | "on" | "true" | "1" => {
-                        Ok(CommandOutput::Action(CommandAction::SetPlanMode(true)))
-                    }
-                    "off" | "false" | "0" => {
-                        Ok(CommandOutput::Action(CommandAction::SetPlanMode(false)))
-                    }
-                    "approve" | "accept" | "done" => {
-                        Ok(CommandOutput::Action(CommandAction::ApprovePlan))
-                    }
-                    "view" | "show" => Ok(CommandOutput::Action(CommandAction::ViewPlan)),
-                    "comments" | "list" => Ok(CommandOutput::Action(CommandAction::PlanReview(
-                        PlanReviewAction::List,
-                    ))),
-                    "comment" => {
-                        let range = parts.next().ok_or_else(|| {
-                            CommandError::new(maestro_ui::localization::tr("Usage: /plan comment <line|start-end> <text>"))
-                        })?;
-                        let (start_line, end_line) = parse_plan_range(range)?;
-                        let text = parts.collect::<Vec<_>>().join(" ");
-                        if text.is_empty() {
-                            return Err(CommandError::new(
-                                maestro_ui::localization::tr("Usage: /plan comment <line|start-end> <text>"),
-                            ));
-                        }
-                        Ok(CommandOutput::Action(CommandAction::PlanReview(
-                            PlanReviewAction::Comment {
-                                start_line,
-                                end_line,
-                                text,
-                            },
-                        )))
-                    }
-                    "resolve" | "reopen" => {
-                        let id = parts
-                            .next()
-                            .ok_or_else(|| CommandError::new(maestro_ui::localization::tr("Usage: /plan resolve|reopen <id>")))?
-                            .trim_start_matches('#')
-                            .parse::<u64>()
-                            .map_err(|_| CommandError::new(maestro_ui::localization::tr("Plan comment id must be a number")))?;
-                        let action = if subcommand == "resolve" {
-                            PlanReviewAction::Resolve { id }
-                        } else {
-                            PlanReviewAction::Reopen { id }
-                        };
-                        Ok(CommandOutput::Action(CommandAction::PlanReview(action)))
-                    }
-                    _ => Err(CommandError::new(maestro_ui::localization::tr("Usage: /plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]"))),
-                }
-            }),
-        ).localized()
-        .usage("/plan [on|off|approve|view|comments|comment <range> <text>|resolve <id>|reopen <id>]").primary(5)
-    );
-
-    registry.register(
-        Command::new(
-            "view-plan",
-            maestro_ui::localization::tr("Show the current session plan.md"),
-            CommandCategory::Context,
-            Box::new(|_| Ok(CommandOutput::Action(CommandAction::ViewPlan))),
-        )
-        .localized()
-        .alias("show-plan")
-        .alias("plan-view")
-        .usage("/view-plan"),
-    );
-
-    // Grok-style permission shortcuts
+    // Permission shortcuts
     registry.register(
         Command::new(
             "always-approve",
@@ -4567,7 +4467,7 @@ mod menu_contract_tests {
         assert_eq!(
             names,
             [
-                "new", "resume", "fork", "rewind", "model", "plan", "review", "tasks", "settings",
+                "new", "resume", "fork", "rewind", "model", "review", "tasks", "settings",
                 "context", "help", "quit"
             ]
         );
@@ -4579,7 +4479,6 @@ mod menu_contract_tests {
             "prompt-audit",
             "mcp-config",
             "magic-trace",
-            "view-plan",
             "stats",
             "toolhistory",
             "limits",

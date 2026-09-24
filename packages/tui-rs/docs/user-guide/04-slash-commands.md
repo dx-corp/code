@@ -71,7 +71,6 @@ Queue modes: `/queue mode [steer|followup] <one|all>`.
 | `/always-approve` | `/yolo` | Auto-approve all tool executions |
 | `/auto` | | Selective approvals (safe free, risky prompt) |
 | `/ask` | | Require approval for all tools |
-| `/plan [on\|off]` | | Enter or leave plan mode |
 
 ---
 
@@ -144,7 +143,6 @@ Limits per process: 32 monitors total, 8 per task, 256 bytes per regex, 1 MiB co
 | `/rlm …` | Named context variables |
 | `/mailbox …` | Durable messages between agent sessions |
 | `/attach …` | Queue local files for the next prompt |
-| `/view-plan` | Show the current session `plan.md` |
 
 ---
 

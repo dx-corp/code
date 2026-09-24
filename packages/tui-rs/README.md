@@ -4,7 +4,7 @@ Native terminal UI for Deixic Code, built with Rust using ratatui and crossterm.
 
 ## User Guide
 
-Numbered end-user docs for install, auth, shortcuts, slash commands, config, MCP, skills, hooks, plan mode, sessions, safety, headless mode, and worktrees:
+Numbered end-user docs for install, auth, shortcuts, slash commands, config, MCP, skills, hooks, sessions, safety, headless mode, and worktrees:
 
 - **[TUI User Guide](docs/user-guide/README.md)**
 

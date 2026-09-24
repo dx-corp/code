@@ -382,7 +382,6 @@ impl App {
         if !self.flush_session() {
             anyhow::bail!("Failed to persist the adopted checkpoint cache audit");
         }
-        crate::plan_mode::set_active_session_id(Some(child_id.clone()));
         self.session_resume_failed = false;
         let notice = self.state.locale.format(
             "Summary saved in {0}. Original conversation remains available in /sessions.",

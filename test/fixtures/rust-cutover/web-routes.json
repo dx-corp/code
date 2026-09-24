@@ -46,8 +46,6 @@
 		{ "method": "GET", "path": "/api/guardian/status" },
 		{ "method": "POST", "path": "/api/guardian/run" },
 		{ "method": "POST", "path": "/api/guardian/config" },
-		{ "method": "GET", "path": "/api/plan" },
-		{ "method": "POST", "path": "/api/plan" },
 		{ "method": "GET", "path": "/api/mcp" },
 		{ "method": "POST", "path": "/api/mcp" },
 		{ "method": "GET", "path": "/api/package" },

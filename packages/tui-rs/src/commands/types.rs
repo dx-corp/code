@@ -222,16 +222,8 @@ pub enum CommandAction {
     SetCompactTools(Option<bool>),
     /// Set approval mode (yolo, selective, safe)
     SetApprovalMode(String),
-    /// Cycle Grok-style interaction mode (Normal → Plan → Always-approve)
+    /// Cycle between normal and auto-approve interaction modes.
     CycleInteractionMode,
-    /// Enter plan mode (require plan before mutating tools)
-    SetPlanMode(bool),
-    /// Show the current session plan.md contents
-    ViewPlan,
-    /// Approve the plan and leave plan mode so implementation can start
-    ApprovePlan,
-    /// Manage structured review comments on the current plan
-    PlanReview(PlanReviewAction),
     /// Ask a tool-free question outside the main conversation history
     SideQuestion(String),
     /// Set extended thinking level (off, low, medium, high, max)
@@ -571,23 +563,6 @@ pub enum TrustAction {
     Grant,
     /// Revoke trust
     Revoke,
-}
-
-/// Structured plan review actions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanReviewAction {
-    Comment {
-        start_line: usize,
-        end_line: usize,
-        text: String,
-    },
-    List,
-    Resolve {
-        id: u64,
-    },
-    Reopen {
-        id: u64,
-    },
 }
 
 /// Queue mode target for queue commands.

@@ -299,8 +299,6 @@ pub enum InteractionMode {
     /// Normal agenting with selective approvals
     #[default]
     Normal,
-    /// Plan mode: require a todo/plan before mutating tools
-    Plan,
     /// Always-approve (YOLO) — skip tool approval prompts
     AlwaysApprove,
 }
@@ -310,7 +308,6 @@ impl InteractionMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Normal => "normal",
-            Self::Plan => "plan",
             Self::AlwaysApprove => "always-approve",
         }
     }
@@ -318,8 +315,7 @@ impl InteractionMode {
     #[must_use]
     pub fn next(self) -> Self {
         match self {
-            Self::Normal => Self::Plan,
-            Self::Plan => Self::AlwaysApprove,
+            Self::Normal => Self::AlwaysApprove,
             Self::AlwaysApprove => Self::Normal,
         }
     }
@@ -327,7 +323,7 @@ impl InteractionMode {
     #[must_use]
     pub fn approval_mode(self) -> ApprovalMode {
         match self {
-            Self::Normal | Self::Plan => ApprovalMode::Selective,
+            Self::Normal => ApprovalMode::Selective,
             Self::AlwaysApprove => ApprovalMode::Yolo,
         }
     }

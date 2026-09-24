@@ -1,15 +1,9 @@
-//! Safe mode guardrails (plan requirement + validators)
+//! Safe mode validators.
 //!
-//! Mirrors the TypeScript safe-mode gates at a minimal level:
-//! - Require a plan before mutating operations (write/edit/bash/background tasks)
-//! - Run configured validators after file mutations
+//! Runs configured validators after file mutations.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-#[cfg(any(test, feature = "test-support"))]
-use std::cell::Cell;
 
 use crate::lsp::{self, LspDiagnostic};
 use crate::tools::resolve_shell_config;
@@ -19,28 +13,13 @@ pub use maestro_runtime::ValidatorResult;
 #[derive(Debug, Clone)]
 struct SafeModeConfig {
     enabled: bool,
-    require_plan: bool,
     validators: Vec<String>,
     lsp_blocking_severity: u8,
-}
-
-static PLAN_SATISFIED: AtomicBool = AtomicBool::new(false);
-#[cfg(not(any(test, feature = "test-support")))]
-static PLAN_MODE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(any(test, feature = "test-support"))]
-thread_local! {
-    static TEST_PLAN_MODE: Cell<bool> = const { Cell::new(false) };
 }
 
 static SAFE_MODE_CONFIG: std::sync::LazyLock<Mutex<SafeModeConfig>> =
     std::sync::LazyLock::new(|| {
         let enabled = std::env::var("MAESTRO_SAFE_MODE").ok().as_deref() == Some("1");
-        let require_plan = if enabled {
-            std::env::var("MAESTRO_SAFE_REQUIRE_PLAN").ok().as_deref() != Some("0")
-        } else {
-            false
-        };
         let validators_raw = std::env::var("MAESTRO_SAFE_VALIDATORS").unwrap_or_default();
         let validators = validators_raw
             .split(',')
@@ -54,76 +33,10 @@ static SAFE_MODE_CONFIG: std::sync::LazyLock<Mutex<SafeModeConfig>> =
 
         Mutex::new(SafeModeConfig {
             enabled,
-            require_plan,
             validators,
             lsp_blocking_severity,
         })
     });
-
-/// Mark plan requirement as satisfied/unsatisfied.
-pub fn set_plan_satisfied(value: bool) {
-    PLAN_SATISFIED.store(value, Ordering::Relaxed);
-}
-
-/// Enable/disable Grok-style plan mode (require plan before mutating tools).
-pub fn set_plan_mode(enabled: bool) {
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        TEST_PLAN_MODE.with(|flag| flag.set(enabled));
-        if enabled {
-            set_plan_satisfied(false);
-        }
-    }
-    #[cfg(not(any(test, feature = "test-support")))]
-    {
-        PLAN_MODE.store(enabled, Ordering::Relaxed);
-        if enabled {
-            // Entering plan mode requires a fresh plan before mutations.
-            set_plan_satisfied(false);
-            // Badge + external readers use this env flag.
-            // SAFETY: process-local UI flag; single-threaded write on mode toggle.
-            std::env::set_var("MAESTRO_PLAN_MODE", "1");
-        } else {
-            std::env::remove_var("MAESTRO_PLAN_MODE");
-        }
-    }
-}
-
-/// Return true if plan mode is enabled.
-#[must_use]
-pub fn is_plan_mode() -> bool {
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        TEST_PLAN_MODE.with(Cell::get)
-    }
-    #[cfg(not(any(test, feature = "test-support")))]
-    {
-        PLAN_MODE.load(Ordering::Relaxed)
-            || std::env::var("MAESTRO_PLAN_MODE").ok().as_deref() == Some("1")
-    }
-}
-
-/// Restore plan mode when a unit test finishes, including on panic.
-#[cfg(any(test, feature = "test-support"))]
-pub struct PlanModeOverride {
-    previous: bool,
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl PlanModeOverride {
-    pub fn enable() -> Self {
-        let previous = is_plan_mode();
-        set_plan_mode(true);
-        Self { previous }
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl Drop for PlanModeOverride {
-    fn drop(&mut self) {
-        set_plan_mode(self.previous);
-    }
-}
 
 /// Return true if safe mode is enabled.
 pub fn is_safe_mode_enabled() -> bool {
@@ -131,26 +44,6 @@ pub fn is_safe_mode_enabled() -> bool {
         .lock()
         .map(|cfg| cfg.enabled)
         .unwrap_or(false)
-}
-
-/// Enforce plan requirement for mutating tools.
-pub fn require_plan(tool_name: &str) -> Result<(), String> {
-    let cfg = SAFE_MODE_CONFIG
-        .lock()
-        .map_err(|_| "Safe mode config unavailable".to_string())?;
-
-    let plan_mode = is_plan_mode();
-    if !(plan_mode || (cfg.enabled && cfg.require_plan)) {
-        return Ok(());
-    }
-
-    if PLAN_SATISFIED.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-
-    Err(format!(
-        "Plan mode requires a plan before executing {tool_name}. Create or update a todo checklist first (or leave plan mode with /plan off)."
-    ))
 }
 
 /// Run validators configured via `MAESTRO_SAFE_VALIDATORS`.
@@ -299,23 +192,6 @@ mod tests {
         };
         assert_eq!(result.exit_code, 1);
         assert!(result.stderr.contains("unused variable"));
-    }
-
-    // ========================================================================
-    // Plan Satisfied Tests
-    // ========================================================================
-
-    #[test]
-    fn test_set_plan_satisfied() {
-        // Reset to known state
-        set_plan_satisfied(false);
-        assert!(!PLAN_SATISFIED.load(std::sync::atomic::Ordering::Relaxed));
-
-        set_plan_satisfied(true);
-        assert!(PLAN_SATISFIED.load(std::sync::atomic::Ordering::Relaxed));
-
-        set_plan_satisfied(false);
-        assert!(!PLAN_SATISFIED.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     // ========================================================================

@@ -318,30 +318,12 @@ impl App {
                 // Keep interaction_mode loosely aligned with approval shortcuts.
                 self.state.interaction_mode = match self.state.approval_mode {
                     ApprovalMode::Yolo => crate::state::InteractionMode::AlwaysApprove,
-                    ApprovalMode::Safe | ApprovalMode::Selective => {
-                        if crate::safety::is_plan_mode() {
-                            crate::state::InteractionMode::Plan
-                        } else {
-                            crate::state::InteractionMode::Normal
-                        }
-                    }
+                    ApprovalMode::Safe | ApprovalMode::Selective => crate::state::InteractionMode::Normal,
                 };
                 self.state.status = Some(self.state.locale.format("Approval mode: {0}", &[(self.state.approval_mode.label()).to_string()]));
             }
             CommandAction::CycleInteractionMode => {
                 self.cycle_interaction_mode();
-            }
-            CommandAction::SetPlanMode(enabled) => {
-                self.apply_plan_mode(enabled);
-            }
-            CommandAction::ViewPlan => {
-                self.show_plan();
-            }
-            CommandAction::ApprovePlan => {
-                self.approve_plan();
-            }
-            CommandAction::PlanReview(action) => {
-                self.handle_plan_review(action);
             }
             CommandAction::SideQuestion(question) => {
                 let _ = self.handle_side_question(question).await;
@@ -1338,7 +1320,6 @@ impl App {
         // Drop the old session's error surface and force a full repaint so
         // its frames cannot linger beneath the restored transcript.
         self.reset_rendered_viewport();
-        crate::plan_mode::set_active_session_id(None);
         if let Some(agent) = &self.native_agent {
             // Drop any active-session state before the new transcript and
             // credential scope become visible.
@@ -1348,8 +1329,6 @@ impl App {
         crate::tools::tool_call_contract::restore_pending_contracts(
             unanswered_tool_call_contracts(session),
         );
-        self.plan_review_comments =
-            crate::session::reconstruct_plan_review(&session.plan_review_events);
 
         self.state.session_id = Some(session_id.clone());
         self.state.status = Some(
@@ -1432,7 +1411,6 @@ impl App {
         }
         self.session_resume_failed = false;
         self.last_esc_at = None;
-        crate::plan_mode::set_active_session_id(Some(session_id.clone()));
         if let Some(event) = self.new_session_event(
             maestro_runtime_contracts::SessionEventLane::Runtime,
             "session.resumed",
@@ -1519,29 +1497,15 @@ impl App {
     }
 
     fn apply_interaction_mode(&mut self, mode: crate::state::InteractionMode) {
-        if mode != crate::state::InteractionMode::Plan
-            && crate::safety::is_plan_mode()
-            && !self.leave_plan_mode()
-        {
-            return;
-        }
         self.state.interaction_mode = mode;
         self.state.approval_mode = mode.approval_mode();
         self.sync_agent_approval_mode();
-        match mode {
-            crate::state::InteractionMode::Plan => {
-                self.apply_plan_mode(true);
-            }
-            crate::state::InteractionMode::Normal
-            | crate::state::InteractionMode::AlwaysApprove => {
-                self.update_agent_system_prompt();
-            }
-        }
+        self.update_agent_system_prompt();
         self.state.status = Some(self.state.locale.format(
             "Mode: {0} (approvals: {1})",
             &[
-                (mode.label()).to_string(),
-                (self.state.approval_mode.label()).to_string(),
+                mode.label().to_string(),
+                self.state.approval_mode.label().to_string(),
             ],
         ));
     }
@@ -1597,288 +1561,6 @@ impl App {
             self.current_model.clone(),
             tx,
         ));
-    }
-
-    pub(super) fn apply_plan_mode(&mut self, enabled: bool) {
-        if enabled {
-            crate::safety::set_plan_mode(true);
-            self.state.interaction_mode = crate::state::InteractionMode::Plan;
-            if matches!(self.state.approval_mode, ApprovalMode::Yolo) {
-                self.state.approval_mode = ApprovalMode::Selective;
-                self.sync_agent_approval_mode();
-            }
-            // Bind plan file to the active session when available.
-            if let Some(id) = self.session_manager.current_session_id() {
-                crate::plan_mode::set_active_session_id(Some(id.to_string()));
-            }
-            let cwd = self.plan_cwd();
-            let _plan_path = crate::plan_mode::ensure_plan_file(&cwd)
-                .unwrap_or_else(|_| crate::plan_mode::plan_file_path(&cwd));
-            self.state.status = Some(
-                self.state
-                    .locale
-                    .translate("Plan mode on. Use /plan view to review, then /plan approve.")
-                    .into(),
-            );
-            self.state.add_system_message(self.state.locale.translate("Plan mode enabled. Changes are limited to the plan until you approve it. Use /plan view to review.").into());
-            // Nudge the agent with plan-mode instructions when possible.
-            if let Some(agent) = &self.native_agent {
-                let prompt = format!(
-                    "{}{}",
-                    self.build_system_prompt(),
-                    crate::plan_mode::plan_mode_system_addendum(&cwd)
-                );
-                let _ = agent.set_system_prompt(prompt);
-            }
-        } else {
-            if !self.leave_plan_mode() {
-                return;
-            }
-            self.state.status = Some(self.state.locale.translate("Plan mode off.").to_string());
-        }
-    }
-
-    fn stale_plan_review_ids(&self) -> Vec<u64> {
-        let plan = crate::plan_mode::read_plan(&self.plan_cwd());
-        self.plan_review_comments
-            .iter()
-            .filter(|comment| {
-                let Some(plan) = plan.as_deref() else {
-                    return true;
-                };
-                comment.revision != crate::plan_mode::plan_revision(plan)
-                    || crate::plan_mode::plan_excerpt(plan, comment.start_line, comment.end_line)
-                        .as_deref()
-                        != Some(comment.excerpt.as_str())
-            })
-            .map(|comment| comment.id)
-            .collect()
-    }
-
-    fn plan_exit_blocker(&self) -> Option<String> {
-        let open_count = self
-            .plan_review_comments
-            .iter()
-            .filter(|comment| !comment.resolved)
-            .count();
-        if open_count > 0 {
-            return Some(self.state.locale.format(
-                "Open review comments prevent leaving plan mode: {0}. Use `/plan comments`.",
-                &[open_count.to_string()],
-            ));
-        }
-        let stale = self.stale_plan_review_ids();
-        (!stale.is_empty()).then(|| {
-            self.state.locale.format("Review comments on an earlier plan: {0}. Recreate stale comments before leaving plan mode.", &[stale.len().to_string()])
-        })
-    }
-
-    fn leave_plan_mode(&mut self) -> bool {
-        if let Some(error) = self.plan_exit_blocker() {
-            self.state.error = Some(error);
-            return false;
-        }
-        crate::plan_mode::approve_plan();
-        if self.state.interaction_mode == crate::state::InteractionMode::Plan {
-            self.state.interaction_mode = crate::state::InteractionMode::Normal;
-        }
-        self.update_agent_system_prompt();
-        true
-    }
-
-    fn show_plan(&mut self) {
-        if let Some(id) = self.session_manager.current_session_id() {
-            crate::plan_mode::set_active_session_id(Some(id.to_string()));
-        }
-        let cwd = self.plan_cwd();
-        match crate::plan_mode::read_plan(&cwd) {
-            Some(text) => {
-                self.state.status =
-                    Some(self.state.locale.translate("Showing plan.md").to_string());
-                self.state.add_system_message(
-                    self.state
-                        .locale
-                        .format("## Current plan\n\n{0}", std::slice::from_ref(&(text))),
-                );
-            }
-            None => {
-                let path = crate::plan_mode::plan_file_path(&cwd);
-                self.state.add_system_message(self.state.locale.format("No plan written yet. In plan mode, write to `.maestro/plan.md` (session copy: `{0}`).", &[(path.display()).to_string()]));
-            }
-        }
-    }
-
-    pub(super) fn approve_plan(&mut self) {
-        let cwd = self.plan_cwd();
-        let preview = crate::plan_mode::read_plan(&cwd);
-        if !self.leave_plan_mode() {
-            return;
-        }
-        self.state.status = Some(
-            self.state
-                .locale
-                .translate("Plan approved. Implementation tools are enabled.")
-                .to_string(),
-        );
-        if let Some(text) = preview {
-            self.state.add_system_message(self.state.locale.format(
-                "Plan approved. Leaving plan mode. Summary of approved plan:\n\n{0}",
-                std::slice::from_ref(&(text)),
-            ));
-        } else {
-            self.state.add_system_message(
-                self.state
-                    .locale
-                    .translate(
-                        "Plan approved (empty plan). Leaving plan mode so you can implement.",
-                    )
-                    .to_string(),
-            );
-        }
-    }
-
-    pub(super) fn handle_plan_review(&mut self, action: PlanReviewAction) {
-        match action {
-            PlanReviewAction::Comment {
-                start_line,
-                end_line,
-                text,
-            } => {
-                let Some(plan) = crate::plan_mode::read_plan(&self.plan_cwd()) else {
-                    self.state.error = Some(
-                        self.state
-                            .locale
-                            .translate("No plan is available for review.")
-                            .to_string(),
-                    );
-                    return;
-                };
-                let line_count = plan.lines().count();
-                if end_line > line_count {
-                    self.state.error = Some(self.state.locale.format(
-                        "Plan has {0} lines; comment range ends at {1}.",
-                        &[(line_count).to_string(), (end_line).to_string()],
-                    ));
-                    return;
-                }
-                let id = self
-                    .plan_review_comments
-                    .iter()
-                    .map(|comment| comment.id)
-                    .max()
-                    .unwrap_or(0)
-                    .saturating_add(1);
-                let revision = crate::plan_mode::plan_revision(&plan);
-                let excerpt = crate::plan_mode::plan_excerpt(&plan, start_line, end_line)
-                    .expect("validated plan comment range");
-                self.plan_review_comments.push(PlanReviewComment {
-                    id,
-                    start_line,
-                    end_line,
-                    text: text.clone(),
-                    revision: revision.clone(),
-                    excerpt: excerpt.clone(),
-                    resolved: false,
-                });
-                self.record_plan_review_event(PlanReviewEvent::Comment {
-                    id,
-                    start_line,
-                    end_line,
-                    text,
-                    revision,
-                    excerpt,
-                });
-                self.state.status = Some(
-                    self.state
-                        .locale
-                        .format("Added plan comment #{0}.", &[(id).to_string()]),
-                );
-            }
-            PlanReviewAction::List => {
-                let mut message =
-                    String::from(self.state.locale.translate("## Plan review comments\n\n"));
-                let stale = self.stale_plan_review_ids();
-                if self.plan_review_comments.is_empty() {
-                    message.push_str(self.state.locale.translate("No review comments."));
-                } else {
-                    for comment in &self.plan_review_comments {
-                        let state = if stale.contains(&comment.id) {
-                            "stale"
-                        } else if comment.resolved {
-                            "resolved"
-                        } else {
-                            "open"
-                        };
-                        message.push_str(&format!(
-                            "- #{} lines {}-{} [{}]: {}\n  ```\n  {}\n  ```\n",
-                            comment.id,
-                            comment.start_line,
-                            comment.end_line,
-                            state,
-                            comment.text,
-                            comment.excerpt.replace('\n', "\n  ")
-                        ));
-                    }
-                }
-                self.state.add_system_message(message);
-            }
-            PlanReviewAction::Resolve { id } => {
-                if self.stale_plan_review_ids().contains(&id) {
-                    self.state.error = Some(self.state.locale.format(
-                        "Plan comment #{0} is stale. Recreate it against the current plan.",
-                        &[(id).to_string()],
-                    ));
-                    return;
-                }
-                let Some(comment) = self
-                    .plan_review_comments
-                    .iter_mut()
-                    .find(|comment| comment.id == id)
-                else {
-                    self.state.error = Some(
-                        self.state
-                            .locale
-                            .format("Plan comment #{0} does not exist.", &[(id).to_string()]),
-                    );
-                    return;
-                };
-                comment.resolved = true;
-                self.record_plan_review_event(PlanReviewEvent::Resolve { id });
-                self.state.status = Some(
-                    self.state
-                        .locale
-                        .format("Plan comment #{0} resolved.", &[(id).to_string()]),
-                );
-            }
-            PlanReviewAction::Reopen { id } => {
-                if self.stale_plan_review_ids().contains(&id) {
-                    self.state.error = Some(self.state.locale.format(
-                        "Plan comment #{0} is stale. Recreate it against the current plan.",
-                        &[(id).to_string()],
-                    ));
-                    return;
-                }
-                let Some(comment) = self
-                    .plan_review_comments
-                    .iter_mut()
-                    .find(|comment| comment.id == id)
-                else {
-                    self.state.error = Some(
-                        self.state
-                            .locale
-                            .format("Plan comment #{0} does not exist.", &[(id).to_string()]),
-                    );
-                    return;
-                };
-                comment.resolved = false;
-                self.record_plan_review_event(PlanReviewEvent::Reopen { id });
-                self.state.status = Some(
-                    self.state
-                        .locale
-                        .format("Plan comment #{0} reopened.", &[(id).to_string()]),
-                );
-            }
-        }
     }
 
     fn handle_magic_trace(&mut self, action: crate::commands::MagicTraceAction) {

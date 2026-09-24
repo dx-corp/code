@@ -1748,9 +1748,6 @@ impl ToolExecutor {
                     }
                 };
 
-                if let Err(err) = crate::plan_mode::gate_mutation("bash", None, &self.cwd) {
-                    return ToolResult::failure(err);
-                }
                 if let Err(error) = self.check_coding_bash_revision(&bash_args.command) {
                     return ToolResult::failure(error);
                 }
@@ -2288,14 +2285,6 @@ impl ToolExecutor {
                     return err;
                 }
 
-                if let Err(err) = crate::plan_mode::gate_mutation(
-                    "write",
-                    Some(std::path::Path::new(&path)),
-                    &self.cwd,
-                ) {
-                    return ToolResult::failure(err);
-                }
-
                 let content = args
                     .get("content")
                     .and_then(|v| v.as_str())
@@ -2375,19 +2364,6 @@ impl ToolExecutor {
                     let details = WriteDetails::new(path.clone())
                         .with_duration(start_time.elapsed().as_millis() as u64);
                     return ToolResult::failure(e).with_details(details.to_json());
-                }
-
-                // Mirror plan-mode plan files into the session plan location.
-                if crate::plan_mode::is_plan_file_path(&self.cwd, std::path::Path::new(&path)) {
-                    if let Err(error) = crate::plan_mode::record_plan_write(
-                        &self.cwd,
-                        std::path::Path::new(&path),
-                        &content,
-                    ) {
-                        report_diagnostic_nonblocking(format!(
-                            "[write] failed to mirror plan file {path}: {error}"
-                        ));
-                    }
                 }
 
                 let diff = if preview_diff {
@@ -2630,14 +2606,6 @@ impl ToolExecutor {
 
                 if let Some(err) = self.deny_native_write_outside_sandbox(&path) {
                     return err;
-                }
-
-                if let Err(err) = crate::plan_mode::gate_mutation(
-                    "edit",
-                    Some(std::path::Path::new(&path)),
-                    &self.cwd,
-                ) {
-                    return ToolResult::failure(err);
                 }
 
                 let replace_all = args
@@ -3134,11 +3102,6 @@ impl ToolExecutor {
                     .unwrap_or("list");
                 match action {
                     "start" => {
-                        if let Err(err) =
-                            crate::plan_mode::gate_mutation("background_tasks", None, &self.cwd)
-                        {
-                            return ToolResult::failure(err);
-                        }
                         let command = match args.get("command").and_then(|v| v.as_str()) {
                             Some(cmd) => cmd.to_string(),
                             None => {

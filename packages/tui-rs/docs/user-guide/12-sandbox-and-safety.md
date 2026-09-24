@@ -1,6 +1,6 @@
 # Sandbox and Safety
 
-Deixic Code runs tools on your machine. Safety layers include the action firewall, approval modes, optional OS sandboxing, and safe/plan modes. Canonical detail: [Safety](../../../../docs/SAFETY.md) and [Threat Model](../../../../docs/THREAT_MODEL.md).
+Deixic Code runs tools on your machine. Safety layers include the action firewall, approval modes, optional OS sandboxing, and safe mode. Canonical detail: [Safety](../../../../docs/SAFETY.md) and [Threat Model](../../../../docs/THREAT_MODEL.md).
 
 ---
 
@@ -107,10 +107,9 @@ If `native` or `docker` cannot be enforced, Deixic Code fails closed unless unsa
 
 ---
 
-## Plan mode and prod profile
+## Production profile
 
-- `/plan` / `MAESTRO_PLAN_MODE=1` — see [Plan Mode](10-plan-mode.md).
-- `MAESTRO_PROFILE=prod` — approval defaults to `fail`, stricter egress, safe mode / plan-required guards, hardened web headers when applicable.
+- `MAESTRO_PROFILE=prod` — approval defaults to `fail`, stricter egress, safe-mode validators, and hardened web headers when applicable.
 
 ---
 

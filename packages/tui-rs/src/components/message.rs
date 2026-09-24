@@ -1292,7 +1292,6 @@ impl<'a> ChatInputWidget<'a> {
             "Mode: {0}",
             &[(match mode {
                 InteractionMode::Normal => maestro_ui::localization::tr("Act"),
-                InteractionMode::Plan => maestro_ui::localization::tr("Plan"),
                 InteractionMode::AlwaysApprove => maestro_ui::localization::tr("Auto-approve"),
             })
             .to_string()],
@@ -3333,7 +3332,6 @@ mod tests {
         let catalog_hits = rendered.matches("GPT-5.6").count();
         assert_eq!(catalog_hits, 1, "model must appear once:\n{rendered}");
         assert!(rendered.contains("Mode: Act"));
-        assert!(!rendered.contains("/plan to plan"));
         assert!(!rendered.contains("via openai-codex"));
         assert!(!rendered.contains("openai-codex/gpt-5.6"));
         assert!(!rendered.contains("Describe what you want to build..."));
@@ -3343,7 +3341,6 @@ mod tests {
     fn composer_mode_remains_visible_at_startup_and_in_conversation() {
         for (mode, label) in [
             (InteractionMode::Normal, "Mode: Act"),
-            (InteractionMode::Plan, "Mode: Plan"),
             (InteractionMode::AlwaysApprove, "Mode: Auto-approve"),
         ] {
             for width in [24, 40, 100] {
@@ -3365,9 +3362,6 @@ mod tests {
                         lines.iter().any(|line| line.contains(label)),
                         "mode missing: {lines:?}"
                     );
-                    if width == 100 && mode == InteractionMode::Plan {
-                        assert!(!lines.iter().any(|line| line.contains("/plan off to act")));
-                    }
                 }
             }
         }

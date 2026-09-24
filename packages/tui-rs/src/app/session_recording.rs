@@ -385,7 +385,6 @@ impl App {
         // turn cannot begin before this point, so no child is ever stamped with
         // the placeholder.
         self.adopt_session_context(Some(&session_id), "new");
-        crate::plan_mode::set_active_session_id(Some(session_id.clone()));
         self.session_started_at = SystemTime::now();
         self.session_resume_failed = false;
         self.usage_tracker = crate::usage::UsageTracker::with_session(session_id.clone());
@@ -956,17 +955,6 @@ impl App {
             question,
             answer,
             error,
-        }));
-        self.flush_session();
-    }
-
-    pub(super) fn record_plan_review_event(&mut self, event: PlanReviewEvent) {
-        if self.ensure_session_started().is_err() {
-            return;
-        }
-        self.write_session_entry(SessionEntry::PlanReview(PlanReviewEntry {
-            timestamp: Utc::now().to_rfc3339(),
-            event,
         }));
         self.flush_session();
     }

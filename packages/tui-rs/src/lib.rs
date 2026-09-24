@@ -217,7 +217,6 @@ pub mod operating_plane_client;
 pub mod operating_plane_summary;
 pub mod orb_cli;
 pub mod painter_cli;
-pub use maestro_local_host::plan_mode;
 pub mod plugins_cli;
 pub mod print_mode;
 /// Pre-main process hardening (core dumps, ptrace, loader-injection env vars).

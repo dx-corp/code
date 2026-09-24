@@ -21,7 +21,6 @@ For architecture and contributor notes, see [TUI Architecture](../../../../docs/
 | 7 | [MCP Servers](07-mcp-servers.md) | Model Context Protocol setup |
 | 8 | [Skills](08-skills.md) | SKILL.md packages and `/skills` |
 | 9 | [Hooks](09-hooks.md) | Lifecycle hooks and `/hooks` |
-| 10 | [Plan Mode](10-plan-mode.md) | Plan-before-mutate workflow |
 | 11 | [Sessions](11-sessions.md) | Save, resume, fork, rewind, export |
 | 12 | [Sandbox and Safety](12-sandbox-and-safety.md) | Approvals, firewall, sandbox modes |
 | 13 | [Headless Mode](13-headless-mode.md) | Print mode, JSON/RPC, embedding |
