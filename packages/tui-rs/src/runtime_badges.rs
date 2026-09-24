@@ -50,10 +50,6 @@ pub fn build_runtime_badges(params: RuntimeBadgeParams) -> RuntimeBadges {
         core.push("safe:on".to_string());
     }
 
-    if env::var("MAESTRO_PLAN_MODE").ok().as_deref() == Some("1") {
-        core.push("plan:on".to_string());
-    }
-
     if replay_mode_enabled() {
         core.push("replay:on".to_string());
     }

@@ -1109,46 +1109,11 @@ fn rewind_parses_files_and_checkpoints_subcommands() {
 }
 
 #[test]
-fn btw_and_structured_plan_review_commands_parse() {
+fn btw_command_parses() {
     let registry = build_command_registry();
-    match registry
-        .execute("/btw why is this queued?", "/tmp", None, None)
-        .expect("/btw")
-    {
-        CommandOutput::Action(CommandAction::SideQuestion(question)) => {
-            assert_eq!(question, "why is this queued?");
-        }
-        other => panic!("expected SideQuestion, got {other:?}"),
-    }
-    match registry
-        .execute("/plan comment 3-7 handle errors", "/tmp", None, None)
-        .expect("/plan comment")
-    {
-        CommandOutput::Action(CommandAction::PlanReview(PlanReviewAction::Comment {
-            start_line,
-            end_line,
-            text,
-        })) => {
-            assert_eq!((start_line, end_line), (3, 7));
-            assert_eq!(text, "handle errors");
-        }
-        other => panic!("expected plan comment, got {other:?}"),
-    }
     assert!(matches!(
-        registry
-            .execute("/plan resolve #4", "/tmp", None, None)
-            .expect("/plan resolve"),
-        CommandOutput::Action(CommandAction::PlanReview(PlanReviewAction::Resolve {
-            id: 4
-        }))
-    ));
-    assert!(matches!(
-        registry
-            .execute("/plan reopen 4", "/tmp", None, None)
-            .expect("/plan reopen"),
-        CommandOutput::Action(CommandAction::PlanReview(PlanReviewAction::Reopen {
-            id: 4
-        }))
+        registry.execute("/btw why is this queued?", "/tmp", None, None),
+        Ok(CommandOutput::Action(CommandAction::SideQuestion(question))) if question == "why is this queued?"
     ));
 }
 
@@ -1163,45 +1128,13 @@ fn double_slash_command_still_resolves() {
         CommandOutput::Action(CommandAction::OpenPanel(ControlPanel::Help)) => {}
         other => panic!("expected help output for //help, got {other:?}"),
     }
-    match registry
-        .execute("///plan on", "/tmp", None, None)
-        .expect("///plan should resolve")
-    {
-        CommandOutput::Action(CommandAction::SetPlanMode(true)) => {}
-        other => panic!("expected SetPlanMode for ///plan on, got {other:?}"),
-    }
 }
 
 #[test]
-fn plan_and_permission_shortcuts_parse() {
+fn plan_commands_are_gone_and_permission_shortcut_works() {
     let registry = build_command_registry();
-    match registry
-        .execute("/plan", "/tmp", None, None)
-        .expect("/plan")
-    {
-        CommandOutput::Action(CommandAction::SetPlanMode(true)) => {}
-        other => panic!("expected SetPlanMode(true), got {other:?}"),
-    }
-    match registry
-        .execute("/plan off", "/tmp", None, None)
-        .expect("/plan off")
-    {
-        CommandOutput::Action(CommandAction::SetPlanMode(false)) => {}
-        other => panic!("expected SetPlanMode(false), got {other:?}"),
-    }
-    match registry
-        .execute("/plan approve", "/tmp", None, None)
-        .expect("/plan approve")
-    {
-        CommandOutput::Action(CommandAction::ApprovePlan) => {}
-        other => panic!("expected ApprovePlan, got {other:?}"),
-    }
-    match registry
-        .execute("/view-plan", "/tmp", None, None)
-        .expect("/view-plan")
-    {
-        CommandOutput::Action(CommandAction::ViewPlan) => {}
-        other => panic!("expected ViewPlan, got {other:?}"),
+    for command in ["/plan", "/view-plan", "/show-plan", "/plan-view"] {
+        assert!(registry.execute(command, "/tmp", None, None).is_err());
     }
     match registry
         .execute("/always-approve", "/tmp", None, None)

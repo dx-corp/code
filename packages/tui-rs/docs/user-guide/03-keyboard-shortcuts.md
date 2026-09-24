@@ -49,7 +49,7 @@ The `@`, session, model, and theme modals remain available through their existin
 | Key | Action |
 |-----|--------|
 | `Ctrl+C` | Interrupt the agent or quit |
-| `Shift+Tab` | Cycle modes: Normal → Plan → Always-approve |
+| `Shift+Tab` | Cycle thinking effort |
 
 Prompt queue behavior while a turn is running is documented in [Prompt Queue](../../../../docs/PROMPT_QUEUE.md): Enter steers; `Alt+Enter` queues a follow-up.
 

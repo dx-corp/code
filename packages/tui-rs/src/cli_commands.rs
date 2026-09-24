@@ -1348,18 +1348,6 @@ fn run_status() -> Result<i32> {
                 .clone()]
         )
     );
-    println!(
-        "{}",
-        crate::localization::cli_locale().format(
-            "  Plan mode:  {0}",
-            &[(if crate::safety::is_plan_mode() {
-                "on"
-            } else {
-                "off"
-            })
-            .to_string()]
-        )
-    );
     Ok(0)
 }
 

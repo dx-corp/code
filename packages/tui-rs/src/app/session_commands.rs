@@ -96,7 +96,6 @@ impl App {
         self.dex_delight = Default::default();
         self.state.messages.clear();
         self.state.clear_focus_turn_state();
-        self.plan_review_comments.clear();
         self.state.scroll_offset = 0;
         self.state.alerts.clear();
         self.state.unseen_alerts = 0;
@@ -112,7 +111,6 @@ impl App {
         self.ready_consumed_agent_tool_notes.clear();
         self.active_turn_assistant_messages_persisted = true;
         self.ephemeral_lifecycle_applications.clear();
-        crate::plan_mode::set_active_session_id(None);
         crate::tools::tool_call_contract::clear_pending_contracts();
         self.session_started_at = SystemTime::now();
         self.session_resume_failed = false;

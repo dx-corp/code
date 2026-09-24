@@ -21,8 +21,8 @@ uses the current model's effective levels; models without reasoning remain
 Off. Draft text is preserved, and changes made during a response apply when
 the runtime processes the setting before a subsequent model request. The
 selected level appears in the footer and is recorded in the session.
-Use `/thinking high` to choose a level directly. Plan and approval modes remain
-available through their explicit commands (`/plan`, `/approvals`).
+Use `/thinking high` to choose a level directly. Approval settings remain
+available through `/approvals`.
 
 ## Install
 

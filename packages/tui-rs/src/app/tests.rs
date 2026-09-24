@@ -729,7 +729,7 @@ fn test_normalize_slash_completion_never_doubles() {
     assert_eq!(normalize_slash_completion("/help"), "/help");
     assert_eq!(normalize_slash_completion("help"), "/help");
     assert_eq!(normalize_slash_completion("//help"), "/help");
-    assert_eq!(normalize_slash_completion("///plan"), "/plan");
+    assert_eq!(normalize_slash_completion("///help"), "/help");
     assert_eq!(normalize_slash_completion("  /theme  "), "/theme");
     assert_eq!(normalize_slash_completion("/"), "/");
     assert_eq!(normalize_slash_completion("//"), "/");
@@ -3317,25 +3317,6 @@ fn side_messages_do_not_count_toward_compaction() {
 }
 
 #[test]
-fn open_plan_comments_block_approval() {
-    let mut app = new_test_app();
-    app.plan_review_comments.push(PlanReviewComment {
-        id: 1,
-        start_line: 1,
-        end_line: 1,
-        text: "Needs work".into(),
-        revision: "revision".into(),
-        excerpt: "line".into(),
-        resolved: false,
-    });
-    app.approve_plan();
-    assert!(
-        app.state.error.as_deref().is_some_and(|error| error
-            == "Open review comments prevent leaving plan mode: 1. Use `/plan comments`.")
-    );
-}
-
-#[test]
 fn restore_side_questions_by_timestamp_without_model_history_entries() {
     let mut state = AppState::new();
     let session = ParsedSession {
@@ -3410,99 +3391,12 @@ fn restore_side_questions_by_timestamp_without_model_history_entries() {
 }
 
 #[test]
-fn stale_plan_comments_cannot_be_resolved_or_approved() {
-    let dir = tempdir().unwrap();
-    let plan_dir = dir.path().join(".maestro");
-    std::fs::create_dir_all(&plan_dir).unwrap();
-    let plan_path = plan_dir.join("plan.md");
-    std::fs::write(&plan_path, "first\nselected\nlast\n").unwrap();
-
-    let mut app = new_test_app();
-    app.state.cwd = Some(dir.path().to_string_lossy().to_string());
-    crate::plan_mode::set_active_session_id(None);
-    app.handle_plan_review(PlanReviewAction::Comment {
-        start_line: 2,
-        end_line: 2,
-        text: "review this".into(),
-    });
-    assert_eq!(app.plan_review_comments[0].excerpt, "selected");
-    assert_eq!(
-        app.plan_review_comments[0].revision,
-        crate::plan_mode::plan_revision("first\nselected\nlast\n")
-    );
-
-    std::fs::write(&plan_path, "first\nchanged\nlast\n").unwrap();
-    app.handle_plan_review(PlanReviewAction::Resolve { id: 1 });
-    assert!(!app.plan_review_comments[0].resolved);
-    assert!(
-        app.state
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("stale"))
-    );
-
-    app.plan_review_comments[0].resolved = true;
-    app.state.error = None;
-    app.approve_plan();
-    assert!(
-        app.state
-            .error
-            .as_deref()
-            .is_some_and(|error| error == "Review comments on an earlier plan: 1. Recreate stale comments before leaving plan mode.")
-    );
-
-    app.handle_plan_review(PlanReviewAction::List);
-    assert!(
-        app.state
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("[stale]"))
-    );
-    crate::plan_mode::set_active_session_id(None);
-}
-
-#[test]
-fn open_plan_comments_block_off_cycle_and_approval() {
-    let mut app = new_test_app();
-    app.plan_review_comments.push(PlanReviewComment {
-        id: 1,
-        start_line: 1,
-        end_line: 1,
-        text: "Needs work".into(),
-        revision: "revision".into(),
-        excerpt: "line".into(),
-        resolved: false,
-    });
-    let _plan_mode = crate::safety::PlanModeOverride::enable();
-    app.state.interaction_mode = crate::state::InteractionMode::Plan;
-
-    app.apply_plan_mode(false);
-    assert!(crate::safety::is_plan_mode());
-    app.cycle_interaction_mode();
-    assert!(crate::safety::is_plan_mode());
-    app.approve_plan();
-    assert!(crate::safety::is_plan_mode());
-
-    crate::safety::set_plan_satisfied(true);
-}
-
-#[test]
-fn fork_snapshot_keeps_parent_plan_state_and_session_selected() {
+fn fork_snapshot_keeps_parent_session_selected() {
     let mut app = new_test_app();
     app.ensure_session_started().unwrap();
     let parent_session = app.state.session_id.clone();
-    app.plan_review_comments.push(PlanReviewComment {
-        id: 1,
-        start_line: 1,
-        end_line: 1,
-        text: "Needs work".into(),
-        revision: "revision".into(),
-        excerpt: "line".into(),
-        resolved: false,
-    });
     app.fork_session();
 
-    assert_eq!(app.plan_review_comments.len(), 1);
     assert_eq!(app.state.session_id, parent_session);
     assert!(
         app.state

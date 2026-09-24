@@ -144,12 +144,6 @@ pub async fn notebook_edit_with_cancellation(
         }
     };
 
-    if let Err(err) =
-        crate::plan_mode::gate_mutation("notebook_edit", Some(std::path::Path::new(&path)), cwd)
-    {
-        return ToolResult::failure(err);
-    }
-
     if !path.to_lowercase().ends_with(".ipynb") {
         return ToolResult::failure(format!("File must be a Jupyter notebook (.ipynb): {path}"));
     }

@@ -1220,8 +1220,10 @@ fn test_apply_compaction_replaces_older_transcript_messages() {
 #[test]
 fn interaction_mode_cycles() {
     use super::InteractionMode;
-    assert_eq!(InteractionMode::Normal.next(), InteractionMode::Plan);
-    assert_eq!(InteractionMode::Plan.next(), InteractionMode::AlwaysApprove);
+    assert_eq!(
+        InteractionMode::Normal.next(),
+        InteractionMode::AlwaysApprove
+    );
     assert_eq!(
         InteractionMode::AlwaysApprove.next(),
         InteractionMode::Normal
@@ -1229,10 +1231,6 @@ fn interaction_mode_cycles() {
     assert_eq!(
         InteractionMode::AlwaysApprove.approval_mode(),
         ApprovalMode::Yolo
-    );
-    assert_eq!(
-        InteractionMode::Plan.approval_mode(),
-        ApprovalMode::Selective
     );
 }
 

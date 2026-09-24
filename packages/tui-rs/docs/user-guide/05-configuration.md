@@ -60,7 +60,6 @@ Prefer `~/.maestro` for new setup; keep legacy paths only if you already depend 
 | `MAESTRO_MODEL` | Default model |
 | `MAESTRO_APPROVAL_MODE` | `prompt` / `auto` / `fail` (CLI surface) |
 | `MAESTRO_SAFE_MODE=1` | Safer defaults / extra prompts |
-| `MAESTRO_PLAN_MODE=1` | Enable plan mode |
 | `MAESTRO_SANDBOX_MODE` | `none` / `local` / `native` / `docker` |
 | `MAESTRO_BASH_GUARD` | `0`/`1` YOLO vs full bash guard |
 | `MAESTRO_NO_EGRESS_SHELL=1` | Require approval for network shell |

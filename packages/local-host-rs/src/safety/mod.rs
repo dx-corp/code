@@ -94,9 +94,6 @@ pub use policy::{
     record_managed_policy_audit, refresh_managed_policy, require_vendor_network,
     vendor_network_disabled,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub use safe_mode::PlanModeOverride;
 pub use safe_mode::{
-    ValidatorResult, is_plan_mode, is_safe_mode_enabled, require_plan, run_validators,
-    run_validators_with_diagnostics, set_plan_mode, set_plan_satisfied,
+    ValidatorResult, is_safe_mode_enabled, run_validators, run_validators_with_diagnostics,
 };

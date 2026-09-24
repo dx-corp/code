@@ -161,14 +161,10 @@ events; the endpoint caps reads at 100 records.
 
 ## Safe mode
 
-Set `MAESTRO_SAFE_MODE=1` to enable the safe-mode gates in
-`packages/local-host-rs/src/safety/safe_mode.rs`. With plan requirements enabled,
-mutating tools require a satisfied plan. Validators can run after file changes,
-and configured LSP diagnostics can block unsafe results.
-
-`MAESTRO_SAFE_REQUIRE_PLAN=0` disables only the plan requirement; it does not
-disable the action firewall or path containment. Use `/sandbox` in the
-interactive UI to inspect the active native policy.
+Set `MAESTRO_SAFE_MODE=1` to enable validators after file changes.
+Configured LSP diagnostics can block unsafe results. The action firewall and
+path containment remain independent; use `/sandbox` in the interactive UI to
+inspect the active native policy.
 
 ## Native sandbox
 

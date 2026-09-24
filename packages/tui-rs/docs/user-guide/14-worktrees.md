@@ -72,4 +72,3 @@ git branch -D <name>
 
 - Name worktrees after branches or tickets (`feat-login`, `fix-1234`).
 - Do not commit secrets into worktree-only scratch files; treat them like normal git checkouts.
-- Combine with plan mode (`/plan`) when you want design-before-mutate in an isolated tree.

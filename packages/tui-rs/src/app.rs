@@ -76,8 +76,8 @@ use crate::ai::AiProvider;
 use crate::clipboard::ClipboardManager;
 use crate::commands::{
     BackgroundMonitorAction, CommandAction, CommandOutput, CommandRegistry, FooterStyle,
-    LoopAction, ModalType, PlanReviewAction, QueueAction, QueueModeKind, QueueMoveDirection,
-    SlashCommandMatcher, SlashCycleState, build_command_registry_with_extensions,
+    LoopAction, ModalType, QueueAction, QueueModeKind, QueueMoveDirection, SlashCommandMatcher,
+    SlashCycleState, build_command_registry_with_extensions,
 };
 use crate::components::{
     ApprovalController, ApprovalDecision, ApprovalModal, ApprovalModalKind, ApprovalRequest,
@@ -107,9 +107,9 @@ use crate::safety::{
 };
 use crate::session::{
     AppMessage, CompactionEntry, ContentBlock as SessionContentBlock, CustomEntry, MessageContent,
-    MessageEntry, ModelChange, ParsedSession, PlanReviewComment, PlanReviewEntry, PlanReviewEvent,
-    SessionEntry, SessionExporter, SessionHeader, SessionManager, SideQuestionEntry, ThinkingLevel,
-    ThinkingLevelChange, TokenCost, TokenUsage as SessionTokenUsage, ToolInfo,
+    MessageEntry, ModelChange, ParsedSession, SessionEntry, SessionExporter, SessionHeader,
+    SessionManager, SideQuestionEntry, ThinkingLevel, ThinkingLevelChange, TokenCost,
+    TokenUsage as SessionTokenUsage, ToolInfo,
 };
 use crate::skills::{LoadedSkill, SkillLoadError, SkillLoader, SkillRegistry};
 use crate::state::{AppState, Message, MessageKind, MessageRole, QueueMode};
@@ -842,7 +842,6 @@ pub struct App {
     next_queue_id: u64,
 
     /// Structured comments on the current plan, rebuilt from session events.
-    plan_review_comments: Vec<PlanReviewComment>,
 
     /// When the current session started (for policy limits).
     session_started_at: SystemTime,
@@ -1776,7 +1775,6 @@ impl App {
             queued_prompt_inflight: None,
             queued_prompt_active: None,
             next_queue_id: 1,
-            plan_review_comments: Vec::new(),
             session_started_at: SystemTime::now(),
             session_resume_failed: false,
             current_model: String::new(),

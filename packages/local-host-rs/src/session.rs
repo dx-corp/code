@@ -10,9 +10,8 @@ pub(crate) use maestro_session::SessionLock;
 pub use maestro_session::{
     AppMessage, Attachment, AttachmentExtract, BranchSummaryEntry, CompactionEntry, ContentBlock,
     CustomEntry, CustomMessageEntry, ImageSource, LabelEntry, MessageContent, MessageEntry,
-    ModelChange, ModelMetadata, PlanReviewComment, PlanReviewEntry, PlanReviewEvent, SessionEntry,
-    SessionHeader, SessionMeta, SessionStats, SideQuestionEntry, ThinkingLevel,
-    ThinkingLevelChange, TokenCost, TokenUsage, ToolInfo, reconstruct_plan_review,
+    ModelChange, ModelMetadata, SessionEntry, SessionHeader, SessionMeta, SessionStats,
+    SideQuestionEntry, ThinkingLevel, ThinkingLevelChange, TokenCost, TokenUsage, ToolInfo,
 };
 pub use maestro_session::{
     BranchId, BranchManager, BranchMetadata, BranchPoint, BranchSummary, MessageId,

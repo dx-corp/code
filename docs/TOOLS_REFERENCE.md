@@ -61,7 +61,7 @@ error distinctions.
 | `apply_patch` | Applies Codex-native `*** Begin Patch` blocks. | Accepts `patch` and optional `dryRun`. Supports Add/Update/Delete File operations, reports touched files, diffs, hunk counts, diagnostic delta, and validator results. Failed hunks are retryable tool errors with conflict details. |
 | `edit` | Structured find/replace writer. | Accepts `path`, `oldText`, `newText`. Supports `edits` array for multiple sequential edits, `replaceAll` for bulk replacements, and `dryRun` for previews. |
 | `write` | Writes or overwrites files. | Takes `path` + `contents`. Creates directories automatically. |
-| `todo` | Generates TodoWrite-style task lists. | Stored near the project (`~/.maestro/todos.json`). Integrates with `/plan`. |
+| `todo` | Generates TodoWrite-style task lists. | Stored near the project (`~/.maestro/todos.json`). Tracks tasks independently. |
 | `notebook_edit` | Edit Jupyter notebook (.ipynb) files at the cell level. | Modes: `replace` (default), `insert`, `delete`. Identify cells by `cell_id` or `cell_index`. Specify `cell_type` (code/markdown) for inserts. |
 | `ask_user` | Ask structured questions with predefined options. | 1-4 questions per call, each with 2-4 options. Supports `multiSelect` for non-exclusive choices. "Other" option auto-added. |
 | `websearch` | Search the web via Exa AI for real-time information. | Supports neural/keyword search, domain filtering, date ranges. Requires `EXA_API_KEY` env var. Large result text is previewed with truncation and overall output is capped. |
