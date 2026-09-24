@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, lstatSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { assertPublicProtocolArtifact } from './check-public-protocol-artifact.mjs';
 import { verifySourceManifest } from './release-source-manifest.mjs';
 
 export const platforms = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64'];
@@ -29,6 +30,10 @@ export function verifyStagedFiles(dir, version, sourceRoot = process.cwd()) {
     if (sums.get(name) !== digest) throw new Error(`Checksum mismatch: ${name}`);
   };
   for (const name of stagedFiles) verifyFile(name);
+  for (const platform of platforms) {
+    const name = `maestro-${platform}`;
+    assertPublicProtocolArtifact(readFileSync(join(dir, name)), name);
+  }
   const metadata = JSON.parse(readFileSync(join(dir, 'release-metadata.json'), 'utf8'));
   if (metadata.version !== version || metadata.releaseTag !== `v${version}` || !/^[a-f0-9]{40}$/.test(metadata.receipt?.sourceSha ?? '')) {
     throw new Error('Staged release version or source does not match');

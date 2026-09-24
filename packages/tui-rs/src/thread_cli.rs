@@ -1,7 +1,7 @@
 //! Attach the native terminal to a Platform-owned Dex operating thread.
 //!
-//! Wire projections shared with the native desktop retain only fields these
-//! clients read. Unknown fields stay opaque; Platform owns execution and approvals.
+//! The shared native client uses the generated public application protocol.
+//! Platform owns execution and approvals.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
@@ -11,12 +11,9 @@ use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use maestro_local_host::credential_mode::PlatformSession;
 use maestro_local_host::credential_mode::verified_current_identity_session;
-#[cfg(test)]
-use maestro_local_host::hosted_thread::{
-    Channel, GetRequest, GetResponse, ListRequest, ListResponse, OperatingMessage, RespondRequest,
-    RespondResponse, SubmitRequest, SubmitResponse, Turn,
-};
 use maestro_local_host::hosted_thread::{Event, ThreadClient};
+#[cfg(test)]
+use maestro_local_host::public_protocol as wire;
 #[cfg(test)]
 use prost::Message;
 use serde::Serialize;
@@ -190,7 +187,7 @@ async fn follow(
                     continue;
                 }
                 cursor = event.cursor;
-                if !event.request_id.is_empty() && matches!(event.kind, 4 | 5 | 14 | 15) {
+                if !event.request_id.is_empty() && matches!(event.kind, 4 | 5 | 10 | 11) {
                     pending.insert(event.request_id.clone(), event.clone());
                 }
                 emit(
@@ -219,7 +216,7 @@ async fn follow(
                     }
                     return Ok(cursor);
                 }
-                if event.turn_id == turn_id && matches!(event.kind, 4 | 5 | 14 | 15) {
+                if event.turn_id == turn_id && matches!(event.kind, 4 | 5 | 10 | 11) {
                     return Ok(cursor);
                 }
             }
@@ -322,7 +319,7 @@ pub async fn run_thread(args: &[String]) -> Result<i32> {
             break;
         }
         for event in page.events {
-            if !event.request_id.is_empty() && matches!(event.kind, 4 | 5 | 14 | 15) {
+            if !event.request_id.is_empty() && matches!(event.kind, 4 | 5 | 10 | 11) {
                 pending.insert(event.request_id.clone(), event.clone());
             }
             if matches!(event.kind, 7..=9) {
@@ -447,15 +444,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typed_owner_calls_keep_tenant_and_request_identity() {
+    async fn public_calls_keep_tenant_and_request_identity() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             for method in [
-                "GetOperatingThread",
-                "SubmitOperatingMessage",
-                "ListOperatingThreadEvents",
-                "RespondOperatingThread",
+                "GetThread",
+                "ListThreads",
+                "RenameThread",
+                "ArchiveThread",
+                "SubmitTask",
+                "ListEvents",
+                "RespondToRequest",
             ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
@@ -469,7 +469,7 @@ mod tests {
                     if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
                         let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
                         assert!(headers.contains(&format!(
-                            "/deixic.v1.deixicservice/{}",
+                            "/deixicpublic.v1.deixicpublicservice/{}",
                             method.to_ascii_lowercase()
                         )));
                         assert!(headers.contains("authorization: bearer scoped-token"));
@@ -494,67 +494,120 @@ mod tests {
                 }
                 let body = &bytes[body_offset..body_offset + body_length];
                 let result = match method {
-                    "GetOperatingThread" => {
-                        let request = GetRequest::decode(body).unwrap();
-                        assert_eq!(request.query.unwrap().organization_id, "org-a");
-                        assert_eq!(request.channel_id, "thread:one");
-                        GetResponse {
-                            channel: Some(Channel {
+                    "ListThreads" => {
+                        let request = wire::ListThreadsRequest::decode(body).unwrap();
+                        assert_eq!(request.scope.unwrap().workspace_id, "ws-a");
+                        assert!(!request.archived);
+                        wire::ListThreadsResponse {
+                            threads: vec![wire::Thread {
                                 id: "thread:one".into(),
-                                ..Channel::default()
+                                title: "Prior title".into(),
+                                unread_count: 2,
+                                ..Default::default()
+                            }],
+                        }
+                        .encode_to_vec()
+                    }
+                    "RenameThread" => {
+                        let request = wire::RenameThreadRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread:one");
+                        assert_eq!(request.title, "New title");
+                        wire::RenameThreadResponse {
+                            thread: Some(wire::Thread {
+                                id: "thread:one".into(),
+                                title: "New title".into(),
+                                ..Default::default()
                             }),
-                            messages: vec![OperatingMessage {
+                            changed: true,
+                        }
+                        .encode_to_vec()
+                    }
+                    "ArchiveThread" => {
+                        let request = wire::ArchiveThreadRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread:one");
+                        assert!(request.archived);
+                        assert!(!request.idempotency_key.is_empty());
+                        wire::ArchiveThreadResponse {
+                            thread: Some(wire::Thread {
+                                id: "thread:one".into(),
+                                archived: true,
+                                ..Default::default()
+                            }),
+                            changed: true,
+                            ..Default::default()
+                        }
+                        .encode_to_vec()
+                    }
+                    "GetThread" => {
+                        let request = wire::GetThreadRequest::decode(body).unwrap();
+                        assert_eq!(request.scope.unwrap().organization_id, "org-a");
+                        assert_eq!(request.thread_id, "thread:one");
+                        wire::GetThreadResponse {
+                            thread: Some(wire::Thread {
+                                id: "thread:one".into(),
+                                ..Default::default()
+                            }),
+                            messages: vec![wire::TaskMessage {
                                 id: "msg-1".into(),
-                                role: "user".into(),
+                                role: wire::MessageRole::User as i32,
                                 body: "prior".into(),
+                                ..Default::default()
                             }],
                             replay_cursor: 9,
+                            ..Default::default()
                         }
                         .encode_to_vec()
                     }
-                    "SubmitOperatingMessage" => {
-                        let request = SubmitRequest::decode(body).unwrap();
-                        assert_eq!(request.query.unwrap().workspace_id, "ws-a");
-                        assert_eq!(request.channel_id, "thread:one");
+                    "SubmitTask" => {
+                        let request = wire::SubmitTaskRequest::decode(body).unwrap();
+                        assert_eq!(request.scope.unwrap().workspace_id, "ws-a");
+                        assert_eq!(request.thread_id, "thread:one");
                         assert_eq!(request.body, "continue");
                         assert!(!request.idempotency_key.is_empty());
-                        SubmitResponse {
-                            accepted_turn: Some(Turn {
+                        wire::SubmitTaskResponse {
+                            accepted_turn: Some(wire::TaskTurn {
                                 turn_id: "turn-2".into(),
+                                ..Default::default()
                             }),
                             replay_cursor: 10,
+                            ..Default::default()
                         }
                         .encode_to_vec()
                     }
-                    "ListOperatingThreadEvents" => {
-                        let request = ListRequest::decode(body).unwrap();
+                    "ListEvents" => {
+                        let request = wire::ListEventsRequest::decode(body).unwrap();
                         assert_eq!(request.after_cursor, 9);
-                        ListResponse {
-                            events: vec![Event {
+                        wire::ListEventsResponse {
+                            events: vec![wire::TaskEvent {
                                 cursor: 10,
-                                event_id: "event-10".into(),
+                                id: "event-10".into(),
                                 turn_id: "turn-2".into(),
                                 kind: 4,
-                                safe_text: "Review the action".into(),
+                                text: "Review the action".into(),
                                 request_id: "request-1".into(),
-                                request_type: 1,
-                                request_call_id: "call-1".into(),
+                                request_kind: 1,
+                                call_id: "call-1".into(),
+                                ..Default::default()
                             }],
                             next_cursor: 10,
                             has_more: false,
                             reset_required: false,
+                            ..Default::default()
                         }
                         .encode_to_vec()
                     }
-                    "RespondOperatingThread" => {
-                        let request = RespondRequest::decode(body).unwrap();
-                        assert_eq!(request.query.unwrap().organization_id, "org-a");
+                    "RespondToRequest" => {
+                        let request = wire::RespondToRequestRequest::decode(body).unwrap();
+                        assert_eq!(request.scope.unwrap().organization_id, "org-a");
                         assert_eq!(request.turn_id, "turn-2");
-                        let response = request.response.unwrap();
-                        assert_eq!(response.request_id, "request-1");
-                        assert_eq!(response.action, 2);
-                        assert_eq!(response.idempotency_key, request.idempotency_key);
-                        RespondResponse { replay_cursor: 11 }.encode_to_vec()
+                        assert_eq!(request.request_id, "request-1");
+                        assert_eq!(request.action, 2);
+                        assert!(!request.idempotency_key.is_empty());
+                        wire::RespondToRequestResponse {
+                            replay_cursor: 11,
+                            ..Default::default()
+                        }
+                        .encode_to_vec()
                     }
                     _ => unreachable!(),
                 };
@@ -582,6 +635,12 @@ mod tests {
         .unwrap();
         let snapshot = client.get().await.unwrap();
         assert_eq!(snapshot.messages[0].body, "prior");
+        let listed = client.list_channels(false).await.unwrap();
+        assert_eq!(listed.channels[0].unread_count, 2);
+        let renamed = client.rename("New title".into()).await.unwrap();
+        assert_eq!(renamed.channel.unwrap().label, "New title");
+        let archived = client.archive(true).await.unwrap();
+        assert!(archived.channel.unwrap().archived);
         let submitted = client.submit("continue".into()).await.unwrap();
         assert_eq!(submitted.accepted_turn.unwrap().turn_id, "turn-2");
         let page = client.events(9).await.unwrap();

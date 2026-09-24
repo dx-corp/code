@@ -80,9 +80,9 @@ class CaptureTests(unittest.TestCase):
             identity = json.loads(post("/v1/tokens/introspect"))
             self.assertEqual(identity["organization_id"], "capture-org")
             self.assertEqual(identity["workspace_id"], "capture-workspace")
-            policy = post("/console.v1.ManagedSetupService/GetManagedSetup")
+            policy = post("/deixicpublic.v1.DeixicPublicService/GetClientSetup")
             self.assertEqual(
-                policy, b"\x08\x01\x2a\x02\x08\x02\x3a\x0bcapture-org"
+                policy, b"\x0a\x0d\x0a\x0bcapture-org\x10\x01\x32\x02\x08\x02"
             )
             self.assertIn("tool_calls", post("/v1/chat/completions"))
             self.assertIn(

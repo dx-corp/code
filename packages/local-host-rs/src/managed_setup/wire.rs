@@ -1,81 +1,19 @@
-//! Bounded native projection of proto/console/v1/console.proto, matching the
-//! existing bug_report adapter. Field tags follow that authoritative contract;
-//! enum conversion below rejects unknown policy values rather than widening access.
+//! Public client policy conversion rejects unknown values rather than widening access.
 use super::ManagedSetupError;
-use prost::Message;
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct GetManagedSetupRequest {
-    #[prost(string, tag = "1")]
-    pub organization_id: String,
-    #[prost(string, tag = "2")]
-    pub workspace_id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct ManagedSetup {
-    #[prost(uint64, tag = "1")]
-    pub version: u64,
-    #[prost(message, optional, tag = "2")]
-    pub issued_at: Option<prost_types::Timestamp>,
-    #[prost(message, repeated, tag = "3")]
-    pub rules: Vec<ManagedRule>,
-    #[prost(message, repeated, tag = "4")]
-    pub skills: Vec<ManagedSkillRef>,
-    #[prost(message, optional, tag = "5")]
-    pub mcp: Option<McpPolicy>,
-    #[prost(string, tag = "6")]
-    pub sandbox_policy_toml: String,
-    #[prost(string, tag = "7")]
-    pub organization_id: String,
-    #[prost(string, tag = "8")]
-    pub workspace_id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct ManagedRule {
-    #[prost(string, tag = "1")]
-    pub id: String,
-    #[prost(string, tag = "2")]
-    pub title: String,
-    #[prost(string, tag = "3")]
-    pub body_markdown: String,
-    #[prost(int32, tag = "4")]
-    pub scope: i32,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct ManagedSkillRef {
-    #[prost(string, tag = "1")]
-    pub id: String,
-    #[prost(string, tag = "2")]
-    pub source: String,
-    #[prost(string, tag = "3")]
-    pub version: String,
-    #[prost(bool, tag = "4")]
-    pub required: bool,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct McpPolicy {
-    #[prost(int32, tag = "1")]
-    pub mode: i32,
-    #[prost(message, repeated, tag = "2")]
-    pub servers: Vec<McpServerRef>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub(super) struct McpServerRef {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(string, tag = "2")]
-    pub url_pattern: String,
-    #[prost(string, tag = "3")]
-    pub transport: String,
-}
+#[cfg(test)]
+pub(super) use crate::public_protocol::{
+    ClientMcpPolicy as McpPolicy, ClientMcpServer as McpServerRef, ClientRule as ManagedRule,
+    ClientSkill as ManagedSkillRef,
+};
+pub(super) use crate::public_protocol::{
+    GetClientSetupRequest as GetManagedSetupRequest, GetClientSetupResponse as ManagedSetup,
+};
 
 impl ManagedSetup {
     pub(super) fn try_into_domain(self) -> Result<super::ManagedSetup, ManagedSetupError> {
+        let scope = self
+            .scope
+            .ok_or_else(|| ManagedSetupError::Decode("missing client setup scope".into()))?;
         let issued_at = self
             .issued_at
             .map(|value| {
@@ -128,8 +66,8 @@ impl ManagedSetup {
         Ok(super::ManagedSetup {
             version: self.version,
             issued_at,
-            organization_id: self.organization_id,
-            workspace_id: self.workspace_id,
+            organization_id: scope.organization_id,
+            workspace_id: scope.workspace_id,
             rules,
             skills: self
                 .skills

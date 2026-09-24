@@ -181,9 +181,9 @@ class CaptureFixture:
                         }}
                         body = "data: " + json.dumps(event) + "\n\n"
                     content_type = "text/event-stream"
-                elif self.path == "/console.v1.ManagedSetupService/GetManagedSetup":
+                elif self.path == "/deixicpublic.v1.DeixicPublicService/GetClientSetup":
                     # ManagedSetup v1, empty MCP allowlist, capture organization.
-                    body = b"\x08\x01\x2a\x02\x08\x02\x3a\x0bcapture-org"
+                    body = b"\x0a\x0d\x0a\x0bcapture-org\x10\x01\x32\x02\x08\x02"
                     content_type = "application/proto"
                 elif self.path == "/v1/tokens/introspect":
                     fixture.identity_requests += 1

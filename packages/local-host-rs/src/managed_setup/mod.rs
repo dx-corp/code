@@ -40,7 +40,7 @@ use crate::path_utils;
 use crate::sandbox_policy::{SandboxPolicyDocument, TeamPolicyProvider, parse_policy_toml};
 
 /// Connect RPC path for the managed setup read.
-const GET_MANAGED_SETUP_PATH: &str = "/console.v1.ManagedSetupService/GetManagedSetup";
+const GET_MANAGED_SETUP_PATH: &str = "/deixicpublic.v1.DeixicPublicService/GetClientSetup";
 
 /// Environment variables that name the Deixic platform base URL, in priority
 /// order. The managed-setup-specific name wins, followed by the shared
@@ -924,8 +924,10 @@ fn fetch_managed_setup_from(
         .build()
         .map_err(|error| ManagedSetupError::Request(error.to_string()))?;
     let body = wire::GetManagedSetupRequest {
-        organization_id: session.organization_id.clone(),
-        workspace_id: session.workspace_id.clone().unwrap_or_default(),
+        scope: Some(crate::public_protocol::Scope {
+            organization_id: session.organization_id.clone(),
+            workspace_id: session.workspace_id.clone().unwrap_or_default(),
+        }),
     }
     .encode_to_vec();
     let request = client

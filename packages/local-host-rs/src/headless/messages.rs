@@ -629,6 +629,10 @@ pub struct GovernedToolGrant {
     /// Platform-owned process definition instructions installed in the system role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_system_prompt: Option<String>,
+    /// Exact Platform-admitted Agent Registry publication and immutable
+    /// PromptService snapshots for this turn. It grants no tools by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<AgentProfileTurnContext>,
     pub envelope_version: u32,
     pub grant_id: String,
     pub grant_version: u64,
@@ -655,6 +659,26 @@ pub struct GovernedToolGrant {
     pub external_tools: Vec<ExternalToolDefinition>,
     #[serde(default)]
     pub connection_bindings: Vec<ConnectionGrantBinding>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentProfileTurnContext {
+    pub agent_id: String,
+    pub config_version: i32,
+    pub digest_sha256: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub instructions: Vec<AgentProfileInstruction>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentProfileInstruction {
+    pub name: String,
+    pub prompt_id: String,
+    pub version_id: String,
+    pub content_digest_sha256: String,
+    pub content: String,
 }
 
 impl GovernedToolGrant {

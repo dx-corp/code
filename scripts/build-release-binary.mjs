@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { assertPublicProtocolArtifact } from "./check-public-protocol-artifact.mjs";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, statSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const TARGETS = new Map([
@@ -52,4 +53,5 @@ const source = resolve(`target/${target}/${options.profile}/maestro`);
 mkdirSync(dirname(outfile), { recursive: true });
 copyFileSync(source, outfile);
 chmodSync(outfile, 0o755);
+assertPublicProtocolArtifact(readFileSync(outfile), outfile);
 console.log(`Built native release ${outfile} (${statSync(outfile).size} bytes).`);

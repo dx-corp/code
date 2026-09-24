@@ -77,13 +77,19 @@ deixic-code thread attach thread:example --message "Check the latest result" --j
 ```
 
 The terminal reads the Platform-owned thread, submits messages through the
-same tenant-scoped owner API as the Deixic UI, and shows safe execution events.
+tenant-scoped public application API, and shows safe execution events.
 When a turn needs approval or input, use `/respond <request-id> <action> [text]`
 after reviewing the request. The CLI never grants an approval automatically.
 `remote attach` is a separate RunnerSession transport and does not attach to a
 Dex thread. A disconnected client can reattach without restarting the resident
 turn. The one-shot form stops following after two minutes and leaves accepted
 work running on Platform.
+
+Native thread, readiness, managed setup, and issue-report clients use generated
+`deixicpublic.v1.DeixicPublicService` bindings from
+[the public contract](proto/deixicpublic/v1/sdk.proto). The release build and staged
+release verifier audit the native bytes for private protocol namespaces before
+publication. The contract copy is checked against the canonical public source in Mono.
 
 For a multi-feature coding task, prepare a mission contract and run it through
 the native workflow scheduler. See [Run a local coding mission](docs/MISSION_RUN.md).

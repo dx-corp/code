@@ -1,16 +1,13 @@
 //! Read-only, tenant-bound managed inference diagnostics. Never execution authority.
 use super::{CheckStatus, DoctorCheck};
 use crate::credential_mode::{DetectedMode, ENVIRONMENT_ENV, PROVIDER_ENV, PlatformSession};
+use crate::public_protocol::{
+    GetModelReadinessRequest, GetModelReadinessResponse, ModelNextAction as Action,
+    ModelReadinessState as Status, ModelSelection, Scope,
+};
 use anyhow::{Result, bail};
 use prost::Message;
-mod wire {
-    include!(concat!(env!("OUT_DIR"), "/console.v1.rs"));
-}
 use std::{collections::HashMap, io::Read, time::Duration};
-use wire::{
-    GetManagedInferenceReadinessRequest, GetManagedInferenceReadinessResponse,
-    ManagedInferenceNextAction as Action, ManagedInferenceReadinessStatus as Status,
-};
 
 pub(super) async fn check(
     readiness: &Result<DetectedMode>,
@@ -57,29 +54,33 @@ fn request_for(
     session: &PlatformSession,
     requested: &str,
     env: &HashMap<String, String>,
-) -> Result<GetManagedInferenceReadinessRequest> {
+) -> Result<GetModelReadinessRequest> {
     let managed = session.managed_env(requested, env)?;
     let route = session.managed_model_route(requested);
-    Ok(GetManagedInferenceReadinessRequest {
-        organization_id: session.organization_id.clone(),
-        workspace_id: session
-            .workspace_id
-            .clone()
-            .filter(|id| !id.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("workspace required"))?,
-        provider: managed
-            .get(PROVIDER_ENV)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("provider required"))?,
-        model: route.strip_prefix("evalops/").unwrap_or(&route).to_owned(),
+    Ok(GetModelReadinessRequest {
+        scope: Some(Scope {
+            organization_id: session.organization_id.clone(),
+            workspace_id: session
+                .workspace_id
+                .clone()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("workspace required"))?,
+        }),
+        selection: Some(ModelSelection {
+            provider: managed
+                .get(PROVIDER_ENV)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("provider required"))?,
+            model: route.strip_prefix("evalops/").unwrap_or(&route).to_owned(),
+        }),
         environment: managed.get(ENVIRONMENT_ENV).cloned().unwrap_or_default(),
     })
 }
 
 fn fetch(
     session: &PlatformSession,
-    request: &GetManagedInferenceReadinessRequest,
-) -> Result<GetManagedInferenceReadinessResponse> {
+    request: &GetModelReadinessRequest,
+) -> Result<GetModelReadinessResponse> {
     let base = crate::managed_setup::platform_base_url()
         .ok_or_else(|| anyhow::anyhow!("platform address required"))?;
     fetch_from(session, request, &base)
@@ -87,21 +88,25 @@ fn fetch(
 
 fn fetch_from(
     session: &PlatformSession,
-    request: &GetManagedInferenceReadinessRequest,
+    request: &GetModelReadinessRequest,
     base: &str,
-) -> Result<GetManagedInferenceReadinessResponse> {
+) -> Result<GetModelReadinessResponse> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
+    let scope = request
+        .scope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("scope required"))?;
     let response = client
         .post(format!(
-            "{}/deixic.v1.DeixicService/GetManagedInferenceReadiness",
+            "{}/deixicpublic.v1.DeixicPublicService/GetModelReadiness",
             base.trim_end_matches('/')
         ))
         .bearer_auth(&session.access_token)
-        .header("x-organization-id", &request.organization_id)
-        .header("x-workspace-id", &request.workspace_id)
+        .header("x-organization-id", &scope.organization_id)
+        .header("x-workspace-id", &scope.workspace_id)
         .header("connect-protocol-version", "1")
         .header("content-type", "application/proto")
         .header("accept", "application/proto")
@@ -115,21 +120,18 @@ fn fetch_from(
     if bytes.len() > 65_536 {
         bail!("readiness response exceeds diagnostic limit");
     }
-    let response = GetManagedInferenceReadinessResponse::decode(bytes.as_slice())?;
+    let response = GetModelReadinessResponse::decode(bytes.as_slice())?;
     if response.environment != request.environment
-        || response.organization_id != request.organization_id
-        || response.workspace_id != request.workspace_id
-        || response.target.as_ref().is_none_or(|target| {
-            target.provider != request.provider || target.model != request.model
-        })
+        || response.scope != request.scope
+        || response.selection != request.selection
     {
         bail!("readiness scope mismatch");
     }
     Ok(response)
 }
 
-fn present(response: &GetManagedInferenceReadinessResponse) -> DoctorCheck {
-    let (status, label) = match Status::try_from(response.status).unwrap_or(Status::Unspecified) {
+fn present(response: &GetModelReadinessResponse) -> DoctorCheck {
+    let (status, label) = match Status::try_from(response.state).unwrap_or(Status::Unspecified) {
         Status::Ready => (CheckStatus::Pass, "Ready"),
         Status::ActivationRequired => (CheckStatus::Warning, "Activation required"),
         Status::FundingRequired => (CheckStatus::Warning, "Funding required"),
@@ -139,20 +141,28 @@ fn present(response: &GetManagedInferenceReadinessResponse) -> DoctorCheck {
     };
     let mut details = vec![format!(
         "Deixic-managed inference: {} / {}; provider {}; model {}",
-        response.organization_id,
-        response.workspace_id,
         response
-            .target
+            .scope
+            .as_ref()
+            .map(|s| s.organization_id.as_str())
+            .unwrap_or("unknown"),
+        response
+            .scope
+            .as_ref()
+            .map(|s| s.workspace_id.as_str())
+            .unwrap_or("unknown"),
+        response
+            .selection
             .as_ref()
             .map(|target| target.provider.as_str())
             .unwrap_or("unknown"),
         response
-            .target
+            .selection
             .as_ref()
             .map(|target| target.model.as_str())
             .unwrap_or("unknown")
     )];
-    if Status::try_from(response.status).unwrap_or(Status::Unspecified) == Status::Ready {
+    if Status::try_from(response.state).unwrap_or(Status::Unspecified) == Status::Ready {
         details.push("No provider key is required. Requests remain subject to your organization’s policy and available funding.".into());
     }
     for action in &response.next_actions {
@@ -191,8 +201,8 @@ mod tests {
             (Status::TemporarilyUnavailable, "Temporarily unavailable"),
             (Status::Unspecified, "Temporarily unavailable"),
         ] {
-            let response = GetManagedInferenceReadinessResponse {
-                status: state.into(),
+            let response = GetModelReadinessResponse {
+                state: state.into(),
                 ..Default::default()
             };
             let report = present(&response);
@@ -227,10 +237,10 @@ mod tests {
     #[test]
     fn managed_inference_readiness_preserves_upstream_model_and_tenant() {
         let request = request_for(&session(), "evalops/openai/gpt-5.6", &HashMap::new()).unwrap();
-        assert_eq!(request.provider, "openrouter");
-        assert_eq!(request.model, "openai/gpt-5.6");
-        assert_eq!(request.organization_id, "org-a");
-        assert_eq!(request.workspace_id, "workspace-a");
+        assert_eq!(request.selection.as_ref().unwrap().provider, "openrouter");
+        assert_eq!(request.selection.as_ref().unwrap().model, "openai/gpt-5.6");
+        assert_eq!(request.scope.as_ref().unwrap().organization_id, "org-a");
+        assert_eq!(request.scope.as_ref().unwrap().workspace_id, "workspace-a");
     }
 
     #[test]
@@ -265,29 +275,26 @@ mod tests {
                             continue;
                         }
                         assert!(headers.starts_with(
-                            "post /deixic.v1.deixicservice/getmanagedinferencereadiness "
+                            "post /deixicpublic.v1.deixicpublicservice/getmodelreadiness "
                         ));
                         assert!(headers.contains("content-type: application/proto"));
                         assert!(headers.contains("connect-protocol-version: 1"));
                         assert!(headers.contains("x-organization-id: org-a"));
                         assert!(headers.contains("x-workspace-id: workspace-a"));
-                        let request =
-                            GetManagedInferenceReadinessRequest::decode(&bytes[end + 4..]).unwrap();
-                        assert_eq!(request.model, "openai/gpt-5.6");
-                        let response = GetManagedInferenceReadinessResponse {
-                            organization_id: if matches {
-                                request.organization_id
-                            } else {
-                                "org-other".into()
-                            },
-                            workspace_id: request.workspace_id,
+                        let request = GetModelReadinessRequest::decode(&bytes[end + 4..]).unwrap();
+                        assert_eq!(request.selection.as_ref().unwrap().model, "openai/gpt-5.6");
+                        let response = GetModelReadinessResponse {
+                            scope: Some(Scope {
+                                organization_id: if matches {
+                                    request.scope.as_ref().unwrap().organization_id.clone()
+                                } else {
+                                    "org-other".into()
+                                },
+                                workspace_id: request.scope.as_ref().unwrap().workspace_id.clone(),
+                            }),
                             environment: request.environment,
-                            status: Status::Ready.into(),
-                            target: wire::InferenceProviderTarget {
-                                provider: request.provider,
-                                model: request.model,
-                            }
-                            .into(),
+                            state: Status::Ready.into(),
+                            selection: request.selection,
                             ..Default::default()
                         }
                         .encode_to_vec();

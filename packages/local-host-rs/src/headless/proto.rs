@@ -44,6 +44,7 @@ mod tests {
         RuntimeGovernedToolGrant {
             process_budget: None,
             process_system_prompt: None,
+            agent_profile: None,
             envelope_version: 2,
             grant_id: "grant-1".into(),
             grant_version: 1,

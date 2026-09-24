@@ -15,7 +15,7 @@ use crate::session::CustomEntry;
 use crate::session::{SessionEntry, SessionManager};
 
 const ENTRY_TYPE: &str = "product_issue_draft_v1";
-const SUBMIT_PATH: &str = "/deixic.v1.DeixicService/SubmitNativeProductIssueReport";
+const SUBMIT_PATH: &str = "/deixicpublic.v1.DeixicPublicService/SubmitIssueReport";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Destination {
@@ -263,7 +263,7 @@ impl FeedbackClient {
             "The report must be reviewed and saved before sending."
         );
         let request = SubmitRequest {
-            query: Some(ReportQuery {
+            scope: Some(ReportQuery {
                 organization_id: self.destination.organization_id.clone(),
                 workspace_id: self.destination.workspace_id.clone(),
             }),
@@ -276,7 +276,7 @@ impl FeedbackClient {
             },
             include_diagnostics: report.include_diagnostics,
             idempotency_key: report.id.clone(),
-            context: report.outgoing_context(),
+            context: report.outgoing_context().map(Into::into),
         };
         let response = self.http.post(&self.destination.endpoint).bearer_auth(&self.token)
             .header("connect-protocol-version", "1")
@@ -345,53 +345,39 @@ fn endpoint(base: &str) -> Result<String> {
     Ok(url.into())
 }
 
-// Bounded native projection of proto/console/v1/console.proto. Wire tags are
-// verified against a shared fixture decoded by the production service tests.
-#[derive(Clone, PartialEq, Message)]
-struct SubmitRequest {
-    #[prost(message, optional, tag = "1")]
-    query: Option<ReportQuery>,
-    #[prost(string, tag = "2")]
-    description: String,
-    #[prost(string, tag = "3")]
-    expected_behavior: String,
-    #[prost(string, tag = "5")]
-    app_version: String,
-    #[prost(bool, tag = "11")]
-    include_diagnostics: bool,
-    #[prost(string, tag = "12")]
-    idempotency_key: String,
-    #[prost(message, optional, tag = "13")]
-    context: Option<ReportContext>,
-}
-#[derive(Clone, PartialEq, Message)]
-struct ReportQuery {
-    #[prost(string, tag = "13")]
-    organization_id: String,
-    #[prost(string, tag = "1")]
-    workspace_id: String,
-}
-#[derive(Clone, PartialEq, Message)]
-struct SubmitResponse {
-    #[prost(message, optional, tag = "1")]
-    report: Option<ReportReceipt>,
-}
-#[derive(Clone, PartialEq, Message)]
-struct ReportReceipt {
-    #[prost(string, tag = "1")]
-    id: String,
-    #[prost(string, tag = "2")]
-    reference: String,
+#[cfg(test)]
+use crate::public_protocol::IssueReport as ReportReceipt;
+use crate::public_protocol::{
+    IssueContext, IssueEvidence, Scope as ReportQuery, SubmitIssueReportRequest as SubmitRequest,
+    SubmitIssueReportResponse as SubmitResponse,
+};
+
+impl From<ReportContext> for IssueContext {
+    fn from(context: ReportContext) -> Self {
+        Self {
+            reproduction_steps: context.reproduction_steps,
+            model: context.model,
+            evidence: context
+                .evidence
+                .into_iter()
+                .map(|e| IssueEvidence {
+                    kind: e.kind,
+                    source_id: e.source_id,
+                    text: e.text,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn native_wire_matches_the_fixture_read_by_the_product_issue_service() {
+    fn public_issue_report_wire_matches_reviewed_fixtures() {
         let mut request = SubmitRequest {
             context: None,
-            query: Some(ReportQuery {
+            scope: Some(ReportQuery {
                 organization_id: "org-1".into(),
                 workspace_id: "workspace-1".into(),
             }),
@@ -408,12 +394,12 @@ mod tests {
         }
         assert_eq!(
             encoded,
-            include_str!("../../../test/fixtures/product-issue-report-native-v1.hex").trim()
+            include_str!("../../../test/fixtures/product-issue-report-public-v1.hex").trim()
         );
-        request.context = Some(ReportContext {
+        request.context = Some(IssueContext {
             reproduction_steps: "Repeat failing tool".into(),
             model: "test-model".into(),
-            evidence: vec![ReportEvidence {
+            evidence: vec![IssueEvidence {
                 kind: "tool_result".into(),
                 source_id: "call-1".into(),
                 text: "wrong action".into(),
@@ -425,7 +411,7 @@ mod tests {
         }
         assert_eq!(
             encoded,
-            include_str!("../../../test/fixtures/product-issue-report-native-v2.hex").trim()
+            include_str!("../../../test/fixtures/product-issue-report-public-v2.hex").trim()
         );
     }
 
@@ -546,26 +532,20 @@ fn now_seconds() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-#[derive(Clone, PartialEq, Message, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReportContext {
-    #[prost(string, tag = "1")]
     #[serde(default)]
     pub reproduction_steps: String,
-    #[prost(string, tag = "2")]
     #[serde(default)]
     pub model: String,
-    #[prost(message, repeated, tag = "3")]
     #[serde(default)]
     pub evidence: Vec<ReportEvidence>,
 }
 
-#[derive(Clone, PartialEq, Message, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReportEvidence {
-    #[prost(string, tag = "1")]
     pub kind: String,
-    #[prost(string, tag = "2")]
     pub source_id: String,
-    #[prost(string, tag = "3")]
     pub text: String,
 }
 
