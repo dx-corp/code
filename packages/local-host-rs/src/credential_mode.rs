@@ -157,6 +157,18 @@ fn test_identity_introspect_response(request: &str) -> (u16, &'static str) {
         (!token.is_empty()).then_some(token)
     });
     match token {
+        Some("desktop-hosted-token") => (
+            200,
+            r#"{"active":true,"subject":"user-test","token_type":"access","organization_id":"org-test","workspace_id":"workspace-test","scopes":["llm_gateway:invoke","console:read","console:write"]}"#,
+        ),
+        Some("desktop-readonly-token") => (
+            200,
+            r#"{"active":true,"subject":"user-test","token_type":"access","organization_id":"org-test","workspace_id":"workspace-test","scopes":["llm_gateway:invoke","console:read"]}"#,
+        ),
+        Some("desktop-writeonly-token") => (
+            200,
+            r#"{"active":true,"subject":"user-test","token_type":"access","organization_id":"org-test","workspace_id":"workspace-test","scopes":["llm_gateway:invoke","console:write"]}"#,
+        ),
         Some("inactive-token") => (
             200,
             r#"{"active":false,"subject":"user-test","token_type":"access","organization_id":"org-test","workspace_id":"workspace-test","scopes":["llm_gateway:invoke"]}"#,
@@ -431,7 +443,7 @@ fn current_verified_identity_session_with_env()
             false,
         );
     }
-    let identity = verify_live_runtime_identity(snapshot.as_ref(), &env)?;
+    let identity = verify_live_runtime_identity(snapshot.as_ref(), &env, &[])?;
     Ok((identity, env))
 }
 
@@ -446,6 +458,41 @@ pub fn verified_current_identity_session() -> Result<PlatformSession> {
         crate::init_cli::load_current_evalops_snapshot()?
     };
     verify_live_identity_session(snapshot.as_ref(), &env)
+}
+
+/// Verify a desktop-held access token without reading or replacing the CLI
+/// credential. The expected tenant is compared after live introspection.
+pub fn verified_desktop_identity_session(
+    access_token: &str,
+    organization_id: &str,
+    workspace_id: &str,
+) -> Result<PlatformSession> {
+    crate::safety::require_vendor_network()?;
+    if access_token.trim().is_empty()
+        || organization_id.trim().is_empty()
+        || workspace_id.trim().is_empty()
+    {
+        bail!("desktop Identity credential is incomplete");
+    }
+    let mut env = std::env::vars()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "MAESTRO_IDENTITY_URL" | "EVALOPS_IDENTITY_URL"
+            ) || key == crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV
+        })
+        .collect::<HashMap<_, _>>();
+    env.insert(ACCESS_TOKEN_ENV.to_owned(), access_token.to_owned());
+    env.insert(ORG_ID_ENV.to_owned(), organization_id.to_owned());
+    env.insert(WORKSPACE_ID_ENV.to_owned(), workspace_id.to_owned());
+    let session = verify_live_runtime_identity(None, &env, &["console:read", "console:write"])?
+        .require_human()?;
+    if session.organization_id != organization_id
+        || session.workspace_id.as_deref() != Some(workspace_id)
+    {
+        bail!("desktop Identity tenant differs from verified token");
+    }
+    Ok(session)
 }
 
 /// Return a replacement verified session only when the credential backing a
@@ -595,12 +642,13 @@ fn verify_live_identity_session(
     snapshot: Option<&EvalOpsCredentialSnapshot>,
     env: &HashMap<String, String>,
 ) -> Result<PlatformSession> {
-    verify_live_runtime_identity(snapshot, env)?.require_human()
+    verify_live_runtime_identity(snapshot, env, &[])?.require_human()
 }
 
 fn verify_live_runtime_identity(
     snapshot: Option<&EvalOpsCredentialSnapshot>,
     env: &HashMap<String, String>,
+    additional_scopes: &[&str],
 ) -> Result<VerifiedIdentity> {
     let Some(unverified) = platform_session_from(snapshot, env) else {
         bail!("{IDENTITY_REQUIRED_MESSAGE}");
@@ -653,6 +701,16 @@ fn verify_live_runtime_identity(
     .join()
     .map_err(|_| anyhow::anyhow!("EvalOps Identity verification thread panicked"))?
     .with_context(|| IDENTITY_REQUIRED_MESSAGE.to_owned())?;
+    if additional_scopes.iter().any(|required| {
+        !introspection
+            .scopes
+            .iter()
+            .map(String::as_str)
+            .chain(introspection.scope.split_whitespace())
+            .any(|present| present == *required)
+    }) {
+        bail!("desktop Identity token lacks required hosted thread scope");
+    }
     verified_runtime_identity(unverified, introspection, hosted)
 }
 
@@ -732,6 +790,7 @@ pub(crate) fn verified_platform_session_for_scope(
     // select a tenant different from the signed Identity token.
     session.organization_id = organization_id.expect("checked above").to_owned();
     session.workspace_id = workspace_id.map(str::to_owned);
+    session.user_id = Some(introspection.subject);
     Ok(session)
 }
 
@@ -1722,6 +1781,53 @@ mod tests {
             404,
             "{}",
             wrong_method.status()
+        );
+    }
+
+    #[test]
+    fn desktop_credential_is_live_verified_and_cannot_select_another_tenant() {
+        let _guard = crate::config::test_process_env_lock();
+        let _restore = EnvRestore::capture(&[
+            "MAESTRO_IDENTITY_URL",
+            crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV,
+        ]);
+        std::env::set_var("MAESTRO_IDENTITY_URL", test_identity_base_url());
+        std::env::set_var(crate::init_cli::TEST_IDENTITY_AUTHORITY_ENV, "1");
+        let session =
+            verified_desktop_identity_session("desktop-hosted-token", "org-test", "workspace-test")
+                .expect("matching desktop token");
+        assert_eq!(session.user_id.as_deref(), Some("user-test"));
+        assert!(
+            verified_desktop_identity_session(
+                "desktop-hosted-token",
+                "other-org",
+                "workspace-test"
+            )
+            .is_err()
+        );
+        assert!(
+            verified_desktop_identity_session(
+                "desktop-hosted-token",
+                "org-test",
+                "other-workspace"
+            )
+            .is_err()
+        );
+        assert!(
+            verified_desktop_identity_session("valid-token", "org-test", "workspace-test").is_err()
+        );
+        for token in ["desktop-readonly-token", "desktop-writeonly-token"] {
+            assert!(
+                verified_desktop_identity_session(token, "org-test", "workspace-test").is_err()
+            );
+        }
+        assert!(
+            verified_desktop_identity_session("inactive-token", "org-test", "workspace-test")
+                .is_err()
+        );
+        assert!(
+            verified_desktop_identity_session("unscoped-token", "org-test", "workspace-test")
+                .is_err()
         );
     }
 

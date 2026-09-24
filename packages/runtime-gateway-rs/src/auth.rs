@@ -158,6 +158,7 @@ fn is_chat_websocket_request(head: &RequestHead) -> bool {
 
 fn runtime_tenant_resource_path(path: &str) -> bool {
     path.starts_with("/api/chat")
+        || path.starts_with("/api/hosted-threads/")
         || path.starts_with("/api/sessions")
         || matches!(
             path,

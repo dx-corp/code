@@ -1,179 +1,31 @@
 //! Attach the native terminal to a Platform-owned Dex operating thread.
 //!
-//! The wire projections below retain only the fields this client reads. Their
-//! field numbers come from proto/console/v1/console.proto. Unknown fields stay
-//! opaque; Platform remains the sole owner of execution and approval state.
+//! Wire projections shared with the native desktop retain only fields these
+//! clients read. Unknown fields stay opaque; Platform owns execution and approvals.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use maestro_local_host::credential_mode::{PlatformSession, verified_current_identity_session};
+#[cfg(test)]
+use maestro_local_host::credential_mode::PlatformSession;
+use maestro_local_host::credential_mode::verified_current_identity_session;
+#[cfg(test)]
+use maestro_local_host::hosted_thread::{
+    Channel, GetRequest, GetResponse, ListRequest, ListResponse, OperatingMessage, RespondRequest,
+    RespondResponse, SubmitRequest, SubmitResponse, Turn,
+};
+use maestro_local_host::hosted_thread::{Event, ThreadClient};
+#[cfg(test)]
 use prost::Message;
-use reqwest::{Client, Url};
 use serde::Serialize;
 use tokio::time::sleep;
-use uuid::Uuid;
 
-const SERVICE: &str = "/deixic.v1.DeixicService";
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const FOLLOW_LIMIT: Duration = Duration::from_mins(2);
 const USAGE: &str = "Usage: deixic-code thread attach <thread-id> [--message <text>] [--json] [--base-url <url>]\n\
 The thread id is a Deixic thread id (thread:...). A managed Deixic login is required.\n\
 Interactive commands: /quit, /respond <request-id> <approve|deny|answer|retry|skip|abort> [text].";
-
-// A narrow wire projection of console.v1. Field numbers and kinds mirror the
-// canonical protobuf contract; unknown fields are ignored by prost.
-#[derive(Clone, PartialEq, Message)]
-struct Query {
-    #[prost(string, tag = "1")]
-    workspace_id: String,
-    #[prost(string, tag = "13")]
-    organization_id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct GetRequest {
-    #[prost(message, optional, tag = "1")]
-    query: Option<Query>,
-    #[prost(string, tag = "2")]
-    channel_id: String,
-    #[prost(int32, tag = "3")]
-    limit: i32,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct Channel {
-    #[prost(string, tag = "1")]
-    id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct OperatingMessage {
-    #[prost(string, tag = "1")]
-    id: String,
-    #[prost(string, tag = "3")]
-    role: String,
-    #[prost(string, tag = "5")]
-    body: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct GetResponse {
-    #[prost(message, optional, tag = "1")]
-    channel: Option<Channel>,
-    #[prost(message, repeated, tag = "2")]
-    messages: Vec<OperatingMessage>,
-    #[prost(int64, tag = "7")]
-    replay_cursor: i64,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct ListRequest {
-    #[prost(message, optional, tag = "1")]
-    query: Option<Query>,
-    #[prost(string, tag = "2")]
-    channel_id: String,
-    #[prost(int64, tag = "3")]
-    after_cursor: i64,
-    #[prost(int32, tag = "4")]
-    limit: i32,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct Event {
-    #[prost(int64, tag = "1")]
-    cursor: i64,
-    #[prost(string, tag = "2")]
-    event_id: String,
-    #[prost(string, tag = "3")]
-    turn_id: String,
-    #[prost(int32, tag = "4")]
-    kind: i32,
-    #[prost(string, tag = "5")]
-    safe_text: String,
-    #[prost(string, tag = "9")]
-    request_id: String,
-    #[prost(int32, tag = "10")]
-    request_type: i32,
-    #[prost(string, tag = "12")]
-    request_call_id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct ListResponse {
-    #[prost(message, repeated, tag = "1")]
-    events: Vec<Event>,
-    #[prost(int64, tag = "2")]
-    next_cursor: i64,
-    #[prost(bool, tag = "3")]
-    has_more: bool,
-    #[prost(bool, tag = "4")]
-    reset_required: bool,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct SubmitRequest {
-    #[prost(message, optional, tag = "1")]
-    query: Option<Query>,
-    #[prost(string, tag = "2")]
-    channel_id: String,
-    #[prost(string, tag = "3")]
-    body: String,
-    #[prost(string, tag = "4")]
-    idempotency_key: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct Turn {
-    #[prost(string, tag = "1")]
-    turn_id: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct SubmitResponse {
-    #[prost(message, optional, tag = "6")]
-    accepted_turn: Option<Turn>,
-    #[prost(int64, tag = "7")]
-    replay_cursor: i64,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct ThreadResponse {
-    #[prost(string, tag = "1")]
-    request_id: String,
-    #[prost(string, tag = "2")]
-    call_id: String,
-    #[prost(int32, tag = "3")]
-    request_type: i32,
-    #[prost(int32, tag = "4")]
-    action: i32,
-    #[prost(string, tag = "5")]
-    text: String,
-    #[prost(string, tag = "7")]
-    idempotency_key: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct RespondRequest {
-    #[prost(message, optional, tag = "1")]
-    query: Option<Query>,
-    #[prost(string, tag = "2")]
-    channel_id: String,
-    #[prost(string, tag = "3")]
-    turn_id: String,
-    #[prost(message, optional, tag = "4")]
-    response: Option<ThreadResponse>,
-    #[prost(string, tag = "5")]
-    idempotency_key: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-struct RespondResponse {
-    #[prost(int64, tag = "5")]
-    replay_cursor: i64,
-}
 
 #[derive(Debug)]
 struct Options {
@@ -249,171 +101,6 @@ fn parse(args: &[String]) -> Result<Option<Options>> {
         json,
         base_url,
     }))
-}
-
-struct ThreadClient {
-    http: Client,
-    base: Url,
-    session: PlatformSession,
-    channel_id: String,
-}
-
-impl ThreadClient {
-    fn new(session: PlatformSession, channel_id: String, base_url: &str) -> Result<Self> {
-        let base = Url::parse(base_url).context("invalid Platform URL")?;
-        if !matches!(base.scheme(), "https" | "http")
-            || base.host_str().is_none()
-            || (base.scheme() == "http"
-                && !matches!(base.host_str(), Some("127.0.0.1" | "localhost" | "::1")))
-        {
-            bail!("Platform URL must use HTTPS or loopback HTTP");
-        }
-        let http = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        Ok(Self {
-            http,
-            base,
-            session,
-            channel_id,
-        })
-    }
-
-    fn query(&self) -> Result<Query> {
-        let workspace_id = self
-            .session
-            .workspace_id
-            .as_ref()
-            .filter(|id| !id.trim().is_empty())
-            .context("managed login must select a workspace")?
-            .clone();
-        Ok(Query {
-            workspace_id,
-            organization_id: self.session.organization_id.clone(),
-        })
-    }
-
-    async fn call<Req: Message, Resp: Message + Default>(
-        &self,
-        method: &str,
-        request: Req,
-    ) -> Result<Resp> {
-        let url = self.base.join(&format!("{SERVICE}/{method}"))?;
-        let workspace = self.query()?.workspace_id;
-        let mut response = self
-            .http
-            .post(url)
-            .bearer_auth(&self.session.access_token)
-            .header("X-Organization-ID", &self.session.organization_id)
-            .header("X-Workspace-ID", workspace)
-            .header("Connect-Protocol-Version", "1")
-            .header("Content-Type", "application/proto")
-            .header("Accept", "application/proto")
-            .body(request.encode_to_vec())
-            .send()
-            .await
-            .context("Platform request failed")?;
-        let status = response.status();
-        if !status.is_success() {
-            bail!("Platform {method} returned HTTP {status}");
-        }
-        if response
-            .content_length()
-            .is_some_and(|size| size as usize > MAX_RESPONSE_BYTES)
-        {
-            bail!("Platform response exceeds limit");
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                bail!("Platform response exceeds limit");
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Resp::decode(bytes.as_slice()).context("invalid Platform protobuf response")
-    }
-
-    async fn get(&self) -> Result<GetResponse> {
-        let result: GetResponse = self
-            .call(
-                "GetOperatingThread",
-                GetRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
-                    limit: 50,
-                },
-            )
-            .await?;
-        if result
-            .channel
-            .as_ref()
-            .is_none_or(|channel| channel.id != self.channel_id)
-        {
-            bail!("Platform returned a different or missing thread");
-        }
-        Ok(result)
-    }
-
-    async fn events(&self, cursor: i64) -> Result<ListResponse> {
-        self.call(
-            "ListOperatingThreadEvents",
-            ListRequest {
-                query: Some(self.query()?),
-                channel_id: self.channel_id.clone(),
-                after_cursor: cursor,
-                limit: 200,
-            },
-        )
-        .await
-    }
-
-    async fn submit(&self, body: String) -> Result<SubmitResponse> {
-        if body.trim().is_empty() || body.len() > 20_000 {
-            bail!("message must contain 1 to 20000 bytes");
-        }
-        let result: SubmitResponse = self
-            .call(
-                "SubmitOperatingMessage",
-                SubmitRequest {
-                    query: Some(self.query()?),
-                    channel_id: self.channel_id.clone(),
-                    body,
-                    idempotency_key: Uuid::new_v4().to_string(),
-                },
-            )
-            .await?;
-        if result
-            .accepted_turn
-            .as_ref()
-            .is_none_or(|turn| turn.turn_id.is_empty())
-        {
-            bail!("Platform did not return an accepted turn");
-        }
-        Ok(result)
-    }
-
-    async fn respond(&self, pending: &Event, action: i32, text: String) -> Result<RespondResponse> {
-        let key = Uuid::new_v4().to_string();
-        self.call(
-            "RespondOperatingThread",
-            RespondRequest {
-                query: Some(self.query()?),
-                channel_id: self.channel_id.clone(),
-                turn_id: pending.turn_id.clone(),
-                response: Some(ThreadResponse {
-                    request_id: pending.request_id.clone(),
-                    call_id: pending.request_call_id.clone(),
-                    request_type: pending.request_type,
-                    action,
-                    text,
-                    idempotency_key: key.clone(),
-                }),
-                idempotency_key: key,
-            },
-        )
-        .await
-    }
 }
 
 #[derive(Serialize)]
@@ -814,6 +501,7 @@ mod tests {
                         GetResponse {
                             channel: Some(Channel {
                                 id: "thread:one".into(),
+                                ..Channel::default()
                             }),
                             messages: vec![OperatingMessage {
                                 id: "msg-1".into(),

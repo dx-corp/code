@@ -47,6 +47,7 @@ mod codex_bridge;
 mod codex_compat;
 mod codex_subagent_dispatch;
 mod extended;
+mod hosted_threads;
 mod http;
 mod local;
 mod markitdown;
@@ -101,6 +102,7 @@ pub(crate) use chat::{
 };
 pub(crate) use codex_bridge::*;
 use extended::{ExtendedApiState, handle_extended_endpoint, is_extended_endpoint};
+use hosted_threads::{handle_hosted_thread_endpoint, is_hosted_thread_endpoint};
 pub(crate) use http::MAX_JSON_BODY_BYTES;
 #[cfg(test)]
 use http::parse_request_head;
@@ -922,6 +924,17 @@ async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Re
                 .write_all(&response)
                 .await
                 .context("failed to write extended endpoint response")?;
+            let _ = stream.shutdown().await;
+            return Ok(());
+        }
+
+        if is_hosted_thread_endpoint(&head) {
+            let response =
+                handle_hosted_thread_endpoint(&mut stream, &mut initial, head, &state).await;
+            stream
+                .write_all(&response)
+                .await
+                .context("failed to write hosted thread response")?;
             let _ = stream.shutdown().await;
             return Ok(());
         }

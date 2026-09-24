@@ -14219,6 +14219,8 @@ fn extended_admin_mcp_and_pending_paths_require_tenant_binding_on_remote() {
         ("POST", "/api/admin/enterprise-policy/publish"),
         ("GET", "/api/admin/enterprise-policy/status"),
         ("POST", "/api/pending-requests/req-1/resume"),
+        ("GET", "/api/hosted-threads/thread:one"),
+        ("POST", "/api/hosted-threads/thread:one/messages"),
     ] {
         assert!(
             authorize(&auth_head(method, path, &write_no_tenant), &remote_config).is_err(),
