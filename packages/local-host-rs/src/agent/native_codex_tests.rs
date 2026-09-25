@@ -682,7 +682,7 @@ async fn native_provider_checkpoint_survives_process_death_and_restores_tool_con
     let sessions = tempfile::tempdir().expect("sessions");
     let mut recorder =
         crate::headless::SessionRecorder::new(sessions.path()).expect("session recorder");
-    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             match source_events.recv().await {
                 Some(FromAgent::ConversationSnapshot { messages, .. }) => break messages,

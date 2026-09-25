@@ -1,5 +1,5 @@
 {
-  "generated_at": 1790322601,
+  "generated_at": 1790356629,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -1331,9 +1331,9 @@
       ],
       "reasoning_efforts": [],
       "cost": {
-        "input": 0.09,
-        "output": 0.3,
-        "cache_read": 0.05
+        "input": 0.0675,
+        "output": 0.225,
+        "cache_read": 0.0375
       },
       "open_weights": true,
       "verification": {
@@ -2767,9 +2767,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.04,
-        "output": 0.49,
-        "cache_read": 0.01
+        "input": 0.075,
+        "output": 0.3,
+        "cache_read": 0.0015
       },
       "verification": {
         "state": "catalog",
@@ -2791,8 +2791,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.09984,
-        "output": 2.88,
+        "input": 0.2528,
+        "output": 1.9584,
         "cache_read": 0.08832
       },
       "verification": {
@@ -2812,7 +2812,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718,
         "temperature": true
       },
       "cost": {
@@ -2892,9 +2891,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.8845,
+        "input": 1.2,
         "output": 10.5346,
-        "cache_read": 0.33
+        "cache_read": 0.3
       },
       "verification": {
         "state": "catalog",
@@ -3896,7 +3895,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -4307,7 +4305,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 7372,
         "temperature": true
       },
       "cost": {
@@ -4409,9 +4406,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.049,
-        "output": 0.098,
-        "cache_read": 0.0098
+        "input": 0.04788,
+        "output": 0.09576,
+        "cache_read": 0.009576
       },
       "status": "deprecated",
       "verification": {
@@ -4431,7 +4428,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943718,
         "temperature": true
       },
       "cost": {
@@ -4486,9 +4482,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.783,
-        "output": 1.566,
-        "cache_read": 0.06525
+        "input": 0.702786,
+        "output": 1.405572,
+        "cache_read": 0.058566
       },
       "verification": {
         "state": "catalog",
@@ -4511,9 +4507,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.462,
-        "output": 1.386,
-        "cache_read": 0.0154
+        "input": 0.34584,
+        "output": 1.03752,
+        "cache_read": 0.011528
       },
       "verification": {
         "state": "catalog",
@@ -4532,13 +4528,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 1.2,
-        "cache_read": 0.006
+        "input": 0.075,
+        "output": 0.3,
+        "cache_read": 0.0015
       },
       "verification": {
         "state": "catalog",
@@ -5166,7 +5161,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -5215,13 +5209,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 0.3,
-        "cache_read": 0.05
+        "input": 0.0675,
+        "output": 0.225,
+        "cache_read": 0.0375
       },
       "verification": {
         "state": "catalog",
@@ -5361,7 +5355,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 3686,
         "temperature": true
       },
       "cost": {
@@ -5408,7 +5401,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -5508,7 +5500,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -5585,9 +5576,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.06,
-        "output": 0.18,
-        "cache_read": 0.012
+        "input": 0.021,
+        "output": 0.0616,
+        "cache_read": 0.0042
       },
       "verification": {
         "state": "catalog",
@@ -5656,7 +5647,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -5778,7 +5768,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -5826,7 +5815,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -6096,7 +6084,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 16384,
-        "output_tokens": 14745,
         "temperature": true
       },
       "cost": {
@@ -6144,7 +6131,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1000192,
-        "output_tokens": 900172,
         "temperature": true
       },
       "cost": {
@@ -6192,7 +6178,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 176947,
         "temperature": true
       },
       "cost": {
@@ -6884,7 +6869,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -6909,7 +6893,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -6934,7 +6917,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -7020,54 +7002,6 @@
       }
     },
     {
-      "id": "nex-agi/nex-n2.5-mini:free",
-      "name": "Nex AGI: Nex-N2.5-Mini (free)",
-      "provider": "openrouter",
-      "description": "Nex-N2.5 is an agentic model built to turn goals into working, verified outcomes. Its core strength is agentic coding…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 235929,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "nex-agi/nex-n2.5-pro:free",
-      "name": "Nex AGI: Nex-N2.5-Pro (free)",
-      "provider": "openrouter",
-      "description": "Nex-N2.5 is an agentic model built to turn goals into working, verified outcomes. Its core strength is agentic coding…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 235929,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "nousresearch/hermes-3-llama-3.1-405b",
       "name": "Nous: Hermes 3 405B Instruct",
       "provider": "openrouter",
@@ -7127,7 +7061,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -7151,7 +7084,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -7200,7 +7132,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -7224,7 +7155,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -7248,7 +7178,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 182520,
         "temperature": true
       },
       "cost": {
@@ -7297,7 +7226,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -7344,12 +7272,11 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 131072,
+        "context_tokens": 1000000,
         "temperature": true
       },
       "cost": {
-        "input": 0.08,
+        "input": 0.07,
         "output": 0.2,
         "cache_read": 0.04
       },
@@ -7419,7 +7346,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 4095,
-        "output_tokens": 3685,
         "temperature": true
       },
       "cost": {
@@ -7467,7 +7393,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 4095,
-        "output_tokens": 3685,
         "temperature": true
       },
       "cost": {
@@ -9119,7 +9044,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 127072,
-        "output_tokens": 114364,
+        "output_tokens": 4096,
         "temperature": true
       },
       "cost": {
@@ -9552,7 +9477,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -9577,7 +9501,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -9625,7 +9548,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -9746,7 +9668,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -9796,7 +9717,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -9897,7 +9817,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -9922,7 +9841,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -10188,7 +10106,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -10334,7 +10251,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -10562,7 +10478,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -10688,7 +10603,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 16384,
-        "output_tokens": 14745,
         "temperature": true
       },
       "cost": {
@@ -10883,7 +10797,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 8192,
-        "output_tokens": 7372,
         "temperature": true
       },
       "cost": {
@@ -11003,7 +10916,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 230400,
         "temperature": true
       },
       "cost": {
@@ -11028,7 +10940,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -11128,9 +11039,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.132,
-        "output": 0.528,
-        "cache_read": 0.033
+        "input": 0.0825,
+        "output": 0.33,
+        "cache_read": 0.020625
       },
       "verification": {
         "state": "catalog",
@@ -11149,7 +11060,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 235929,
         "temperature": true
       },
       "cost": {
@@ -11199,7 +11109,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -11272,7 +11181,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 471859,
         "temperature": true
       },
       "cost": {
@@ -11395,7 +11303,6 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 6144,
-        "output_tokens": 5529,
         "temperature": true
       },
       "cost": {
@@ -11444,7 +11351,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 117964,
         "temperature": true
       },
       "cost": {
@@ -11961,7 +11867,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 200000,
-        "output_tokens": 117964,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
@@ -12084,7 +11990,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 32768,
+        "context_tokens": 131072,
         "temperature": true
       },
       "cost": {
@@ -12108,7 +12014,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 943717,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {

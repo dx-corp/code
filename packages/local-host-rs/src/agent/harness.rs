@@ -32,6 +32,13 @@ pub struct AgentHarness {
     hook_log: PathBuf,
 }
 
+/// Upper bound for an event a test expects to arrive. `wait_for_event` returns
+/// as soon as the event is observed, so this only bounds a failing test. The
+/// previous 2-12 s limits expired on a loaded host during the full
+/// maestro-local-host suite (9 of 3232 tests on dev-desktop, 2026-09-25) while
+/// the same tests passed when run alone.
+const EVENT_WAIT: Duration = Duration::from_secs(30);
+
 impl AgentHarness {
     /// Create a harness with a scripted client and hook logging enabled.
     pub fn with_scripted(responses: Vec<ScriptedResponse>) -> anyhow::Result<Self> {
@@ -229,7 +236,7 @@ async fn scripted_stream_error_dispatches_stop_failure() {
         .expect("prompt");
 
     let saw_error = harness
-        .wait_for_event(Duration::from_secs(5), |event| {
+        .wait_for_event(EVENT_WAIT, |event| {
             matches!(event, FromAgent::Error { terminal: true, .. })
         })
         .await;
@@ -291,7 +298,7 @@ async fn scripted_provider_error_preserves_kind_and_never_completes_turn() {
 
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::ProviderError { .. }
             ))
@@ -333,7 +340,7 @@ async fn scripted_partial_text_eof_is_transient_protocol_error() {
         .expect("prompt");
 
     let snapshot = harness
-        .wait_for_event(Duration::from_secs(2), |event| {
+        .wait_for_event(EVENT_WAIT, |event| {
             matches!(event, FromAgent::ConversationSnapshot { .. })
         })
         .await
@@ -349,7 +356,7 @@ async fn scripted_partial_text_eof_is_transient_protocol_error() {
     );
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::ProviderError { .. }
             ))
@@ -396,7 +403,7 @@ async fn scripted_completed_tool_block_eof_is_transient_protocol_error() {
 
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::ProviderError { .. }
             ))
@@ -432,7 +439,7 @@ async fn successful_native_loop_emits_explicit_turn_completed() {
 
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::TurnCompleted { .. }
             ))
@@ -465,7 +472,7 @@ async fn continue_preserves_provider_error_kind_and_does_not_complete() {
         .expect("prompt");
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::TurnCompleted { .. }
             ))
@@ -476,7 +483,7 @@ async fn continue_preserves_provider_error_kind_and_does_not_complete() {
     harness.agent.continue_execution().expect("continue");
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::ProviderError { .. }
             ))
@@ -515,7 +522,7 @@ async fn cancelled_native_loop_emits_explicit_turn_interrupted() {
         .expect("prompt");
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::ResponseStart { .. }
             ))
@@ -526,7 +533,7 @@ async fn cancelled_native_loop_emits_explicit_turn_interrupted() {
 
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::TurnInterrupted { .. }
             ))
@@ -573,7 +580,7 @@ async fn side_question_eof_reports_structured_transient_protocol_error() {
 
     assert!(matches!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| matches!(
+            .wait_for_event(EVENT_WAIT, |event| matches!(
                 event,
                 FromAgent::SideQuestionEnd { .. }
             ))
@@ -605,7 +612,7 @@ async fn scripted_empty_response_is_terminal_error_without_response_end() {
         .expect("prompt");
 
     let error = harness
-        .wait_for_event(Duration::from_secs(12), |event| {
+        .wait_for_event(EVENT_WAIT, |event| {
             matches!(event, FromAgent::Error { terminal: true, .. })
         })
         .await
@@ -656,7 +663,7 @@ async fn scripted_empty_response_retries_before_terminal_success() {
 
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::Status { message } if message.contains("Retrying"))
             })
             .await
@@ -665,7 +672,7 @@ async fn scripted_empty_response_retries_before_terminal_success() {
     );
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::ResponseEnd { response_id, .. } if response_id == "done")
             })
             .await
@@ -700,7 +707,7 @@ async fn scripted_billed_empty_completion_steers_once_then_completes() {
 
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(
                     event,
                     FromAgent::Status { message }
@@ -713,7 +720,7 @@ async fn scripted_billed_empty_completion_steers_once_then_completes() {
     );
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::ResponseEnd { response_id, .. } if response_id == "done")
             })
             .await
@@ -756,7 +763,7 @@ async fn scripted_tool_side_effect_is_not_repeated_by_later_empty_retry() {
         .expect("prompt");
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(8), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::ResponseEnd { response_id, .. } if response_id == "done")
             })
             .await
@@ -786,7 +793,7 @@ async fn scripted_text_response_still_completes() {
 
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::ResponseEnd { response_id, .. } if response_id == "done")
             })
             .await
@@ -821,7 +828,7 @@ async fn scripted_tool_only_turn_is_not_rejected_as_empty() {
 
     assert!(
         harness
-            .wait_for_event(Duration::from_secs(5), |event| {
+            .wait_for_event(EVENT_WAIT, |event| {
                 matches!(event, FromAgent::ResponseEnd { response_id, .. } if response_id == "done")
             })
             .await

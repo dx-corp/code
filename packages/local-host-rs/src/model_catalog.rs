@@ -812,12 +812,12 @@ async fn write_cache_atomic(path: &Path, cache: &CachedCatalog) -> anyhow::Resul
 }
 
 /// Positive output ceiling that is distinct from an aggregator's context copy
-/// or exact 90% fallback. Keep in sync with the snapshot generator.
+/// or rounded 90% fallback. Keep in sync with the snapshot generator.
 fn distinct_output_tokens(context: Option<u32>, output: Option<u32>) -> Option<u32> {
     let output = output.filter(|tokens| *tokens > 0)?;
     match context.filter(|tokens| *tokens > 0) {
         Some(context) if u64::from(output) * 100 >= u64::from(context) * 99 => None,
-        Some(context) if u64::from(output) == (u64::from(context) * 9 + 5) / 10 => None,
+        Some(context) if (u64::from(output) * 10).abs_diff(u64::from(context) * 9) <= 10 => None,
         _ => Some(output),
     }
 }
@@ -847,7 +847,12 @@ fn parse_limit_tokens(model: &serde_json::Value, field: &str) -> Option<u32> {
 ///
 /// Vendor-native rows are inserted first so a distinct Google/OpenAI/Moonshot
 /// output wins over an OpenRouter row that copied the context window.
-type DevTokenWindow = (Option<u32>, Option<u32>);
+#[derive(Clone, Copy, Debug)]
+struct DevTokenWindow {
+    context: Option<u32>,
+    output: Option<u32>,
+    is_openrouter: bool,
+}
 
 #[derive(Debug, Default)]
 struct DevTokenLimits {
@@ -880,31 +885,31 @@ impl DevTokenLimits {
             let context = parse_limit_tokens(model, "context");
             let output = parse_limit_tokens(model, "output");
             if provider == "openrouter" {
-                self.push(id, context, output);
+                self.push(id, context, output, true);
             } else {
-                self.push(&format!("{provider}/{id}"), context, output);
+                let namespace = if provider == "zai" { "z-ai" } else { provider };
+                self.push(&format!("{namespace}/{id}"), context, output, false);
             }
         }
     }
 
-    fn push(&mut self, key: &str, context: Option<u32>, output: Option<u32>) {
+    fn push(&mut self, key: &str, context: Option<u32>, output: Option<u32>, is_openrouter: bool) {
         self.entries
             .entry(key.to_owned())
             .or_default()
-            .push((context, output));
+            .push(DevTokenWindow {
+                context,
+                output,
+                is_openrouter,
+            });
     }
 
-    fn distinct_output(
-        &self,
-        openrouter_id: &str,
-        openrouter_context: u32,
-        openrouter_output: Option<u32>,
-    ) -> Option<u32> {
-        if let Some(output) = distinct_output_tokens(Some(openrouter_context), openrouter_output) {
-            return Some(output);
-        }
-        for (_context, output) in self.candidates(openrouter_id) {
-            if let Some(resolved) = distinct_output_tokens(Some(openrouter_context), output) {
+    fn distinct_output(&self, openrouter_id: &str, rejected_aggregator: bool) -> Option<u32> {
+        for candidate in self.candidates(openrouter_id) {
+            if rejected_aggregator && candidate.is_openrouter {
+                continue;
+            }
+            if let Some(resolved) = distinct_output_tokens(candidate.context, candidate.output) {
                 return Some(resolved);
             }
         }
@@ -1058,24 +1063,34 @@ fn map_openrouter_model(
         return None;
     }
     let top_provider = model.get("top_provider");
-    let context_tokens = model
-        .get("context_length")
-        .or_else(|| top_provider.and_then(|provider| provider.get("context_length")))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|context| u32::try_from(context).ok())
-        .filter(|context| *context > 0)?;
-    let advertised_output = top_provider
-        .and_then(|provider| provider.get("max_completion_tokens"))
-        .or_else(|| model.get("max_completion_tokens"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|output| u32::try_from(output).ok())
-        .filter(|output| *output > 0);
+    let positive_u32 = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| u32::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+    };
+    let model_context = positive_u32(model.get("context_length"));
+    let provider_context =
+        positive_u32(top_provider.and_then(|provider| provider.get("context_length")));
+    let context_tokens = model_context.or(provider_context)?;
+    let top_output_field = top_provider.and_then(|provider| provider.get("max_completion_tokens"));
+    let top_output = positive_u32(top_output_field);
+    let (advertised_context, advertised_output, checked_provider) =
+        if top_output_field.is_some() && provider_context.is_some() {
+            (provider_context, top_output, true)
+        } else {
+            (
+                model_context,
+                positive_u32(model.get("max_completion_tokens")),
+                false,
+            )
+        };
+    let advertised_distinct = distinct_output_tokens(advertised_context, advertised_output);
+    let rejected_aggregator = checked_provider && advertised_distinct.is_none();
     let output_tokens = omit_unverified_sonar_output(
         id,
-        limits.map_or_else(
-            || distinct_output_tokens(Some(context_tokens), advertised_output),
-            |limits| limits.distinct_output(id, context_tokens, advertised_output),
-        ),
+        advertised_distinct
+            .or_else(|| limits.and_then(|limits| limits.distinct_output(id, rejected_aggregator))),
     );
     let name = model
         .get("name")
@@ -1751,9 +1766,9 @@ mod tests {
         });
         let openrouter = serde_json::json!({"data": [
             {"id": "perplexity/sonar-reasoning-pro", "context_length": 128_000,
-             "top_provider": {"max_completion_tokens": 115_200}},
+             "top_provider": {"context_length": 128_000, "max_completion_tokens": 115_200}},
             {"id": "perplexity/another-model", "context_length": 128_000,
-             "top_provider": {"max_completion_tokens": 4_096}}
+             "top_provider": {"context_length": 128_000, "max_completion_tokens": 4_096}}
         ]});
         let limits = DevTokenLimits::from_models_dev(&models_dev);
         let refreshed = map_openrouter_catalog_with_limits(&openrouter, Some(&limits)).unwrap();
@@ -2294,11 +2309,49 @@ mod tests {
         assert_eq!(distinct_output_tokens(Some(262_144), Some(262_140)), None);
         assert_eq!(distinct_output_tokens(Some(1_000_000), Some(900_000)), None);
         assert_eq!(distinct_output_tokens(Some(262_143), Some(235_929)), None);
+        assert_eq!(distinct_output_tokens(Some(1_048_575), Some(943_717)), None);
         assert_eq!(
             distinct_output_tokens(Some(200_000), Some(100_000)),
             Some(100_000)
         );
         assert_eq!(distinct_output_tokens(Some(200_000), None), None);
+    }
+
+    #[test]
+    fn runtime_openrouter_output_uses_matching_context_and_vendor_fallback() {
+        let openrouter = serde_json::json!({"data": [
+            {"id": "z-ai/glm-5.3", "context_length": 1_310_720,
+             "top_provider": {"context_length": 1_048_575, "max_completion_tokens": 943_717}},
+            {"id": "example/near-context", "context_length": 200_000,
+             "top_provider": {"context_length": 100_000, "max_completion_tokens": 99_000}},
+            {"id": "example/valid", "context_length": 200_000,
+             "top_provider": {"context_length": 100_000, "max_completion_tokens": 50_000}},
+            {"id": "example/missing-provider-context", "context_length": 200_000,
+             "top_provider": {"max_completion_tokens": 50_000}},
+            {"id": "example/model-level-output", "context_length": 200_000,
+             "max_completion_tokens": 50_000}
+        ]});
+        let models_dev = serde_json::json!({
+            "zai": {"models": {"glm-5.3": {"limit": {"context": 1_000_000, "output": 131_072}}}},
+            "openrouter": {"models": {"z-ai/glm-5.3": {
+                "limit": {"context": 1_310_720, "output": 943_717}
+            }}}
+        });
+        let limits = DevTokenLimits::from_models_dev(&models_dev);
+        let models = map_openrouter_catalog_with_limits(&openrouter, Some(&limits)).unwrap();
+        let output = |id: &str| {
+            models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap()
+                .capabilities
+                .output_tokens
+        };
+        assert_eq!(output("z-ai/glm-5.3"), Some(131_072));
+        assert_eq!(output("example/near-context"), None);
+        assert_eq!(output("example/valid"), Some(50_000));
+        assert_eq!(output("example/missing-provider-context"), None);
+        assert_eq!(output("example/model-level-output"), Some(50_000));
     }
 
     #[test]
@@ -2400,7 +2453,7 @@ mod tests {
                     "architecture": {"input_modalities": ["text", "image"]},
                     "supported_parameters": ["tools", "tool_choice", "reasoning"],
                     "reasoning": {"default_enabled": true},
-                    "top_provider": {"max_completion_tokens": 64_000}
+                    "top_provider": {"context_length": 200_000, "max_completion_tokens": 64_000}
                 },
                 {
                     "id": "openai/gpt-5.6",
