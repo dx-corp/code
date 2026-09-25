@@ -35,7 +35,7 @@ enum Following {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TitleLex {
-    Leading,
+    Leading(u8),
     Hashes(u8),
     Heading,
     FirstStar,
@@ -47,9 +47,9 @@ enum TitleLex {
 impl TitleLex {
     fn advance(self, ch: char) -> Self {
         match self {
-            Self::Leading if ch == ' ' => Self::Leading,
-            Self::Leading if ch == '#' => Self::Hashes(1),
-            Self::Leading if ch == '*' => Self::FirstStar,
+            Self::Leading(spaces) if ch == ' ' && spaces < 3 => Self::Leading(spaces + 1),
+            Self::Leading(_) if ch == '#' => Self::Hashes(1),
+            Self::Leading(_) if ch == '*' => Self::FirstStar,
             Self::Hashes(width) if ch == '#' && width < 6 => Self::Hashes(width + 1),
             Self::Hashes(_) if ch == ' ' => Self::Heading,
             Self::Heading => Self::Heading,
@@ -90,7 +90,7 @@ impl SemanticTextRelease {
         Self {
             pending: String::new(),
             line: String::new(),
-            title_lex: TitleLex::Leading,
+            title_lex: TitleLex::Leading(0),
             line_non_title: false,
             following: Following::None,
             held_since_ms: None,
@@ -140,7 +140,7 @@ impl SemanticTextRelease {
                     self.finish_line(now_ms, &mut releases);
                 }
                 self.line.clear();
-                self.title_lex = TitleLex::Leading;
+                self.title_lex = TitleLex::Leading(0);
                 self.line_non_title = false;
             } else if self.following == Following::None
                 && !self.line_non_title
@@ -214,7 +214,7 @@ impl SemanticTextRelease {
         self.release(now_ms, Some(reason), &mut releases);
         self.following = Following::None;
         self.line.clear();
-        self.title_lex = TitleLex::Leading;
+        self.title_lex = TitleLex::Leading(0);
         self.line_non_title = false;
         releases
     }
@@ -282,7 +282,10 @@ impl SemanticTextRelease {
 }
 
 fn standalone_title(line: &str) -> bool {
-    let value = line.trim();
+    let Some(value) = markdown_block_start(line) else {
+        return false;
+    };
+    let value = value.trim_end();
     if value.starts_with('#') {
         let width = value.bytes().take_while(|byte| *byte == b'#').count();
         return (1..=6).contains(&width)
@@ -299,7 +302,7 @@ fn standalone_title(line: &str) -> bool {
 }
 
 fn opening_fence(line: &str) -> Option<(char, usize)> {
-    let value = line.trim_start_matches(' ');
+    let value = markdown_block_start(line)?;
     let marker = value.chars().next()?;
     if !matches!(marker, '`' | '~') {
         return None;
@@ -309,17 +312,30 @@ fn opening_fence(line: &str) -> Option<(char, usize)> {
 }
 
 fn closing_fence(line: &str, marker: char, width: usize) -> bool {
-    let value = line.trim();
+    let Some(value) = markdown_block_start(line) else {
+        return false;
+    };
+    let value = value.trim_end();
     let count = value.chars().take_while(|ch| *ch == marker).count();
     count >= width && value[count..].trim().is_empty()
 }
 
+// Markdown headings and fences may be indented by up to three spaces. Four
+// spaces (or a leading tab) start an indented code block instead.
+fn markdown_block_start(line: &str) -> Option<&str> {
+    let spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+    (spaces <= 3 && !line[spaces..].starts_with('\t')).then_some(&line[spaces..])
+}
+
 fn table_row(line: &str) -> bool {
-    line.trim().contains('|')
+    markdown_block_start(line).is_some_and(|value| value.contains('|'))
 }
 
 fn table_delimiter(line: &str) -> bool {
-    let value = line.trim().trim_matches('|');
+    let Some(value) = markdown_block_start(line) else {
+        return false;
+    };
+    let value = value.trim_end().trim_matches('|');
     let mut cells = 0;
     for cell in value.split('|') {
         let cell = cell.trim().trim_matches(':');
@@ -390,6 +406,97 @@ mod tests {
             policy.push("```\n", 0)[0].text,
             "# Code\n```rs\nfn main() {}\n```\n"
         );
+    }
+
+    #[test]
+    fn markdown_indentation_does_not_turn_code_into_a_title_or_fence() {
+        for spaces in 0..=3 {
+            let indent = " ".repeat(spaces);
+            let mut policy = SemanticTextRelease::default();
+            assert!(policy.push(&format!("{indent}# Heading\n"), 0).is_empty());
+            assert_eq!(
+                policy.push("Paragraph.\n", 1)[0].text,
+                format!("{indent}# Heading\nParagraph.\n")
+            );
+
+            let mut fenced = SemanticTextRelease::default();
+            assert!(
+                fenced
+                    .push(&format!("# Code\n{indent}```rust\nlet x = 1;\n"), 0)
+                    .is_empty()
+            );
+            assert_eq!(
+                fenced.push(&format!("{indent}```\n"), 1)[0].text,
+                format!("# Code\n{indent}```rust\nlet x = 1;\n{indent}```\n")
+            );
+
+            let mut table = SemanticTextRelease::default();
+            assert!(
+                table
+                    .push(
+                        &format!("# Table\n{indent}| A | B |\n{indent}| --- | --- |\n"),
+                        0
+                    )
+                    .is_empty()
+            );
+            assert_eq!(
+                table.push(&format!("{indent}| 1 | 2 |\n"), 1)[0].text,
+                format!("# Table\n{indent}| A | B |\n{indent}| --- | --- |\n{indent}| 1 | 2 |\n")
+            );
+        }
+
+        for indent in ["    ", "\t"] {
+            for title in ["# Indented heading", "**Indented title**"] {
+                let line = format!("{indent}{title}\n");
+                let mut policy = SemanticTextRelease::default();
+                assert_eq!(policy.push(&line, 0)[0].text, line);
+                assert_eq!(policy.held_bytes(), 0);
+                assert_eq!(policy.titles_seen(), 0);
+            }
+
+            let mut policy = SemanticTextRelease::default();
+            let opening = format!("# Code\n{indent}```rust\n");
+            assert_eq!(policy.push(&opening, 0)[0].text, opening);
+            assert_eq!(policy.held_bytes(), 0);
+
+            let mut table = SemanticTextRelease::default();
+            let header = format!("# Table\n{indent}| A | B |\n");
+            assert_eq!(table.push(&header, 0)[0].text, header);
+            assert_eq!(table.held_bytes(), 0);
+        }
+
+        let mut table = SemanticTextRelease::default();
+        assert!(table.push("# Table\n| A | B |\n", 0).is_empty());
+        assert_eq!(
+            table.push("    | --- | --- |\n", 1)[0].text,
+            "# Table\n| A | B |\n    | --- | --- |\n"
+        );
+
+        let mut policy = SemanticTextRelease::default();
+        assert!(policy.push("# Code\n```rust\nlet x = 1;\n", 0).is_empty());
+        assert!(policy.push("    ```\n", 1).is_empty());
+        assert_eq!(
+            policy.push("```\n", 2)[0].text,
+            "# Code\n```rust\nlet x = 1;\n    ```\n```\n"
+        );
+    }
+
+    #[test]
+    fn indented_code_release_is_stable_across_transport_chunks() {
+        let input = "    # Not a heading\n# Real heading\n    ```rust\n\t**Not a title**\n# Table\n    | A | B |\n";
+        let canonical = run(input, 1)
+            .into_iter()
+            .filter(|release| release.semantic_unit)
+            .map(|release| release.text)
+            .collect::<Vec<_>>();
+        for chunk in 2..=input.len() {
+            let actual = run(input, chunk)
+                .into_iter()
+                .filter(|release| release.semantic_unit)
+                .map(|release| release.text)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, canonical, "chunk size {chunk}");
+        }
     }
 
     #[test]
