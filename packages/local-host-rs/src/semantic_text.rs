@@ -83,7 +83,9 @@ impl SemanticTextRelease {
         let mut releases = Vec::new();
         for ch in delta.chars() {
             if self.pending.len() + ch.len_utf8() > self.max_bytes {
-                self.release(now_ms, Some(FlushReason::SizeLimit), &mut releases);
+                let forced = (!self.line_non_title || self.following != Following::None)
+                    .then_some(FlushReason::SizeLimit);
+                self.release(now_ms, forced, &mut releases);
                 self.line.clear();
                 self.line_non_title = true;
             }
@@ -108,17 +110,19 @@ impl SemanticTextRelease {
                 && !could_be_title(&self.line)
             {
                 // Ordinary prose need not wait for a line or a transport timer.
-                self.release(now_ms, None, &mut releases);
                 self.line.clear();
                 self.line_non_title = true;
-            } else if self.line_non_title && self.following == Following::None {
-                self.release(now_ms, None, &mut releases);
             }
             if self.pending.len() >= self.max_bytes {
-                self.release(now_ms, Some(FlushReason::SizeLimit), &mut releases);
+                let forced = (!self.line_non_title || self.following != Following::None)
+                    .then_some(FlushReason::SizeLimit);
+                self.release(now_ms, forced, &mut releases);
                 self.line.clear();
                 self.line_non_title = true;
             }
+        }
+        if self.line_non_title && self.following == Following::None {
+            self.release(now_ms, None, &mut releases);
         }
         if self
             .held_since_ms
@@ -513,5 +517,22 @@ mod tests {
             started.elapsed().as_millis(),
             policy.peak_held_bytes()
         );
+    }
+
+    #[test]
+    fn large_prose_delta_releases_promptly_without_a_forced_flush() {
+        let input = "ordinary assistant prose. ".repeat(1_000);
+        let mut policy = SemanticTextRelease::default();
+        let releases = policy.push(&input, 42);
+        assert_eq!(
+            releases
+                .iter()
+                .map(|release| release.text.as_str())
+                .collect::<String>(),
+            input
+        );
+        assert!(releases.iter().all(|release| release.forced.is_none()));
+        assert!(releases.iter().all(|release| release.text.len() <= 4_096));
+        assert_eq!(policy.held_bytes(), 0);
     }
 }
