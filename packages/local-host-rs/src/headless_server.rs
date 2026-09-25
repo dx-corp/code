@@ -59,6 +59,11 @@ use crate::headless::messages::{
     UtilityFileSearchMatch,
 };
 use crate::headless::{HEADLESS_PROTOCOL_VERSION, native_server_capabilities};
+use crate::semantic_text::{
+    FlushReason as SemanticFlushReason, Release as SemanticRelease, SemanticTextRelease,
+};
+
+mod semantic_stream;
 
 /// Test-only provider override for the local SDK conformance fixture.
 ///
@@ -124,6 +129,16 @@ struct RuntimeMeta {
     turn_active: bool,
     transcript_grade: crate::transcript::TranscriptGrade,
     response_chunks: Vec<(String, bool)>,
+    semantic_text: SemanticTextRelease,
+    semantic_response_id: Option<String>,
+    semantic_started_at: Option<Instant>,
+    semantic_raw_first_ms: Option<u64>,
+    semantic_first_released_ms: Option<u64>,
+    semantic_published_chunks: u64,
+    semantic_standalone_releases: u64,
+    semantic_forced_flushes: u64,
+    semantic_peak_held_bytes: usize,
+    semantic_total_hold_ms: u64,
     /// Last safe managed-Gateway evidence for the active turn.
     managed_gateway_receipt: Option<maestro_ai::ManagedGatewayReceipt>,
     /// Controller assignment proven against the provider-bound system prompt.
@@ -167,19 +182,6 @@ impl RuntimeMeta {
         };
         self.decided_tool_execution_ids
             .insert(tool_execution_id.to_string())
-    }
-
-    fn record_response_chunk(
-        &mut self,
-        content: &str,
-        is_thinking: bool,
-    ) -> crate::transcript::TranscriptGrade {
-        let grade = self.transcript_grade;
-        if grade != crate::transcript::TranscriptGrade::Delta {
-            self.response_chunks
-                .push((content.to_string(), is_thinking));
-        }
-        grade
     }
 }
 
@@ -269,6 +271,16 @@ impl HeadlessState {
                 turn_active: false,
                 transcript_grade: crate::transcript::TranscriptGrade::Delta,
                 response_chunks: Vec::new(),
+                semantic_text: SemanticTextRelease::default(),
+                semantic_response_id: None,
+                semantic_started_at: None,
+                semantic_raw_first_ms: None,
+                semantic_first_released_ms: None,
+                semantic_published_chunks: 0,
+                semantic_standalone_releases: 0,
+                semantic_forced_flushes: 0,
+                semantic_peak_held_bytes: 0,
+                semantic_total_hold_ms: 0,
                 managed_gateway_receipt: None,
                 prompt_experiment: None,
                 receipt_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -531,25 +543,34 @@ impl HeadlessState {
                 self.ready_emitted = true;
             }
             let event_task = tokio::spawn(async move {
-                while let Some(msg) = event_rx.recv().await {
-                    if let Err(err) = handle_agent_event(
-                        msg,
-                        &meta_bg,
-                        &tool_tx_bg,
-                        &reported_model,
-                        routed_provider.as_deref(),
-                    )
-                    .await
-                    {
-                        let _ = emit(&FromAgentMessage::Error {
-                            request_id: None,
-                            message: format!("headless event bridge failed: {err:#}"),
-                            fatal: false,
-                            terminal: true,
-                            error_type: Some(HeadlessErrorType::Protocol),
-                        });
+                let mut semantic_tick =
+                    tokio::time::interval(std::time::Duration::from_millis(100));
+                semantic_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        msg = event_rx.recv() => {
+                            let Some(msg) = msg else { break };
+                            if let Err(err) = handle_agent_event(
+                                msg, &meta_bg, &tool_tx_bg, &reported_model,
+                                routed_provider.as_deref(),
+                            ).await {
+                                let _ = semantic_stream::flush_and_emit(&meta_bg, SemanticFlushReason::Error);
+                                let _ = emit(&FromAgentMessage::Error {
+                                    request_id: None,
+                                    message: format!("headless event bridge failed: {err:#}"),
+                                    fatal: false,
+                                    terminal: true,
+                                    error_type: Some(HeadlessErrorType::Protocol),
+                                });
+                            }
+                        }
+                        _ = semantic_tick.tick() => {
+                            let _ = semantic_stream::tick_and_emit(&meta_bg);
+                        }
                     }
                 }
+                let _ =
+                    semantic_stream::flush_and_emit(&meta_bg, SemanticFlushReason::Cancellation);
             });
             self.tool_tx = Some(tool_tx);
             self.event_task = Some(event_task);
@@ -2751,6 +2772,9 @@ async fn handle_agent_event(
             emit(&FromAgentMessage::ProcessBudgetCheckpoint { budget })?;
         }
     }
+    if let Some(reason) = semantic_stream::boundary_reason(&msg) {
+        semantic_stream::flush_and_emit(meta, reason)?;
+    }
     match msg {
         FromAgent::ManagedAuthorizationRequest { request_id } => {
             emit(&FromAgentMessage::ManagedAuthorizationRequest { request_id })?;
@@ -2852,6 +2876,7 @@ async fn handle_agent_event(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             meta.response_chunks.clear();
+            semantic_stream::reset_response(&mut meta, &response_id);
             meta.managed_gateway_receipt = None;
             drop(meta);
             emit(&FromAgentMessage::ResponseStart { response_id })?;
@@ -2861,21 +2886,10 @@ async fn handle_agent_event(
             content,
             is_thinking,
         } => {
-            let grade = {
-                let mut meta = meta
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                meta.record_response_chunk(&content, is_thinking)
-            };
-            if grade == crate::transcript::TranscriptGrade::Delta {
-                emit(&FromAgentMessage::ResponseChunk {
-                    response_id,
-                    content,
-                    is_thinking,
-                })?;
-            }
+            semantic_stream::publish_response_chunk(meta, response_id, content, is_thinking)?;
         }
         FromAgent::ResponseEnd { response_id, usage } => {
+            semantic_stream::flush_and_emit(meta, SemanticFlushReason::Finalization)?;
             let session_id = meta
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2890,6 +2904,7 @@ async fn handle_agent_event(
                 configured_model = %configured_model,
                 routed_provider = routed_provider.unwrap_or(""),
             );
+            semantic_stream::log_response(meta, &response_id);
             for message in take_interrupted_tool_terminal_messages(meta) {
                 emit(&message)?;
             }
@@ -6215,23 +6230,6 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
             .find(|event| event["type"] == "conversation_snapshot")
             .expect("private snapshot on headless wire");
         assert_eq!(snapshot["processed_queue_ids"], serde_json::json!([7, 9]));
-    }
-
-    #[test]
-    fn delta_transcript_does_not_buffer_emitted_response_chunks() {
-        let mut meta = RuntimeMeta {
-            transcript_grade: crate::transcript::TranscriptGrade::Delta,
-            ..RuntimeMeta::default()
-        };
-
-        for _ in 0..10_000 {
-            assert_eq!(
-                meta.record_response_chunk("already emitted", false),
-                crate::transcript::TranscriptGrade::Delta,
-            );
-        }
-
-        assert!(meta.response_chunks.is_empty());
     }
 
     #[test]

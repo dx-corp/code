@@ -57,6 +57,7 @@ mod private_code_authority;
 pub mod rlm;
 pub mod safety;
 pub mod sandbox_policy;
+pub mod semantic_text;
 pub mod service_connections;
 pub mod session;
 pub mod skill_cli;

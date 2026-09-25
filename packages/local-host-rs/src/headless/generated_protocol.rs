@@ -68,6 +68,7 @@ pub const HEADLESS_FROM_AGENT_MESSAGE_TYPES: &[&str] = &[
     "hello_ok",
     "ready",
     "response_start",
+    "assistant_text_observed",
     "response_chunk",
     "response_end",
     "tool_call",

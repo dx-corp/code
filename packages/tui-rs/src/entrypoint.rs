@@ -949,6 +949,10 @@ pub async fn run_cli(raw_args: Vec<std::ffi::OsString>) -> Result<()> {
     if classify_agent_entry(&raw_args) == AgentEntry::ClapParsed
         && classify_clap_dispatch(&raw_args) == ClapDispatch::Interactive
     {
+        // Opt-in `MAESTRO_AUTO_UPDATE=apply` only: check, install, and restart
+        // before terminal setup. Every other mode returns `None` here without
+        // touching the network; the default notice check runs inside the TUI
+        // after its first frame (`App::spawn_startup_update_check`).
         if let Some(exit_code) = crate::update_cli::run_startup_update(&raw_args).await {
             std::process::exit(exit_code);
         }

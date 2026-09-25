@@ -826,6 +826,7 @@ impl AgentState {
                 None
             }
             FromAgentMessage::ProcessBudgetCheckpoint { .. } => None,
+            FromAgentMessage::AssistantTextObserved { .. } => None,
             FromAgentMessage::ManagedGatewayReceipt {
                 request_id,
                 record_id,

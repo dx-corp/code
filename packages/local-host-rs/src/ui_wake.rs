@@ -11,7 +11,9 @@ static HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
 /// Install or clear the UI wake hook. The TUI sets this while its loop runs.
 pub fn set_hook(hook: Option<Arc<dyn Fn() + Send + Sync>>) {
-    *HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+    *HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
 }
 
 /// Wake the installed UI loop, if any. Safe to call when no hook is set.

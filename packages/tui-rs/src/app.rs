@@ -808,6 +808,9 @@ pub struct App {
     setup_login_rx: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     setup_login_url_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     setup_login_task: Option<tokio::task::JoinHandle<()>>,
+    /// Bounded release check spawned after the first frame; its result is a
+    /// transcript notice. Never awaited by the startup path.
+    startup_update_check: startup_update::StartupUpdateCheck,
     onboarding: onboarding::OnboardingSession,
     pending_agent_spawn: bool,
     /// True when `current_model` was chosen by `/setup` or `/model`, so a
@@ -1792,6 +1795,7 @@ impl App {
             setup_login_rx: None,
             setup_login_url_rx: None,
             setup_login_task: None,
+            startup_update_check: startup_update::StartupUpdateCheck::idle(),
             onboarding: onboarding::OnboardingSession::default(),
             pending_agent_spawn: false,
             current_model_user_set: false,
@@ -2274,6 +2278,8 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     /// Exit code for the process (0 = success, non-zero = error).
     pub async fn run(&mut self) -> Result<i32> {
         let result = self.run_inner().await;
+        // Quit never waits for an in-flight release check.
+        self.startup_update_check.cancel();
         let disable_theme_reporting = self.prepare_terminal_restore();
         if disable_theme_reporting {
             let _ = terminal::disable_theme_reporting();
@@ -2320,6 +2326,12 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         self.terminal_session_started = true;
         let startup_seqs = self.terminal_notifier.session_started();
         Self::write_terminal_sequences(&startup_seqs);
+
+        // The bounded release check runs only now, after the first frame, and
+        // reports through the loop wake. The opt-in
+        // `MAESTRO_AUTO_UPDATE=apply` path ran before terminal setup instead
+        // (`update_cli::run_startup_update`).
+        self.spawn_startup_update_check();
 
         // Index @-mention files with a bounded, killable scan (see workspace.rs).
         // Kick it off on a background thread so agent spawn is not gated on it.
@@ -2370,6 +2382,9 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 needs_redraw = true;
             }
             if self.poll_setup_login() {
+                needs_redraw = true;
+            }
+            if self.poll_startup_update_notice() {
                 needs_redraw = true;
             }
             if self.poll_onboarding() {
@@ -5879,6 +5894,7 @@ mod session_commands;
 mod session_recording;
 mod session_transition;
 mod startup;
+mod startup_update;
 
 #[cfg(test)]
 mod tests;

@@ -367,6 +367,28 @@ impl PtySession {
         extra_env: &[(&str, &str)],
         columns: u16,
     ) -> Self {
+        Self::launch(
+            mock,
+            workdir,
+            PtyLaunch {
+                executable: std::env::var_os("CARGO_BIN_EXE_maestro-tui")
+                    .expect("Cargo must provide the maestro-tui integration-test binary"),
+                args,
+                extra_env,
+                removed_env: &[],
+                columns,
+            },
+        )
+    }
+
+    fn launch(mock: &MockOpenAiServer, workdir: &std::path::Path, launch: PtyLaunch<'_>) -> Self {
+        let PtyLaunch {
+            executable,
+            args,
+            extra_env,
+            removed_env,
+            columns,
+        } = launch;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -384,14 +406,12 @@ impl PtySession {
             std::fs::write(&preferences, r#"{"onboardingSeen":true}"#).unwrap();
         }
 
-        let mut command = CommandBuilder::new(
-            std::env::var_os("CARGO_BIN_EXE_maestro-tui")
-                .expect("Cargo must provide the maestro-tui integration-test binary"),
-        );
+        let mut command = CommandBuilder::new(executable);
         command.args(args);
         command.cwd(workdir);
-        // CommandBuilder starts from an empty environment; pass through only
-        // what the child needs and pin everything else explicitly.
+        // CommandBuilder copies the parent environment (portable-pty's
+        // `get_base_env`). Pin what the child needs explicitly; a scenario
+        // that must see a variable unset lists it in `removed_env`.
         for key in ["PATH", "LANG", "USER", "LOGNAME", "TMPDIR"] {
             if let Ok(value) = std::env::var(key) {
                 command.env(key, value);
@@ -424,6 +444,9 @@ impl PtySession {
         );
         for (name, value) in extra_env {
             command.env(name, value);
+        }
+        for name in removed_env {
+            command.env_remove(name);
         }
 
         let child = pair
@@ -648,6 +671,22 @@ impl PtySession {
         table
             .iter()
             .any(|(pid, _, args)| args.contains(needle) && is_descendant(&table, *pid, root))
+    }
+
+    /// Ask the TUI to quit (Ctrl+D) and report whether it exited on its own
+    /// within `timeout`. `Drop` kills a child that did not.
+    fn quit_and_wait(&mut self, timeout: Duration) -> Option<portable_pty::ExitStatus> {
+        self.send_bytes(b"\x04");
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// Ask the TUI to quit (Ctrl+D), then fall back to killing the child.
@@ -1095,6 +1134,282 @@ fn pty_confirmed_rewind_preserves_earlier_turn_and_persists_child_lineage() {
 /// thread, stretching the probe-reply window until keystrokes get eaten by
 /// the app's position reads.
 static PTY_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+/// Everything `PtySession::launch` needs beyond the harness defaults.
+struct PtyLaunch<'a> {
+    executable: std::ffi::OsString,
+    args: &'a [&'a str],
+    extra_env: &'a [(&'a str, &'a str)],
+    /// Removed after the harness defaults and `extra_env`, so the child sees
+    /// these unset even when the test runner's environment defines them.
+    removed_env: &'a [&'a str],
+    columns: u16,
+}
+
+/// A TCP listener that accepts every connection and never writes a byte.
+/// Stands in for a release source that is up but does not answer.
+struct HoldingServer {
+    url: String,
+    accepted: Arc<std::sync::atomic::AtomicUsize>,
+    _held: Arc<Mutex<Vec<TcpStream>>>,
+}
+
+impl HoldingServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind holding server");
+        let address = listener.local_addr().expect("holding server address");
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let held: Arc<Mutex<Vec<TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let thread_accepted = Arc::clone(&accepted);
+        let thread_held = Arc::clone(&held);
+        std::thread::Builder::new()
+            .name("pty-e2e-holding-server".to_owned())
+            .spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(stream) = stream else {
+                        break;
+                    };
+                    thread_held
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(stream);
+                    thread_accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .expect("spawn holding server thread");
+        Self {
+            url: format!("http://{address}/version.json"),
+            accepted,
+            _held: held,
+        }
+    }
+
+    fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn wait_for_connection(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while self.accepted() == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the release check never connected to the holding server within {timeout:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+/// Serve `{"version": <version>}` to every request, the same shape the
+/// update client's unit tests use. Returns the URL and a request counter.
+fn start_version_server(version: &str) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind version server");
+    let address = listener.local_addr().expect("version server address");
+    let body = format!(r#"{{"version":"{version}"}}"#);
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let thread_requests = Arc::clone(&requests);
+    std::thread::Builder::new()
+        .name("pty-e2e-version-server".to_owned())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    break;
+                };
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.flush();
+                thread_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        })
+        .expect("spawn version server thread");
+    (format!("http://{address}/version.json"), requests)
+}
+
+/// Lay the test binary out as a global npm package install so
+/// `update_cli::install_context` recognizes it. Returns the package root and
+/// the executable to launch.
+fn stage_fake_package_install(
+    workdir: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let source = std::env::var_os("CARGO_BIN_EXE_maestro-tui")
+        .expect("Cargo must provide the maestro-tui integration-test binary");
+    let package_root = workdir
+        .join("lib")
+        .join("node_modules")
+        .join("@evalops")
+        .join("deixic-code");
+    let vendor_dir = package_root.join("vendor").join("maestro").join("pty-e2e");
+    std::fs::create_dir_all(&vendor_dir).expect("create vendor dir");
+    let executable = vendor_dir.join("maestro");
+    if std::fs::hard_link(&source, &executable).is_err() {
+        std::fs::copy(&source, &executable).expect("copy test binary into the fake package");
+    }
+    let bin_dir = package_root.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+    std::fs::write(bin_dir.join("maestro"), "#!/bin/sh\nexit 0\n").expect("write launcher");
+    (package_root, executable)
+}
+
+/// Variables that would switch the startup check off or reroute it. Removed
+/// so the child runs the default (notice) mode regardless of the runner's
+/// environment.
+const STARTUP_UPDATE_ENV_TO_REMOVE: &[&str] = &[
+    "CI",
+    "NODE_ENV",
+    "MAESTRO_AUTO_UPDATE",
+    "MAESTRO_STARTUP_UPDATE",
+    "MAESTRO_SKIP_STARTUP_UPDATE",
+    "MAESTRO_UPDATE_URLS",
+    "MAESTRO_UPDATE_CHANNEL",
+    "MAESTRO_MANAGED_POLICY_PATH",
+];
+
+fn startup_update_launch<'a>(
+    executable: &std::path::Path,
+    package_root: &'a str,
+    update_url: &'a str,
+    timeout_ms: &'a str,
+) -> (std::ffi::OsString, Vec<(&'a str, &'a str)>) {
+    (
+        executable.as_os_str().to_owned(),
+        vec![
+            ("MAESTRO_INSTALL_METHOD", "package"),
+            ("MAESTRO_PACKAGE_NAME", "@evalops/deixic-code"),
+            ("MAESTRO_PACKAGE_ROOT", package_root),
+            ("MAESTRO_UPDATE_URL", update_url),
+            ("MAESTRO_VERSION", "1.0.0"),
+            ("MAESTRO_STARTUP_UPDATE_TIMEOUT_MS", timeout_ms),
+        ],
+    )
+}
+
+/// Terminal setup and the first frame must not wait for the release check.
+///
+/// The check is pointed at a socket that accepts and never answers, with the
+/// bound raised to 60 s. Before the fix the check ran before `terminal::init`,
+/// so the "Starting…" composer could not appear inside the 5 s wait. After
+/// the fix the composer appears, the check connects afterwards and stays
+/// pending, and Ctrl+D exits without waiting for the bound.
+#[test]
+fn pty_first_frame_renders_while_the_startup_update_check_is_pending() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut mock = MockOpenAiServer::start(Vec::new());
+    mock.managed_setup_base_url = start_mock_managed_setup_server_with_gate(Some(gate));
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let (package_root, executable) = stage_fake_package_install(workdir.path());
+    let package_root = package_root.to_string_lossy().into_owned();
+    let holding = HoldingServer::start();
+    let (executable, extra_env) =
+        startup_update_launch(&executable, &package_root, &holding.url, "60000");
+
+    let started = Instant::now();
+    let mut session = PtySession::launch(
+        &mock,
+        workdir.path(),
+        PtyLaunch {
+            executable,
+            args: &["--model", "openai/gpt-4o"],
+            extra_env: &extra_env,
+            removed_env: STARTUP_UPDATE_ENV_TO_REMOVE,
+            columns: 120,
+        },
+    );
+    session.wait_for_text("Starting…", Duration::from_secs(5));
+    let first_frame = started.elapsed();
+    assert_eq!(
+        holding.accepted(),
+        0,
+        "the release check must not run before the first frame"
+    );
+
+    // Policy release lets the loop start; the check starts after its first
+    // frame and then stays pending against the silent socket.
+    release.send(()).unwrap();
+    // Agent spawn runs between the first frame and the loop; under load it
+    // takes several seconds, so the connection wait uses the startup ceiling.
+    holding.wait_for_connection(READY_TIMEOUT);
+    let check_connected = started.elapsed();
+
+    let quit_started = Instant::now();
+    let status = session.quit_and_wait(Duration::from_secs(10));
+    let quit_elapsed = quit_started.elapsed();
+    assert!(
+        status.as_ref().is_some_and(|status| status.success()),
+        "quit must not wait for the pending 60 s release check (exit status: {status:?})"
+    );
+    eprintln!(
+        "startup composer at {first_frame:?}; release check connected at {check_connected:?} and was still pending; quit took {quit_elapsed:?}"
+    );
+}
+
+/// A newer release reaches the transcript as a notice after the first frame,
+/// through the loop wake, without any install.
+#[test]
+fn pty_startup_update_notice_appears_after_the_first_frame() {
+    let _serial = PTY_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (release, gate) = std::sync::mpsc::channel();
+    let mut mock = MockOpenAiServer::start(Vec::new());
+    mock.managed_setup_base_url = start_mock_managed_setup_server_with_gate(Some(gate));
+    let workdir = tempfile::tempdir().expect("temp workdir");
+    let (package_root, executable) = stage_fake_package_install(workdir.path());
+    let package_root = package_root.to_string_lossy().into_owned();
+    let (update_url, version_requests) = start_version_server("99.0.0");
+    let (executable, extra_env) =
+        startup_update_launch(&executable, &package_root, &update_url, "5000");
+
+    let started = Instant::now();
+    let mut session = PtySession::launch(
+        &mock,
+        workdir.path(),
+        PtyLaunch {
+            executable,
+            args: &["--model", "openai/gpt-4o"],
+            extra_env: &extra_env,
+            removed_env: STARTUP_UPDATE_ENV_TO_REMOVE,
+            columns: 120,
+        },
+    );
+    session.wait_for_text("Starting…", Duration::from_secs(5));
+    assert_eq!(
+        version_requests.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the release check must not run before the first frame"
+    );
+    release.send(()).unwrap();
+    let request_deadline = Instant::now() + READY_TIMEOUT;
+    while version_requests.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < request_deadline,
+            "the release check never requested version.json"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let requested_at = started.elapsed();
+    // The transcript renders the code span without its backticks. The notice
+    // lands once the loop starts, after agent spawn, so use the startup ceiling.
+    session.wait_for_wrapped_text(
+        "Deixic Code 99.0.0 is available (current 1.0.0); run deixic-code update.",
+        READY_TIMEOUT,
+    );
+    let notice_at = started.elapsed();
+    assert_eq!(
+        mock.request_count(),
+        0,
+        "the notice must not trigger a model request"
+    );
+    let status = session.quit_and_wait(Duration::from_secs(10));
+    assert!(status.is_some_and(|status| status.success()));
+    eprintln!(
+        "release check requested version.json at {requested_at:?}; notice visible at {notice_at:?}"
+    );
+}
 
 fn bad_gateway_turn() -> ScriptedTurn {
     ScriptedTurn {

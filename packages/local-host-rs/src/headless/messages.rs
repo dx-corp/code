@@ -1007,6 +1007,10 @@ pub enum FromAgentMessage {
     ResponseStart {
         response_id: String,
     },
+    /// First non-empty raw assistant delta, with no model text on this event.
+    AssistantTextObserved {
+        response_id: String,
+    },
     /// Response chunk (text or thinking)
     ResponseChunk {
         response_id: String,
