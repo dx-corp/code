@@ -865,13 +865,18 @@ mod ui_theme_tests {
     fn built_in_control_surfaces_are_opaque_including_light_on_dark_terminals() {
         for theme in [dark_theme(), light_theme(), high_contrast_theme()] {
             let ui = theme.ui_theme();
-            assert_ne!(
-                ui.surface,
-                Color::Reset,
-                "{} must not inherit an incompatible terminal background",
-                theme.name
-            );
-            assert_ne!(ui.surface, ui.text);
+            if palette::color_level() == palette::ColorLevel::None {
+                assert_eq!(ui.surface, Color::Reset);
+                assert_eq!(ui.text, Color::Reset);
+            } else {
+                assert_ne!(
+                    ui.surface,
+                    Color::Reset,
+                    "{} must not inherit an incompatible terminal background",
+                    theme.name
+                );
+                assert_ne!(ui.surface, ui.text);
+            }
             assert_eq!(
                 ui.surface,
                 parse_color(&theme.colors.assistant_message_bg)

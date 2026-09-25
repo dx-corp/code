@@ -2147,36 +2147,114 @@ fn persist_rollback_suppression(path: &Path, version: &str) -> Result<()> {
     write_startup_state(path, &state)
 }
 
-fn startup_update_mode() -> &'static str {
-    let mode = env::var("MAESTRO_AUTO_UPDATE")
-        .or_else(|_| env::var("MAESTRO_STARTUP_UPDATE"))
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
+/// What an installed interactive launch does about a newer release.
+///
+/// Read from `MAESTRO_AUTO_UPDATE`, then `MAESTRO_STARTUP_UPDATE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartupUpdateMode {
+    /// `0`, `false`, `off`, `skip`, or `disabled`: no startup check at all.
+    Off,
+    /// The default, and every value other than the off and apply spellings.
+    /// The TUI runs a bounded check after its first frame and shows a notice
+    /// in the transcript when a newer release exists. Nothing is installed.
+    Notice,
+    /// `apply` or `install`: check, install, and restart before the terminal
+    /// is set up. This is the only path that still delays the first frame,
+    /// and it is opt-in.
+    ApplyBeforeTui,
+}
+
+pub(crate) fn startup_update_mode_from(value: Option<&str>) -> StartupUpdateMode {
+    let mode = value.unwrap_or_default().trim().to_ascii_lowercase();
     if matches!(mode.as_str(), "0" | "false" | "off" | "skip" | "disabled") {
-        "off"
-    } else if matches!(mode.as_str(), "check" | "notice" | "notify") {
-        "check"
+        StartupUpdateMode::Off
+    } else if matches!(mode.as_str(), "apply" | "install") {
+        StartupUpdateMode::ApplyBeforeTui
     } else {
-        "apply"
+        StartupUpdateMode::Notice
     }
+}
+
+fn startup_update_mode() -> StartupUpdateMode {
+    let value = env::var("MAESTRO_AUTO_UPDATE")
+        .or_else(|_| env::var("MAESTRO_STARTUP_UPDATE"))
+        .ok();
+    startup_update_mode_from(value.as_deref())
 }
 
 fn startup_update_enabled() -> bool {
     env::var_os("MAESTRO_SKIP_STARTUP_UPDATE").is_none()
         && env::var_os("CI").is_none()
         && env::var("NODE_ENV").ok().as_deref() != Some("test")
-        && startup_update_mode() != "off"
+        && startup_update_mode() != StartupUpdateMode::Off
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
 }
 
-/// Best-effort update of an installed interactive Maestro before the TUI starts.
+/// One bounded startup check against the trusted release sources.
 ///
-/// Returns the restarted process exit code after a successful update. All check,
-/// state, and install failures fail open so an unavailable update service can
-/// never prevent Maestro from starting.
-pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> {
+/// `total_timeout` is the existing `MAESTRO_STARTUP_UPDATE_TIMEOUT_MS` bound
+/// (default 350 ms); it applies to the whole check, and each source gets an
+/// equal share of it.
+#[derive(Debug, Clone)]
+pub(crate) struct StartupUpdateCheckRequest {
+    current: String,
+    urls: Vec<String>,
+    channel: UpdateChannel,
+    total_timeout: Duration,
+    source_timeout: Duration,
+}
+
+impl StartupUpdateCheckRequest {
+    fn new(current: String, urls: Vec<String>, channel: UpdateChannel) -> Self {
+        let total_timeout = env_duration(
+            "MAESTRO_STARTUP_UPDATE_TIMEOUT_MS",
+            DEFAULT_STARTUP_CHECK_TIMEOUT,
+            false,
+        );
+        Self::with_timeout(current, urls, channel, total_timeout)
+    }
+
+    fn with_timeout(
+        current: String,
+        urls: Vec<String>,
+        channel: UpdateChannel,
+        total_timeout: Duration,
+    ) -> Self {
+        let source_count = u128::try_from(urls.len().max(1)).unwrap_or(1);
+        let source_timeout = Duration::from_millis(
+            u64::try_from((total_timeout.as_millis() / source_count).max(1)).unwrap_or(1),
+        );
+        Self {
+            current,
+            urls,
+            channel,
+            total_timeout,
+            source_timeout,
+        }
+    }
+
+    /// The check, bounded by `total_timeout`. `None` on timeout, failure, or
+    /// when the installed version is already current.
+    async fn run(self) -> Option<UpdateCheck> {
+        let check = tokio::time::timeout(
+            self.total_timeout,
+            check_for_update_urls_with_timeout(
+                &self.current,
+                self.urls,
+                self.source_timeout,
+                self.channel,
+            ),
+        )
+        .await
+        .ok()?;
+        (check.status == "available" && check.latest_version.is_some()).then_some(check)
+    }
+}
+
+/// The gate every startup check passes: machine policy, environment opt-outs,
+/// a real terminal, and an installed (package or release) binary.
+fn startup_update_check_request() -> Option<(InstallContext, StartupUpdateCheckRequest)> {
     if maestro_local_host::safety::vendor_network_disabled() {
         return None;
     }
@@ -2187,38 +2265,70 @@ pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> 
     let channel = UpdateChannel::from_environment().ok()?;
     let current = current_version();
     let urls = trusted_startup_update_urls(&context, channel);
-    let total_timeout = env_duration(
-        "MAESTRO_STARTUP_UPDATE_TIMEOUT_MS",
-        DEFAULT_STARTUP_CHECK_TIMEOUT,
-        false,
-    );
-    let source_count = u128::try_from(urls.len().max(1)).unwrap_or(1);
-    let source_timeout = Duration::from_millis(
-        u64::try_from((total_timeout.as_millis() / source_count).max(1)).unwrap_or(1),
-    );
-    let check = match tokio::time::timeout(
-        total_timeout,
-        check_for_update_urls_with_timeout(&current, urls, source_timeout, channel),
-    )
+    let request = StartupUpdateCheckRequest::new(current, urls, channel);
+    Some((context, request))
+}
+
+/// A newer release the TUI should mention. Carries raw values; the UI
+/// formats them with its own locale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StartupUpdateNotice {
+    pub(crate) latest: String,
+    pub(crate) current: String,
+}
+
+/// Background startup check for the interactive TUI.
+///
+/// Runs after the first frame; the caller never awaits it on the startup
+/// path. Returns `None` in every case except a completed check that found a
+/// newer release while the mode is [`StartupUpdateMode::Notice`]. The
+/// [`StartupUpdateMode::ApplyBeforeTui`] path already ran (or restarted the
+/// process) before the terminal was set up, so it is not repeated here.
+pub(crate) async fn startup_update_notice() -> Option<StartupUpdateNotice> {
+    // The gate reads the environment, checks the tty, and resolves the
+    // install layout from disk. Keep those syscalls off the async worker.
+    let request = tokio::task::spawn_blocking(|| {
+        if startup_update_mode() != StartupUpdateMode::Notice {
+            return None;
+        }
+        startup_update_check_request().map(|(_, request)| request)
+    })
     .await
-    {
-        Ok(check) if check.status != "failed" => check,
-        _ => return None,
-    };
-    if check.status != "available" {
+    .ok()??;
+    startup_update_notice_for(request).await
+}
+
+async fn startup_update_notice_for(
+    request: StartupUpdateCheckRequest,
+) -> Option<StartupUpdateNotice> {
+    let current = request.current.clone();
+    let check = request.run().await?;
+    Some(StartupUpdateNotice {
+        latest: check.latest_version?,
+        current,
+    })
+}
+
+/// Explicit `MAESTRO_AUTO_UPDATE=apply`: update an installed interactive
+/// Maestro before the TUI starts.
+///
+/// This is the only startup path that waits on the network before terminal
+/// setup, and it is bounded by `MAESTRO_STARTUP_UPDATE_TIMEOUT_MS`. Every other
+/// mode returns `None` immediately; the default notice check runs inside the
+/// TUI after the first frame (see [`startup_update_notice`]).
+///
+/// Returns the restarted process exit code after a successful update. All check,
+/// state, and install failures fail open so an unavailable update service can
+/// never prevent Maestro from starting.
+pub async fn run_startup_update(raw_args: &[std::ffi::OsString]) -> Option<i32> {
+    if startup_update_mode() != StartupUpdateMode::ApplyBeforeTui {
         return None;
     }
+    let (context, request) = startup_update_check_request()?;
+    let current = request.current.clone();
+    let channel = request.channel;
+    let check = request.run().await?;
     let latest = check.latest_version.as_deref()?;
-    if startup_update_mode() == "check" {
-        eprintln!(
-            "{}",
-            crate::localization::cli_locale().format(
-                "Deixic Code {0} is available (current {1}); run `deixic-code update`.",
-                &[(latest).to_string(), (current).clone()]
-            )
-        );
-        return None;
-    }
 
     let state_path = startup_state_path_for(Some(&context))?;
     let update_lock = try_acquire_startup_update_lock(&state_path).ok()??;
@@ -3670,6 +3780,136 @@ mod tests {
         fs::create_dir_all(local.parent().unwrap()).unwrap();
         fs::write(&local, b"local binary").unwrap();
         assert!(legacy_package_install_context(&local).is_none());
+    }
+
+    #[test]
+    fn startup_update_mode_defaults_to_notice_and_only_apply_installs_before_the_tui() {
+        assert_eq!(startup_update_mode_from(None), StartupUpdateMode::Notice);
+        for value in ["", "check", "notice", "notify", "1", "true", "on", "yes"] {
+            assert_eq!(
+                startup_update_mode_from(Some(value)),
+                StartupUpdateMode::Notice,
+                "{value:?}"
+            );
+        }
+        for value in ["0", "false", "off", "skip", "disabled", " OFF "] {
+            assert_eq!(
+                startup_update_mode_from(Some(value)),
+                StartupUpdateMode::Off,
+                "{value:?}"
+            );
+        }
+        for value in ["apply", "install", "Apply", " install "] {
+            assert_eq!(
+                startup_update_mode_from(Some(value)),
+                StartupUpdateMode::ApplyBeforeTui,
+                "{value:?}"
+            );
+        }
+    }
+
+    fn startup_request(url: String, timeout: Duration) -> StartupUpdateCheckRequest {
+        StartupUpdateCheckRequest::with_timeout(
+            "0.10.52".to_owned(),
+            vec![url],
+            UpdateChannel::Stable,
+            timeout,
+        )
+    }
+
+    #[tokio::test]
+    async fn startup_update_notice_reports_a_newer_release() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("read request");
+            let body = r#"{"version":"0.11.0"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+        });
+
+        let request = startup_request(
+            format!("http://{address}/version.json"),
+            Duration::from_secs(5),
+        );
+        let notice = startup_update_notice_for(request).await;
+        server.join().expect("join server");
+        assert_eq!(
+            notice,
+            Some(StartupUpdateNotice {
+                latest: "0.11.0".to_owned(),
+                current: "0.10.52".to_owned(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_update_notice_is_silent_when_the_installed_version_is_current() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("server address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("read request");
+            let body = r#"{"version":"0.10.52"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+        });
+
+        let request = startup_request(
+            format!("http://{address}/version.json"),
+            Duration::from_secs(5),
+        );
+        let notice = startup_update_notice_for(request).await;
+        server.join().expect("join server");
+        assert_eq!(notice, None);
+    }
+
+    /// The startup bound (`MAESTRO_STARTUP_UPDATE_TIMEOUT_MS`, default 350 ms)
+    /// still caps the whole check when a source accepts and never answers.
+    #[tokio::test]
+    async fn startup_update_notice_is_bounded_when_the_source_never_answers() {
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind holding server");
+        let address = listener.local_addr().expect("holding server address");
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept request");
+            // Hold the connection open, unanswered, until the test finishes.
+            let _ = done_rx.recv();
+            drop(stream);
+        });
+
+        let bound = Duration::from_millis(200);
+        let request = startup_request(format!("http://{address}/version.json"), bound);
+        let started = Instant::now();
+        let notice = startup_update_notice_for(request).await;
+        let elapsed = started.elapsed();
+        let _ = done_tx.send(());
+        server.join().expect("join holding server");
+
+        assert_eq!(notice, None);
+        assert!(
+            elapsed >= bound,
+            "the check returned before its {bound:?} bound: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the check ran past its {bound:?} bound: {elapsed:?}"
+        );
     }
 
     #[test]

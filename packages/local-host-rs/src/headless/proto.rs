@@ -341,6 +341,9 @@ mod tests {
             FromAgentMessage::ResponseStart {
                 response_id: "response-1".into(),
             },
+            FromAgentMessage::AssistantTextObserved {
+                response_id: "response-1".into(),
+            },
             FromAgentMessage::ResponseChunk {
                 response_id: "response-1".into(),
                 content: "chunk".into(),
@@ -610,6 +613,7 @@ mod tests {
             | FromAgentMessage::WorkspaceCapabilitySetApplied { .. }
             | FromAgentMessage::Ready { .. }
             | FromAgentMessage::ResponseStart { .. }
+            | FromAgentMessage::AssistantTextObserved { .. }
             | FromAgentMessage::ResponseChunk { .. }
             | FromAgentMessage::ResponseEnd { .. }
             | FromAgentMessage::TurnCompleted { .. }
@@ -1161,6 +1165,7 @@ mod tests {
             FromPayload::HelloOk(_) => "hello_ok",
             FromPayload::Ready(_) => "ready",
             FromPayload::ResponseStart(_) => "response_start",
+            FromPayload::AssistantTextObserved(_) => "assistant_text_observed",
             FromPayload::ResponseChunk(_) => "response_chunk",
             FromPayload::ResponseEnd(_) => "response_end",
             FromPayload::ToolCall(_) => "tool_call",
@@ -1247,6 +1252,7 @@ mod tests {
             FromPayload::HelloOk(Default::default()),
             FromPayload::Ready(Default::default()),
             FromPayload::ResponseStart(Default::default()),
+            FromPayload::AssistantTextObserved(Default::default()),
             FromPayload::ResponseChunk(Default::default()),
             FromPayload::ResponseEnd(Default::default()),
             FromPayload::ToolCall(Default::default()),

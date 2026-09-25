@@ -557,6 +557,10 @@ message ResponseChunkMessage {
   bool is_thinking = 3;
 }
 
+message AssistantTextObservedMessage {
+  string response_id = 1;
+}
+
 message ResponseEndMessage {
   string response_id = 1;
   ResponseUsage usage = 2;
@@ -917,5 +921,6 @@ message FromAgentEnvelope {
     DelegationEventMessage delegation_event = 33;
     WorkspaceCapabilitySetAppliedMessage workspace_capability_set_applied = 34;
     ManagedAuthorizationRequestMessage managed_authorization_request = 35;
+    AssistantTextObservedMessage assistant_text_observed = 36;
   }
 }

@@ -660,7 +660,16 @@ mod tests {
         let mut custom = crate::themes::light_theme();
         custom.colors.md_heading = "#ff0000".into();
         custom.colors.md_link = "#00ff00".into();
-        assert_ne!(custom.get_color("md_link"), custom.get_color("md_heading"));
+        assert_ne!(
+            crate::palette::color_for_level(0, 255, 0, crate::palette::ColorLevel::Indexed),
+            crate::palette::color_for_level(255, 0, 0, crate::palette::ColorLevel::Indexed)
+        );
+        if crate::palette::color_level() == crate::palette::ColorLevel::None {
+            assert_eq!(custom.get_color("md_link"), Some(Color::Reset));
+            assert_eq!(custom.get_color("md_heading"), Some(Color::Reset));
+        } else {
+            assert_ne!(custom.get_color("md_link"), custom.get_color("md_heading"));
+        }
         for theme in [crate::themes::light_theme(), custom] {
             let line = parse_markdown_line_with_theme("See [guide](https://example.com).", &theme);
             let link = line

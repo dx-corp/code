@@ -47,6 +47,7 @@
     "hello_ok",
     "ready",
     "response_start",
+    "assistant_text_observed",
     "response_chunk",
     "response_end",
     "tool_call",

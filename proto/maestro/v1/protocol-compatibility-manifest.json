@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:f5e8e7ac8d9e165b854eeae3baa063030fa269c8f847c86490c63d263b5426ce",
+  "compatibilityDigest": "sha256:1f7aa547ac86f4008bab638ff01321efb99a2274bcf8d823eea3a2cb2763db56",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -37,8 +37,8 @@
         "2026-08-08"
       ],
       "schemaDeclaredVersion": "2026-08-08",
-      "schemaContractDigest": "sha256:6f861ccdc76c8f85150a6a2aeceb99a0da5847f04ffd3d0b39011d94c81dbc53",
-      "runtimeContractDigest": "sha256:cea8cf73427930169aa188ee8eca2ccee0bb020f7d379150b44dbd0c6de0952a",
+      "schemaContractDigest": "sha256:88a8ce00ee666bde7d519eacf552f2c22608b553446f3b5a718ca66ce696894f",
+      "runtimeContractDigest": "sha256:2883475a1a847bdfc2cd9585a88a657ce788380951f2de1593ae6eaa5d97716e",
       "messages": {
         "toRuntime": [
           "managed_authorization_result",
@@ -78,6 +78,7 @@
           "workspace_capability_set_applied",
           "ready",
           "response_start",
+          "assistant_text_observed",
           "response_chunk",
           "response_end",
           "turn_completed",
@@ -201,7 +202,7 @@
     },
     "runtime": {
       "schemaVersion": "evalops.maestro.headless-protocol.v1",
-      "contractDigest": "sha256:43703fc50891d32f11e169729feb0a9eed7b92546a53234c758ba451dc1f4e53",
+      "contractDigest": "sha256:8353f3612f7e7f4f7f5c55020b2c255f7ad52b57417a027ae66ceb657c402ba8",
       "receipt": {
         "schemaVersion": "evalops.maestro.runtime-receipt.v1",
         "sourceDigest": "sha256:8fbcb58770dccabaf0d87b2532121addafd35e04f5a09f9dffdd2dea8897b921",
