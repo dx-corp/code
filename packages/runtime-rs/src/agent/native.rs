@@ -3737,10 +3737,23 @@ fn vault_provider_history_shared(
     messages: &Arc<Vec<Message>>,
     credential_vault: &CredentialVault,
 ) -> Result<Arc<Vec<Message>>> {
+    #[cfg(feature = "test-support")]
+    PROVIDER_HISTORY_VAULT_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(Arc::new(vault_provider_history(
         messages,
         credential_vault,
     )?))
+}
+
+#[cfg(feature = "test-support")]
+static PROVIDER_HISTORY_VAULT_PASSES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Return and reset the number of full history vault passes in this process.
+/// This deterministic work counter is only compiled for benchmark builds.
+#[cfg(feature = "test-support")]
+pub fn take_provider_history_vault_passes_for_bench() -> u64 {
+    PROVIDER_HISTORY_VAULT_PASSES.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The only direct-provider payload constructed by the native turn loop.
@@ -3755,10 +3768,21 @@ struct ProviderSafeRequest {
 impl ProviderSafeRequest {
     fn prepare(
         messages: &Arc<Vec<Message>>,
-        mut config: RequestConfig,
+        config: RequestConfig,
         vault: &CredentialVault,
     ) -> Result<Self> {
         let messages = vault_provider_history_shared(messages, vault)?;
+        Self::prepare_vaulted(messages, config, vault)
+    }
+
+    // The provider loop already vaults its projected history before computing
+    // request usage. Keep that projection and recheck it after config
+    // preparation, which can discover credentials in system or tool text.
+    fn prepare_vaulted(
+        messages: Arc<Vec<Message>>,
+        mut config: RequestConfig,
+        vault: &CredentialVault,
+    ) -> Result<Self> {
         config.system = config.system.map(|system| vault.vault_in_text(&system));
         config.tools = vault_provider_tools(config.tools.as_ref(), vault)?;
         // Config preparation may discover a credential present in history.

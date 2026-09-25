@@ -2,6 +2,22 @@
 
 use super::*;
 
+fn prior_route_notes(
+    snapshot: Option<&maestro_context::token_counting::RequestCacheSnapshot>,
+) -> Vec<(maestro_ai::cache_topology::CacheTopology, bool)> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+    let mut notes = Vec::new();
+    if let Some(topology) = &snapshot.cache_topology {
+        notes.push((topology.clone(), snapshot.tools_system_materialized));
+    }
+    for prior in &snapshot.prior_routes {
+        notes.push((prior.topology.clone(), prior.tools_system_materialized));
+    }
+    notes
+}
+
 impl NativeAgentRunner {
     async fn recover_durable_tool_operations(&mut self) {
         let mut records = match self.hooks.hook_load_tool_operations().await {
@@ -564,6 +580,8 @@ impl NativeAgentRunner {
             thinking,
             cache_topology: None,
             cache_system_prompt,
+            explicit_cache_boundaries:
+                maestro_ai::cache_topology::explicit_cache_boundaries_enabled(),
         };
         let mut audit = self
             .runtime_audit
@@ -576,21 +594,32 @@ impl NativeAgentRunner {
                 .map(|client| client.cache_namespace())
                 .transpose()?
                 .unwrap_or_else(|| "local".into());
+            let prior_notes = prior_route_notes(audit.request_cache.as_ref());
             let previous = audit
                 .request_cache
                 .as_ref()
                 .and_then(|snapshot| snapshot.cache_topology.as_ref());
-            config.cache_topology = Some(
-                maestro_ai::cache_topology::PreparedPrompt::prepare(
-                    request_messages,
-                    &config,
-                    namespace,
-                    previous,
-                )?
-                .with_volatile_tail(self.prompt_context.clone()),
-            );
+            let mut prepared = maestro_ai::cache_topology::PreparedPrompt::prepare(
+                request_messages,
+                &config,
+                namespace,
+                previous,
+            )?;
+            for (topology, materialized) in &prior_notes {
+                prepared.note_prior_route(topology, *materialized, request_messages)?;
+            }
+            prepared = prepared.with_volatile_tail(self.prompt_context.clone());
+            prepared.finalize_boundary(
+                self.client.as_ref().map(|client| client.provider_name()),
+                &config.model,
+                config.cache_system_prompt,
+                config.system.is_some(),
+                !config.tools.is_empty(),
+                request_messages.len(),
+            )?;
+            config.cache_topology = Some(prepared);
         }
-        let snapshot = maestro_context::token_counting::RequestCacheSnapshot::from_request(
+        let mut snapshot = maestro_context::token_counting::RequestCacheSnapshot::from_request(
             &config,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -598,6 +627,17 @@ impl NativeAgentRunner {
                 .as_secs(),
         );
         if include_tools {
+            if let Some(provider) = self.client.as_ref().map(|client| client.provider_name()) {
+                snapshot.provider = Some(provider.to_string());
+            }
+            if let Some(previous) = audit.request_cache.as_ref() {
+                let next_model = snapshot
+                    .cache_topology
+                    .as_ref()
+                    .map(|topology| topology.shape.model.as_str())
+                    .unwrap_or("");
+                snapshot.prior_routes = previous.rolled_prior_routes(next_model);
+            }
             audit.cache_reuse = audit
                 .request_cache
                 .as_ref()
@@ -628,23 +668,45 @@ impl NativeAgentRunner {
             .runtime_audit
             .write()
             .unwrap_or_else(|p| p.into_inner());
+        let prior_notes = prior_route_notes(audit.request_cache.as_ref());
         let previous = audit
             .request_cache
             .as_ref()
             .and_then(|snapshot| snapshot.cache_topology.as_ref());
-        config.cache_topology = Some(
-            maestro_ai::cache_topology::PreparedPrompt::prepare(
-                &messages, &config, namespace, previous,
-            )?
-            .with_volatile_tail(self.prompt_context.clone()),
-        );
-        let snapshot = maestro_context::token_counting::RequestCacheSnapshot::from_request(
+        let mut prepared = maestro_ai::cache_topology::PreparedPrompt::prepare(
+            &messages, &config, namespace, previous,
+        )?;
+        for (topology, materialized) in &prior_notes {
+            prepared.note_prior_route(topology, *materialized, &messages)?;
+        }
+        prepared = prepared.with_volatile_tail(self.prompt_context.clone());
+        prepared.finalize_boundary(
+            self.client.as_ref().map(|client| client.provider_name()),
+            &config.model,
+            config.cache_system_prompt,
+            config.system.is_some(),
+            !config.tools.is_empty(),
+            messages.len(),
+        )?;
+        config.cache_topology = Some(prepared);
+        let mut snapshot = maestro_context::token_counting::RequestCacheSnapshot::from_request(
             &config,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
         );
+        if let Some(provider) = self.client.as_ref().map(|client| client.provider_name()) {
+            snapshot.provider = Some(provider.to_string());
+        }
+        if let Some(previous) = audit.request_cache.as_ref() {
+            let next_model = snapshot
+                .cache_topology
+                .as_ref()
+                .map(|topology| topology.shape.model.as_str())
+                .unwrap_or("");
+            snapshot.prior_routes = previous.rolled_prior_routes(next_model);
+        }
         audit.cache_reuse = audit
             .request_cache
             .as_ref()
@@ -762,9 +824,18 @@ impl NativeAgentRunner {
             .map(|client| client.cache_namespace())
             .transpose()?
             .unwrap_or_else(|| "local".into());
-        config.cache_topology = Some(maestro_ai::cache_topology::PreparedPrompt::auxiliary(
-            messages, &config, namespace,
-        )?);
+        let mut prepared =
+            maestro_ai::cache_topology::PreparedPrompt::auxiliary(messages, &config, namespace)?;
+        // Auxiliary summaries never take the primary checkpoint or a routing lease.
+        prepared.finalize_boundary(
+            self.client.as_ref().map(|client| client.provider_name()),
+            &config.model,
+            false,
+            config.system.is_some(),
+            !config.tools.is_empty(),
+            messages.len(),
+        )?;
+        config.cache_topology = Some(prepared);
         Ok(config)
     }
     pub(super) async fn run_selective_summary(

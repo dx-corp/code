@@ -536,6 +536,395 @@ impl OpenAiRequestCapabilities {
     }
 }
 
+/// OpenAI prompt-caching guide. Re-check before adding a wire field.
+pub const OPENAI_PROMPT_CACHING_SOURCE: &str =
+    "https://developers.openai.com/api/docs/guides/prompt-caching (checked 2026-09-24)";
+/// Anthropic prompt-caching guide. Re-check before adding a wire field.
+pub const ANTHROPIC_PROMPT_CACHING_SOURCE: &str =
+    "https://platform.claude.com/docs/en/build-with-claude/prompt-caching (checked 2026-09-24)";
+
+/// How a route caches. Unknown does not inherit another route's lifetime or rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheBehavior {
+    Unknown,
+    Unsupported,
+    Implicit,
+    Explicit,
+}
+
+/// Where a caller is allowed to place a boundary. Empty means "do not send a marker".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheBoundaryKind {
+    /// Anthropic `cache_control` on tools, system, or a non-thinking message block.
+    AnthropicCacheControl,
+    /// OpenAI Responses `prompt_cache_breakpoint` on a content block. Not valid on top-level `instructions`.
+    OpenAiContentBreakpoint,
+    /// The provider chooses breakpoints. Callers must not send a marker parameter.
+    ProviderChosen,
+}
+
+/// How far a later request can see a breakpoint that was actually written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheLookback {
+    Unknown,
+    /// Anthropic checks at most this many blocks per breakpoint, counting the breakpoint.
+    Blocks(u32),
+    /// OpenAI explicit lookup: the first N and the latest M explicit breakpoints.
+    ExplicitBreakpoints {
+        first: u32,
+        latest: u32,
+    },
+}
+
+/// Retention the source actually states. A missing hint is not five minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheRetention {
+    Unknown,
+    Unsupported,
+    /// Anthropic default ephemeral lifetime. The clock starts when the caching request starts.
+    AnthropicEphemeral5m,
+    /// Anthropic `ttl: "1h"`. Twice the base input price. Not selected by the boundary planner.
+    AnthropicEphemeral1h,
+    /// GPT-5.6+ `prompt_cache_options.ttl` of `"30m"`, also the default. Minimum lifetime after write or reuse.
+    OpenAiTtl30m,
+    /// Earlier OpenAI models: `in_memory` is typically 5–10 minutes of inactivity, up to an hour.
+    OpenAiInMemory,
+    /// Earlier OpenAI `prompt_cache_retention: "24h"`. Up to 24 hours. Not a single cutoff.
+    OpenAiExtended24h,
+    /// Earlier OpenAI default depends on the organization's zero-data-retention policy, which this process does not know.
+    OpenAiOrganizationDependent,
+}
+
+impl CacheRetention {
+    /// A single sourced duration, in seconds, suitable only as a diagnostic hint.
+    /// `None` means the source does not give one number. Callers must not substitute 300.
+    #[must_use]
+    pub fn hint_seconds(self) -> Option<u64> {
+        match self {
+            Self::AnthropicEphemeral5m => Some(300),
+            Self::AnthropicEphemeral1h => Some(3_600),
+            Self::OpenAiTtl30m => Some(1_800),
+            Self::Unknown
+            | Self::Unsupported
+            | Self::OpenAiInMemory
+            | Self::OpenAiExtended24h
+            | Self::OpenAiOrganizationDependent => None,
+        }
+    }
+}
+
+/// How reported usage relates to cached and uncached input. Missing stays missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheUsageInterpretation {
+    Unknown,
+    /// `input_tokens` excludes cache read and cache creation. Total input is the sum of the three.
+    AnthropicSeparateCacheFields,
+    /// GPT-5.6+: `input_tokens` includes `cached_tokens` and `cache_write_tokens`. No 128-token rounding.
+    OpenAiInclusiveExact,
+    /// Earlier OpenAI: `cached_tokens` omits hidden system tokens and rounds down to a multiple of 128.
+    OpenAiCachedTokensRounded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheWireProtocol {
+    Unknown,
+    None,
+    AnthropicMessages,
+    BedrockConverse,
+    OpenAiResponses,
+    OpenAiChat,
+}
+
+/// Model-and-provider scoped cache contract. Rates are sourced milli-units of the
+/// uncached input price (100 = 0.1×). `None` is not a default of 100 or of 1.25×.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheCapability {
+    pub behavior: CacheBehavior,
+    pub boundary_kinds: &'static [CacheBoundaryKind],
+    pub minimum_cacheable_tokens: Option<u32>,
+    pub max_explicit_markers: Option<u8>,
+    pub lookback: CacheLookback,
+    pub read_rate_millis: Option<u32>,
+    pub write_rate_millis: Option<u32>,
+    pub retention: CacheRetention,
+    pub wire: CacheWireProtocol,
+    pub usage: CacheUsageInterpretation,
+    /// Attribution for this record. Not a provider semver.
+    pub record_id: &'static str,
+    pub source: &'static str,
+}
+
+const NO_BOUNDARIES: &[CacheBoundaryKind] = &[];
+const ANTHROPIC_BOUNDARIES: &[CacheBoundaryKind] = &[CacheBoundaryKind::AnthropicCacheControl];
+const OPENAI_EXPLICIT_BOUNDARIES: &[CacheBoundaryKind] =
+    &[CacheBoundaryKind::OpenAiContentBreakpoint];
+const PROVIDER_CHOSEN_BOUNDARIES: &[CacheBoundaryKind] = &[CacheBoundaryKind::ProviderChosen];
+
+/// Family, minimum cacheable tokens, cache-read milli-rate. Longer families come first
+/// so `claude-opus-4` does not swallow `claude-opus-4-5`.
+const ANTHROPIC_CACHE_TABLE: &[(&str, u32, u32)] = &[
+    ("claude-fable-5-1", 512, 25),
+    ("claude-mythos-5-1", 512, 25),
+    ("claude-opus-5-5", 512, 50),
+    ("claude-opus-5", 512, 100),
+    ("claude-fable-5", 512, 100),
+    ("claude-mythos-preview", 2_048, 100),
+    ("claude-mythos-5", 512, 100),
+    ("claude-opus-4-8", 1_024, 100),
+    ("claude-opus-4-7", 2_048, 100),
+    ("claude-opus-4-6", 4_096, 100),
+    ("claude-opus-4-5", 4_096, 100),
+    ("claude-sonnet-5", 1_024, 100),
+    ("claude-sonnet-4-6", 1_024, 100),
+    ("claude-sonnet-4-5", 1_024, 100),
+    ("claude-haiku-4-5", 4_096, 100),
+    ("claude-haiku-3-5", 2_048, 100),
+];
+
+fn unknown_capability(record_id: &'static str, source: &'static str) -> CacheCapability {
+    CacheCapability {
+        behavior: CacheBehavior::Unknown,
+        boundary_kinds: NO_BOUNDARIES,
+        minimum_cacheable_tokens: None,
+        max_explicit_markers: None,
+        lookback: CacheLookback::Unknown,
+        read_rate_millis: None,
+        write_rate_millis: None,
+        retention: CacheRetention::Unknown,
+        wire: CacheWireProtocol::Unknown,
+        usage: CacheUsageInterpretation::Unknown,
+        record_id,
+        source,
+    }
+}
+
+fn normalized_route(provider: Option<&str>, model: &str) -> (Option<String>, String) {
+    let stripped = strip_managed_model_prefix(model.trim());
+    let embedded = stripped
+        .split_once('/')
+        .map(|(name, _)| name.trim().to_ascii_lowercase());
+    let provider = provider
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_ascii_lowercase())
+        .or(embedded);
+    (provider, provider_model_name(stripped).to_ascii_lowercase())
+}
+
+fn openai_explicit_breakpoint_family(model: &str) -> bool {
+    // GPT-5.6 and later, per the OpenAI guide's model table. GPT-5.5 and earlier are implicit only.
+    let name = model.rsplit('/').next().unwrap_or(model);
+    let Some(rest) = name.strip_prefix("gpt-") else {
+        return false;
+    };
+    let major_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if major_end == 0 {
+        return false;
+    }
+    let Ok(major) = rest[..major_end].parse::<u32>() else {
+        return false;
+    };
+    if major > 5 {
+        return true;
+    }
+    if major < 5 {
+        return false;
+    }
+    let after = &rest[major_end..];
+    let Some(minor_src) = after.strip_prefix('.') else {
+        return false;
+    };
+    let minor_end = minor_src
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(minor_src.len());
+    minor_src[..minor_end]
+        .parse::<u32>()
+        .ok()
+        .is_some_and(|minor| minor >= 6)
+}
+
+fn anthropic_cache_row(model: &str) -> Option<(u32, u32)> {
+    let normalized = anthropic_model_id(Some("anthropic"), model).or_else(|| {
+        let lower = provider_model_name(model).to_ascii_lowercase();
+        lower.starts_with("claude-").then_some(lower)
+    })?;
+    ANTHROPIC_CACHE_TABLE
+        .iter()
+        .find(|(family, _, _)| is_model_family(&normalized, family))
+        .map(|(_, minimum, read)| (*minimum, *read))
+}
+
+fn anthropic_explicit_capability(
+    model: &str,
+    wire: CacheWireProtocol,
+    record_id: &'static str,
+    known_retention: bool,
+) -> CacheCapability {
+    let row = anthropic_cache_row(model);
+    CacheCapability {
+        behavior: CacheBehavior::Explicit,
+        boundary_kinds: ANTHROPIC_BOUNDARIES,
+        minimum_cacheable_tokens: row.map(|(minimum, _)| minimum),
+        max_explicit_markers: Some(4),
+        lookback: CacheLookback::Blocks(20),
+        // Recognized families use the published multiplier. An unrecognized Claude id
+        // stays explicit (the route already accepts markers) but does not inherit 0.1×.
+        read_rate_millis: row.map(|(_, read)| read),
+        write_rate_millis: row.map(|_| 1_250),
+        retention: if known_retention {
+            CacheRetention::AnthropicEphemeral5m
+        } else {
+            CacheRetention::Unknown
+        },
+        wire,
+        usage: if wire == CacheWireProtocol::AnthropicMessages {
+            CacheUsageInterpretation::AnthropicSeparateCacheFields
+        } else {
+            // Bedrock's usage field names are a different document and were not re-fetched here.
+            CacheUsageInterpretation::Unknown
+        },
+        record_id,
+        source: ANTHROPIC_PROMPT_CACHING_SOURCE,
+    }
+}
+
+/// Sourced cache contract for this provider route and model. Aggregator routes stay
+/// unknown even when the model id looks like a direct OpenAI or Anthropic model.
+#[must_use]
+pub fn cache_capability(provider: Option<&str>, model: &str) -> CacheCapability {
+    // A managed or aggregator id does not identify the physical deployment.
+    // Do not inherit the direct OpenAI or Anthropic contract from the suffix.
+    if has_managed_model_prefix(model) {
+        return unknown_capability(
+            "managed-gateway-route.2026-09-24",
+            "managed gateway routes do not identify the physical cache",
+        );
+    }
+    let (provider_name, model_id) = normalized_route(provider, model);
+    let provider = provider_name.as_deref();
+    let is = |name: &str| provider.is_some_and(|provider| provider == name);
+
+    if is("openrouter") || is("azure") || is("azure-openai") || is("vertex-ai") || is("google") {
+        return unknown_capability(
+            "aggregator-or-translated-route.2026-09-24",
+            "physical cache placement is not the logical model id",
+        );
+    }
+    if is("anthropic")
+        || is("claude")
+        || (provider.is_none() && anthropic_model_id(None, model).is_some())
+    {
+        return anthropic_explicit_capability(
+            model,
+            CacheWireProtocol::AnthropicMessages,
+            "anthropic-messages-explicit.2026-09-24",
+            true,
+        );
+    }
+    if is("bedrock") {
+        return if supports_explicit_prompt_caching(AiProvider::Bedrock, model) {
+            anthropic_explicit_capability(
+                &model_id,
+                CacheWireProtocol::BedrockConverse,
+                "bedrock-claude-explicit-markers.2026-09-24",
+                false,
+            )
+        } else {
+            unknown_capability(
+                "bedrock-unlisted.2026-09-24",
+                ANTHROPIC_PROMPT_CACHING_SOURCE,
+            )
+        };
+    }
+    if is("openai") {
+        return openai_direct_capability(provider, model);
+    }
+    if is("llamacpp") {
+        return CacheCapability {
+            behavior: CacheBehavior::Implicit,
+            boundary_kinds: PROVIDER_CHOSEN_BOUNDARIES,
+            minimum_cacheable_tokens: None,
+            max_explicit_markers: Some(0),
+            lookback: CacheLookback::Unknown,
+            read_rate_millis: None,
+            write_rate_millis: None,
+            retention: CacheRetention::Unknown,
+            wire: CacheWireProtocol::OpenAiChat,
+            usage: CacheUsageInterpretation::Unknown,
+            record_id: "llamacpp-cache-prompt.2026-09-24",
+            source: "existing llama.cpp cache_prompt request flag; no sourced lifetime",
+        };
+    }
+    unknown_capability(
+        "unknown-route.2026-09-24",
+        "no sourced cache contract for this provider",
+    )
+}
+
+fn openai_direct_capability(provider: Option<&str>, model: &str) -> CacheCapability {
+    let responses = uses_responses_api(provider, model);
+    if responses && openai_explicit_breakpoint_family(model) {
+        return CacheCapability {
+            behavior: CacheBehavior::Explicit,
+            boundary_kinds: OPENAI_EXPLICIT_BOUNDARIES,
+            minimum_cacheable_tokens: Some(1_024),
+            // The guide documents a lookup window (first 2 and latest 50), not a
+            // hard marker cap. The planner applies its own budget separately.
+            max_explicit_markers: None,
+            lookback: CacheLookback::ExplicitBreakpoints {
+                first: 2,
+                latest: 50,
+            },
+            read_rate_millis: Some(100),
+            write_rate_millis: Some(1_250),
+            retention: CacheRetention::OpenAiTtl30m,
+            wire: CacheWireProtocol::OpenAiResponses,
+            usage: CacheUsageInterpretation::OpenAiInclusiveExact,
+            record_id: "openai-responses-gpt-5.6-explicit.2026-09-24",
+            source: OPENAI_PROMPT_CACHING_SOURCE,
+        };
+    }
+    CacheCapability {
+        behavior: CacheBehavior::Implicit,
+        boundary_kinds: PROVIDER_CHOSEN_BOUNDARIES,
+        minimum_cacheable_tokens: None,
+        max_explicit_markers: Some(0),
+        lookback: CacheLookback::Unknown,
+        // The guide says earlier models have a model-dependent cached-input rate and no
+        // extra write charge. Neither fact is a universal 0.1× read rate.
+        read_rate_millis: None,
+        write_rate_millis: Some(1_000),
+        retention: CacheRetention::OpenAiOrganizationDependent,
+        wire: if responses {
+            CacheWireProtocol::OpenAiResponses
+        } else {
+            CacheWireProtocol::OpenAiChat
+        },
+        usage: CacheUsageInterpretation::OpenAiCachedTokensRounded,
+        record_id: "openai-implicit.2026-09-24",
+        source: OPENAI_PROMPT_CACHING_SOURCE,
+    }
+}
+
+#[must_use]
+pub fn allows_openai_explicit_breakpoint(provider: Option<&str>, model: &str) -> bool {
+    let capability = cache_capability(provider, model);
+    capability.behavior == CacheBehavior::Explicit
+        && capability.wire == CacheWireProtocol::OpenAiResponses
+        && capability
+            .boundary_kinds
+            .contains(&CacheBoundaryKind::OpenAiContentBreakpoint)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,6 +961,109 @@ mod tests {
                 "{provider:?}/{model}"
             );
         }
+    }
+
+    #[test]
+    fn cache_capability_records_are_sourced_and_do_not_lend_defaults() {
+        let unknown = cache_capability(Some("openrouter"), "openai/gpt-5.6");
+        assert_eq!(unknown.behavior, CacheBehavior::Unknown);
+        assert!(unknown.boundary_kinds.is_empty());
+        assert_eq!(unknown.read_rate_millis, None);
+        assert_eq!(unknown.write_rate_millis, None);
+        assert_eq!(unknown.retention.hint_seconds(), None);
+        assert!(!allows_openai_explicit_breakpoint(
+            Some("openrouter"),
+            "openai/gpt-5.6"
+        ));
+
+        let bare = cache_capability(None, "gpt-5.6");
+        assert_ne!(bare.behavior, CacheBehavior::Explicit);
+        assert_eq!(bare.read_rate_millis, None);
+        assert_eq!(bare.retention.hint_seconds(), None);
+
+        let explicit = cache_capability(Some("openai"), "gpt-5.6-sol");
+        assert_eq!(explicit.behavior, CacheBehavior::Explicit);
+        assert_eq!(explicit.minimum_cacheable_tokens, Some(1_024));
+        assert_eq!(explicit.max_explicit_markers, None);
+        assert_eq!(
+            explicit.lookback,
+            CacheLookback::ExplicitBreakpoints {
+                first: 2,
+                latest: 50
+            }
+        );
+        assert_eq!(explicit.read_rate_millis, Some(100));
+        assert_eq!(explicit.write_rate_millis, Some(1_250));
+        assert_eq!(explicit.retention, CacheRetention::OpenAiTtl30m);
+        assert_eq!(
+            explicit.usage,
+            CacheUsageInterpretation::OpenAiInclusiveExact
+        );
+        assert!(explicit.source.contains("developers.openai.com"));
+        assert!(allows_openai_explicit_breakpoint(
+            Some("openai"),
+            "gpt-6-astra"
+        ));
+        assert!(
+            !allows_openai_explicit_breakpoint(Some("openai"), "maestro-managed/openai/gpt-5.6"),
+            "a managed-gateway model id is not a confirmed physical OpenAI route"
+        );
+        assert_eq!(
+            cache_capability(Some("openai"), "claude-opus-4").minimum_cacheable_tokens,
+            None
+        );
+        assert_eq!(
+            cache_capability(Some("anthropic"), "claude-sonnet-4").minimum_cacheable_tokens,
+            None,
+            "families absent from the sourced minimum table do not inherit a neighbor's number"
+        );
+        assert_eq!(
+            cache_capability(Some("anthropic"), "claude-opus-4-1").read_rate_millis,
+            None
+        );
+
+        let earlier = cache_capability(Some("openai"), "gpt-5.4");
+        assert_eq!(earlier.behavior, CacheBehavior::Implicit);
+        assert_eq!(earlier.max_explicit_markers, Some(0));
+        assert_eq!(earlier.read_rate_millis, None);
+        assert_eq!(earlier.write_rate_millis, Some(1_000));
+        assert_eq!(earlier.retention.hint_seconds(), None);
+        assert!(!allows_openai_explicit_breakpoint(Some("openai"), "gpt-5"));
+        assert!(!allows_openai_explicit_breakpoint(
+            Some("openai"),
+            "gpt-4.1"
+        ));
+
+        let opus = cache_capability(Some("anthropic"), "claude-opus-5-5");
+        assert_eq!(opus.minimum_cacheable_tokens, Some(512));
+        assert_eq!(opus.read_rate_millis, Some(50));
+        assert_eq!(opus.lookback, CacheLookback::Blocks(20));
+        assert_eq!(opus.max_explicit_markers, Some(4));
+        assert_eq!(opus.retention.hint_seconds(), Some(300));
+        assert_eq!(
+            cache_capability(Some("anthropic"), "claude-fable-5-1").read_rate_millis,
+            Some(25)
+        );
+        assert_eq!(
+            cache_capability(Some("anthropic"), "claude-haiku-4-5").minimum_cacheable_tokens,
+            Some(4_096)
+        );
+        let unrecognized = cache_capability(Some("anthropic"), "claude-not-a-family");
+        assert_eq!(unrecognized.behavior, CacheBehavior::Explicit);
+        assert_eq!(unrecognized.read_rate_millis, None);
+        assert_eq!(unrecognized.minimum_cacheable_tokens, None);
+
+        let bedrock = cache_capability(
+            Some("bedrock"),
+            "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        );
+        assert_eq!(bedrock.behavior, CacheBehavior::Explicit);
+        assert_eq!(bedrock.usage, CacheUsageInterpretation::Unknown);
+        assert_eq!(bedrock.retention.hint_seconds(), None);
+        assert_eq!(
+            cache_capability(Some("bedrock"), "amazon.nova-pro-v1:0").behavior,
+            CacheBehavior::Unknown
+        );
     }
 
     #[test]

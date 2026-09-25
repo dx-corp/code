@@ -369,16 +369,61 @@ impl AnthropicClient {
     ) -> Result<serde_json::Value> {
         let model = provider_model_name(&config.model);
         let capabilities = anthropic_request_capabilities(Some("anthropic"), &model);
-        let previous_checkpoint = config
+        let finalized = config
             .cache_topology
             .as_ref()
-            .and_then(|prepared| prepared.previous_checkpoint())
-            .filter(|index| *index < messages.len())
-            .and_then(|index| {
-                transform_messages_for_target(&messages[..=index], OutboundTarget::Anthropic)
-                    .len()
-                    .checked_sub(1)
-            });
+            .is_some_and(|prepared| prepared.boundary().is_final());
+        // New boundary plans are opt-in. Off keeps the markers main already sent.
+        let apply_plan = finalized && config.explicit_cache_boundaries;
+        let plan = config
+            .cache_topology
+            .as_ref()
+            .filter(|prepared| apply_plan && prepared.boundary().is_final())
+            .map(|prepared| prepared.boundary());
+        let mark_system = if apply_plan {
+            plan.is_some_and(|plan| plan.mark_system)
+        } else {
+            config.cache_system_prompt
+        };
+        let mark_tools = if apply_plan {
+            plan.is_some_and(|plan| plan.mark_tools)
+        } else {
+            config.cache_system_prompt
+        };
+        let previous_checkpoint = if apply_plan {
+            None
+        } else {
+            config
+                .cache_topology
+                .as_ref()
+                .and_then(|prepared| prepared.previous_checkpoint())
+                .filter(|index| *index < messages.len())
+                .and_then(|index| {
+                    crate::cache_topology::wire_message_index(
+                        messages,
+                        index,
+                        OutboundTarget::Anthropic,
+                    )
+                })
+        };
+        let history_indexes: Vec<usize> = if apply_plan {
+            plan.map(|plan| {
+                plan.history_indexes
+                    .iter()
+                    .filter_map(|index| {
+                        crate::cache_topology::wire_message_index(
+                            messages,
+                            *index,
+                            OutboundTarget::Anthropic,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let history_ttl = plan.and_then(|plan| plan.history_ttl).unwrap_or("5m");
         let messages = transform_messages_for_target(messages, OutboundTarget::Anthropic);
         let mut body = serde_json::json!({
             "model": model,
@@ -389,7 +434,7 @@ impl AnthropicClient {
 
         // Add system prompt with optional caching
         if let Some(system) = &config.system {
-            if config.cache_system_prompt {
+            if mark_system {
                 // Use cache_control format for prompt caching
                 body["system"] = serde_json::json!([{
                     "type": "text",
@@ -411,7 +456,7 @@ impl AnthropicClient {
 
         // Add tools with cache_control on the last tool for tool definition caching
         if !config.tools.is_empty() {
-            if config.cache_system_prompt {
+            if mark_tools {
                 // Add cache_control to the last tool for tool definition caching
                 let mut tools_json: Vec<serde_json::Value> =
                     config.tools.iter().map(|t| serde_json::json!(t)).collect();
@@ -468,7 +513,13 @@ impl AnthropicClient {
         }
 
         if let Some(prepared) = &config.cache_topology {
-            if config.cache_system_prompt {
+            if apply_plan {
+                crate::cache_topology::mark_history_indexes(
+                    &mut body,
+                    history_ttl,
+                    &history_indexes,
+                );
+            } else if config.cache_system_prompt {
                 crate::cache_topology::mark_stable_history(&mut body, "5m", previous_checkpoint);
             }
             prepared.append_volatile_tail(&mut body);
@@ -1192,6 +1243,301 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let headers = client.headers();
 
         assert_eq!(headers.get("x-api-key").unwrap(), "test-key");
+    }
+
+    #[test]
+    fn stable_boundary_wire_contract_marks_anthropic_prefix_before_the_volatile_tail() {
+        let client = AnthropicClient::new("test-key").unwrap();
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::text("a"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("b"),
+            },
+        ];
+        let mut config = RequestConfig {
+            model: "claude-sonnet-4-5".into(),
+            max_tokens: 128,
+            system: Some("Standing policy".into()),
+            cache_system_prompt: true,
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let first = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap();
+        let appended = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::text("a"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("b"),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::text("c"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("d"),
+            },
+        ];
+        let mut next = crate::cache_topology::PreparedPrompt::prepare(
+            &appended,
+            &config,
+            "session".into(),
+            Some(first.topology()),
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock".into()));
+        next.finalize_boundary(
+            Some("anthropic"),
+            "claude-sonnet-4-5",
+            true,
+            true,
+            false,
+            appended.len(),
+        )
+        .unwrap();
+        assert_eq!(
+            next.topology().transition,
+            crate::cache_topology::CacheTransition::Append
+        );
+        config.cache_topology = Some(next);
+        let body = client.build_request_body(&appended, &config).unwrap();
+        assert_eq!(body["system"][0]["text"], "Standing policy");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert!(body["system"][0]["cache_control"].get("ttl").is_none());
+        let messages = body["messages"].as_array().unwrap();
+        let marked: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message["content"].as_array().is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block.get("cache_control").is_some())
+                })
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(marked, vec![1, 3]);
+        assert_eq!(messages.last().unwrap()["content"], "clock");
+        assert!(messages.last().unwrap().get("cache_control").is_none());
+        assert!(!body.to_string().contains("prompt_cache_breakpoint"));
+        let markers = body.to_string().matches("cache_control").count();
+        assert!(
+            markers <= 4,
+            "anthropic allows four breakpoints, saw {markers}"
+        );
+    }
+
+    #[test]
+    fn explicit_plan_marks_the_checkpoint_after_transform_drops_a_message() {
+        let client = AnthropicClient::new("test-key").unwrap();
+        let history = vec![
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::Thinking {
+                    thinking: "   ".into(),
+                    signature: None,
+                }]),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("checkpoint"),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tool-1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                    gemini_context: None,
+                }]),
+            },
+        ];
+        let mut config = RequestConfig {
+            model: "claude-sonnet-4-5".into(),
+            max_tokens: 128,
+            system: Some("Standing policy".into()),
+            cache_system_prompt: true,
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let prefix = crate::cache_topology::PreparedPrompt::prepare(
+            &history[..2],
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap();
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &config,
+            "session".into(),
+            Some(prefix.topology()),
+        )
+        .unwrap();
+        prepared
+            .finalize_boundary(
+                Some("anthropic"),
+                "claude-sonnet-4-5",
+                true,
+                true,
+                false,
+                history.len(),
+            )
+            .unwrap();
+        // The empty thinking message is dropped, so canonical index 1 is wire index 0.
+        assert_eq!(
+            crate::cache_topology::wire_message_index(
+                &history,
+                1,
+                crate::transform::OutboundTarget::Anthropic
+            ),
+            Some(0)
+        );
+        config.cache_topology = Some(prepared);
+        let body = client.build_request_body(&history, &config).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let marked_text: Vec<String> = messages
+            .iter()
+            .filter_map(|message| {
+                let blocks = message["content"].as_array()?;
+                let marked = blocks
+                    .iter()
+                    .any(|block| block.get("cache_control").is_some());
+                if !marked {
+                    return None;
+                }
+                blocks.iter().find_map(|block| {
+                    block
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_owned)
+                })
+            })
+            .collect();
+        assert!(
+            marked_text.iter().any(|text| text == "checkpoint"),
+            "marker landed on {marked_text:?}, messages={messages:?}"
+        );
+        assert!(body["system"][0].get("cache_control").is_some());
+    }
+
+    #[test]
+    fn history_rewrite_still_writes_system_and_tools() {
+        let client = AnthropicClient::new("test-key").unwrap();
+        let tools = vec![Tool::new("read", "Read a file")];
+        let first_history = vec![Message {
+            role: Role::User,
+            content: MessageContent::text("old"),
+        }];
+        let mut config = RequestConfig {
+            model: "claude-sonnet-4-5".into(),
+            max_tokens: 128,
+            system: Some("Standing policy".into()),
+            tools: tools.into(),
+            cache_system_prompt: true,
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let first = crate::cache_topology::PreparedPrompt::prepare(
+            &first_history,
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap();
+        let rewritten = vec![Message {
+            role: Role::User,
+            content: MessageContent::text("summary"),
+        }];
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &rewritten,
+            &config,
+            "session".into(),
+            Some(first.topology()),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.topology().transition,
+            crate::cache_topology::CacheTransition::HistoryRewritten
+        );
+        prepared
+            .finalize_boundary(
+                Some("anthropic"),
+                "claude-sonnet-4-5",
+                true,
+                true,
+                true,
+                rewritten.len(),
+            )
+            .unwrap();
+        config.cache_topology = Some(prepared);
+        let body = client.build_request_body(&rewritten, &config).unwrap();
+        assert!(body["system"][0].get("cache_control").is_some());
+        let tools = body["tools"].as_array().unwrap();
+        assert!(tools.last().unwrap().get("cache_control").is_some());
+    }
+
+    #[test]
+    fn explicit_boundaries_off_matches_the_legacy_anthropic_payload() {
+        let client = AnthropicClient::new("test-key").unwrap();
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::text("a"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("b"),
+            },
+        ];
+        let mut legacy = RequestConfig {
+            model: "claude-sonnet-4-5".into(),
+            max_tokens: 128,
+            system: Some("Standing policy".into()),
+            cache_system_prompt: true,
+            ..Default::default()
+        };
+        legacy.cache_topology = Some(
+            crate::cache_topology::PreparedPrompt::prepare(
+                &history,
+                &legacy,
+                "session".into(),
+                None,
+            )
+            .unwrap()
+            .with_volatile_tail(Some("clock".into())),
+        );
+        let mut opted_out = legacy.clone();
+        let mut prepared = opted_out.cache_topology.take().unwrap();
+        prepared
+            .finalize_boundary(
+                Some("anthropic"),
+                "claude-sonnet-4-5",
+                true,
+                true,
+                false,
+                history.len(),
+            )
+            .unwrap();
+        opted_out.explicit_cache_boundaries = false;
+        opted_out.cache_topology = Some(prepared);
+        let legacy_body = client.build_request_body(&history, &legacy).unwrap();
+        let off_body = client.build_request_body(&history, &opted_out).unwrap();
+        assert_eq!(legacy_body, off_body);
     }
 
     #[test]

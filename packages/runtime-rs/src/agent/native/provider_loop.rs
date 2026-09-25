@@ -286,8 +286,11 @@ impl NativeAgentRunner {
             let (config, request_usage) = self
                 .build_config_with_usage(&provider_messages, true)
                 .await?;
-            let prepared_request =
-                ProviderSafeRequest::prepare(&provider_messages, config, &self.credential_vault)?;
+            let prepared_request = ProviderSafeRequest::prepare_vaulted(
+                provider_messages,
+                config,
+                &self.credential_vault,
+            )?;
             let provider_messages = &prepared_request.messages;
             let config = &prepared_request.config;
             let estimated_input_tokens = request_usage.total();

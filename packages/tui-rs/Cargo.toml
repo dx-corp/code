@@ -175,7 +175,7 @@ windows-sys = { workspace = true, features = [
 default = []
 # Unverified NativeAgent constructor for in-crate tests plus the local
 # perf/bench binaries. Shipped maestro / deixic-code builds must not enable it.
-test-support = ["maestro-local-host/test-support"]
+test-support = ["maestro-local-host/test-support", "maestro-runtime/test-support"]
 thin-scenario = ["maestro-local-host/thin-scenario"]
 clipboard = ["arboard"]
 # Hook backends

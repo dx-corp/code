@@ -742,6 +742,28 @@ mod tests {
         let messages = build_request_messages(&history, &config).unwrap();
 
         assert_eq!(cache_point_positions(&messages), vec![1, 3]);
+        let mut sealed = config.cache_topology.clone().unwrap();
+        sealed
+            .finalize_boundary(
+                Some("bedrock"),
+                &config.model,
+                true,
+                false,
+                false,
+                history.len(),
+            )
+            .unwrap();
+        let off = RequestConfig {
+            cache_topology: Some(sealed),
+            explicit_cache_boundaries: false,
+            ..config.clone()
+        };
+        let off_messages = build_request_messages(&history, &off).unwrap();
+        assert_eq!(
+            format!("{off_messages:?}"),
+            format!("{messages:?}"),
+            "explicit boundaries stay off, so the Bedrock payload matches the legacy payload"
+        );
         assert_eq!(messages.len(), 5);
         assert_eq!(
             messages[4].content(),

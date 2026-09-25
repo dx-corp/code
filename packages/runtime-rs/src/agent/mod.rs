@@ -95,5 +95,5 @@ pub use workflow_state::{
 pub use native::{
     codex_native_effect_denial_for_test, deferred_firewall_verdict_for_test,
     deferred_policy_rejection_event_for_test, invalidate_cache_after_serial_tool_for_test,
-    rerun_deferred_pre_tool_use_for_test,
+    rerun_deferred_pre_tool_use_for_test, take_provider_history_vault_passes_for_bench,
 };

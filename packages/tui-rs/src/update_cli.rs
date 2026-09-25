@@ -1172,6 +1172,7 @@ fn package_install_context_from(
     manager_override: Option<&str>,
 ) -> Option<InstallContext> {
     let package_root = dunce::canonicalize(package_root).ok()?;
+    let executable = dunce::canonicalize(executable).ok()?;
     let relative = executable.strip_prefix(&package_root).ok()?;
     let components = relative
         .components()
@@ -3730,6 +3731,16 @@ mod tests {
                     .expect("canonical package root")
                     .join("bin/maestro"),
             }
+        );
+        let aliased_executable = alias.join("vendor/maestro/test-target/maestro");
+        assert_eq!(
+            package_install_context_from(
+                &aliased_executable,
+                &package_root,
+                "@evalops/maestro".to_owned(),
+                Some("npm"),
+            ),
+            Some(context),
         );
     }
 

@@ -647,6 +647,7 @@ fn test_request_config_building() {
         tools: tools.into(),
         thinking: None,
         cache_system_prompt: true,
+        explicit_cache_boundaries: false,
         cache_topology: None,
     };
 
@@ -655,6 +656,7 @@ fn test_request_config_building() {
     assert!(request_config.system.is_some());
     assert!(!request_config.tools.is_empty());
     assert!(request_config.cache_system_prompt);
+    assert!(!request_config.explicit_cache_boundaries);
 }
 
 #[test]

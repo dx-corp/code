@@ -7332,6 +7332,33 @@ fn provider_request_rechecks_system_after_tool_credential_discovery() {
     assert!(system.contains("{{CRED|"));
 }
 
+#[test]
+fn provider_request_pre_vaulted_history_rechecks_late_tool_credential() {
+    let vault = CredentialVault::new();
+    let raw = "late-shared-tool-secret-1234567890";
+    let history = Arc::new(vec![Message {
+        role: Role::User,
+        content: MessageContent::text(format!("Use {raw}")),
+    }]);
+    let first = vault_provider_history_shared(&history, &vault).unwrap();
+    assert!(serde_json::to_string(first.as_ref()).unwrap().contains(raw));
+
+    let config = RequestConfig {
+        tools: Arc::new(vec![Tool {
+            name: "safe_tool".to_owned(),
+            description: format!("token: {raw}"),
+            input_schema: serde_json::json!({"type": "object"}),
+            schema_enforcement: Default::default(),
+        }]),
+        ..RequestConfig::default()
+    };
+    let request = ProviderSafeRequest::prepare_vaulted(first, config, &vault).unwrap();
+    let wire = serde_json::to_string(request.messages.as_ref()).unwrap();
+    assert!(wire.contains("{{CRED|"));
+    assert!(!wire.contains(raw));
+    request.ensure_current(&vault).unwrap();
+}
+
 #[tokio::test]
 async fn test_wait_for_tool_response_buffers_out_of_order() {
     let (tx, rx) = mpsc::unbounded_channel();

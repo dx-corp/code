@@ -50,19 +50,40 @@ pub struct CacheIdentity<'a> {
 #[serde(rename_all = "snake_case")]
 pub enum CacheReuse {
     Reusable,
+    /// Prepared identity matches and no sourced retention hint applies.
+    CompatiblePrefix,
+    /// Compatible, and the gap is inside a sourced retention hint. Not an observed hit.
+    PredictedReuse,
+    /// Provider-reported cache read. Not a prediction.
+    ObservedRead,
+    /// Provider-reported cache write. Lifetime starts at the provider event.
+    ObservedWrite,
     ModelChanged,
     SystemPromptChanged,
     ThinkingChanged,
     SkillsChanged,
     ToolsChanged,
+    /// The gap is past a sourced retention hint. Not proof the entry is gone.
     LikelyExpired,
+    Unsupported,
+    /// No sourced lifetime or read rate. Callers must not assume five minutes or 0.1×.
+    Unknown,
 }
 
 impl CacheReuse {
     pub fn explanation(self) -> &'static str {
         match self {
-            Self::Reusable => {
-                "Model, system prompt, thinking, and tools match; cache reuse is not confirmed."
+            Self::Reusable | Self::CompatiblePrefix => {
+                "Compatible prefix: model, instructions, thinking, and tools match. This is not an observed read or a predicted hit."
+            }
+            Self::PredictedReuse => {
+                "Predicted reuse: the prefix is compatible and the gap is inside the provider retention hint. A preparation timestamp is not a provider cache-creation time."
+            }
+            Self::ObservedRead => {
+                "Observed read: the provider reported cache-read tokens for this prefix."
+            }
+            Self::ObservedWrite => {
+                "Observed write: the provider reported cache-write tokens. The lifetime starts at that event, not at preparation or stream completion."
             }
             Self::ModelChanged => "Model changed.",
             Self::SystemPromptChanged => "System prompt or instructions changed.",
@@ -70,10 +91,32 @@ impl CacheReuse {
             Self::SkillsChanged => "Skills changed.",
             Self::ToolsChanged => "Tool schemas changed.",
             Self::LikelyExpired => {
-                "At least five minutes since the previous request; cache may have expired."
+                "Expired hint: the gap since preparation, or since the observed cache event when one was recorded, is past the provider retention hint. This does not confirm the entry is gone, and requesting a quote does not extend it."
             }
+            Self::Unsupported => "Unsupported: this route has no prompt-cache markers.",
+            Self::Unknown => "Unknown cache behavior. No lifetime or read rate is assumed.",
         }
     }
+}
+
+/// Provider-reported cache usage. `None` is missing, not zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheObservation {
+    pub read_tokens: Option<u64>,
+    pub write_tokens: Option<u64>,
+    /// Provider event time. Not preparation time and not stream completion.
+    /// For Anthropic this is request start: the ephemeral TTL clock starts there.
+    /// Production audit still calls [`RequestCacheSnapshot::compare`], which passes
+    /// no observation. Wiring reported usage into this field is deferred.
+    pub event_seconds: Option<u64>,
+}
+
+/// One earlier route's prepared topology. Digests only; no prompt text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PriorRouteRecord {
+    pub topology: maestro_ai::cache_topology::CacheTopology,
+    #[serde(default)]
+    pub tools_system_materialized: bool,
 }
 
 /// Diagnostic request identity, persisted by the existing session owner.
@@ -87,6 +130,21 @@ pub struct RequestCacheSnapshot {
     pub prepared_at_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_topology: Option<maestro_ai::cache_topology::CacheTopology>,
+    /// Routed provider id. Absent on legacy snapshots; inference then uses the model id only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// The tools/system breakpoint was placed on this request, not merely eligible.
+    #[serde(default)]
+    pub tools_system_materialized: bool,
+    /// Other routes' prepared topologies for this session. Empty on legacy snapshots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_routes: Vec<PriorRouteRecord>,
+    /// Capability record that chose the markers. Absent on legacy snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_record_id: Option<String>,
+    /// Canonical history indexes the plan marked. Empty when the plan was not finalized.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history_boundaries: Vec<usize>,
 }
 
 impl RequestCacheSnapshot {
@@ -111,31 +169,103 @@ impl RequestCacheSnapshot {
                 .cache_topology
                 .as_ref()
                 .map(|prepared| prepared.topology().clone()),
+            provider: None,
+            tools_system_materialized: config.cache_topology.as_ref().is_some_and(|prepared| {
+                let plan = prepared.boundary();
+                plan.is_final() && (plan.mark_system || plan.mark_tools)
+            }),
+            prior_routes: Vec::new(),
+            boundary_record_id: config.cache_topology.as_ref().and_then(|prepared| {
+                prepared
+                    .boundary()
+                    .is_final()
+                    .then(|| prepared.boundary().record_id.to_string())
+            }),
+            history_boundaries: config
+                .cache_topology
+                .as_ref()
+                .filter(|prepared| prepared.boundary().is_final())
+                .map(|prepared| prepared.boundary().history_indexes.clone())
+                .unwrap_or_default(),
         }
     }
 
-    pub fn compare(&self, previous: &Self) -> CacheReuse {
-        fn identity(value: &RequestCacheSnapshot) -> CacheIdentity<'_> {
-            CacheIdentity {
-                model: &value.model,
-                system_prompt_sha256: &value.system_sha256,
-                thinking: &value.thinking_sha256,
-                skills_sha256: "", // Effective skill text is part of the request prompt.
+    /// Keep other routes when the model changes. Same-model topology stays on `cache_topology`.
+    /// At most two prior routes: this is the boundary handoff, not a placement registry.
+    #[must_use]
+    pub fn rolled_prior_routes(&self, next_model_digest: &str) -> Vec<PriorRouteRecord> {
+        let mut kept = Vec::new();
+        if let Some(topology) = &self.cache_topology {
+            if topology.shape.model != next_model_digest {
+                kept.push(PriorRouteRecord {
+                    topology: topology.clone(),
+                    tools_system_materialized: self.tools_system_materialized,
+                });
             }
         }
-        let reason = cache_reuse(
-            &identity(previous),
-            &identity(self),
-            self.prepared_at_seconds
-                .saturating_sub(previous.prepared_at_seconds),
-            300,
-        );
-        if matches!(reason, CacheReuse::Reusable | CacheReuse::LikelyExpired)
-            && self.tools_sha256 != previous.tools_sha256
-        {
-            CacheReuse::ToolsChanged
+        for prior in &self.prior_routes {
+            if prior.topology.shape.model != next_model_digest
+                && kept
+                    .iter()
+                    .all(|existing| existing.topology.shape.model != prior.topology.shape.model)
+            {
+                kept.push(prior.clone());
+            }
+        }
+        kept.truncate(2);
+        kept
+    }
+
+    pub fn compare(&self, previous: &Self) -> CacheReuse {
+        self.compare_observed(previous, None)
+    }
+
+    /// Diagnostic only. Does not store a new expiry and does not treat preparation as cache creation.
+    pub fn compare_observed(
+        &self,
+        previous: &Self,
+        observed: Option<&CacheObservation>,
+    ) -> CacheReuse {
+        if self.model != previous.model {
+            return CacheReuse::ModelChanged;
+        }
+        if self.system_sha256 != previous.system_sha256 {
+            return CacheReuse::SystemPromptChanged;
+        }
+        if self.thinking_sha256 != previous.thinking_sha256 {
+            return CacheReuse::ThinkingChanged;
+        }
+        if self.tools_sha256 != previous.tools_sha256 {
+            return CacheReuse::ToolsChanged;
+        }
+        let provider = self.provider.as_deref().or(previous.provider.as_deref());
+        let capability = maestro_ai::cache_capability(provider, &self.model);
+        if capability.behavior == maestro_ai::CacheBehavior::Unsupported {
+            return CacheReuse::Unsupported;
+        }
+        if let Some(observed) = observed {
+            if observed.read_tokens.is_some_and(|tokens| tokens > 0) {
+                return CacheReuse::ObservedRead;
+            }
+            if observed.write_tokens.is_some_and(|tokens| tokens > 0) {
+                return CacheReuse::ObservedWrite;
+            }
+        }
+        let Some(hint) = capability.retention.hint_seconds() else {
+            return if capability.behavior == maestro_ai::CacheBehavior::Unknown {
+                CacheReuse::Unknown
+            } else {
+                CacheReuse::CompatiblePrefix
+            };
+        };
+        let anchor = observed
+            .and_then(|observation| observation.event_seconds)
+            .unwrap_or(previous.prepared_at_seconds);
+        let idle = self.prepared_at_seconds.saturating_sub(anchor);
+        if idle >= hint {
+            CacheReuse::LikelyExpired
         } else {
-            reason
+            CacheReuse::PredictedReuse
         }
     }
 }
@@ -240,7 +370,12 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&initial).unwrap()).unwrap();
         assert_eq!(
             RequestCacheSnapshot::from_request(&config, 11).compare(&restored),
-            CacheReuse::Reusable
+            CacheReuse::PredictedReuse
+        );
+        assert!(
+            CacheReuse::PredictedReuse
+                .explanation()
+                .contains("not a provider cache-creation time")
         );
         assert_eq!(
             RequestCacheSnapshot::from_request(&config, 311).compare(&restored),
@@ -345,6 +480,145 @@ mod tests {
         assert_eq!(
             cache_reuse(&original, &original, 301, 300),
             CacheReuse::LikelyExpired
+        );
+    }
+
+    #[test]
+    fn lifetime_hints_are_provider_specific_and_preparation_is_not_creation() {
+        let mut config = maestro_ai::RequestConfig {
+            model: "local-gguf".into(),
+            ..Default::default()
+        };
+        let previous = RequestCacheSnapshot::from_request(&config, 10);
+        let later = RequestCacheSnapshot::from_request(&config, 10_000);
+        assert_eq!(later.compare(&previous), CacheReuse::Unknown);
+        assert!(
+            CacheReuse::Unknown
+                .explanation()
+                .contains("No lifetime or read rate")
+        );
+        assert_eq!(
+            maestro_ai::cache_capability(None, "local-gguf").read_rate_millis,
+            None
+        );
+        assert_eq!(
+            maestro_ai::cache_capability(None, "local-gguf")
+                .retention
+                .hint_seconds(),
+            None
+        );
+
+        config.model = "gpt-5.6".into();
+        let mut prepared = RequestCacheSnapshot::from_request(&config, 0);
+        prepared.provider = Some("openai".into());
+        let mut within = RequestCacheSnapshot::from_request(&config, 1_000);
+        within.provider = Some("openai".into());
+        assert_eq!(within.compare(&prepared), CacheReuse::PredictedReuse);
+        let mut past_hint = RequestCacheSnapshot::from_request(&config, 1_800);
+        past_hint.provider = Some("openai".into());
+        assert_eq!(past_hint.compare(&prepared), CacheReuse::LikelyExpired);
+        // The same preparation gap is not expired when the provider event is recent.
+        // Repeating the comparison does not move that event.
+        let observed = CacheObservation {
+            read_tokens: None,
+            write_tokens: Some(100_000),
+            event_seconds: Some(1_700),
+        };
+        assert_eq!(
+            past_hint.compare_observed(&prepared, Some(&observed)),
+            CacheReuse::ObservedWrite
+        );
+        assert_eq!(
+            past_hint.compare_observed(&prepared, Some(&observed)),
+            CacheReuse::ObservedWrite
+        );
+        let read = CacheObservation {
+            read_tokens: Some(100_000),
+            write_tokens: Some(0),
+            event_seconds: Some(1_790),
+        };
+        assert_eq!(
+            past_hint.compare_observed(&prepared, Some(&read)),
+            CacheReuse::ObservedRead
+        );
+        let explicit_zero = CacheObservation {
+            read_tokens: Some(0),
+            write_tokens: Some(0),
+            event_seconds: Some(1_790),
+        };
+        assert_eq!(
+            past_hint.compare_observed(&prepared, Some(&explicit_zero)),
+            CacheReuse::PredictedReuse
+        );
+        let missing = CacheObservation {
+            read_tokens: None,
+            write_tokens: None,
+            event_seconds: Some(0),
+        };
+        assert_eq!(
+            past_hint.compare_observed(&prepared, Some(&missing)),
+            CacheReuse::LikelyExpired
+        );
+
+        config.model = "gpt-5.4".into();
+        let mut earlier = RequestCacheSnapshot::from_request(&config, 0);
+        earlier.provider = Some("openai".into());
+        let mut much_later = RequestCacheSnapshot::from_request(&config, 86_400);
+        much_later.provider = Some("openai".into());
+        assert_eq!(much_later.compare(&earlier), CacheReuse::CompatiblePrefix);
+        assert_eq!(
+            much_later.compare(&earlier),
+            much_later.compare(&earlier),
+            "a repeated diagnostic must not extend the hint"
+        );
+    }
+
+    #[test]
+    fn legacy_cache_snapshot_without_capability_fields_stays_readable() {
+        let legacy = r#"{"model":"claude-sonnet-4-5","system_sha256":"abc","thinking_sha256":"def","tools_sha256":"ghi","prepared_at_seconds":10}"#;
+        let restored: RequestCacheSnapshot = serde_json::from_str(legacy).unwrap();
+        assert!(restored.provider.is_none());
+        assert!(!restored.tools_system_materialized);
+        assert!(restored.prior_routes.is_empty());
+        assert!(restored.boundary_record_id.is_none());
+        assert!(restored.history_boundaries.is_empty());
+        assert!(restored.cache_topology.is_none());
+        let mut config = maestro_ai::RequestConfig {
+            model: "gpt-5.6".into(),
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let messages = vec![maestro_ai::Message {
+            role: maestro_ai::Role::User,
+            content: maestro_ai::MessageContent::text("stable"),
+        }];
+        let mut prepared = maestro_ai::cache_topology::PreparedPrompt::prepare(
+            &messages,
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock".into()));
+        prepared
+            .finalize_boundary(Some("openai"), "gpt-5.6", true, false, false, 1)
+            .unwrap();
+        config.cache_topology = Some(prepared);
+        let snapshot = RequestCacheSnapshot::from_request(&config, 10);
+        let round_trip: RequestCacheSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            round_trip.boundary_record_id.as_deref(),
+            Some("openai-responses-gpt-5.6-explicit.2026-09-24")
+        );
+        assert_eq!(round_trip.history_boundaries, vec![0]);
+        let topology = r#"{"version":1,"generation":1,"transition":"initial","shape":{"namespace":"n","model":"m","instructions":"i","tools":"t","thinking":"h","cache_policy":"c","history":[]}}"#;
+        let parsed: maestro_ai::cache_topology::CacheTopology =
+            serde_json::from_str(topology).unwrap();
+        assert_eq!(parsed.generation, 1);
+        assert_eq!(
+            parsed.transition,
+            maestro_ai::cache_topology::CacheTransition::Initial
         );
     }
 }

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result, bail};
+use maestro_runtime::agent::take_provider_history_vault_passes_for_bench;
 use maestro_tui::agent::{FromAgent, NativeAgent, NativeAgentConfig};
 use maestro_tui::ai::{ScriptedBlock, ScriptedClient, ScriptedResponse, StopReason, UnifiedClient};
 use maestro_tui::components::{ChatView, ModelSelector};
@@ -81,8 +82,8 @@ impl Comparison {
     }
 }
 
-/// Compare current timings against a baseline. Scenarios absent from either
-/// side are skipped; only shared scenarios can regress.
+/// Compare current timings against a baseline. Call
+/// `require_baseline_scenarios` first when enforcing a baseline.
 fn compare(baseline: &BTreeMap<String, u64>, current: &BTreeMap<String, u64>) -> Vec<Comparison> {
     baseline
         .iter()
@@ -94,6 +95,20 @@ fn compare(baseline: &BTreeMap<String, u64>, current: &BTreeMap<String, u64>) ->
             })
         })
         .collect()
+}
+
+fn require_baseline_scenarios(
+    baseline: &BTreeMap<String, u64>,
+    current: &BTreeMap<String, u64>,
+) -> Result<()> {
+    let missing = baseline
+        .keys()
+        .filter(|name| !current.contains_key(*name))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!("required timing baseline scenarios are missing: {missing:?}");
+    }
+    Ok(())
 }
 
 /// Scenarios whose slowdown exceeds `threshold` (e.g. 0.15 for 15%).
@@ -658,6 +673,7 @@ struct Args {
     write_baseline: Option<PathBuf>,
     baseline: Option<PathBuf>,
     threshold: f64,
+    work_counts_json: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -665,6 +681,7 @@ fn parse_args() -> Result<Args> {
         write_baseline: None,
         baseline: None,
         threshold: DEFAULT_THRESHOLD,
+        work_counts_json: false,
     };
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -685,9 +702,10 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .with_context(|| format!("invalid --threshold value: {value}"))?;
             }
+            "--work-counts-json" => args.work_counts_json = true,
             "-h" | "--help" => {
                 println!(
-                    "maestro-perf-bench [--write-baseline <path>] [--baseline <path>] [--threshold <frac>]"
+                    "maestro-perf-bench [--write-baseline <path>] [--baseline <path>] [--threshold <frac>] [--work-counts-json]"
                 );
                 std::process::exit(0);
             }
@@ -697,11 +715,29 @@ fn parse_args() -> Result<Args> {
     if args.write_baseline.is_some() && args.baseline.is_some() {
         bail!("--write-baseline and --baseline are mutually exclusive");
     }
+    if args.work_counts_json && (args.write_baseline.is_some() || args.baseline.is_some()) {
+        bail!("--work-counts-json cannot be combined with timing baselines");
+    }
     Ok(args)
 }
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    if args.work_counts_json {
+        take_provider_history_vault_passes_for_bench();
+        Runtime::new()
+            .context("create work-count runtime")?
+            .block_on(run_scripted_long_history(AGENT_LONG_HISTORY_TURN_COUNT));
+        let passes = take_provider_history_vault_passes_for_bench();
+        println!(
+            "{}",
+            serde_json::json!({
+                "fixture": "agent_loop_96_long_history_turns",
+                "metrics": {"provider_history_vault_passes": passes}
+            })
+        );
+        return Ok(());
+    }
     let current = run_scenarios()?;
 
     if let Some(path) = args.write_baseline {
@@ -718,6 +754,7 @@ fn main() -> Result<()> {
     };
 
     let baseline = load_baseline(&path)?;
+    require_baseline_scenarios(&baseline.scenarios, &current)?;
     let comparisons = compare(&baseline.scenarios, &current);
 
     println!(
@@ -805,6 +842,8 @@ mod tests {
         let comparisons = compare(&baseline, &current);
         assert_eq!(comparisons.len(), 1);
         assert_eq!(comparisons[0].name, "a");
+        assert!(require_baseline_scenarios(&baseline, &current).is_err());
+        assert!(require_baseline_scenarios(&current, &baseline).is_err());
     }
 
     #[test]
