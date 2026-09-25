@@ -89,7 +89,7 @@ function distinctOutputTokens(context, output) {
 	if (Number.isInteger(context) && context > 0 && output >= context * 0.99) {
 		return undefined;
 	}
-	// Exactly 90% of the context window is OpenRouter's fallback, not a vendor's
+	// About 90% of the context window is OpenRouter's fallback, not a vendor's
 	// limit. 32 rows match it to six significant figures and every one is an
 	// OpenRouter row, spread across 17 vendor namespaces: x-ai, meta, qwen,
 	// google, perplexity, deepseek, moonshotai, ibm-granite and more.
@@ -106,7 +106,9 @@ function distinctOutputTokens(context, output) {
 	//
 	// Dropping it leaves the field absent, which is the honest state, and
 	// conductor's resolveMaxOutputTokens falls back to each provider's floor.
-	if (Number.isInteger(context) && context > 0 && output === Math.round(context * 0.9)) {
+	// Upstream may truncate rather than round a fractional token (GLM 5.3:
+	// 943,717 of 1,048,575). One token of rounding cannot establish a cap.
+	if (Number.isInteger(context) && context > 0 && Math.abs(output - context * 0.9) <= 1) {
 		return undefined;
 	}
 	return output;
@@ -161,11 +163,11 @@ function indexModelsDevModelFacts(modelsDevCatalog) {
 
 function indexModelsDevTokenLimits(modelsDevCatalog) {
 	const entries = new Map();
-	const push = (key, context, output) => {
+	const push = (key, context, output, source) => {
 		if (!entries.has(key)) {
 			entries.set(key, []);
 		}
-		entries.get(key).push({ context, output });
+		entries.get(key).push({ context, output, source });
 	};
 	const indexProvider = (providerId, providerModels) => {
 		if (!providerModels || typeof providerModels !== "object") {
@@ -174,10 +176,13 @@ function indexModelsDevTokenLimits(modelsDevCatalog) {
 		for (const [modelId, model] of Object.entries(providerModels)) {
 			const context = limitTokens(model, "context");
 			const output = limitTokens(model, "output");
+			// models.dev spells Z.ai as "zai" while OpenRouter uses "z-ai".
+			// Keep this explicit so a rejected OpenRouter cap can reach the
+			// vendor's independently published limit.
 			if (providerId === "openrouter") {
-				push(modelId, context, output);
+				push(modelId, context, output, "openrouter");
 			} else {
-				push(`${providerId}/${modelId}`, context, output);
+				push(`${providerId === "zai" ? "z-ai" : providerId}/${modelId}`, context, output, "vendor");
 			}
 		}
 	};
@@ -191,14 +196,25 @@ function indexModelsDevTokenLimits(modelsDevCatalog) {
 	return entries;
 }
 
-function resolveOpenRouterOutput(entries, id, context, advertised) {
-	const distinct = distinctOutputTokens(context, advertised);
-	if (distinct !== undefined) {
-		return distinct;
+function resolveOpenRouterOutput(entries, id, model) {
+	const topProvider = model.top_provider;
+	let rejectedAggregator = false;
+	// An output from top_provider must be checked against that same provider's
+	// window. If it publishes no window, the output has no verifiable context.
+	if (topProvider?.max_completion_tokens !== undefined &&
+		Number.isInteger(topProvider.context_length) && topProvider.context_length > 0) {
+		const distinct = distinctOutputTokens(topProvider.context_length, topProvider.max_completion_tokens);
+		if (distinct !== undefined) return distinct;
+		rejectedAggregator = true;
+	} else {
+		const distinct = distinctOutputTokens(model.context_length, model.max_completion_tokens);
+		if (distinct !== undefined) return distinct;
 	}
 	const candidates = entries.get(id) ?? [];
 	for (const candidate of candidates) {
-		const resolved = distinctOutputTokens(context, candidate.output);
+		// models.dev's OpenRouter mirror may repeat the very cap rejected above.
+		if (rejectedAggregator && candidate.source === "openrouter") continue;
+		const resolved = distinctOutputTokens(candidate.context, candidate.output);
 		if (resolved !== undefined) {
 			return resolved;
 		}
@@ -220,7 +236,6 @@ function mapOpenRouterModel(model, tokenLimits, vendorFacts) {
 	if (context <= 0) {
 		return null;
 	}
-	const advertised = model.top_provider?.max_completion_tokens ?? model.max_completion_tokens;
 	const inputs = Array.isArray(model.architecture?.input_modalities)
 		? model.architecture.input_modalities
 		: [];
@@ -246,7 +261,7 @@ function mapOpenRouterModel(model, tokenLimits, vendorFacts) {
 				(model.reasoning != null && typeof model.reasoning === "object"),
 			streaming: true,
 			context_tokens: context,
-			output_tokens: omitUnverifiedSonarOutput(id, resolveOpenRouterOutput(tokenLimits, id, context, advertised)),
+			output_tokens: omitUnverifiedSonarOutput(id, resolveOpenRouterOutput(tokenLimits, id, model)),
 			// OpenRouter lists `temperature` in `supported_parameters` for
 			// routes that accept it. Omitted when the route lists no
 			// parameters at all.
