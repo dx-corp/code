@@ -278,6 +278,9 @@ pub struct RequestConfig {
     /// Enable provider prompt caching for stable system, tool, and history prefixes.
     /// When true, supported providers add their native cache markers.
     pub cache_system_prompt: bool,
+    /// Opt in to new explicit cache-write boundaries. Default off, so outgoing
+    /// payloads stay identical to the previous request shape.
+    pub explicit_cache_boundaries: bool,
     /// Immutable preparation proof; dispatch rejects changes after preparation.
     pub cache_topology: Option<crate::cache_topology::PreparedPrompt>,
 }
@@ -292,6 +295,7 @@ impl Default for RequestConfig {
             tools: Arc::new(Vec::new()),
             thinking: None,
             cache_system_prompt: false,
+            explicit_cache_boundaries: false,
             cache_topology: None,
         }
     }

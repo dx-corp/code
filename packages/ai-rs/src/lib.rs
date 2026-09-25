@@ -88,8 +88,11 @@ mod kimi;
 pub mod managed_authorization;
 mod model_capabilities;
 pub use model_capabilities::{
-    ASTRA_CONTEXT_TOKENS, ASTRA_OUTPUT_TOKENS, AnthropicRequestCapabilities, AnthropicThinkingMode,
-    OpenAiRequestCapabilities, OpenAiWireProtocol, anthropic_request_capabilities,
+    ANTHROPIC_PROMPT_CACHING_SOURCE, ASTRA_CONTEXT_TOKENS, ASTRA_OUTPUT_TOKENS,
+    AnthropicRequestCapabilities, AnthropicThinkingMode, CacheBehavior, CacheBoundaryKind,
+    CacheCapability, CacheLookback, CacheRetention, CacheUsageInterpretation, CacheWireProtocol,
+    OPENAI_PROMPT_CACHING_SOURCE, OpenAiRequestCapabilities, OpenAiWireProtocol,
+    allows_openai_explicit_breakpoint, anthropic_request_capabilities, cache_capability,
     openai_request_capabilities, supports_explicit_prompt_caching,
 };
 pub mod op_secret;

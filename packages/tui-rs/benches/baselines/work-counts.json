@@ -1,0 +1,6 @@
+{
+  "fixture": "agent_loop_96_long_history_turns",
+  "metrics": {
+    "provider_history_vault_passes": 192
+  }
+}

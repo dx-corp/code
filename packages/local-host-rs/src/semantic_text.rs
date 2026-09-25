@@ -33,10 +33,43 @@ enum Following {
     Fence { marker: char, width: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TitleLex {
+    Leading,
+    Hashes(u8),
+    Heading,
+    FirstStar,
+    Bold { last_star: bool },
+    BoldClosed { colon: bool },
+    Other,
+}
+
+impl TitleLex {
+    fn advance(self, ch: char) -> Self {
+        match self {
+            Self::Leading if ch == ' ' => Self::Leading,
+            Self::Leading if ch == '#' => Self::Hashes(1),
+            Self::Leading if ch == '*' => Self::FirstStar,
+            Self::Hashes(width) if ch == '#' && width < 6 => Self::Hashes(width + 1),
+            Self::Hashes(_) if ch == ' ' => Self::Heading,
+            Self::Heading => Self::Heading,
+            Self::FirstStar if ch == '*' => Self::Bold { last_star: false },
+            Self::Bold { last_star: true } if ch == '*' => Self::BoldClosed { colon: false },
+            Self::Bold { .. } => Self::Bold {
+                last_star: ch == '*',
+            },
+            Self::BoldClosed { colon } if ch.is_whitespace() => Self::BoldClosed { colon },
+            Self::BoldClosed { colon: false } if ch == ':' => Self::BoldClosed { colon: true },
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SemanticTextRelease {
     pending: String,
     line: String,
+    title_lex: TitleLex,
     line_non_title: bool,
     following: Following,
     held_since_ms: Option<u64>,
@@ -57,6 +90,7 @@ impl SemanticTextRelease {
         Self {
             pending: String::new(),
             line: String::new(),
+            title_lex: TitleLex::Leading,
             line_non_title: false,
             following: Following::None,
             held_since_ms: None,
@@ -87,6 +121,7 @@ impl SemanticTextRelease {
                     .then_some(FlushReason::SizeLimit);
                 self.release(now_ms, forced, &mut releases);
                 self.line.clear();
+                self.title_lex = TitleLex::Other;
                 self.line_non_title = true;
             }
             if self.pending.is_empty() {
@@ -96,6 +131,7 @@ impl SemanticTextRelease {
             self.peak_held_bytes = self.peak_held_bytes.max(self.pending.len());
             if !self.line_non_title {
                 self.line.push(ch);
+                self.title_lex = self.title_lex.advance(ch);
             }
             if ch == '\n' {
                 if self.line_non_title {
@@ -104,13 +140,15 @@ impl SemanticTextRelease {
                     self.finish_line(now_ms, &mut releases);
                 }
                 self.line.clear();
+                self.title_lex = TitleLex::Leading;
                 self.line_non_title = false;
             } else if self.following == Following::None
                 && !self.line_non_title
-                && !could_be_title(&self.line)
+                && self.title_lex == TitleLex::Other
             {
                 // Ordinary prose need not wait for a line or a transport timer.
                 self.line.clear();
+                self.title_lex = TitleLex::Other;
                 self.line_non_title = true;
             }
             if self.pending.len() >= self.max_bytes {
@@ -118,6 +156,7 @@ impl SemanticTextRelease {
                     .then_some(FlushReason::SizeLimit);
                 self.release(now_ms, forced, &mut releases);
                 self.line.clear();
+                self.title_lex = TitleLex::Other;
                 self.line_non_title = true;
             }
         }
@@ -131,6 +170,7 @@ impl SemanticTextRelease {
             self.release(now_ms, Some(FlushReason::LatencyLimit), &mut releases);
             if !self.line.is_empty() {
                 self.line.clear();
+                self.title_lex = TitleLex::Other;
                 self.line_non_title = true;
             }
         }
@@ -174,6 +214,7 @@ impl SemanticTextRelease {
         self.release(now_ms, Some(reason), &mut releases);
         self.following = Following::None;
         self.line.clear();
+        self.title_lex = TitleLex::Leading;
         self.line_non_title = false;
         releases
     }
@@ -238,24 +279,6 @@ impl SemanticTextRelease {
         self.held_since_ms = None;
         self.following = Following::None;
     }
-}
-
-fn could_be_title(line: &str) -> bool {
-    let value = line.trim_start_matches(' ');
-    if value.starts_with('#') {
-        let width = value.bytes().take_while(|byte| *byte == b'#').count();
-        return width <= 6 && (value.len() == width || value.as_bytes().get(width) == Some(&b' '));
-    }
-    if value == "*" {
-        return true;
-    }
-    if let Some(body) = value.strip_prefix("**") {
-        if let Some(end) = body.find("**") {
-            return body[end + 2..].trim().trim_end_matches(':').is_empty();
-        }
-        return true;
-    }
-    false
 }
 
 fn standalone_title(line: &str) -> bool {
@@ -534,5 +557,22 @@ mod tests {
         assert!(releases.iter().all(|release| release.forced.is_none()));
         assert!(releases.iter().all(|release| release.text.len() <= 4_096));
         assert_eq!(policy.held_bytes(), 0);
+    }
+
+    #[test]
+    fn long_bold_candidate_is_scanned_incrementally_and_forced_at_the_size_limit() {
+        let mut policy = SemanticTextRelease::new(4_096, 10_000);
+        assert!(policy.push("**", 0).is_empty());
+        let mut released = String::new();
+        for _ in 0..4_100 {
+            for chunk in policy.push("x", 0) {
+                released.push_str(&chunk.text);
+            }
+            assert!(policy.held_bytes() <= 4_096);
+        }
+        for chunk in policy.flush(FlushReason::Finalization, 0) {
+            released.push_str(&chunk.text);
+        }
+        assert_eq!(released, format!("**{}", "x".repeat(4_100)));
     }
 }

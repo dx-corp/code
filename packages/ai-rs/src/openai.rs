@@ -1933,14 +1933,19 @@ impl OpenAiClient {
         config: &RequestConfig,
     ) -> Result<serde_json::Value> {
         let model = self.request_model_name(&config.model);
+        let canonical_messages = messages;
         let messages = transform_messages_for_target(messages, OutboundTarget::OpenAiResponses);
         // Convert messages to Responses API format
         // The input array contains ResponseItems, which can be messages, function calls, or function outputs
         let mut input: Vec<serde_json::Value> = Vec::new();
+        let mut message_end: Vec<Option<usize>> = Vec::new();
 
         for msg in messages {
+            let before = input.len();
             match msg.role {
-                Role::System => continue, // System goes in instructions
+                Role::System => {
+                    // Instructions are sent separately and cannot hold a breakpoint.
+                }
                 Role::User => {
                     // User messages use "input_text" content type
                     match &msg.content {
@@ -2073,6 +2078,7 @@ impl OpenAiClient {
                     }
                 }
             }
+            message_end.push(input.len().checked_sub(1).filter(|_| input.len() > before));
         }
 
         let mut body = serde_json::json!({
@@ -2140,6 +2146,29 @@ impl OpenAiClient {
         // Always include reasoning content for visibility
         // This enables streaming of reasoning text (only encrypted_content is valid)
         body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
+
+        // Opt-in only. Managed and aggregator routes stay on the implicit shape even
+        // when the model id looks like a direct GPT-5.6 deployment.
+        if config.explicit_cache_boundaries && !self.managed_gateway {
+            if let Some(prepared) = config.cache_topology.as_ref() {
+                if prepared.boundary().is_final()
+                    && prepared.boundary().openai_explicit_breakpoint
+                    && crate::allows_openai_explicit_breakpoint(
+                        self.route_provider.as_deref(),
+                        &config.model,
+                    )
+                    && mark_responses_breakpoints(
+                        &mut body,
+                        canonical_messages,
+                        &message_end,
+                        &prepared.boundary().history_indexes,
+                    )
+                {
+                    body["prompt_cache_options"] =
+                        serde_json::json!({"mode": "explicit", "ttl": "30m"});
+                }
+            }
+        }
 
         Ok(body)
     }
@@ -3391,6 +3420,111 @@ struct PromptTokensDetails {
     cache_write_tokens: Option<u64>,
 }
 
+fn input_carrier(block_type: Option<&str>) -> bool {
+    matches!(
+        block_type,
+        Some("input_text" | "input_image" | "input_file")
+    )
+}
+
+fn item_has_input_carrier(item: &serde_json::Value) -> bool {
+    item.get("content")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|content| {
+            content
+                .iter()
+                .any(|block| input_carrier(block.get("type").and_then(serde_json::Value::as_str)))
+        })
+}
+
+fn mark_input_carrier(item: &mut serde_json::Value) -> bool {
+    let Some(content) = item
+        .get_mut("content")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    let Some(block) = content
+        .iter_mut()
+        .rev()
+        .find(|block| input_carrier(block.get("type").and_then(serde_json::Value::as_str)))
+    else {
+        return false;
+    };
+    block["prompt_cache_breakpoint"] = serde_json::json!({"mode": "explicit"});
+    true
+}
+
+/// Returns whether the newest planned boundary was marked on a documented input carrier.
+/// Older indexes may walk back to an earlier carrier. `output_text` and string tool
+/// output are not carriers; if the newest boundary is one of those, the body is left implicit.
+fn mark_responses_breakpoints(
+    body: &mut serde_json::Value,
+    canonical: &[Message],
+    message_end: &[Option<usize>],
+    indexes: &[usize],
+) -> bool {
+    let Some(input) = body
+        .get_mut("input")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    let Some(newest) = indexes.iter().copied().max() else {
+        return false;
+    };
+    let Some(newest_item) = canonical_input_item(canonical, message_end, newest) else {
+        return false;
+    };
+    if !item_has_input_carrier(&input[newest_item]) {
+        return false;
+    }
+    let mut placed_newest = false;
+    let mut planned: Vec<usize> = indexes.to_vec();
+    planned.sort_unstable();
+    planned.dedup();
+    for (nth, canonical_index) in planned.iter().copied().enumerate() {
+        let floor = if nth == 0 {
+            0
+        } else {
+            canonical_input_item(canonical, message_end, planned[nth - 1]).unwrap_or(0)
+        };
+        let Some(start) = canonical_input_item(canonical, message_end, canonical_index) else {
+            continue;
+        };
+        let mut item_index = start;
+        let mut marked = false;
+        loop {
+            let markable = item_has_input_carrier(&input[item_index]);
+            if markable && mark_input_carrier(&mut input[item_index]) {
+                marked = true;
+                break;
+            }
+            if item_index <= floor {
+                break;
+            }
+            item_index -= 1;
+        }
+        if canonical_index == newest {
+            placed_newest = marked;
+        }
+    }
+    placed_newest
+}
+
+fn canonical_input_item(
+    canonical: &[Message],
+    message_end: &[Option<usize>],
+    canonical_index: usize,
+) -> Option<usize> {
+    let wire = crate::cache_topology::wire_message_index(
+        canonical,
+        canonical_index,
+        crate::transform::OutboundTarget::OpenAiResponses,
+    )?;
+    message_end.get(wire).copied().flatten()
+}
+
 fn apply_prompt_cache_key(body: &mut serde_json::Value, provider: Option<&str>, key: Option<&str>) {
     if let (Some("openrouter"), Some(key)) = (
         provider,
@@ -3543,6 +3677,284 @@ mod tests {
             .unwrap();
         assert_eq!(auxiliary["messages"][0]["content"], "checkpoint");
         assert!(auxiliary.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn stable_boundary_wire_contract_places_openai_breakpoint_before_the_volatile_tail() {
+        let client = OpenAiClient::new("fixture")
+            .unwrap()
+            .with_route_provider("openai");
+        let history = vec![Message {
+            role: Role::User,
+            content: MessageContent::text("stable history"),
+        }];
+        let mut config = RequestConfig {
+            model: "gpt-5.6".into(),
+            system: Some("Standing developer policy".into()),
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock and plan".into()));
+        prepared
+            .finalize_boundary(Some("openai"), "gpt-5.6", false, true, false, history.len())
+            .unwrap();
+        config.cache_topology = Some(prepared);
+        let body = client
+            .build_request_body_for_api(&history, &config, true)
+            .unwrap();
+        assert_eq!(body["instructions"], "Standing developer policy");
+        assert!(body["instructions"].is_string());
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(
+            input[0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+        assert_eq!(input[1]["role"], "user");
+        assert_eq!(input[1]["content"], "clock and plan");
+        assert!(input[1].get("prompt_cache_breakpoint").is_none());
+        assert_eq!(body["prompt_cache_options"]["mode"], "explicit");
+        assert_eq!(body["prompt_cache_options"]["ttl"], "30m");
+        assert!(body.get("prompt_cache_breakpoint").is_none());
+        let rendered = body.to_string();
+        assert!(!rendered.contains("\"role\":\"developer\""));
+        assert_eq!(rendered.matches("Standing developer policy").count(), 1);
+
+        let mut earlier = config.clone();
+        earlier.model = "gpt-5.4".into();
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &earlier,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock and plan".into()));
+        prepared
+            .finalize_boundary(Some("openai"), "gpt-5.4", false, true, false, history.len())
+            .unwrap();
+        earlier.cache_topology = Some(prepared);
+        let implicit = client
+            .build_request_body_for_api(&history, &earlier, true)
+            .unwrap();
+        assert!(implicit.get("prompt_cache_options").is_none());
+        assert!(!implicit.to_string().contains("prompt_cache_breakpoint"));
+
+        let chat = client
+            .build_request_body_for_api(&history, &config, false)
+            .unwrap();
+        assert!(
+            !chat.to_string().contains("prompt_cache_breakpoint"),
+            "chat completions must not receive the Responses breakpoint"
+        );
+
+        let router = OpenAiClient::new("fixture")
+            .unwrap()
+            .with_route_provider("openrouter");
+        let routed = router
+            .build_request_body_for_api(&history, &config, true)
+            .unwrap();
+        assert!(
+            !routed.to_string().contains("prompt_cache_breakpoint"),
+            "an aggregator route must not receive a guessed OpenAI breakpoint"
+        );
+
+        let mut instructions_only = config.clone();
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &[],
+            &instructions_only,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("only the tail".into()));
+        prepared
+            .finalize_boundary(Some("openai"), "gpt-5.6", false, true, false, 0)
+            .unwrap();
+        assert!(!prepared.boundary().openai_explicit_breakpoint);
+        instructions_only.cache_topology = Some(prepared);
+        let no_history = client
+            .build_request_body_for_api(&[], &instructions_only, true)
+            .unwrap();
+        assert_eq!(no_history["instructions"], "Standing developer policy");
+        assert!(!no_history.to_string().contains("prompt_cache_breakpoint"));
+        assert!(no_history.get("prompt_cache_options").is_none());
+    }
+
+    #[test]
+    fn explicit_breakpoint_follows_the_transformed_message_and_refuses_unmarkable_tails() {
+        let client = OpenAiClient::new("fixture")
+            .unwrap()
+            .with_route_provider("openai");
+        let history = vec![
+            Message {
+                role: Role::System,
+                content: MessageContent::text("not on the input array"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("stable"),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::text("assistant text"),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::text("q"),
+            },
+        ];
+        let mut config = RequestConfig {
+            model: "gpt-5.6".into(),
+            explicit_cache_boundaries: true,
+            ..Default::default()
+        };
+        let mut prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &config,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock".into()));
+        prepared
+            .finalize_boundary(Some("openai"), "gpt-5.6", true, false, false, history.len())
+            .unwrap();
+        config.cache_topology = Some(prepared);
+        let body = client
+            .build_request_body_for_api(&history, &config, true)
+            .unwrap();
+        let marked: Vec<String> = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| {
+                let blocks = item.get("content")?.as_array()?;
+                let marked = blocks
+                    .iter()
+                    .any(|block| block.get("prompt_cache_breakpoint").is_some());
+                if !marked {
+                    return None;
+                }
+                blocks
+                    .iter()
+                    .find_map(|block| block.get("text").and_then(|text| text.as_str()))
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert_eq!(marked, vec!["q".to_string()]);
+        let breakpoint_types: Vec<&str> = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|item| {
+                item.get("content")
+                    .and_then(|c| c.as_array())
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|block| block.get("prompt_cache_breakpoint").is_some())
+            .filter_map(|block| block.get("type").and_then(|t| t.as_str()))
+            .collect();
+        assert_eq!(breakpoint_types, vec!["input_text"]);
+
+        let tool_history = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::text("ask"),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![crate::ContentBlock::ToolUse {
+                    id: "call-1".into(),
+                    name: "read".into(),
+                    input: serde_json::json!({}),
+                    gemini_context: None,
+                }]),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![crate::ContentBlock::ToolResult {
+                    tool_use_id: "call-1".into(),
+                    content: "result".into(),
+                    is_error: None,
+                }]),
+            },
+        ];
+        let mut tool_config = config.clone();
+        let mut tool_prepared = crate::cache_topology::PreparedPrompt::prepare(
+            &tool_history,
+            &tool_config,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock".into()));
+        tool_prepared
+            .finalize_boundary(
+                Some("openai"),
+                "gpt-5.6",
+                true,
+                false,
+                false,
+                tool_history.len(),
+            )
+            .unwrap();
+        tool_config.cache_topology = Some(tool_prepared);
+        let tool_body = client
+            .build_request_body_for_api(&tool_history, &tool_config, true)
+            .unwrap();
+        assert!(
+            tool_body.get("prompt_cache_options").is_none(),
+            "a newest tool-result boundary is not an input carrier, so the request stays implicit"
+        );
+        assert!(!tool_body.to_string().contains("prompt_cache_breakpoint"));
+
+        let mut off = config.clone();
+        off.explicit_cache_boundaries = false;
+        let off_body = client
+            .build_request_body_for_api(&history, &off, true)
+            .unwrap();
+        let mut legacy = off.clone();
+        let unfinalized = crate::cache_topology::PreparedPrompt::prepare(
+            &history,
+            &legacy,
+            "session".into(),
+            None,
+        )
+        .unwrap()
+        .with_volatile_tail(Some("clock".into()));
+        legacy.cache_topology = Some(unfinalized);
+        let legacy_body = client
+            .build_request_body_for_api(&history, &legacy, true)
+            .unwrap();
+        assert_eq!(off_body, legacy_body);
+
+        let managed = OpenAiClient::new("fixture")
+            .unwrap()
+            .with_route_provider("openai")
+            .with_managed_gateway_scope(
+                "org_123",
+                "workspace_456",
+                serde_json::json!({
+                    "provider": "openai",
+                    "environment": "production",
+                    "credential_name": "default"
+                }),
+            )
+            .unwrap();
+        let managed_body = managed
+            .build_request_body_for_api(&history, &config, true)
+            .unwrap();
+        assert!(!managed_body.to_string().contains("prompt_cache_breakpoint"));
+        assert!(managed_body.get("prompt_cache_options").is_none());
     }
 
     #[test]
