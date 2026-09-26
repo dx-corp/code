@@ -489,12 +489,29 @@ fn capture_hook_payload(
             }))
         }
         "PostMessage" | "SessionEnd" => {
-            let transcript_path = payload.transcript_path.ok_or_else(|| {
-                TranscriptError::Hook(format!(
-                    "{} payload omitted transcript_path",
-                    payload.hook_event_name
-                ))
-            })?;
+            // Subagent sessions are stamped with a real session id but never
+            // a transcript path (`agent.set_session_context(Some(record.id),
+            // "subagent_start", false)` in `tools/subagents.rs` -- "the child
+            // record is not a SessionManager transcript cleanup owner"), and
+            // exec/print-mode's own top-level session likewise has no
+            // SessionManager-owned JSONL file to point at. Neither omission
+            // is a hook failure: there is simply nothing to spool, so skip
+            // the same way a missing tenant identity is skipped below
+            // instead of hard-failing every PostMessage/SessionEnd for these
+            // sessions.
+            let Some(transcript_path) = payload.transcript_path else {
+                if payload.hook_event_name == "SessionEnd" && git_repo.is_some() {
+                    clear_hook_session(&repo, &payload.session_id)
+                        .map_err(|error| TranscriptError::Hook(error.to_string()))?;
+                }
+                return Ok(json!({
+                    "operation": "transcript.hook",
+                    "event": payload.hook_event_name,
+                    "session_id": session_id,
+                    "capture": "skipped",
+                    "reason": "hook payload omitted transcript_path",
+                }));
+            };
             if payload.hook_event_name == "PostMessage"
                 && args.agent == TranscriptAgent::Maestro
                 && let Some(size_before) = payload.transcript_size_before
@@ -1841,6 +1858,38 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
     use tempfile::tempdir;
+
+    #[test]
+    fn subagent_and_exec_sessions_skip_capture_instead_of_failing_without_a_transcript() {
+        // Regression test for the exec/subagent capture failure: both
+        // `agent.set_session_context(Some(record.id), "subagent_start",
+        // false)` (subagents.rs) and exec/print-mode's top-level session
+        // stamp a real session id onto the hook system without ever
+        // resolving a SessionManager-owned transcript path. Before the fix,
+        // `capture_hook_payload` hard-failed PostMessage and SessionEnd with
+        // "<event> payload omitted transcript_path" whenever that happened.
+        let temp = tempdir().unwrap();
+        let state = temp.path().join("state");
+        for event_name in ["PostMessage", "SessionEnd"] {
+            let event = MaestroTranscriptEvent {
+                event_name: event_name.to_string(),
+                source_session_id: "subagent-session-1".to_string(),
+                cwd: temp.path().to_path_buf(),
+                transcript_path: None,
+                transcript_size_before: None,
+                organization_id: "org-1".to_string(),
+                workspace_id: "workspace-1".to_string(),
+                endpoint: None,
+                access_token: None,
+                model: None,
+            };
+            let result = capture_maestro_event(event, Some(&state)).unwrap_or_else(|error| {
+                panic!("{event_name} must skip capture, not fail, without a transcript: {error}")
+            });
+            assert_eq!(result["capture"], "skipped");
+            assert_eq!(result["reason"], "hook payload omitted transcript_path");
+        }
+    }
 
     fn prepare_native_fixture(input: PathBuf, state: &Path, branch: &str) -> PathBuf {
         let result = prepare_transcript(

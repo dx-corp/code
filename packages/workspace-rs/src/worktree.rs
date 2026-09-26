@@ -5,7 +5,11 @@
 //! `<name>`, then runs the whole session (TUI, `exec`, or print mode) with the
 //! worktree as the working directory. On exit a clean worktree (no uncommitted
 //! changes, no untracked files, no new commits) can be removed. Interactive
-//! sessions keep their worktree. Successful sessions always preserve the branch.
+//! sessions keep their worktree. A non-interactive session's branch is deleted
+//! along with the worktree when the branch never received a commit, since the
+//! branch was created fresh for this session and a retry with the same
+//! `-w <name>` would otherwise collide with it. A branch that gained commits,
+//! or a worktree left dirty, is preserved.
 //!
 //! Like the rest of the crate's git integration (see [`crate::git`]), this
 //! module shells out to the `git` CLI instead of linking libgit2.
@@ -572,7 +576,17 @@ impl WorktreeSession {
         );
     }
 
-    /// Remove only an unchanged, clean non-interactive worktree; keep its branch.
+    /// Remove an unchanged, clean non-interactive worktree along with its
+    /// branch.
+    ///
+    /// Every branch reaching the "unchanged" path below was created fresh by
+    /// this session: `create_in`/`create_in_at` refuse to reuse a branch that
+    /// already exists, and `reopen_in_at` only ever reattaches to a branch
+    /// this session previously created. So a branch with no commits beyond
+    /// `initial_head` is never work worth keeping, and deleting it here
+    /// cannot discard a branch that predates this run. Leaving it behind
+    /// instead makes a retry with the same `-w <name>` fail with "branch
+    /// already exists", forcing the caller to run `git branch -D` by hand.
     pub fn finish(self) {
         let unchanged =
             git_output(&self.path, &["rev-parse", "--verify", "HEAD"]).is_ok_and(|output| {
@@ -589,14 +603,24 @@ impl WorktreeSession {
             .arg(&self.path)
             .current_dir(&self.repo_root);
         let removed = output_with_deadline(&mut remove).is_ok_and(|output| output.status.success());
-        if removed {
+        if !removed {
+            self.keep();
+            return;
+        }
+        let branch_deleted = git_output(&self.repo_root, &["branch", "-D", &self.branch])
+            .is_ok_and(|output| output.status.success());
+        if branch_deleted {
+            eprintln!(
+                "Removed unchanged worktree {} (branch {} deleted)",
+                self.path.display(),
+                self.branch
+            );
+        } else {
             eprintln!(
                 "Removed unchanged worktree {}\n  branch kept: {}",
                 self.path.display(),
                 self.branch
             );
-        } else {
-            self.keep();
         }
     }
 }
@@ -1130,7 +1154,43 @@ mod tests {
 
         session.finish();
         assert!(!expected.exists(), "clean worktree should be removed");
-        assert_eq!(listed_branch(&repo, "My-Feature"), "My-Feature");
+        assert_eq!(
+            listed_branch(&repo, "My-Feature"),
+            "",
+            "unused branch should be deleted alongside its clean worktree"
+        );
+        fs::remove_dir_all(repo.parent().expect("repo has a parent"))
+            .expect("test directory should be removed");
+    }
+
+    #[test]
+    fn finish_deletes_unused_branch_so_retry_can_reuse_the_name() {
+        let repo = temp_repo("retry");
+        let session =
+            WorktreeSession::create_in(&repo, "retry-me").expect("worktree should be created");
+        let path = session.path().to_path_buf();
+        assert!(session.is_clean());
+
+        session.finish();
+        assert!(!path.exists(), "unchanged worktree should be removed");
+        assert_eq!(
+            listed_branch(&repo, "retry-me"),
+            "",
+            "a branch this session created with no new commits must not \
+             survive finish(), or a retry with the same -w name collides \
+             with it"
+        );
+
+        // Regression guard: before the fix, this second create_in call
+        // failed with "branch `retry-me` already exists" because finish()
+        // removed the worktree but always kept the branch.
+        let retry = WorktreeSession::create_in(&repo, "retry-me")
+            .expect("retrying with the same worktree name must succeed");
+        let retry_path = retry.path().to_path_buf();
+        retry.finish();
+        assert!(!retry_path.exists());
+        assert_eq!(listed_branch(&repo, "retry-me"), "");
+
         fs::remove_dir_all(repo.parent().expect("repo has a parent"))
             .expect("test directory should be removed");
     }
