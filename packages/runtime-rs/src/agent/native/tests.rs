@@ -2021,7 +2021,7 @@ async fn native_agent_projects_managed_gateway_receipt_without_signed_payload() 
             None,
             Some("lineage-native".to_string()),
             Some(crate::agent::ManagedInferenceAuthorization::new(
-                authorization,
+                authorization.clone(),
             )),
         )
         .await
@@ -2029,9 +2029,25 @@ async fn native_agent_projects_managed_gateway_receipt_without_signed_payload() 
 
     let mut saw_receipt = false;
     let mut saw_provider_content = false;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             match events.recv().await {
+                Some(FromAgent::ManagedAuthorizationRequest { request_id }) => {
+                    let mut renewed: serde_json::Value =
+                        serde_json::from_str(&authorization).expect("renewed authorization");
+                    renewed["claims"]["authorization_id"] = request_id.clone().into();
+                    agent
+                        .managed_authorization_coordinator()
+                        .respond(
+                            &request_id,
+                            crate::agent::ManagedInferenceAuthorization::new(renewed.to_string()),
+                            Some(maestro_runtime_contracts::ManagedGatewayCredential::new(
+                                "delegated-token",
+                                i64::MAX,
+                            )),
+                        )
+                        .expect("renew managed authority");
+                }
                 Some(receipt @ FromAgent::ManagedGatewayReceipt { .. }) => {
                     assert!(!saw_provider_content);
                     let serialized =

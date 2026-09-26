@@ -810,24 +810,32 @@ async fn runner_returns_a_typed_error_for_a_nonfatal_terminal_runtime_error() {
 }
 
 #[tokio::test]
-async fn runner_treats_provider_eof_and_cancellation_as_errors_not_completion() {
+async fn runner_retries_provider_eof_and_treats_cancellation_as_error() {
     let eof_workspace = tempfile::tempdir().expect("EOF workspace");
-    let mut eof_runner = ScriptedEmbeddingBuilder::new(vec![ScriptedResponse {
-        blocks: vec![
-            ScriptedBlock::Text("partial".to_owned()),
-            ScriptedBlock::Eof,
-        ],
-        stop_reason: StopReason::EndTurn,
-        error: None,
-    }])
+    let mut eof_runner = ScriptedEmbeddingBuilder::new(vec![
+        ScriptedResponse {
+            blocks: vec![
+                ScriptedBlock::Text("partial".to_owned()),
+                ScriptedBlock::Eof,
+            ],
+            stop_reason: StopReason::EndTurn,
+            error: None,
+        },
+        ScriptedResponse::text("completed after retry"),
+    ])
     .working_directory(eof_workspace.path())
     .start_runner()
     .expect("EOF runner starts");
-    assert!(matches!(
-        eof_runner.run("Read until EOF.").await,
-        Err(EmbeddedRunError::Provider { kind, .. })
-            if kind == format!("{:?}", ProviderStreamErrorKind::TransientProtocol)
-    ));
+    let completed = eof_runner
+        .run("Read until EOF.")
+        .await
+        .expect("the retry completes without the partial response");
+    match completed {
+        EmbeddedRunProgress::Completed(completed) => {
+            assert_eq!(completed.output(), "completed after retry");
+        }
+        EmbeddedRunProgress::AwaitingTool(_) => panic!("unexpected tool call after provider retry"),
+    }
     eof_runner.shutdown().await;
 
     let provider_workspace = tempfile::tempdir().expect("provider workspace");
