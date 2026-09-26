@@ -1507,19 +1507,20 @@ mod tests {
     /// carrying no cost while OpenRouter published $0.09/$0.30 for the same
     /// weights.
     ///
-    /// The exceptions are OpenRouter's routing models. They publish
+    /// The exceptions are routing models on OpenRouter. They publish
     /// `"prompt": "-1"`, meaning the price is whatever the model they route to
     /// charges, so no fixed number exists to record. They are named here one
-    /// by one rather than matched by prefix, so a new `openrouter/` model that
-    /// really is unpriced has to be looked at instead of being absorbed.
+    /// by one rather than matched by prefix, so a newly unpriced model must
+    /// be reviewed before entering the catalog.
     #[test]
     fn every_catalogued_model_has_a_published_price() {
-        const PRICED_AT_ROUTING_TIME: [&str; 5] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 6] = [
             "openrouter/auto",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
             "openrouter/fusion",
             "openrouter/pareto-code",
+            "typesafe/jev-router",
         ];
 
         let mut unpriced = Vec::new();
@@ -1540,12 +1541,13 @@ mod tests {
     /// The routing exceptions must stay real models, not a stale allowlist.
     #[test]
     fn every_routing_time_exception_is_still_catalogued() {
-        const PRICED_AT_ROUTING_TIME: [&str; 5] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 6] = [
             "openrouter/auto",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
             "openrouter/fusion",
             "openrouter/pareto-code",
+            "typesafe/jev-router",
         ];
 
         let ids: std::collections::HashSet<&str> =
