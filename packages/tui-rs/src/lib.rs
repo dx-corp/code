@@ -192,6 +192,7 @@ pub mod palette;
 
 pub mod a2a_cli;
 pub mod cli_commands;
+pub mod cloud_cli;
 pub mod mission_run;
 pub mod workflow_cli;
 pub use maestro_codex::codex_app_server;
