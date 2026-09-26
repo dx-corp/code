@@ -922,10 +922,16 @@ impl NativeAgentRunner {
                                     request_retry_decision(
                                         &mut self.retry_policy,
                                         error_kind,
-                                        if provider_stream_failure.is_some() {
-                                            RequestFailureOwner::ProviderStream
-                                        } else {
-                                            RequestFailureOwner::Request
+                                        match &provider_stream_failure {
+                                            Some((kind, message)) => {
+                                                RequestFailureOwner::ProviderStream {
+                                                    partial_content_retryable:
+                                                        is_retryable_partial_content_stream_failure(
+                                                            *kind, message,
+                                                        ),
+                                                }
+                                            }
+                                            None => RequestFailureOwner::Request,
                                         },
                                     )
                                 };

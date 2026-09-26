@@ -114,9 +114,10 @@ pub use app_message::{AppMessage, BashExecution, from_api_messages, transform_to
 #[cfg(feature = "bedrock")]
 pub use bedrock::BedrockClient;
 pub use client::{
-    AiClient, AiProvider, DEFAULT_STREAM_IDLE_TIMEOUT, DEFAULT_STREAM_MAX_RETRIES, UnifiedClient,
-    canonical_managed_credential_name, canonical_managed_environment, create_client,
-    create_client_for_model, provider_model_name,
+    AiClient, AiProvider, DEFAULT_STREAM_IDLE_TIMEOUT, DEFAULT_STREAM_MAX_RETRIES,
+    PARTIAL_CONTENT_STREAM_FAILURE_MARKER, UnifiedClient, canonical_managed_credential_name,
+    canonical_managed_environment, create_client, create_client_for_model,
+    is_retryable_partial_content_stream_failure, provider_model_name,
 };
 pub use error::summarize_error_body;
 pub use google::GoogleClient;
