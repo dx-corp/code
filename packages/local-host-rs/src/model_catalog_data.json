@@ -1,5 +1,5 @@
 {
-  "generated_at": 1790356629,
+  "generated_at": 1790407733,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -2764,12 +2764,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 384000,
         "temperature": true
       },
       "cost": {
-        "input": 0.075,
-        "output": 0.3,
-        "cache_read": 0.0015
+        "input": 0.035,
+        "output": 0.29,
+        "cache_read": 0.001
       },
       "verification": {
         "state": "catalog",
@@ -2791,9 +2792,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.2528,
-        "output": 1.9584,
-        "cache_read": 0.08832
+        "input": 0.25,
+        "output": 3.5,
+        "cache_read": 0.249
       },
       "verification": {
         "state": "catalog",
@@ -2815,7 +2816,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.03,
+        "input": 0.021,
         "output": 0.32,
         "cache_read": 0.016
       },
@@ -2891,8 +2892,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 1.2,
-        "output": 10.5346,
+        "input": 1.0301,
+        "output": 9.043,
         "cache_read": 0.3
       },
       "verification": {
@@ -3065,13 +3066,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 128000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.045,
-        "output": 0.14,
-        "cache_read": 0.01
+        "input": 0.04,
+        "output": 0.5,
+        "cache_read": 0.015
       },
       "verification": {
         "state": "catalog",
@@ -3094,9 +3095,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.5614,
-        "output": 1.7644,
-        "cache_read": 0.10426
+        "input": 0.3794,
+        "output": 1.1924,
+        "cache_read": 0.07046
       },
       "verification": {
         "state": "catalog",
@@ -3390,32 +3391,6 @@
       "cost": {
         "input": 2.5,
         "output": 5
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "anthropic/claude-3-haiku",
-      "name": "Anthropic: Claude 3 Haiku",
-      "provider": "openrouter",
-      "description": "Claude 3 Haiku is Anthropic's fastest and most compact model for\nnear-instant responsiveness. Quick and accurate…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 4096,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.25,
-        "output": 1.25,
-        "cache_read": 0.03,
-        "cache_write": 0.3
       },
       "verification": {
         "state": "catalog",
@@ -4406,9 +4381,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.04788,
-        "output": 0.09576,
-        "cache_read": 0.009576
+        "input": 0.04704,
+        "output": 0.09408,
+        "cache_read": 0.009408
       },
       "status": "deprecated",
       "verification": {
@@ -4431,7 +4406,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.03,
+        "input": 0.021,
         "output": 0.32,
         "cache_read": 0.016
       },
@@ -4482,9 +4457,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.702786,
-        "output": 1.405572,
-        "cache_read": 0.058566
+        "input": 0.418818,
+        "output": 0.837636,
+        "cache_read": 0.034902
       },
       "verification": {
         "state": "catalog",
@@ -4507,9 +4482,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.34584,
-        "output": 1.03752,
-        "cache_read": 0.011528
+        "input": 0.264,
+        "output": 0.792,
+        "cache_read": 0.0088
       },
       "verification": {
         "state": "catalog",
@@ -4531,9 +4506,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.075,
-        "output": 0.3,
-        "cache_read": 0.0015
+        "input": 0.3,
+        "output": 1.2,
+        "cache_read": 0.006
       },
       "verification": {
         "state": "catalog",
@@ -7273,10 +7248,11 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.07,
+        "input": 0.08,
         "output": 0.2,
         "cache_read": 0.04
       },
@@ -9033,6 +9009,30 @@
       }
     },
     {
+      "id": "perceptron/perceptron-mk1.5",
+      "name": "Perceptron: Perceptron Mk1.5",
+      "provider": "openrouter",
+      "description": "Perceptron Mk1.5 is Perceptron's embodied reasoning model for physical agents. It accepts text, image, video, and…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 36864,
+        "output_tokens": 8192,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.15,
+        "output": 1.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "perplexity/sonar",
       "name": "Perplexity: Sonar",
       "provider": "openrouter",
@@ -10227,12 +10227,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 81920,
         "temperature": true
       },
       "cost": {
         "input": 0.32,
-        "output": 2.7,
-        "cache_read": 0.15
+        "output": 3.2
       },
       "verification": {
         "state": "catalog",
@@ -11039,9 +11039,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0825,
-        "output": 0.33,
-        "cache_read": 0.020625
+        "input": 0.132,
+        "output": 0.528,
+        "cache_read": 0.033
       },
       "verification": {
         "state": "catalog",
@@ -11180,7 +11180,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
+        "context_tokens": 524288,
         "temperature": true
       },
       "cost": {
@@ -11204,7 +11204,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
+        "context_tokens": 524288,
         "output_tokens": 262144,
         "temperature": true
       },
@@ -11260,6 +11260,25 @@
       "cost": {
         "input": 0,
         "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "typesafe/jev-router",
+      "name": "TypeSafe: Jev Router",
+      "provider": "openrouter",
+      "description": "Jev Router picks the best model and reasoning effort for each request, balancing quality, speed, and cost. It runs on…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "temperature": false
       },
       "verification": {
         "state": "catalog",
@@ -11666,7 +11685,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
+        "context_tokens": 1050000,
         "output_tokens": 131072,
         "temperature": true
       },
@@ -11980,29 +11999,6 @@
       }
     },
     {
-      "id": "z-ai/glm-5.2:free",
-      "name": "Z.ai: GLM 5.2 (free)",
-      "provider": "openrouter",
-      "description": "GLM 5.2 is a large-scale reasoning model from Z.ai. It supports text input and output with a 1M-token context window,…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "z-ai/glm-5.3",
       "name": "Z.ai: GLM 5.3",
       "provider": "openrouter",
@@ -12039,13 +12035,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 128000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.045,
-        "output": 0.14,
-        "cache_read": 0.01
+        "input": 0.04,
+        "output": 0.5,
+        "cache_read": 0.015
       },
       "verification": {
         "state": "catalog",
