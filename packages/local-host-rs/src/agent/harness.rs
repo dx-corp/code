@@ -322,16 +322,16 @@ async fn scripted_provider_error_preserves_kind_and_never_completes_turn() {
 }
 
 #[tokio::test]
-async fn scripted_partial_text_eof_is_transient_protocol_error() {
-    let mut harness = AgentHarness::with_scripted(vec![ScriptedResponse {
+async fn scripted_partial_text_eof_is_transient_protocol_error_after_retries() {
+    let eof = ScriptedResponse {
         blocks: vec![
             ScriptedBlock::Text("partial answer".to_string()),
             ScriptedBlock::Eof,
         ],
         stop_reason: StopReason::EndTurn,
         error: None,
-    }])
-    .expect("harness should construct");
+    };
+    let mut harness = AgentHarness::with_scripted(vec![eof; 3]).expect("harness should construct");
 
     harness
         .agent
@@ -380,8 +380,8 @@ async fn scripted_partial_text_eof_is_transient_protocol_error() {
 }
 
 #[tokio::test]
-async fn scripted_completed_tool_block_eof_is_transient_protocol_error() {
-    let mut harness = AgentHarness::with_scripted(vec![ScriptedResponse {
+async fn scripted_completed_tool_block_eof_is_transient_protocol_error_after_retries() {
+    let eof = ScriptedResponse {
         blocks: vec![
             ScriptedBlock::ToolUse {
                 id: "call-cut".to_string(),
@@ -392,8 +392,8 @@ async fn scripted_completed_tool_block_eof_is_transient_protocol_error() {
         ],
         stop_reason: StopReason::ToolUse,
         error: None,
-    }])
-    .expect("harness should construct");
+    };
+    let mut harness = AgentHarness::with_scripted(vec![eof; 3]).expect("harness should construct");
 
     harness
         .agent
