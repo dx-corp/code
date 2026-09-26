@@ -1682,7 +1682,9 @@ fn exhausted_provider_stream_does_not_consume_the_outer_request_retry_budget() {
         request_retry_decision(
             &mut retry_policy,
             transient,
-            RequestFailureOwner::ProviderStream,
+            RequestFailureOwner::ProviderStream {
+                partial_content_retryable: false,
+            },
         ),
         super::super::retry::RetryDecision::GiveUp { reason }
             if reason.contains("stream retry policy")
@@ -1692,6 +1694,138 @@ fn exhausted_provider_stream_does_not_consume_the_outer_request_retry_budget() {
         request_retry_decision(&mut retry_policy, transient, RequestFailureOwner::Request,),
         super::super::retry::RetryDecision::Retry { attempt: 1, .. }
     ));
+}
+
+#[test]
+fn a_stream_closed_after_partial_content_retries_the_model_turn_instead_of_ending_the_session() {
+    // "Provider stream closed mid-response without a terminal event; not
+    // retrying because provider output or metering was already observed" is
+    // the exact class of `TransientProtocol` failure this must retry: one
+    // dropped stream must not end the whole agent session once the partial
+    // reply has already been discarded (see `run_loop_inner`'s
+    // `stream_failed` branch, which never commits it to history).
+    let mut retry_policy = super::super::retry::RetryPolicy::default();
+    // The classified `error_kind` is irrelevant once
+    // `partial_content_retryable` is true: `request_retry_decision` always
+    // treats this class of stream failure as transient on its own terms,
+    // never by trusting the caller's classification of the message text.
+    let unclassified = super::super::retry::ErrorKind::Unknown;
+
+    let first = request_retry_decision(
+        &mut retry_policy,
+        unclassified,
+        RequestFailureOwner::ProviderStream {
+            partial_content_retryable: true,
+        },
+    );
+    match first {
+        super::super::retry::RetryDecision::Retry {
+            attempt, reason, ..
+        } => {
+            assert_eq!(attempt, 1);
+            assert!(
+                reason.contains("retrying the model turn"),
+                "session events must be able to tell this retry apart from a generic one: {reason}"
+            );
+        }
+        other => panic!("expected the first partial-content stream failure to retry: {other:?}"),
+    }
+
+    // Bounded: `RetryPolicy::default()` allows 3 retries total, matching the
+    // turn's own three-discarded-attempt ceiling.
+    for attempt in 2..=3 {
+        assert!(matches!(
+            request_retry_decision(
+                &mut retry_policy,
+                unclassified,
+                RequestFailureOwner::ProviderStream {
+                    partial_content_retryable: true,
+                },
+            ),
+            super::super::retry::RetryDecision::Retry { attempt: got, .. } if got == attempt
+        ));
+    }
+    assert!(matches!(
+        request_retry_decision(
+            &mut retry_policy,
+            unclassified,
+            RequestFailureOwner::ProviderStream {
+                partial_content_retryable: true,
+            },
+        ),
+        super::super::retry::RetryDecision::GiveUp { .. }
+    ));
+}
+
+#[tokio::test]
+async fn stream_closed_mid_response_retries_the_turn_and_completes_on_the_scripted_retry() {
+    // Simulates the exact production failure: the provider forwards some
+    // assistant text, then the stream closes without a terminal event
+    // (`ScriptedBlock::Eof` after a `Text` block, with no `MessageStop`). The
+    // agent must retry the model turn -- consuming the second scripted
+    // response -- rather than ending the session on `FromAgent::ProviderError`.
+    let scripted = crate::ai::ScriptedClient::new(
+        "partial-content-retry",
+        vec![
+            crate::ai::ScriptedResponse {
+                blocks: vec![
+                    crate::ai::ScriptedBlock::Text("Here is the first ".to_owned()),
+                    crate::ai::ScriptedBlock::Eof,
+                ],
+                stop_reason: crate::ai::StopReason::EndTurn,
+                error: None,
+            },
+            crate::ai::ScriptedResponse::text("Retried and finished the reply."),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeAgentConfig {
+        model: "scripted/partial-content-retry".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..NativeAgentConfig::default()
+    };
+    let (agent, mut events) =
+        NativeAgent::new_with_test_client(config, UnifiedClient::Scripted(scripted.clone()))
+            .expect("scripted agent");
+
+    agent
+        .prompt("Say something.".to_owned(), vec![])
+        .await
+        .expect("prompt");
+
+    let mut saw_retry_status = false;
+    let terminal = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::ProviderError { message, .. }) => {
+                    panic!(
+                        "a stream closed after partial content must not end the session: {message}"
+                    )
+                }
+                Some(FromAgent::TurnCompleted { .. }) => break "completed",
+                Some(FromAgent::RequestRetryScheduled { .. }) => {
+                    saw_retry_status = true;
+                }
+                Some(_) => {}
+                None => panic!("agent event channel closed before the turn completed"),
+            }
+        }
+    })
+    .await
+    .expect("turn completion timeout");
+    agent.shutdown().await;
+
+    assert_eq!(terminal, "completed");
+    assert!(
+        saw_retry_status,
+        "the retry must be observable in the session's event stream"
+    );
+    assert_eq!(
+        scripted.remaining(),
+        0,
+        "the turn must have consumed both scripted responses: the dropped stream and its retry"
+    );
 }
 
 #[tokio::test]

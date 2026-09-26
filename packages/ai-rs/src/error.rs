@@ -35,11 +35,17 @@ pub fn summarize_error_body(body: &str) -> String {
 /// Pull `error.message` (plus `error.type`/`status`/`code`) out of a parsed
 /// error envelope. Also accepts a top-level `message` and the
 /// `"error": "..."` string shorthand some gateways use.
+///
+/// A governance denial's error envelope may additionally carry `decision_id`
+/// and `reason_codes` (or `reasons`) fields alongside `message`: see
+/// `governance_denial_detail`. Both are optional and are appended to the
+/// message when present, so their absence leaves the summary unchanged.
 fn extract_error_message(value: &Value) -> Option<String> {
     let error = value.get("error").unwrap_or(value);
+    let detail = governance_denial_detail(error);
     if let Some(message) = error.as_str() {
         let message = message.trim();
-        return (!message.is_empty()).then(|| message.to_string());
+        return (!message.is_empty()).then(|| format!("{message}{detail}"));
     }
     let message = error.get("message").and_then(Value::as_str)?.trim();
     if message.is_empty() {
@@ -53,9 +59,45 @@ fn extract_error_message(value: &Value) -> Option<String> {
         .map(str::to_string)
         .or_else(|| error.get("code").map(ToString::to_string));
     Some(match kind {
-        Some(kind) => format!("{kind}: {message}"),
-        None => message.to_string(),
+        Some(kind) => format!("{kind}: {message}{detail}"),
+        None => format!("{message}{detail}"),
     })
+}
+
+/// Render a gateway's optional governance-decision metadata for display.
+///
+/// A governance denial's 403 body may carry `decision_id` (a string) and
+/// `reason_codes` (an array of strings; some gateways instead use `reasons`)
+/// alongside the usual `code`/`message`. Both fields are optional -- render
+/// as `" (decision <id>; reasons: <codes>)"`, dropping whichever half is
+/// absent, or `""` when neither is present, so a body without this metadata
+/// (every provider's error shape, and any gateway response predating it)
+/// summarizes exactly as before.
+fn governance_denial_detail(error: &Value) -> String {
+    let decision_id = error
+        .get("decision_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let reasons = error
+        .get("reason_codes")
+        .or_else(|| error.get("reasons"))
+        .and_then(Value::as_array)
+        .map(|codes| {
+            codes
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|codes| !codes.is_empty());
+
+    match (decision_id, reasons) {
+        (Some(id), Some(codes)) => format!(" (decision {id}; reasons: {codes})"),
+        (Some(id), None) => format!(" (decision {id})"),
+        (None, Some(codes)) => format!(" (reasons: {codes})"),
+        (None, None) => String::new(),
+    }
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -131,5 +173,63 @@ mod tests {
     fn handles_empty_body() {
         assert_eq!(summarize_error_body(""), "(empty response body)");
         assert_eq!(summarize_error_body("  \n "), "(empty response body)");
+    }
+
+    #[test]
+    fn governance_denial_appends_decision_id_and_reason_codes() {
+        let body = r#"{"message":"governance denied model content","decision_id":"dec_01HZX","reason_codes":["policy.blocked_topic","policy.pii"]}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance denied model content \
+             (decision dec_01HZX; reasons: policy.blocked_topic, policy.pii)"
+        );
+    }
+
+    #[test]
+    fn governance_denial_accepts_reasons_alias() {
+        let body = r#"{"message":"governance denied model content","decision_id":"dec_02","reasons":["policy.blocked_topic"]}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance denied model content (decision dec_02; reasons: policy.blocked_topic)"
+        );
+    }
+
+    #[test]
+    fn governance_denial_tolerates_a_decision_id_without_reason_codes() {
+        let body = r#"{"message":"governance denied model content","decision_id":"dec_03"}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance denied model content (decision dec_03)"
+        );
+    }
+
+    #[test]
+    fn governance_denial_tolerates_reason_codes_without_a_decision_id() {
+        let body = r#"{"message":"governance denied model content","reason_codes":["policy.blocked_topic"]}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance denied model content (reasons: policy.blocked_topic)"
+        );
+    }
+
+    #[test]
+    fn governance_denial_fields_absent_leave_the_message_unchanged() {
+        let body = r#"{"type":"governance_denied","message":"governance denied model content"}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance_denied: governance denied model content"
+        );
+    }
+
+    #[test]
+    fn governance_denial_detail_survives_the_error_wrapper_shorthand() {
+        // The real gateway body nests the code/message/decision fields
+        // directly under a top-level `error` object, mirroring the other
+        // providers' envelopes this module already handles.
+        let body = r#"{"error":{"message":"governance denied model content","decision_id":"dec_04","reason_codes":["policy.blocked_topic"]}}"#;
+        assert_eq!(
+            summarize_error_body(body),
+            "governance denied model content (decision dec_04; reasons: policy.blocked_topic)"
+        );
     }
 }

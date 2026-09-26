@@ -133,7 +133,7 @@ use super::{
 use crate::ai::{
     AiProvider, ContentBlock, ImageSource, Message, MessageContent, ProviderStreamErrorKind,
     RequestConfig, Role, StopReason, StreamEvent, ThinkingConfig, Tool, UnifiedClient,
-    provider_model_name,
+    is_retryable_partial_content_stream_failure, provider_model_name,
 };
 use crate::{
     approval_span, record_model_usage, record_outcome, terminal_span, tool_span_for_call, turn_span,
@@ -353,7 +353,14 @@ impl std::error::Error for ProviderStreamFailure {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestFailureOwner {
     Request,
-    ProviderStream,
+    /// `partial_content_retryable` is set from
+    /// [`is_retryable_partial_content_stream_failure`]: whether the failure
+    /// is a stream that closed or stalled mid-response *after* content had
+    /// already been forwarded downstream, rather than every other typed
+    /// stream failure.
+    ProviderStream {
+        partial_content_retryable: bool,
+    },
 }
 
 fn request_retry_decision(
@@ -361,18 +368,47 @@ fn request_retry_decision(
     error_kind: super::retry::ErrorKind,
     owner: RequestFailureOwner,
 ) -> super::retry::RetryDecision {
-    if owner == RequestFailureOwner::ProviderStream {
-        // UnifiedClient owns retries once a provider stream has opened. A
-        // typed stream failure is therefore already the terminal outcome of
-        // that policy. Retrying the entire request here would multiply the
-        // stream budget and can keep a hosted turn non-terminal beyond its
-        // controller deadline. Request/open failures still use this outer
-        // policy because no stream-level retry owner exists for them.
-        super::retry::RetryDecision::GiveUp {
-            reason: "Provider stream retry policy reached a terminal outcome".to_string(),
+    match owner {
+        RequestFailureOwner::ProviderStream {
+            partial_content_retryable: true,
+        } => {
+            // The stream closed or stalled mid-response after forwarding
+            // assistant content, but `run_loop_inner` discards that partial
+            // content instead of committing it to conversation history
+            // before returning this failure (see its `stream_failed`
+            // branch). Retrying therefore replays the request from the last
+            // committed message, not the tokens the provider already sent,
+            // so -- unlike every other provider-stream failure below -- one
+            // dropped stream does not have to end the whole agent session.
+            // Bounded and backed off by the same policy every other request
+            // retry uses, and the turn's discarded-attempt budget still caps
+            // the total regardless of how many times this fires.
+            match retry_policy.should_retry(super::retry::ErrorKind::Transient) {
+                super::retry::RetryDecision::Retry { delay, attempt, .. } => {
+                    super::retry::RetryDecision::Retry {
+                        delay,
+                        attempt,
+                        reason: "Provider stream closed mid-response; discarding the partial reply and retrying the model turn"
+                            .to_string(),
+                    }
+                }
+                give_up @ super::retry::RetryDecision::GiveUp { .. } => give_up,
+            }
         }
-    } else {
-        retry_policy.should_retry(error_kind)
+        RequestFailureOwner::ProviderStream {
+            partial_content_retryable: false,
+        } => {
+            // UnifiedClient owns retries once a provider stream has opened. A
+            // typed stream failure is therefore already the terminal outcome of
+            // that policy. Retrying the entire request here would multiply the
+            // stream budget and can keep a hosted turn non-terminal beyond its
+            // controller deadline. Request/open failures still use this outer
+            // policy because no stream-level retry owner exists for them.
+            super::retry::RetryDecision::GiveUp {
+                reason: "Provider stream retry policy reached a terminal outcome".to_string(),
+            }
+        }
+        RequestFailureOwner::Request => retry_policy.should_retry(error_kind),
     }
 }
 

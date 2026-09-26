@@ -1129,9 +1129,10 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                         events_forwarded,
                     );
                     let message = if committed_content {
-                        "Provider stream closed without a terminal event; \
-                         not retrying because provider output or metering was already observed"
-                            .to_string()
+                        format!(
+                            "Provider stream closed without a terminal event; \
+                             not retrying because {PARTIAL_CONTENT_STREAM_FAILURE_MARKER}"
+                        )
                     } else {
                         format!(
                             "Provider stream closed without a terminal event after \
@@ -1176,7 +1177,7 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     let message = if committed_content {
                         format!(
                             "Provider stream stalled: no data received for {}s; \
-                             not retrying because provider output or metering was already observed",
+                             not retrying because {PARTIAL_CONTENT_STREAM_FAILURE_MARKER}",
                             idle_timeout.as_secs()
                         )
                     } else {
@@ -1328,6 +1329,32 @@ fn stream_event_prevents_retry(event: &StreamEvent) -> bool {
             | StreamEvent::ProviderCost { .. }
             | StreamEvent::ReasoningUsage { .. }
     )
+}
+
+/// Substring shared by every `ProviderStreamErrorKind::TransientProtocol`
+/// message this module sends when a stream closes or stalls mid-response
+/// after `stream_event_prevents_retry` has already forwarded provider output
+/// (see the `committed_content` message-construction sites above). A caller
+/// higher up the stack -- the native agent's outer request-retry loop --
+/// matches on it (via [`is_retryable_partial_content_stream_failure`]) to
+/// decide whether a `TransientProtocol` failure is safe to retry as a fresh
+/// model turn: the partial output was never committed to conversation
+/// history, so retrying only replays the request, not the tokens already
+/// streamed. Every other stream failure stays terminal at this layer.
+pub const PARTIAL_CONTENT_STREAM_FAILURE_MARKER: &str =
+    "provider output or metering was already observed";
+
+/// Whether a stream failure reports the closed/stalled-after-partial-content
+/// class of `TransientProtocol` failure (see
+/// [`PARTIAL_CONTENT_STREAM_FAILURE_MARKER`]) that is safe to retry as a
+/// fresh model turn rather than ending the agent session.
+#[must_use]
+pub fn is_retryable_partial_content_stream_failure(
+    kind: ProviderStreamErrorKind,
+    message: &str,
+) -> bool {
+    matches!(kind, ProviderStreamErrorKind::TransientProtocol)
+        && message.contains(PARTIAL_CONTENT_STREAM_FAILURE_MARKER)
 }
 
 /// Create a unified client for the given provider
