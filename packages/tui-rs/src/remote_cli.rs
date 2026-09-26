@@ -22,24 +22,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-const DEFAULT_BASE_URL: &str = "https://runner.evalops.dev";
+pub(crate) const DEFAULT_BASE_URL: &str = "https://runner.evalops.dev";
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_MAX_ATTEMPTS: usize = 2;
 const VERIFY_ERROR_BODY_MAX_CHARS: usize = 512;
 const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 const DEFAULT_POLL_MS: u64 = 5_000;
 const CONNECT_VERSION: &str = "1";
-const SERVICE: &str = "remote runner service";
+pub(crate) const SERVICE: &str = "remote runner service";
 const SERVICE_PATH: &str = "/remoterunner.v1.RemoteRunnerService";
 
-const CREATE_PATH: &str = "/remoterunner.v1.RemoteRunnerService/CreateRunnerSession";
-const GET_PATH: &str = "/remoterunner.v1.RemoteRunnerService/GetRunnerSession";
-const LIST_PATH: &str = "/remoterunner.v1.RemoteRunnerService/ListRunnerSessions";
-const STOP_PATH: &str = "/remoterunner.v1.RemoteRunnerService/StopRunnerSession";
+pub(crate) const CREATE_PATH: &str = "/remoterunner.v1.RemoteRunnerService/CreateRunnerSession";
+pub(crate) const GET_PATH: &str = "/remoterunner.v1.RemoteRunnerService/GetRunnerSession";
+pub(crate) const LIST_PATH: &str = "/remoterunner.v1.RemoteRunnerService/ListRunnerSessions";
+pub(crate) const STOP_PATH: &str = "/remoterunner.v1.RemoteRunnerService/StopRunnerSession";
 const EXTEND_PATH: &str = "/remoterunner.v1.RemoteRunnerService/ExtendRunnerSession";
-const MINT_PATH: &str = "/remoterunner.v1.RemoteRunnerService/MintAttachToken";
+pub(crate) const MINT_PATH: &str = "/remoterunner.v1.RemoteRunnerService/MintAttachToken";
 const REVOKE_PATH: &str = "/remoterunner.v1.RemoteRunnerService/RevokeAttachToken";
-const EVENTS_PATH: &str = "/remoterunner.v1.RemoteRunnerService/ListRunnerSessionEvents";
+pub(crate) const EVENTS_PATH: &str = "/remoterunner.v1.RemoteRunnerService/ListRunnerSessionEvents";
 const STATUS_PATH: &str = "/remoterunner.v1.RemoteRunnerService/GetStatus";
 
 const BASE_URL_ENV: &[&str] = &[
@@ -100,14 +100,14 @@ Notes:
   On a TTY (without --json/--print-env), attach mints a token and opens an
   interactive REPL. Otherwise it prints transport env handoff instructions.";
 
-const STATE_RUNNING: &str = "RUNNER_SESSION_STATE_RUNNING";
-const STATE_IDLE: &str = "RUNNER_SESSION_STATE_IDLE";
-const STATE_STOPPED: &str = "RUNNER_SESSION_STATE_STOPPED";
-const STATE_EXPIRED: &str = "RUNNER_SESSION_STATE_EXPIRED";
-const STATE_FAILED: &str = "RUNNER_SESSION_STATE_FAILED";
-const STATE_LOST: &str = "RUNNER_SESSION_STATE_LOST";
-const ROLE_VIEWER: &str = "RUNNER_ATTACH_ROLE_VIEWER";
-const ROLE_CONTROLLER: &str = "RUNNER_ATTACH_ROLE_CONTROLLER";
+pub(crate) const STATE_RUNNING: &str = "RUNNER_SESSION_STATE_RUNNING";
+pub(crate) const STATE_IDLE: &str = "RUNNER_SESSION_STATE_IDLE";
+pub(crate) const STATE_STOPPED: &str = "RUNNER_SESSION_STATE_STOPPED";
+pub(crate) const STATE_EXPIRED: &str = "RUNNER_SESSION_STATE_EXPIRED";
+pub(crate) const STATE_FAILED: &str = "RUNNER_SESSION_STATE_FAILED";
+pub(crate) const STATE_LOST: &str = "RUNNER_SESSION_STATE_LOST";
+pub(crate) const ROLE_VIEWER: &str = "RUNNER_ATTACH_ROLE_VIEWER";
+pub(crate) const ROLE_CONTROLLER: &str = "RUNNER_ATTACH_ROLE_CONTROLLER";
 const ROLE_ADMIN: &str = "RUNNER_ATTACH_ROLE_ADMIN";
 
 #[derive(Debug, Clone)]
@@ -123,70 +123,72 @@ enum FlagVal {
 }
 
 #[derive(Debug, Clone)]
-struct ClientOpts {
-    base_url: Option<String>,
-    token: Option<String>,
-    organization_id: Option<String>,
-    workspace_id: Option<String>,
+pub(crate) struct ClientOpts {
+    pub(crate) base_url: Option<String>,
+    pub(crate) token: Option<String>,
+    pub(crate) organization_id: Option<String>,
+    pub(crate) workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct Config {
-    base_url: String,
-    token: String,
-    organization_id: String,
-    workspace_id: Option<String>,
-    timeout_ms: u64,
-    max_attempts: usize,
+pub(crate) struct Config {
+    pub(crate) base_url: String,
+    pub(crate) token: String,
+    pub(crate) organization_id: String,
+    pub(crate) workspace_id: Option<String>,
+    pub(crate) timeout_ms: u64,
+    pub(crate) max_attempts: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct Session {
-    id: String,
+pub(crate) struct Session {
+    pub(crate) id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    workspace_id: Option<String>,
+    pub(crate) workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    state: Option<String>,
+    pub(crate) state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    runner_profile: Option<String>,
+    pub(crate) runner_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    repo_url: Option<String>,
+    pub(crate) maestro_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    pub(crate) repo_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    expires_at: Option<String>,
+    pub(crate) branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    idle_expires_at: Option<String>,
+    pub(crate) expires_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    stop_reason: Option<String>,
+    pub(crate) idle_expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct Event {
+pub(crate) struct Event {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    sequence: Option<f64>,
+    pub(crate) sequence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    event_type: Option<String>,
+    pub(crate) event_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    occurred_at: Option<String>,
+    pub(crate) occurred_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct AttachToken {
-    id: String,
+pub(crate) struct AttachToken {
+    pub(crate) id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    expires_at: Option<String>,
+    pub(crate) expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Minted {
-    token: AttachToken,
-    token_secret: String,
-    gateway_base_url: String,
+pub(crate) struct Minted {
+    pub(crate) token: AttachToken,
+    pub(crate) token_secret: String,
+    pub(crate) gateway_base_url: String,
 }
 
 pub async fn run_remote(args: &[String]) -> Result<i32> {
@@ -697,7 +699,7 @@ async fn cmd_target(o: &Opts) -> Result<()> {
     Ok(())
 }
 
-async fn mint(
+pub(crate) async fn mint(
     session_id: &str,
     roles: Vec<String>,
     ttl_minutes: u64,
@@ -734,13 +736,13 @@ async fn mint(
     })
 }
 
-async fn get_session(id: &str, co: &ClientOpts) -> Result<Session> {
+pub(crate) async fn get_session(id: &str, co: &ClientOpts) -> Result<Session> {
     let config = require_config(co)?;
     let payload = post(&config, GET_PATH, json!({"sessionId": id})).await?;
     require_session(&payload)
 }
 
-async fn wait_ready(
+pub(crate) async fn wait_ready(
     id: &str,
     co: &ClientOpts,
     timeout_ms: u64,
@@ -924,7 +926,7 @@ fn ensure_verify_disconnect_success(status: StatusCode, body: &str) -> Result<()
     )
 }
 
-async fn post(config: &Config, path: &str, body: Value) -> Result<Value> {
+pub(crate) async fn post(config: &Config, path: &str, body: Value) -> Result<Value> {
     let client = Client::builder()
         .timeout(Duration::from_millis(config.timeout_ms))
         .build()
@@ -991,13 +993,13 @@ fn retryable(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 429) || status.is_server_error()
 }
 
-fn require_config(o: &ClientOpts) -> Result<Config> {
+pub(crate) fn require_config(o: &ClientOpts) -> Result<Config> {
     resolve_config(o)?.ok_or_else(|| {
         anyhow!("{}", crate::localization::cli_locale().format("Remote runner requires EvalOps organization and access token. Set MAESTRO_REMOTE_RUNNER_ORG_ID/MAESTRO_EVALOPS_ORG_ID and MAESTRO_REMOTE_RUNNER_TOKEN/MAESTRO_EVALOPS_ACCESS_TOKEN, or run EvalOps login.", &[]))
     })
 }
 
-fn resolve_config(o: &ClientOpts) -> Result<Option<Config>> {
+pub(crate) fn resolve_config(o: &ClientOpts) -> Result<Option<Config>> {
     let organization_id = trim(o.organization_id.clone().or_else(|| env_first(ORG_ENV)));
     let token = trim(o.token.clone().or_else(|| env_first(TOKEN_ENV)));
     let stored = if organization_id.is_none() || token.is_none() {
@@ -1032,7 +1034,7 @@ fn workspace_required(cli: Option<String>, co: &ClientOpts, verb: &str) -> Resul
     })
 }
 
-fn gateway_url(base: &str, session_id: &str) -> String {
+pub(crate) fn gateway_url(base: &str, session_id: &str) -> String {
     format!(
         "{}/v1/runner-sessions/{}/headless",
         base.trim_end_matches('/'),
@@ -1040,7 +1042,7 @@ fn gateway_url(base: &str, session_id: &str) -> String {
     )
 }
 
-fn normalize_base(base: &str) -> String {
+pub(crate) fn normalize_base(base: &str) -> String {
     let mut n = base.trim().trim_end_matches('/').to_owned();
     for suffix in [
         CREATE_PATH,
@@ -1180,7 +1182,7 @@ pub fn parse_remote_duration_minutes(raw: Option<&str>, fallback: u64) -> Result
     parse_minutes(raw, fallback)
 }
 
-fn parse_minutes(raw: Option<&str>, fallback: u64) -> Result<u64> {
+pub(crate) fn parse_minutes(raw: Option<&str>, fallback: u64) -> Result<u64> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(fallback);
     };
@@ -1332,7 +1334,7 @@ fn role_values(o: &Opts) -> Result<Vec<String>> {
 
 /// Map minted attach roles to the headless connection role.
 /// Viewer-only role sets attach as viewer; any controller/admin capability attaches as controller.
-fn attach_connection_role(roles: &[String]) -> AttachRole {
+pub(crate) fn attach_connection_role(roles: &[String]) -> AttachRole {
     if !roles.is_empty() && roles.iter().all(|role| role == ROLE_VIEWER) {
         AttachRole::Viewer
     } else {
@@ -1395,7 +1397,7 @@ fn state_label(state: Option<&str>) -> String {
         .to_ascii_lowercase()
         .replace('_', "-")
 }
-fn require_session(payload: &Value) -> Result<Session> {
+pub(crate) fn require_session(payload: &Value) -> Result<Session> {
     payload
         .get("session")
         .and_then(norm_session)
@@ -1423,6 +1425,7 @@ fn norm_session(v: &Value) -> Option<Session> {
         workspace_id: first_str_map(o, &["workspaceId", "workspace_id"]),
         state: first_str_map(o, &["state"]),
         runner_profile: first_str_map(o, &["runnerProfile", "runner_profile"]),
+        maestro_session_id: first_str_map(o, &["maestroSessionId", "maestro_session_id"]),
         repo_url: first_str_map(o, &["repoUrl", "repo_url"]),
         branch: first_str_map(o, &["branch"]),
         expires_at: first_str_map(o, &["expiresAt", "expires_at"]),
@@ -1437,14 +1440,14 @@ fn norm_token(v: &Value) -> Option<AttachToken> {
         expires_at: first_str_map(o, &["expiresAt", "expires_at"]),
     })
 }
-fn array_sessions(payload: &Value) -> Vec<Session> {
+pub(crate) fn array_sessions(payload: &Value) -> Vec<Session> {
     payload
         .get("sessions")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(norm_session).collect())
         .unwrap_or_default()
 }
-fn array_events(payload: &Value) -> Vec<Event> {
+pub(crate) fn array_events(payload: &Value) -> Vec<Event> {
     payload
         .get("events")
         .and_then(Value::as_array)
@@ -1462,7 +1465,7 @@ fn array_events(payload: &Value) -> Vec<Event> {
         })
         .unwrap_or_default()
 }
-fn first_str(v: &Value, names: &[&str]) -> Option<String> {
+pub(crate) fn first_str(v: &Value, names: &[&str]) -> Option<String> {
     v.as_object().and_then(|m| first_str_map(m, names))
 }
 fn first_str_map(m: &Map<String, Value>, names: &[&str]) -> Option<String> {
@@ -1476,7 +1479,7 @@ fn first_str_map(m: &Map<String, Value>, names: &[&str]) -> Option<String> {
     }
     None
 }
-fn first_num(v: &Value, names: &[&str]) -> Option<f64> {
+pub(crate) fn first_num(v: &Value, names: &[&str]) -> Option<f64> {
     v.as_object().and_then(|m| first_num_map(m, names))
 }
 fn first_num_map(m: &Map<String, Value>, names: &[&str]) -> Option<f64> {
@@ -1520,7 +1523,7 @@ fn ensure_nonneg(v: Option<u64>, field: &str, max: u64) -> Result<Option<u64>> {
         Some(x) => Ok(Some(x)),
     }
 }
-fn strip_null(v: Value) -> Value {
+pub(crate) fn strip_null(v: Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut out = Map::new();
@@ -1535,10 +1538,10 @@ fn strip_null(v: Value) -> Value {
         other => other,
     }
 }
-fn trim(v: Option<String>) -> Option<String> {
+pub(crate) fn trim(v: Option<String>) -> Option<String> {
     v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
-fn env_first(names: &[&str]) -> Option<String> {
+pub(crate) fn env_first(names: &[&str]) -> Option<String> {
     names.iter().find_map(|n| {
         std::env::var(n)
             .ok()
@@ -1546,16 +1549,16 @@ fn env_first(names: &[&str]) -> Option<String> {
             .filter(|v| !v.is_empty())
     })
 }
-fn pkg_version() -> String {
+pub(crate) fn pkg_version() -> String {
     std::env::var("MAESTRO_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned())
 }
-fn print_json(v: &impl Serialize) -> Result<()> {
+pub(crate) fn print_json(v: &impl Serialize) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(v)?);
     Ok(())
 }
-fn print_session(s: &Session) {
+pub(crate) fn print_session(s: &Session) {
     println!("{}", s.id);
     println!("  state:     {}", state_label(s.state.as_deref()));
     println!("  workspace: {}", s.workspace_id.as_deref().unwrap_or("-"));
@@ -1574,7 +1577,7 @@ fn print_session(s: &Session) {
         println!("  stopped:   {r}");
     }
 }
-fn print_table(sessions: &[Session]) {
+pub(crate) fn print_table(sessions: &[Session]) {
     if sessions.is_empty() {
         println!(
             "{}",
@@ -1690,7 +1693,7 @@ fn print_attach_instr(
 fn shell_quote(v: &str) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| format!("\"{v}\""))
 }
-fn format_elapsed(ms: u64) -> String {
+pub(crate) fn format_elapsed(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms}ms")
     } else if ms < 60_000 {

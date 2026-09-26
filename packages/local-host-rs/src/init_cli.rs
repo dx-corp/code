@@ -2458,6 +2458,40 @@ pub async fn perform_evalops_login() -> Result<()> {
     Ok(())
 }
 
+/// Interactive login that requests `extra_scopes` in addition to
+/// `REQUIRED_LOGIN_SCOPES`. `deixic-code cloud login` uses it to obtain the
+/// `remote-runner:read` and `remote-runner:write` scopes that
+/// `RemoteRunnerService` requires. Identity issues only the scopes listed in
+/// its `IDENTITY_ALLOWED_PRODUCT_SCOPES` allowlist.
+pub async fn perform_evalops_login_with_scopes(extra_scopes: &str) -> Result<()> {
+    crate::safety::require_vendor_network()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("build EvalOps HTTP client")?;
+    let options = InitOptions {
+        force_login: true,
+        ..InitOptions::default()
+    };
+    let scopes = merge_login_scopes(REQUIRED_LOGIN_SCOPES, extra_scopes);
+    status(&options, "Opening EvalOps login");
+    let credentials = login_with_scopes(&options, &client, &scopes, None).await?;
+    save_credentials(&credentials)?;
+    Ok(())
+}
+
+/// Appends whitespace-separated `extra` scopes to `base`, dropping duplicates
+/// and preserving order.
+pub fn merge_login_scopes(base: &str, extra: &str) -> String {
+    let mut merged: Vec<&str> = Vec::new();
+    for scope in base.split_whitespace().chain(extra.split_whitespace()) {
+        if !merged.contains(&scope) {
+            merged.push(scope);
+        }
+    }
+    merged.join(" ")
+}
+
 /// Interactive login for the alternate-screen TUI. The caller renders the
 /// authorization link; this path never writes status or URLs to the terminal.
 pub async fn perform_evalops_login_in_tui(
@@ -2643,6 +2677,18 @@ fn remove_provider_from_registry(provider: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_login_scopes_appends_without_duplicates() {
+        assert_eq!(
+            merge_login_scopes("a:read b:write", "b:write c:read  c:read"),
+            "a:read b:write c:read"
+        );
+        assert_eq!(
+            merge_login_scopes(REQUIRED_LOGIN_SCOPES, ""),
+            REQUIRED_LOGIN_SCOPES
+        );
+    }
 
     #[test]
     fn production_identity_admission_rejects_caller_selected_authorities() {

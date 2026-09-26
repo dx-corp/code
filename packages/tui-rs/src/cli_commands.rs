@@ -132,6 +132,7 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
             Ok(1)
         }
         "remote" => crate::remote_cli::run_remote(&args[1..]).await,
+        "cloud" => crate::cloud_cli::run_cloud(&args[1..]).await,
         "thread" => crate::thread_cli::run_thread(&args[1..]).await,
         "value" => crate::value_cli::run_value(&args[1..]).await,
         "scenario" => crate::scenario_cli::run_scenario(&args[1..]).await,
