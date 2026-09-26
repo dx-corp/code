@@ -63,6 +63,7 @@ use crate::semantic_text::{
     FlushReason as SemanticFlushReason, Release as SemanticRelease, SemanticTextRelease,
 };
 
+mod managed_authorization;
 mod semantic_stream;
 
 /// Test-only provider override for the local SDK conformance fixture.
@@ -1775,16 +1776,14 @@ pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> 
             ToAgentMessage::ManagedAuthorizationResult {
                 request_id,
                 authorization,
+                gateway_credential,
             } => {
-                let result = state
-                    .agent
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("no active native agent"))
-                    .and_then(|agent| {
-                        agent
-                            .managed_authorization_coordinator()
-                            .respond(&request_id, authorization)
-                    });
+                let result = managed_authorization::deliver(
+                    &state,
+                    &request_id,
+                    authorization,
+                    gateway_credential,
+                );
                 match result {
                     Ok(()) => emit(&FromAgentMessage::ResponseAccepted(
                         tool_wire::ResponseAccepted { request_id },

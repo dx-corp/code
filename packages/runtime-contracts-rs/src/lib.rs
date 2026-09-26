@@ -30,9 +30,9 @@ pub use boundary::{
 };
 pub use contracts::{
     DenialReason, ExecutionPhase, ExecutionSource, ExecutionStatus,
-    MAX_MANAGED_INFERENCE_AUTHORIZATION_BYTES, ManagedInferenceAuthorization, ToAgent, TokenUsage,
-    ToolCallContract, ToolError, ToolOutcome, ToolOutput, ToolResult, ValidatorResult,
-    mcp_server_id, schema_digest, validate_identity,
+    MAX_MANAGED_INFERENCE_AUTHORIZATION_BYTES, ManagedGatewayCredential,
+    ManagedInferenceAuthorization, ToAgent, TokenUsage, ToolCallContract, ToolError, ToolOutcome,
+    ToolOutput, ToolResult, ValidatorResult, mcp_server_id, schema_digest, validate_identity,
 };
 pub use default_models::DefaultModel;
 pub use delegation::{

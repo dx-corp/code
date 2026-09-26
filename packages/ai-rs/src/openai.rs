@@ -1136,8 +1136,6 @@ pub struct OpenAiClient {
     managed_workspace_id: Option<String>,
     managed_request_lineage: Option<ManagedRequestLineage>,
     managed_inference_authorization: Option<String>,
-    // Clones share consumption state across rounds, retries, and auxiliary calls.
-    managed_authorization_used: std::sync::Arc<std::sync::atomic::AtomicBool>,
     managed_authorization_provider:
         Option<std::sync::Arc<dyn crate::managed_authorization::ManagedAuthorizationProvider>>,
     route_provider: Option<String>,
@@ -1170,9 +1168,6 @@ impl OpenAiClient {
             managed_workspace_id: None,
             managed_request_lineage: None,
             managed_inference_authorization: None,
-            managed_authorization_used: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                false,
-            )),
             managed_authorization_provider: None,
             route_provider: None,
             #[cfg(test)]
@@ -1215,9 +1210,6 @@ impl OpenAiClient {
             managed_workspace_id: None,
             managed_request_lineage: None,
             managed_inference_authorization: None,
-            managed_authorization_used: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                false,
-            )),
             managed_authorization_provider: None,
             route_provider: None,
             #[cfg(test)]
@@ -1294,8 +1286,6 @@ impl OpenAiClient {
 
     pub(crate) fn set_managed_inference_authorization(&mut self, authorization: Option<String>) {
         self.managed_inference_authorization = authorization;
-        self.managed_authorization_used =
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     }
 
     pub(crate) fn set_managed_authorization_provider(
@@ -2286,17 +2276,19 @@ impl OpenAiClient {
     ) -> Result<CancellableStream> {
         if self.managed_gateway && self.managed_inference_authorization.is_some() {
             let mut invocation = self.clone();
-            if self
-                .managed_authorization_used
-                .swap(true, std::sync::atomic::Ordering::AcqRel)
-            {
-                let provider = self
-                    .managed_authorization_provider
-                    .as_ref()
-                    .context("managed inference authorization renewal is unavailable")?;
-                let authorization = provider.renew().await?;
-                authorization.validate().map_err(anyhow::Error::msg)?;
-                invocation.managed_inference_authorization = Some(authorization.into_inner());
+            if let Some(provider) = self.managed_authorization_provider.as_ref() {
+                let renewal = provider.renew().await?;
+                renewal
+                    .authorization
+                    .validate()
+                    .map_err(anyhow::Error::msg)?;
+                let credential = renewal
+                    .gateway_credential
+                    .context("managed gateway credential renewal is unavailable")?;
+                credential.validate().map_err(anyhow::Error::msg)?;
+                invocation.api_key = credential.token().to_owned();
+                invocation.managed_inference_authorization =
+                    Some(renewal.authorization.into_inner());
             }
             return invocation
                 .stream_authorized_invocation(messages, config)
@@ -4450,6 +4442,8 @@ mod tests {
         });
         (format!("http://{address}/v1"), request_rx)
     }
+
+    mod managed_gateway_renewal;
 
     fn managed_gateway_test_client(
         sse_body: &str,

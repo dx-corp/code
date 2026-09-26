@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:1f7aa547ac86f4008bab638ff01321efb99a2274bcf8d823eea3a2cb2763db56",
+  "compatibilityDigest": "sha256:d0ac5088988f410e8c028bf8348317c5848c91d538341c5793e531818804b053",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -37,8 +37,8 @@
         "2026-08-08"
       ],
       "schemaDeclaredVersion": "2026-08-08",
-      "schemaContractDigest": "sha256:88a8ce00ee666bde7d519eacf552f2c22608b553446f3b5a718ca66ce696894f",
-      "runtimeContractDigest": "sha256:2883475a1a847bdfc2cd9585a88a657ce788380951f2de1593ae6eaa5d97716e",
+      "schemaContractDigest": "sha256:b6ae5fb85cd06765713a15e96246059c6db967742dce0e7537bd1ed4a9aa6d0c",
+      "runtimeContractDigest": "sha256:c2483714ba8ad6b5f4b8bf19dc7670df5a784300c99a8216c023299d822046e8",
       "messages": {
         "toRuntime": [
           "managed_authorization_result",
@@ -177,7 +177,7 @@
       }
     },
     "thread": {
-      "contractDigest": "sha256:35857c90fd6276c1bd20def22e3e6c8c29c0686dc56de4424853fbc6d0e73bdb",
+      "contractDigest": "sha256:80f6c553f3933b7e2e4195fc15ae25c47607d12a89b0b751cad79524db3c2fa1",
       "supportedVersions": [
         {
           "version": "evalops.maestro.thread.v1",
