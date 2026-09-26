@@ -75,6 +75,54 @@ impl std::fmt::Debug for ManagedInferenceAuthorization {
     }
 }
 
+/// A short-lived, tenant-scoped bearer delivered with one managed invocation.
+/// This value is never part of the signed inference authorization or session state.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedGatewayCredential {
+    token: String,
+    expires_at_epoch_seconds: i64,
+}
+
+impl ManagedGatewayCredential {
+    pub fn new(token: impl Into<String>, expires_at_epoch_seconds: i64) -> Self {
+        Self {
+            token: token.into(),
+            expires_at_epoch_seconds,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.token.is_empty()
+            || self.token.len() > 16 * 1024
+            || self.token.chars().any(char::is_control)
+        {
+            return Err("managed gateway credential is malformed");
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "system clock is unavailable")?
+            .as_secs() as i64;
+        if self.expires_at_epoch_seconds <= now.saturating_add(10) {
+            return Err("managed gateway credential expires too soon");
+        }
+        Ok(())
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn expires_at_epoch_seconds(&self) -> i64 {
+        self.expires_at_epoch_seconds
+    }
+}
+
+impl std::fmt::Debug for ManagedGatewayCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ManagedGatewayCredential([REDACTED])")
+    }
+}
+
 /// Messages sent from a host or client to the native agent.
 ///
 /// The tagged JSON representation is the pre-existing `type`/snake-case
@@ -571,6 +619,27 @@ mod tests {
         assert_eq!(
             format!("{value:?}"),
             "ManagedInferenceAuthorization([REDACTED])"
+        );
+    }
+
+    #[test]
+    fn managed_gateway_credential_expires_and_redacts_debug_output() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let usable = ManagedGatewayCredential::new("secret-marker", now + 60);
+        assert!(usable.validate().is_ok());
+        assert!(!format!("{usable:?}").contains("secret-marker"));
+        assert!(
+            ManagedGatewayCredential::new("secret-marker", now + 10)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            ManagedGatewayCredential::new("bad\nsecret", now + 60)
+                .validate()
+                .is_err()
         );
     }
 }

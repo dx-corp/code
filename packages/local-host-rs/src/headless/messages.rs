@@ -204,6 +204,8 @@ pub enum ToAgentMessage {
     ManagedAuthorizationResult {
         request_id: String,
         authorization: maestro_runtime_contracts::ManagedInferenceAuthorization,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gateway_credential: Option<maestro_runtime_contracts::ManagedGatewayCredential>,
     },
     /// Declare client identity and negotiated capabilities for this connection
     Hello {

@@ -160,6 +160,7 @@ mod tests {
                 authorization: maestro_runtime_contracts::ManagedInferenceAuthorization::new(
                     "opaque-capability",
                 ),
+                gateway_credential: None,
             },
             ToAgentMessage::Interrupt,
             ToAgentMessage::ToolResponse {

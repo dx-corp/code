@@ -882,6 +882,8 @@ message ManagedAuthorizationRequestMessage {
 message ManagedAuthorizationResultMessage {
   string request_id = 1;
   string authorization = 2;
+  string gateway_credential = 3;
+  int64 gateway_credential_expires_at_epoch_seconds = 4;
 }
 
 message FromAgentEnvelope {

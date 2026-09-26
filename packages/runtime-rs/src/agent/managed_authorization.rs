@@ -1,7 +1,9 @@
 //! Transient rendezvous with the trusted controller for invocation authority.
 use super::protocol::FromAgent;
-use maestro_ai::managed_authorization::ManagedAuthorizationProvider;
-use maestro_runtime_contracts::ManagedInferenceAuthorization;
+use maestro_ai::managed_authorization::{
+    ManagedAuthorizationProvider, ManagedAuthorizationRenewal,
+};
+use maestro_runtime_contracts::{ManagedGatewayCredential, ManagedInferenceAuthorization};
 use std::{
     collections::HashMap,
     future::Future,
@@ -10,7 +12,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-type Reply = oneshot::Sender<ManagedInferenceAuthorization>;
+type Reply = oneshot::Sender<ManagedAuthorizationRenewal>;
 
 #[derive(Clone)]
 pub struct ManagedAuthorizationCoordinator {
@@ -31,8 +33,12 @@ impl ManagedAuthorizationCoordinator {
         &self,
         request_id: &str,
         authorization: ManagedInferenceAuthorization,
+        gateway_credential: Option<ManagedGatewayCredential>,
     ) -> anyhow::Result<()> {
         authorization.validate().map_err(anyhow::Error::msg)?;
+        if let Some(credential) = &gateway_credential {
+            credential.validate().map_err(anyhow::Error::msg)?;
+        }
         let reply = self
             .pending
             .lock()
@@ -40,7 +46,10 @@ impl ManagedAuthorizationCoordinator {
             .remove(request_id)
             .ok_or_else(|| anyhow::anyhow!("authorization request is no longer pending"))?;
         reply
-            .send(authorization)
+            .send(ManagedAuthorizationRenewal {
+                authorization,
+                gateway_credential,
+            })
             .map_err(|_| anyhow::anyhow!("authorization request was cancelled"))
     }
 }
@@ -62,7 +71,7 @@ impl Drop for PendingGuard<'_> {
 impl ManagedAuthorizationProvider for ManagedAuthorizationCoordinator {
     fn renew(
         &self,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ManagedInferenceAuthorization>> + Send + '_>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<ManagedAuthorizationRenewal>> + Send + '_>>
     {
         Box::pin(async move {
             let id = uuid::Uuid::new_v4().to_string();
@@ -103,7 +112,8 @@ mod tests {
             coordinator
                 .respond(
                     "another-request",
-                    ManagedInferenceAuthorization::new("opaque")
+                    ManagedInferenceAuthorization::new("opaque"),
+                    None,
                 )
                 .is_err()
         );
@@ -113,7 +123,11 @@ mod tests {
         assert!(coordinator.pending.lock().unwrap().is_empty());
         assert!(
             coordinator
-                .respond(&request_id, ManagedInferenceAuthorization::new("opaque"))
+                .respond(
+                    &request_id,
+                    ManagedInferenceAuthorization::new("opaque"),
+                    None
+                )
                 .is_err()
         );
     }
@@ -131,12 +145,23 @@ mod tests {
             panic!("expected authorization request")
         };
         coordinator
-            .respond(&request_id, ManagedInferenceAuthorization::new("opaque"))
+            .respond(
+                &request_id,
+                ManagedInferenceAuthorization::new("opaque"),
+                None,
+            )
             .unwrap();
-        assert_eq!(waiter.await.unwrap().unwrap().into_inner(), "opaque");
+        assert_eq!(
+            waiter.await.unwrap().unwrap().authorization.into_inner(),
+            "opaque"
+        );
         assert!(
             coordinator
-                .respond(&request_id, ManagedInferenceAuthorization::new("other"))
+                .respond(
+                    &request_id,
+                    ManagedInferenceAuthorization::new("other"),
+                    None
+                )
                 .is_err()
         );
     }

@@ -1734,6 +1734,10 @@ mod tests {
             ToAgentMessage::ManagedAuthorizationResult {
                 request_id: "invocation-1".into(),
                 authorization: ManagedInferenceAuthorization::new("signed-renewal-secret-marker"),
+                gateway_credential: Some(maestro_runtime_contracts::ManagedGatewayCredential::new(
+                    "bearer-secret-marker",
+                    i64::MAX,
+                )),
             },
         );
         loaded
@@ -1765,6 +1769,7 @@ mod tests {
             .unwrap();
         let durable = std::fs::read_to_string(&loaded.journal.path).unwrap();
         assert!(!durable.contains("signed-renewal-secret-marker"));
+        assert!(!durable.contains("bearer-secret-marker"));
         drop(loaded);
         let restored = ThreadJournal::load(workspace.path(), "thread-auth", 1).unwrap();
         assert!(restored.pending_response_idempotency.is_empty());
