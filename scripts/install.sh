@@ -1156,6 +1156,7 @@ install_channel_quoted="$(shell_quote "$install_channel")"
 		'export MAESTRO_INSTALL_DIR="$install_dir"' \
 		'export MAESTRO_DATA_DIR="$data_dir"' \
 		'export MAESTRO_UPDATE_CHANNEL="${MAESTRO_UPDATE_CHANNEL:-$install_channel}"' \
+		'export MAESTRO_AUTO_UPDATE="${MAESTRO_AUTO_UPDATE:-apply}"' \
 		'export MAESTRO_STARTUP_UPDATE_STATE="${MAESTRO_STARTUP_UPDATE_STATE:-$data_dir/startup-update-state.json}"' \
 		'export MAESTRO_VERSION="$release_version"'
 	# shellcheck disable=SC2016
