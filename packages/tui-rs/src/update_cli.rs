@@ -1929,7 +1929,7 @@ fn launcher_contents(
     version: &str,
 ) -> Vec<u8> {
     format!(
-        "#!/usr/bin/env bash\nset -eu\nrelease_dir={}\ninstall_dir={}\ndata_dir={}\nrelease_version={}\nexport MAESTRO_INSTALL_METHOD=release\nexport MAESTRO_INSTALL_DIR=\"$install_dir\"\nexport MAESTRO_DATA_DIR=\"$data_dir\"\nexport MAESTRO_STARTUP_UPDATE_STATE=\"${{MAESTRO_STARTUP_UPDATE_STATE:-$data_dir/startup-update-state.json}}\"\nexport MAESTRO_VERSION=\"$release_version\"\nexec \"$release_dir/bin/maestro\" \"$@\"\n",
+        "#!/usr/bin/env bash\nset -eu\nrelease_dir={}\ninstall_dir={}\ndata_dir={}\nrelease_version={}\nexport MAESTRO_INSTALL_METHOD=release\nexport MAESTRO_INSTALL_DIR=\"$install_dir\"\nexport MAESTRO_DATA_DIR=\"$data_dir\"\nexport MAESTRO_STARTUP_UPDATE_STATE=\"${{MAESTRO_STARTUP_UPDATE_STATE:-$data_dir/startup-update-state.json}}\"\nexport MAESTRO_AUTO_UPDATE=\"${{MAESTRO_AUTO_UPDATE:-apply}}\"\nexport MAESTRO_VERSION=\"$release_version\"\nexec \"$release_dir/bin/maestro\" \"$@\"\n",
         shell_quote_path(release_dir),
         shell_quote_path(install_dir),
         shell_quote_path(data_dir),
@@ -4162,6 +4162,7 @@ mod tests {
         .expect("atomically repoint launcher");
         let launcher_text = fs::read_to_string(&launcher).expect("read launcher");
         assert!(launcher_text.contains("MAESTRO_STARTUP_UPDATE_STATE"));
+        assert!(launcher_text.contains("MAESTRO_AUTO_UPDATE=\"${MAESTRO_AUTO_UPDATE:-apply}\""));
         assert!(launcher_text.contains(&selected.release_dir.display().to_string()));
 
         fs::remove_file(&metadata_path).expect("remove optional metadata fixture");
