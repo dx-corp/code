@@ -116,6 +116,15 @@ pub fn build_setup_report(doctor: DoctorReport) -> SetupReport {
                 "deixic-code doctor --live",
                 check.summary.clone(),
             ),
+            "managed_inference" if check.live && check.status == CheckStatus::Warning => push_step(
+                &mut next_steps,
+                "managed-inference",
+                "deixic-code doctor --live",
+                check
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| check.summary.clone()),
+            ),
             _ if check.status == CheckStatus::Fail => push_step(
                 &mut next_steps,
                 &check.id,
@@ -129,10 +138,12 @@ pub fn build_setup_report(doctor: DoctorReport) -> SetupReport {
     SetupReport {
         schema_version: SETUP_SCHEMA_VERSION,
         ready: doctor.ok
-            && !doctor
-                .checks
-                .iter()
-                .any(|check| check.status == CheckStatus::Fail),
+            && !doctor.checks.iter().any(|check| {
+                check.status == CheckStatus::Fail
+                    || (check.id == "managed_inference"
+                        && check.live
+                        && check.status == CheckStatus::Warning)
+            }),
         doctor,
         next_steps,
     }
@@ -534,6 +545,28 @@ mod tests {
 
         assert!(result.ready);
         assert!(result.next_steps.is_empty());
+    }
+
+    #[test]
+    fn live_managed_activation_does_not_claim_setup_ready() {
+        let mut doctor = report(
+            "evalops",
+            vec![check(
+                "managed_inference",
+                CheckStatus::Warning,
+                "Activation and funding required",
+                Some(
+                    "Contact your organization administrator. View funding in Deixic Settings > Billing.",
+                ),
+            )],
+        );
+        doctor.live_requested = true;
+        doctor.checks[0].live = true;
+        let result = build_setup_report(doctor);
+        assert!(!result.ready);
+        assert_eq!(result.next_steps.len(), 1);
+        assert_eq!(result.next_steps[0].id, "managed-inference");
+        assert!(result.next_steps[0].reason.contains("View funding"));
     }
 
     #[test]

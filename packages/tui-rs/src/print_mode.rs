@@ -4,7 +4,7 @@
 //! assistant response, and exits. Supports `--output-last-message` and a
 //! lightweight JSON Schema check via `--output-schema`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Component, Path, PathBuf};
 
@@ -63,11 +63,16 @@ fn approval_denied(
             ))
 }
 
-/// Print mode owns its tool limits, workspace policy, and execution. Native
-/// must therefore defer every tool call to this event loop so each call is
-/// executed exactly once through the print-mode executor.
+/// Print mode checks its tool limits and workspace policy before approving a
+/// call. The native host owns execution and its result receipt.
 fn print_mode_approval_mode() -> ApprovalMode {
     ApprovalMode::Safe
+}
+
+fn native_tool_approval(call_id: String, approved: bool) -> crate::agent::ToolResponseMessage {
+    // Native tool results must come from the native host. Supplying a result
+    // here would make the runner reject it as an unregistered external tool.
+    (call_id, approved, None, ExecutionSource::Native, None)
 }
 
 fn typed_terminal_exit_code(event: &FromAgent) -> Option<i32> {
@@ -523,9 +528,8 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         thinking_enabled,
         thinking_budget,
         cwd: cwd.clone(),
-        // Print mode owns the limits, workspace policy, and executor below.
-        // Defer every call to this event loop so native cannot auto-execute a
-        // selective-safe call before this mode sees the ToolCall event.
+        // Defer every call so print-mode limits and workspace checks run before
+        // the native host executes it.
         approval_mode: print_mode_approval_mode(),
         context_window: None,
         // The native agent runner's own tool executor -- which runs every
@@ -617,6 +621,7 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
     let mut assistant_buf = String::new();
     let mut last_assistant_message = String::new();
     let mut tool_calls = 0usize;
+    let mut pending_tool_names = HashMap::<String, String>::new();
     let mut turns = 0usize;
 
     loop {
@@ -675,6 +680,7 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                 ..
             } => {
                 tool_calls += 1;
+                pending_tool_names.insert(call_id.clone(), tool.clone());
                 let normalized_tool = tool.to_ascii_lowercase();
                 let limit_error = if limits
                     .allowed_tools
@@ -749,42 +755,47 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
                         })
                     }
                 });
-                let result = if let Some(message) = &rejection {
-                    crate::agent::ToolResult::failure(message)
-                } else if denied {
-                    crate::agent::ToolResult::failure(format!(
-                        "Tool `{tool}` requires approval, but approval mode is fail"
-                    ))
-                } else {
-                    tool_executor
-                        .execute(&tool, &execution_args, None, &call_id)
-                        .await
-                };
-
                 if options.json {
-                    let line = serde_json::json!({
-                        "type": "item",
-                        "subtype": "tool_result",
-                        "call_id": call_id,
-                        "tool": tool,
-                        "success": result.success,
-                        "output": result.output,
-                    });
-                    println!("{line}");
+                    if let Some(message) = &rejection {
+                        let line = serde_json::json!({
+                            "type": "item",
+                            "subtype": "tool_result",
+                            "call_id": call_id,
+                            "tool": tool,
+                            "success": false,
+                            "output": message,
+                        });
+                        println!("{line}");
+                    }
                 }
 
                 let approved = rejection.is_none() && !denied;
-                let _ = tool_tx.send((
-                    call_id,
-                    approved,
-                    Some(result),
-                    ExecutionSource::Native,
-                    None,
-                ));
+                let _ = tool_tx.send(native_tool_approval(call_id, approved));
                 if rejection.is_some() {
                     exit_code = 1;
                     agent.cancel();
                     break;
+                }
+            }
+            FromAgent::ToolEnd {
+                call_id,
+                success,
+                result,
+                ..
+            } => {
+                let tool = pending_tool_names.remove(&call_id).unwrap_or_default();
+                if options.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "item",
+                            "subtype": "tool_result",
+                            "call_id": call_id,
+                            "tool": tool,
+                            "success": success,
+                            "output": result.map(|value| value.output).unwrap_or_default(),
+                        })
+                    );
                 }
             }
             FromAgent::ResponseEnd { response_id, usage } => {
@@ -1302,6 +1313,17 @@ mod tests {
     #[test]
     fn print_mode_defers_every_tool_call_to_its_host_executor() {
         assert_eq!(print_mode_approval_mode(), ApprovalMode::Safe);
+    }
+
+    #[test]
+    fn print_mode_native_approval_never_supplies_a_tool_result() {
+        let (call_id, approved, result, source, acknowledgement) =
+            super::native_tool_approval("read-call".into(), true);
+        assert_eq!(call_id, "read-call");
+        assert!(approved);
+        assert!(result.is_none());
+        assert_eq!(source, crate::agent::ExecutionSource::Native);
+        assert!(acknowledgement.is_none());
     }
 
     #[test]
