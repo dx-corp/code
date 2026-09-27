@@ -265,6 +265,8 @@ pub enum CommandAction {
     HooksManage(HooksAction),
     /// Show usage and cost statistics
     ShowUsage(UsageAction),
+    /// Show activity and subscription quota across linked providers.
+    ShowUnifiedUsage,
     /// Show a token breakdown of the current session's context by category
     ShowContext,
     /// Exclude or include a registered tool schema for this session.

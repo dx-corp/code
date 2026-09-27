@@ -789,6 +789,9 @@ pub struct App {
     mcp_config_tx: mpsc::UnboundedSender<Result<String, String>>,
     mcp_config_rx: mpsc::UnboundedReceiver<Result<String, String>>,
     mcp_config_in_flight: bool,
+    usage_report_tx: mpsc::UnboundedSender<String>,
+    usage_report_rx: mpsc::UnboundedReceiver<String>,
+    usage_report_in_flight: bool,
 
     /// Manages session persistence (save/load conversations).
     session_manager: SessionManager,
@@ -1635,6 +1638,7 @@ impl App {
         let (guardian_tx, guardian_rx) = mpsc::unbounded_channel();
         let (mcp_status_tx, mcp_status_rx) = mpsc::unbounded_channel();
         let (mcp_config_tx, mcp_config_rx) = mpsc::unbounded_channel();
+        let (usage_report_tx, usage_report_rx) = mpsc::unbounded_channel();
         let (exec_command_tx, exec_command_rx) = std::sync::mpsc::channel();
         let (a2a_handoff_tx, a2a_handoff_rx) = mpsc::unbounded_channel();
 
@@ -1786,6 +1790,9 @@ impl App {
             mcp_config_tx,
             mcp_config_rx,
             mcp_config_in_flight: false,
+            usage_report_tx,
+            usage_report_rx,
+            usage_report_in_flight: false,
             session_manager: SessionManager::new(&cwd),
             clipboard: ClipboardManager::new(),
             model_selector: ModelSelector::new(),
@@ -2559,6 +2566,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             }
 
             if self.poll_mcp_config() {
+                needs_redraw = true;
+            }
+
+            if self.poll_usage_report() {
                 needs_redraw = true;
             }
 
@@ -3895,6 +3906,16 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 )),
             }
             self.last_mcp_status_refresh = None;
+            dirty = true;
+        }
+        dirty
+    }
+
+    fn poll_usage_report(&mut self) -> bool {
+        let mut dirty = false;
+        while let Ok(report) = self.usage_report_rx.try_recv() {
+            self.usage_report_in_flight = false;
+            self.state.add_system_message(report);
             dirty = true;
         }
         dirty

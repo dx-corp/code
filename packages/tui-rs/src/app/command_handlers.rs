@@ -487,6 +487,30 @@ impl App {
             CommandAction::ShowUsage(usage_action) => {
                 self.handle_usage_action(usage_action);
             }
+            CommandAction::ShowUnifiedUsage => {
+                if self.usage_report_in_flight {
+                    self.state.status = Some("Usage refresh already in progress".to_owned());
+                } else {
+                    self.usage_report_in_flight = true;
+                    self.state.status = Some("Loading usage…".to_owned());
+                    let cwd = self.session_manager.cwd().to_owned();
+                    let tx = self.usage_report_tx.clone();
+                    let wake = self.loop_wake.clone();
+                    tokio::spawn(async move {
+                        let report = match tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            crate::subscription_usage::report(&cwd),
+                        )
+                        .await
+                        {
+                            Ok(report) => report,
+                            Err(_) => "Usage refresh timed out while checking linked subscriptions. Try /usage again after resolving any sign-in prompt.".to_owned(),
+                        };
+                        let _ = tx.send(report);
+                        wake.signal();
+                    });
+                }
+            }
             CommandAction::SetContextTool { name, excluded } => {
                 if self.state.busy {
                     self.state.status = Some(self.state.locale.translate("Wait for the active response to finish before changing context tools.").into());
