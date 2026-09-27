@@ -434,6 +434,7 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
     })
 }
 mod attachments;
+mod builtin_read;
 mod cancellation;
 mod codex;
 mod commands;
@@ -876,6 +877,13 @@ enum AgentCommand {
     SetContextToolExcluded {
         name: String,
         excluded: bool,
+    },
+    BuiltinWorkTypeNames {
+        content: String,
+        call_id: String,
+        proposal: maestro_runtime_contracts::BuiltinWorkTypeNamesProposal,
+        cancellation: CancellationToken,
+        reply: oneshot::Sender<Result<maestro_runtime_contracts::BuiltinWorkTypeNamesResult>>,
     },
     /// User submitted a prompt
     ///
@@ -1687,6 +1695,31 @@ impl NativeAgent {
     pub async fn prompt(&self, content: String, attachments: Vec<String>) -> Result<()> {
         self.prompt_with_kind(content, attachments, PromptKind::Prompt, None)
             .await
+    }
+
+    /// Execute one typed caller-owned catalog read without a provider request.
+    /// The caller must service external tool events through its governed bridge.
+    /// Errors never trigger model recovery or replay the owner read implicitly.
+    pub async fn builtin_work_type_names(
+        &self,
+        content: String,
+        call_id: String,
+        proposal: maestro_runtime_contracts::BuiltinWorkTypeNamesProposal,
+        cancellation: CancellationToken,
+    ) -> Result<maestro_runtime_contracts::BuiltinWorkTypeNamesResult> {
+        let cancellation = cancellation.child_token();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        let (reply, result) = oneshot::channel();
+        self.command_tx
+            .send(AgentCommand::BuiltinWorkTypeNames {
+                content,
+                call_id,
+                proposal,
+                cancellation,
+                reply,
+            })
+            .map_err(|_| anyhow::anyhow!("Agent is unavailable"))?;
+        result.await.context("Typed read response channel closed")?
     }
 
     /// Send a prompt with an explicit kind (prompt/steer/follow-up).

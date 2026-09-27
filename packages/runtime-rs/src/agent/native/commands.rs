@@ -127,6 +127,11 @@ impl NativeAgentRunner {
                         )),
                     });
                 }
+                AgentCommand::BuiltinWorkTypeNames { reply, .. } => {
+                    let _ = reply.send(Err(anyhow::anyhow!(
+                        "Typed reads require an idle actor with no queued work"
+                    )));
+                }
                 AgentCommand::Prompt {
                     content,
                     attachments,
@@ -430,6 +435,39 @@ impl NativeAgentRunner {
                 break;
             };
             match cmd {
+                AgentCommand::BuiltinWorkTypeNames {
+                    content,
+                    call_id,
+                    proposal,
+                    cancellation,
+                    reply,
+                } => {
+                    let result = if self.busy
+                        || !self.pending_messages.is_empty()
+                        || !self.deferred_commands.is_empty()
+                        || !self.command_rx.is_empty()
+                    {
+                        Err(anyhow::anyhow!(
+                            "Typed reads require an idle actor with no queued work"
+                        ))
+                    } else {
+                        self.busy = true;
+                        self.set_active_request_cancel_token(Some(cancellation.clone()));
+                        let result = self
+                            .run_builtin_work_type_names(
+                                &content,
+                                &call_id,
+                                &proposal,
+                                &cancellation,
+                            )
+                            .await;
+                        self.set_active_request_cancel_token(None);
+                        self.set_active_approval_cancel_token(None);
+                        self.busy = false;
+                        result
+                    };
+                    let _ = reply.send(result);
+                }
                 AgentCommand::AwaitIdle { reply } => {
                     // Active-turn command draining defers this until cleanup completes.
                     let _ = reply.send(());

@@ -94,6 +94,29 @@ pub struct ConnectionMcpProvenance {
     pub reference: String,
 }
 
+/// Local attribution to a verified Deixic user. This is not proof of an
+/// OpenAI external identity and carries no provider credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionOwner {
+    pub organization_id: String,
+    pub user_id: String,
+}
+
+impl ConnectionOwner {
+    fn matches(&self, organization_id: &str, user_id: Option<&str>) -> bool {
+        self.organization_id == organization_id && user_id == Some(&self.user_id)
+    }
+
+    pub fn require_current_user(&self) -> Result<()> {
+        let current = crate::credential_mode::verified_current_identity_session()?;
+        if !self.matches(&current.organization_id, current.user_id.as_deref()) {
+            bail!("Codex connection belongs to another Deixic user or organization");
+        }
+        Ok(())
+    }
+}
+
 impl ConnectionMcpBinding {
     pub fn validate(&self) -> Result<()> {
         validate_mcp_server_name(&self.server_name)?;
@@ -159,6 +182,8 @@ pub struct ServiceConnection {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_binding: Option<ConnectionMcpBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<ConnectionOwner>,
     pub generation: u64,
     #[serde(default)]
     pub is_default: bool,
@@ -180,6 +205,14 @@ impl ServiceConnection {
         }
         if self.generation == 0 {
             bail!("connection generation must be positive");
+        }
+        if let Some(owner) = &self.owner {
+            if self.type_id != "codex-subscription"
+                || owner.organization_id.trim().is_empty()
+                || owner.user_id.trim().is_empty()
+            {
+                bail!("Codex connection owner must name a user and organization");
+            }
         }
         match self.auth_kind {
             ConnectionAuthKind::ApiKey => {
@@ -576,6 +609,11 @@ impl ConnectionBroker<KeyringSecretBackend> {
         model: &str,
         env: &mut HashMap<String, String>,
     ) -> Result<Option<String>> {
+        // Codex app-server owns this delegated subscription. The native host
+        // selects its profile separately; there is no bearer to inject.
+        if crate::codex_auth::resolve_model_route(model).uses_app_server() {
+            return Ok(None);
+        }
         if managed_connection_store_can_be_skipped(model, env)? {
             return Ok(None);
         }
@@ -837,15 +875,11 @@ impl<B: SecretBackend> ConnectionBroker<B> {
         }
         match &connection.secret_ref {
             ConnectionSecretRef::Delegated { provider, profile } if provider == "openai-codex" => {
-                let workspace = std::env::current_dir().context("could not resolve workspace")?;
-                let identity =
-                    crate::codex_identity::resolve_codex_identity(profile.as_deref(), &workspace)?;
-                let ready = crate::codex_auth::read_codex_auth_from(&identity.auth_path())
-                    .is_some_and(|snapshot| snapshot.has_usable_credential());
-                if !ready {
-                    bail!("Codex subscription auth is unavailable; run `deixic-code codex login`");
+                if let Some(owner) = &connection.owner {
+                    owner.require_current_user()?;
                 }
-                Ok(())
+                let workspace = std::env::current_dir().context("could not resolve workspace")?;
+                crate::codex_subscription::check_chatgpt_profile(profile.as_deref(), &workspace)
             }
             _ if connection.mcp_binding.is_some() => {
                 crate::orb_connection::validate_managed_mcp_connection(connection)
@@ -933,17 +967,20 @@ pub fn keyring_secret_ref(connection_id: &str, generation: u64) -> ConnectionSec
 /// An explicit provider profile keeps precedence; otherwise an explicitly
 /// selected or default managed connection may supply the profile name.
 pub fn selected_delegated_profile_from_env(provider_id: &str) -> Result<Option<String>> {
-    if let Some(profile) = std::env::var("MAESTRO_CODEX_PROFILE")
+    let explicit_profile = std::env::var("MAESTRO_CODEX_PROFILE")
         .ok()
         .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(Some(profile));
-    }
+        .filter(|value| !value.is_empty());
     let explicit_connection = std::env::var("MAESTRO_CONNECTION")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    if explicit_profile.is_some() && explicit_connection.is_some() {
+        bail!("MAESTRO_CODEX_PROFILE and MAESTRO_CONNECTION cannot both select Codex auth");
+    }
+    if explicit_profile.is_some() {
+        return Ok(explicit_profile);
+    }
     selected_delegated_profile_from_store(
         provider_id,
         explicit_connection.as_deref(),
@@ -957,7 +994,14 @@ fn selected_delegated_profile_from_store(
     path: &Path,
 ) -> Result<Option<String>> {
     match ConnectionStore::load(path) {
-        Ok(store) => store.delegated_profile(provider_id, explicit_connection),
+        Ok(store) => {
+            if let Some(connection) = store.selected(provider_id, explicit_connection)? {
+                if let Some(owner) = &connection.owner {
+                    owner.require_current_user()?;
+                }
+            }
+            store.delegated_profile(provider_id, explicit_connection)
+        }
         // Managed metadata is optional when no connection was explicitly
         // selected. Fall through to the provider-owned default identity.
         Err(_) if explicit_connection.is_none() => Ok(None),
@@ -1131,6 +1175,7 @@ mod tests {
             state: ConnectionState::Active,
             capabilities: vec!["models.read".into(), "responses.create".into()],
             mcp_binding: None,
+            owner: None,
             generation: 1,
             is_default: true,
             created_at_ms: 10,
@@ -1406,6 +1451,7 @@ mod tests {
                 state: ConnectionState::Active,
                 capabilities: vec!["models.invoke".into()],
                 mcp_binding: None,
+                owner: None,
                 generation: 1,
                 is_default: true,
                 created_at_ms: 10,
@@ -1421,6 +1467,35 @@ mod tests {
         );
         let serialized = serde_json::to_string(&store).unwrap();
         assert!(!serialized.contains("access_token"));
+    }
+
+    #[test]
+    fn codex_app_server_connection_never_enters_direct_client_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("connections.json");
+        let mut env = HashMap::from([("MAESTRO_CONNECTION".into(), "codex-personal".into())]);
+        assert!(
+            ConnectionBroker::<KeyringSecretBackend>::merge_persisted_for_model(
+                &path,
+                "openai-codex/gpt-5.6-sol",
+                &mut env
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(env.len(), 1);
+    }
+
+    #[test]
+    fn codex_connection_owner_rejects_another_user_or_organization() {
+        let owner = ConnectionOwner {
+            organization_id: "org_a".into(),
+            user_id: "user_a".into(),
+        };
+        assert!(owner.matches("org_a", Some("user_a")));
+        assert!(!owner.matches("org_a", Some("user_b")));
+        assert!(!owner.matches("org_b", Some("user_a")));
+        assert!(!owner.matches("org_a", None));
     }
 
     #[test]

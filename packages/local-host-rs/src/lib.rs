@@ -21,6 +21,7 @@ pub mod code_authority;
 pub mod codex_auth;
 pub mod codex_cli;
 pub mod codex_identity;
+pub mod codex_subscription;
 pub mod color_utils;
 pub mod config;
 pub mod credential_mode;

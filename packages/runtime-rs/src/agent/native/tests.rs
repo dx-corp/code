@@ -53,6 +53,9 @@ use std::sync::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+#[path = "tests/builtin_read.rs"]
+mod builtin_read;
+
 fn empty_runtime_audit() -> Arc<RwLock<RuntimeAuditSnapshot>> {
     Arc::new(RwLock::new(RuntimeAuditSnapshot {
         request_cache: None,
@@ -85,6 +88,10 @@ pub(super) struct RuntimeTestHost {
     block_provider_after_tool: bool,
     block_model_after_tool: bool,
     post_tool_context: Option<String>,
+    permission_hook: Option<NativeHookResult>,
+    pre_tool_hook: Option<NativeHookResult>,
+    eval_hook: Option<NativeHookResult>,
+    pre_message_models: Arc<Mutex<Vec<Option<String>>>>,
     projected_tool_outputs: Arc<Mutex<Vec<String>>>,
     post_hook_outputs: Arc<Mutex<Vec<String>>>,
     eval_hook_outputs: Arc<Mutex<Vec<String>>>,
@@ -139,6 +146,10 @@ impl RuntimeTestHost {
             block_provider_after_tool: false,
             block_model_after_tool: false,
             post_tool_context: None,
+            permission_hook: None,
+            pre_tool_hook: None,
+            eval_hook: None,
+            pre_message_models: Arc::new(Mutex::new(Vec::new())),
             projected_tool_outputs: Arc::new(Mutex::new(Vec::new())),
             post_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             eval_hook_outputs: Arc::new(Mutex::new(Vec::new())),
@@ -476,7 +487,7 @@ impl NativeExecutionHost for RuntimeTestHost {
         _call_id: &'a str,
         _args: &'a Value,
     ) -> NativeHostFuture<'a, NativeHookResult> {
-        Box::pin(async { Self::hook_result() })
+        Box::pin(async { self.pre_tool_hook.clone().unwrap_or_else(Self::hook_result) })
     }
 
     fn hook_post_tool_use<'a>(
@@ -514,7 +525,7 @@ impl NativeExecutionHost for RuntimeTestHost {
             .lock()
             .unwrap()
             .push(output.to_owned());
-        Box::pin(async { Self::hook_result() })
+        Box::pin(async { self.eval_hook.clone().unwrap_or_else(Self::hook_result) })
     }
 
     fn hook_user_prompt_submit<'a>(
@@ -529,8 +540,12 @@ impl NativeExecutionHost for RuntimeTestHost {
         &'a self,
         _message: &'a str,
         _attachments: &'a [String],
-        _model: Option<&'a str>,
+        model: Option<&'a str>,
     ) -> NativeHostFuture<'a, NativeHookResult> {
+        self.pre_message_models
+            .lock()
+            .unwrap()
+            .push(model.map(str::to_owned));
         Box::pin(async { Self::hook_result() })
     }
 
@@ -597,7 +612,11 @@ impl NativeExecutionHost for RuntimeTestHost {
         _args: &'a Value,
         _reason: &'a str,
     ) -> NativeHostFuture<'a, NativeHookResult> {
-        Box::pin(async { Self::hook_result() })
+        Box::pin(async {
+            self.permission_hook
+                .clone()
+                .unwrap_or_else(Self::hook_result)
+        })
     }
 
     fn hook_handle_overflow<'a>(&'a self) -> NativeHostFuture<'a, bool> {

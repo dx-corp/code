@@ -25,9 +25,9 @@ use serde::Serialize;
 
 use crate::plugins::{ConnectionTypeDefinition, ConnectionTypeManifest, PluginRegistry};
 use crate::service_connections::{
-    ConnectionAuthKind, ConnectionBroker, ConnectionPlacement, ConnectionSecretRef,
-    ConnectionState, ConnectionStore, KeyringSecretBackend, SecretBackend, ServiceConnection,
-    keyring_secret_ref, now_ms,
+    ConnectionAuthKind, ConnectionBroker, ConnectionOwner, ConnectionPlacement,
+    ConnectionSecretRef, ConnectionState, ConnectionStore, KeyringSecretBackend, SecretBackend,
+    ServiceConnection, keyring_secret_ref, now_ms,
 };
 
 #[path = "connections_one_password.rs"]
@@ -45,6 +45,7 @@ struct Args {
     secret_stdin: bool,
     default: bool,
     json: bool,
+    local: bool,
     workspace: Option<PathBuf>,
     help: bool,
 }
@@ -104,6 +105,9 @@ pub fn run_connections(args: &[String]) -> Result<i32> {
         }
         "types" => run_types(&parsed),
         "list" | "ls" => {
+            if parsed.local {
+                return run_list(parsed.json);
+            }
             if let Some(session) = current_platform_session() {
                 return run_list_platform(&session, parsed.json);
             }
@@ -119,27 +123,36 @@ pub fn run_connections(args: &[String]) -> Result<i32> {
             run_add_wizard(parsed.workspace.as_deref()).map(|()| 0)
         }
         "add" => {
-            if current_platform_session().is_some() {
+            if current_platform_session().is_some()
+                && !matches!(
+                    parsed.positionals.first().map(String::as_str),
+                    Some("codex-subscription" | "openai-codex")
+                )
+            {
                 return run_add_platform(&parsed);
             }
             run_add(&parsed)
         }
         "status" | "check" => {
-            if let Some(session) = current_platform_session() {
-                return run_status_platform(&session, &parsed);
+            if !local_codex_connection(&parsed)? {
+                if let Some(session) = current_platform_session() {
+                    return run_status_platform(&session, &parsed);
+                }
             }
             run_status(&parsed)
         }
         "use" | "default" => {
-            if current_platform_session().is_some() {
+            if !local_codex_connection(&parsed)? && current_platform_session().is_some() {
                 return run_use_platform(&parsed);
             }
             run_use(&parsed)
         }
         "rotate" => run_rotate(&parsed),
         "remove" | "rm" | "revoke" => {
-            if let Some(session) = current_platform_session() {
-                return run_remove_platform(&session, &parsed);
+            if !local_codex_connection(&parsed)? {
+                if let Some(session) = current_platform_session() {
+                    return run_remove_platform(&session, &parsed);
+                }
             }
             run_remove(&parsed)
         }
@@ -161,6 +174,26 @@ fn has_explicit_add_options(args: &Args) -> bool {
         || args.from_one_password.is_some()
         || args.delegated_profile.is_some()
         || args.secret_stdin
+}
+
+fn local_codex_connection(args: &Args) -> Result<bool> {
+    local_codex_connection_at(args, &ConnectionStore::default_path()?)
+}
+
+fn local_codex_connection_at(args: &Args, path: &Path) -> Result<bool> {
+    let Some(id) = args.positionals.first() else {
+        return Ok(false);
+    };
+    // The local store is optional for Platform connections. Its corruption
+    // must not prevent unrelated Platform status, use, or removal.
+    Ok(ConnectionStore::load(path)
+        .ok()
+        .and_then(|store| {
+            store
+                .get(id)
+                .map(|connection| connection.type_id == "codex-subscription")
+        })
+        .unwrap_or(false))
 }
 
 fn run_types(args: &Args) -> Result<i32> {
@@ -199,7 +232,7 @@ fn run_list(json: bool) -> Result<i32> {
         );
         for connection in store.connections {
             println!(
-                "- {} — {} [{}; {:?}; generation={}; {}]",
+                "- {} — {} [{}; {:?}; generation={}; {}{}]",
                 connection.id,
                 connection.label,
                 connection.provider_id,
@@ -209,6 +242,11 @@ fn run_list(json: bool) -> Result<i32> {
                     "default"
                 } else {
                     "available"
+                },
+                if connection.owner.is_some() {
+                    "; Deixic user bound"
+                } else {
+                    ""
                 }
             );
         }
@@ -231,6 +269,23 @@ fn run_add(args: &Args) -> Result<i32> {
     )?;
     let definitions = connection_types(args.workspace.as_deref())?;
     let definition = resolve_connection_type(&definitions, type_id)?;
+    if definition.id == "codex-subscription" {
+        maestro_local_host::codex_subscription::check_chatgpt_profile(
+            args.delegated_profile.as_deref(),
+            &std::env::current_dir()?,
+        )?;
+    }
+    let owner = if definition.id == "codex-subscription" && current_platform_session().is_some() {
+        let session = crate::credential_mode::verified_current_identity_session()?;
+        Some(ConnectionOwner {
+            organization_id: session.organization_id,
+            user_id: session
+                .user_id
+                .context("verified Identity user is missing")?,
+        })
+    } else {
+        None
+    };
     let path = ConnectionStore::default_path()?;
     let backend = KeyringSecretBackend;
     let connection = with_locked_store(&path, |store| {
@@ -261,6 +316,7 @@ fn run_add(args: &Args) -> Result<i32> {
             state: ConnectionState::Active,
             capabilities: definition.capabilities.clone(),
             mcp_binding: None,
+            owner: owner.clone(),
             generation: 1,
             is_default,
             created_at_ms: timestamp,
@@ -325,6 +381,7 @@ fn run_status(args: &Args) -> Result<i32> {
                 "status": status,
                 "providerId": connection.provider_id,
                 "generation": connection.generation,
+                "identityBound": connection.owner.is_some(),
                 "detail": managed_detail.or_else(|| {
                     result.as_ref().err().map(std::string::ToString::to_string)
                 }),
@@ -347,6 +404,12 @@ fn run_use(args: &Args) -> Result<i32> {
     )?;
     let path = ConnectionStore::default_path()?;
     with_locked_store(&path, |store| {
+        if let Some(owner) = store
+            .get(id)
+            .and_then(|connection| connection.owner.as_ref())
+        {
+            owner.require_current_user()?;
+        }
         store.set_default(id)?;
         store.save(&path)
     })?;
@@ -435,6 +498,12 @@ fn run_remove(args: &Args) -> Result<i32> {
 
 fn remove_connection(path: &Path, id: &str, backend: &impl SecretBackend) -> Result<()> {
     with_locked_store(path, |store| {
+        if let Some(owner) = store
+            .get(id)
+            .and_then(|connection| connection.owner.as_ref())
+        {
+            owner.require_current_user()?;
+        }
         let connection = store
             .remove(id)
             .with_context(|| format!("connection not found: {id}"))?;
@@ -812,6 +881,7 @@ fn parse_args(args: &[String]) -> Result<Args> {
         };
         match value.as_str() {
             "--json" => parsed.json = true,
+            "--local" => parsed.local = true,
             "--default" => parsed.default = true,
             "--secret-stdin" => parsed.secret_stdin = true,
             "--help" | "-h" => parsed.help = true,
@@ -1045,7 +1115,7 @@ fn run_remove_platform(
 }
 
 fn print_help() {
-    println!("{}", crate::localization::cli_locale().format("deixic-code connections <command> [options]\n\nCommands:\nui                              Open the interactive connection manager\ntypes [--json]                 List built-in and trusted-plugin connection types\nlist [--json]                  List non-secret connection metadata\nadd [<type> <id>] [source]     Add an API key or delegated account\nType may be a type id (anthropic-api-key)\nor a provider id (anthropic)\nstatus <id> [--json]           Validate that the credential source is available\nuse <id>                       Select the provider's default connection\nrotate <id> [--secret-stdin]   Replace a keyring credential and revoke old leases\nremove <id>                    Delete metadata and keyring credential\n\nCredential sources for add:\n--from-env NAME                Resolve from an existing environment variable\n--from-file PATH               Resolve from an operator-owned file\n--from-1password op://...      Resolve with the 1Password CLI\n--secret-stdin                 Read a literal key from stdin into the OS credential store\n--delegated-profile NAME       Name a vendor-owned subscription/OAuth profile\n\nLiteral keys are never accepted as command-line arguments or written to connections.json.", &[]));
+    println!("{}", crate::localization::cli_locale().format("deixic-code connections <command> [options]\n\nCommands:\nui                              Open the interactive connection manager\ntypes [--json]                 List built-in and trusted-plugin connection types\nlist [--json] [--local]        List non-secret connection metadata\nadd [<type> <id>] [source]     Add an API key or delegated account\nType may be a type id (anthropic-api-key)\nor a provider id (anthropic)\nstatus <id> [--json]           Validate that the credential source is available\nuse <id>                       Select the provider's default connection\nrotate <id> [--secret-stdin]   Replace a keyring credential and revoke old leases\nremove <id>                    Delete metadata and keyring credential\n\nCredential sources for add:\n--from-env NAME                Resolve from an existing environment variable\n--from-file PATH               Resolve from an operator-owned file\n--from-1password op://...      Resolve with the 1Password CLI\n--secret-stdin                 Read a literal key from stdin into the OS credential store\n--delegated-profile NAME       Name a vendor-owned subscription/OAuth profile\n\nLiteral keys are never accepted as command-line arguments or written to connections.json.", &[]));
     println!(
         "\n1password                       {}",
         crate::localization::cli_locale().translate("Add a native 1Password capability")
@@ -1765,6 +1835,7 @@ pub(crate) fn save_local_api_key(provider_id: &str, secret: &str) -> Result<Stri
             state: ConnectionState::Active,
             capabilities: definition.capabilities.clone(),
             mcp_binding: None,
+            owner: None,
             generation: 1,
             is_default: true,
             created_at_ms: timestamp,
@@ -1919,11 +1990,45 @@ mod tests {
             state: ConnectionState::Active,
             capabilities: vec!["models.invoke".into()],
             mcp_binding: None,
+            owner: None,
             generation: 1,
             is_default: false,
             created_at_ms: 1,
             updated_at_ms: 1,
         }
+    }
+
+    #[test]
+    fn codex_subscription_id_routes_to_local_store_even_in_platform_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("connections.json");
+        let mut codex = test_connection("codex-personal");
+        codex.type_id = "codex-subscription".into();
+        codex.provider_id = "openai-codex".into();
+        codex.auth_kind = ConnectionAuthKind::Subscription;
+        codex.env_var = None;
+        codex.secret_ref = ConnectionSecretRef::Delegated {
+            provider: "openai-codex".into(),
+            profile: None,
+        };
+        ConnectionStore {
+            schema_version: 1,
+            connections: vec![codex],
+        }
+        .save(&path)
+        .unwrap();
+        let args = Args {
+            positionals: vec!["codex-personal".into()],
+            ..Default::default()
+        };
+        assert!(local_codex_connection_at(&args, &path).unwrap());
+        let other = Args {
+            positionals: vec!["unknown".into()],
+            ..Default::default()
+        };
+        assert!(!local_codex_connection_at(&other, &path).unwrap());
+        std::fs::write(&path, "not-json").unwrap();
+        assert!(!local_codex_connection_at(&args, &path).unwrap());
     }
 
     #[test]

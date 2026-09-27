@@ -31,6 +31,7 @@ pub enum CodexCommand {
     Status,
     Doctor,
     Ready,
+    Models,
 }
 
 pub fn parse_codex_subcommand(args: &[&str]) -> Result<CodexCommand> {
@@ -40,6 +41,7 @@ pub fn parse_codex_subcommand(args: &[&str]) -> Result<CodexCommand> {
         Some("status") => Ok(CodexCommand::Status),
         Some("doctor") => Ok(CodexCommand::Doctor),
         Some("ready") => Ok(CodexCommand::Ready),
+        Some("models") => Ok(CodexCommand::Models),
         _ => bail!(
             "{}",
             crate::localization::cli_locale().format("unknown codex subcommand", &[])
@@ -53,7 +55,7 @@ pub async fn run_codex(args: &[String]) -> Result<i32> {
     let command = match parse_codex_subcommand(&refs) {
         Ok(command) => command,
         Err(_) => {
-            eprintln!("{}", crate::localization::cli_locale().format("Unknown codex subcommand. Try \"deixic-code codex login\", \"logout\", \"status\", \"ready\", or \"doctor\".", &[]));
+            eprintln!("{}", crate::localization::cli_locale().format("Unknown codex subcommand. Try \"deixic-code codex login\", \"logout\", \"status\", \"models\", \"ready\", or \"doctor\".", &[]));
             return Ok(1);
         }
     };
@@ -63,6 +65,7 @@ pub async fn run_codex(args: &[String]) -> Result<i32> {
         CodexCommand::Status => handle_status(&args[1..]).await,
         CodexCommand::Doctor => handle_doctor(&args[1..]).await,
         CodexCommand::Ready => handle_ready(&args[1..]).await,
+        CodexCommand::Models => handle_models(&args[1..]).await,
     }
 }
 
@@ -191,6 +194,7 @@ pub struct CodexOptionalReadiness {
 pub struct CodexReadinessReport {
     profile: String,
     auth: CodexReadinessCheck,
+    model: CodexReadinessCheck,
     compatibility: CodexReadinessCheck,
     tool_schema: CodexReadinessCheck,
     binding: CodexReadinessCheck,
@@ -203,6 +207,7 @@ pub struct CodexReadinessEvaluation {
     exit_code: i32,
     profile: String,
     auth: CodexReadinessCheck,
+    model: CodexReadinessCheck,
     compatibility: CodexReadinessCheck,
     tool_schema: CodexReadinessCheck,
     binding: CodexReadinessCheck,
@@ -222,10 +227,7 @@ impl CodexReadinessOptions {
         let state_root = crate::path_utils::maestro_home_dir()
             .ok_or_else(|| anyhow::anyhow!("Maestro state directory is unavailable"))?;
         Ok(Self {
-            model: options
-                .model
-                .clone()
-                .unwrap_or_else(crate::codex_auth::resolve_default_model),
+            model: options.model.clone().unwrap_or_default(),
             cwd,
             state_root,
         })
@@ -234,6 +236,7 @@ impl CodexReadinessOptions {
 
 pub fn evaluate_readiness(report: CodexReadinessReport) -> CodexReadinessEvaluation {
     let ready = report.auth.is_ready()
+        && report.model.is_ready()
         && report.compatibility.is_ready()
         && report.tool_schema.is_ready()
         && report.binding.is_ready();
@@ -242,6 +245,7 @@ pub fn evaluate_readiness(report: CodexReadinessReport) -> CodexReadinessEvaluat
         exit_code: i32::from(!ready),
         profile: report.profile,
         auth: report.auth,
+        model: report.model,
         compatibility: report.compatibility,
         tool_schema: report.tool_schema,
         binding: report.binding,
@@ -265,6 +269,72 @@ async fn handle_ready(params: &[String]) -> Result<i32> {
     Ok(evaluation.exit_code)
 }
 
+async fn handle_models(params: &[String]) -> Result<i32> {
+    let options = parse_codex_options(params)?;
+    let identity = requested_identity_with_profile(options.profile.as_deref())?;
+    let client = spawn_for_identity(&identity).await?;
+    let result = async {
+        client.initialize(InitializeOptions::default()).await?;
+        if !account_is_chatgpt(&client.read_account(true).await?) {
+            bail!("Codex profile is not signed in with ChatGPT");
+        }
+        let mut cursor: Option<String> = None;
+        let mut seen = std::collections::HashSet::new();
+        let mut models = Vec::new();
+        loop {
+            let page = client
+                .request(
+                    "model/list",
+                    Some(json!({"includeHidden": false, "cursor": cursor})),
+                    Some(5_000),
+                )
+                .await?;
+            let data = page
+                .get("data")
+                .and_then(Value::as_array)
+                .context("Codex model/list returned invalid data")?;
+            for model in data {
+                if let Some(id) = model
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .or_else(|| model.get("id").and_then(Value::as_str))
+                {
+                    models.push(json!({
+                        "model": format!("openai-codex/{id}"),
+                        "default": model.get("isDefault").and_then(Value::as_bool).unwrap_or(false)
+                    }));
+                }
+            }
+            let Some(next) = page.get("nextCursor").and_then(Value::as_str) else {
+                break;
+            };
+            if !seen.insert(next.to_owned()) || seen.len() > 100 {
+                bail!("Codex model/list did not converge");
+            }
+            cursor = Some(next.to_owned());
+        }
+        if options.json {
+            println!("{}", serde_json::to_string_pretty(&models)?);
+        } else {
+            for model in &models {
+                println!(
+                    "{}{}",
+                    model["model"].as_str().unwrap_or_default(),
+                    if model["default"] == true {
+                        " (default)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+        Ok(0)
+    }
+    .await;
+    client.close();
+    result
+}
+
 async fn build_readiness_report(
     client: &CodexAppServerClient,
     identity: &crate::codex_identity::CodexIdentitySelection,
@@ -278,7 +348,7 @@ async fn build_readiness_report(
         })
         .await?;
     let account = client.read_account(true).await?;
-    let auth = if account.account.is_some() {
+    let auth = if account_is_chatgpt(&account) {
         CodexReadinessCheck::ready(format!("configured{}", account_label(&account)))
     } else {
         CodexReadinessCheck::missing(format!(
@@ -327,12 +397,14 @@ async fn build_readiness_report(
         CodexReadinessCheck::missing(schema_diagnostics.join("; "))
     };
 
+    let (model, selected_model) = codex_model_readiness(client, &options.model).await?;
+
     let binding = readiness_binding_check_at(
         client,
         identity,
         &options.state_root,
         &options.cwd,
-        &options.model,
+        &selected_model,
         &compatibility,
         &initialized,
     )
@@ -341,6 +413,7 @@ async fn build_readiness_report(
     Ok(CodexReadinessReport {
         profile: identity.profile_name.clone(),
         auth,
+        model,
         compatibility: compatibility_check,
         tool_schema,
         binding,
@@ -403,6 +476,62 @@ async fn readiness_binding_check_at(
     })
 }
 
+async fn codex_model_readiness(
+    client: &CodexAppServerClient,
+    selected: &str,
+) -> Result<(CodexReadinessCheck, String)> {
+    let selected = (!selected.is_empty())
+        .then(|| crate::agent::codex_app_server_turns::codex_thread_model_id(selected));
+    let mut cursor: Option<String> = None;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = client
+            .request(
+                "model/list",
+                Some(json!({"includeHidden": true, "cursor": cursor})),
+                Some(5_000),
+            )
+            .await?;
+        let Some(models) = page.get("data").and_then(Value::as_array) else {
+            return Ok((
+                CodexReadinessCheck::missing("Codex model/list returned invalid data"),
+                String::new(),
+            ));
+        };
+        for model in models {
+            let offered = model
+                .get("model")
+                .and_then(Value::as_str)
+                .or_else(|| model.get("id").and_then(Value::as_str));
+            let chosen = selected.as_deref() == offered
+                || (selected.is_none()
+                    && model.get("isDefault").and_then(Value::as_bool) == Some(true));
+            if chosen {
+                let id = offered.unwrap_or_default().to_owned();
+                return Ok((CodexReadinessCheck::ready(format!("{id} available")), id));
+            }
+        }
+        let Some(next) = page.get("nextCursor").and_then(Value::as_str) else {
+            let detail = selected.map_or_else(
+                || "Codex model/list has no default model".to_owned(),
+                |id| {
+                    format!(
+                        "{id} is not offered by this Codex sign-in; run `deixic-code codex models`"
+                    )
+                },
+            );
+            return Ok((CodexReadinessCheck::missing(detail), String::new()));
+        };
+        if !seen.insert(next.to_owned()) || seen.len() > 100 {
+            return Ok((
+                CodexReadinessCheck::missing("Codex model/list did not converge"),
+                String::new(),
+            ));
+        }
+        cursor = Some(next.to_owned());
+    }
+}
+
 fn render_readiness_human(evaluation: &CodexReadinessEvaluation) -> String {
     let mut out = String::new();
     if evaluation.ready {
@@ -417,6 +546,10 @@ fn render_readiness_human(evaluation: &CodexReadinessEvaluation) -> String {
     out.push_str(&crate::localization::cli_locale().format(
         "Auth: {0}\n",
         std::slice::from_ref(&(evaluation.auth.detail)),
+    ));
+    out.push_str(&crate::localization::cli_locale().format(
+        "Model: {0}\n",
+        std::slice::from_ref(&(evaluation.model.detail)),
     ));
     out.push_str(&crate::localization::cli_locale().format(
         "Compatibility: {0}\n",
@@ -461,7 +594,11 @@ fn requested_identity_with_profile(
     profile: Option<&str>,
 ) -> Result<crate::codex_identity::CodexIdentitySelection> {
     let workspace = std::env::current_dir()?;
-    crate::codex_identity::resolve_codex_identity(profile, &workspace)
+    let selected = match profile {
+        Some(profile) => Some(profile.to_owned()),
+        None => crate::service_connections::selected_delegated_profile_from_env("openai-codex")?,
+    };
+    crate::codex_identity::resolve_codex_identity(selected.as_deref(), &workspace)
 }
 
 fn requested_identity(params: &[String]) -> Result<crate::codex_identity::CodexIdentitySelection> {
@@ -518,7 +655,7 @@ async fn login_with_client(
 
     if !force_login {
         match client.read_account(true).await {
-            Ok(account) if account.account.is_some() => {
+            Ok(account) if account_is_chatgpt(&account) => {
                 println!(
                     "{}",
                     crate::localization::cli_locale().format(
@@ -625,6 +762,9 @@ async fn login_with_client(
         }
         "chatgptAuthTokens" => {
             let account = client.read_account(true).await?;
+            if !account_is_chatgpt(&account) {
+                bail!("Codex auth did not establish a ChatGPT subscription account");
+            }
             println!(
                 "{}",
                 crate::localization::cli_locale().format(
@@ -653,6 +793,9 @@ async fn login_with_client(
     }
 
     let account = client.read_account(true).await?;
+    if !account_is_chatgpt(&account) {
+        bail!("Codex login did not establish a ChatGPT subscription account");
+    }
     println!(
         "{}",
         crate::localization::cli_locale().format(
@@ -771,7 +914,7 @@ async fn handle_doctor(params: &[String]) -> Result<i32> {
             crate::localization::cli_locale().format("Connectivity: ready", &[])
         );
         let account = client.read_account(true).await?;
-        if account.account.is_none() {
+        if !account_is_chatgpt(&account) {
             println!(
                 "{}",
                 crate::localization::cli_locale().format("ChatGPT sign-in: missing", &[])
@@ -842,6 +985,15 @@ fn account_label(state: &AccountReadResult) -> String {
     normalized_plan_label(account).unwrap_or_default()
 }
 
+fn account_is_chatgpt(state: &AccountReadResult) -> bool {
+    state
+        .account
+        .as_ref()
+        .and_then(|account| account.get("type"))
+        .and_then(Value::as_str)
+        == Some("chatgpt")
+}
+
 fn codex_status_payload(
     identity: &crate::codex_identity::CodexIdentitySelection,
     account: &AccountReadResult,
@@ -851,7 +1003,7 @@ fn codex_status_payload(
         "profile": identity.profile_name,
         "provider": "openai-codex",
         "transport": "codex-app-server",
-        "signed_in": account.account.is_some(),
+        "signed_in": account_is_chatgpt(account),
         "auth_state": auth_health.state,
         "account_label": account_label(account).trim(),
     })
@@ -865,7 +1017,7 @@ fn render_status_human(
         "Profile: {0}\n",
         std::slice::from_ref(&(identity.profile_name)),
     );
-    if account.account.is_none() {
+    if !account_is_chatgpt(account) {
         out.push_str(
             crate::localization::cli_locale().translate("No ChatGPT sign-in for OpenAI Codex.\n"),
         );
@@ -1393,6 +1545,16 @@ mod tests {
                 "requiresOpenaiAuth": false
             }),
         );
+        respond_model_list(mock, "gpt-5.6").await;
+    }
+
+    async fn respond_model_list(mock: &MockCodexTransport, model: &str) {
+        let request = mock.next_request().await.unwrap();
+        assert_eq!(request["method"], "model/list");
+        mock.respond(
+            request["id"].as_u64().unwrap(),
+            json!({"data": [{"id": model, "model": model}], "nextCursor": null}),
+        );
     }
 
     async fn assert_no_prompt_sent(mock: &MockCodexTransport) {
@@ -1555,6 +1717,7 @@ mod tests {
         let report = CodexReadinessReport {
             profile: "work".to_owned(),
             auth: CodexReadinessCheck::ready("ready"),
+            model: CodexReadinessCheck::ready("gpt-5.5 available"),
             compatibility: CodexReadinessCheck::missing(
                 "missing required app-server capabilities: turn/start",
             ),
@@ -1583,6 +1746,7 @@ mod tests {
         let report = CodexReadinessReport {
             profile: "work".to_owned(),
             auth: CodexReadinessCheck::ready("ready"),
+            model: CodexReadinessCheck::ready("gpt-5.5 available"),
             compatibility: CodexReadinessCheck::ready("protocol 2025-01-01"),
             tool_schema: CodexReadinessCheck::ready("compatible"),
             binding: CodexReadinessCheck::ready("clean"),
@@ -1606,10 +1770,77 @@ mod tests {
     }
 
     #[test]
+    fn api_key_account_does_not_count_as_chatgpt_subscription() {
+        let account = AccountReadResult {
+            account: Some(json!({"type": "apiKey"})),
+            requires_openai_auth: false,
+        };
+        assert!(!account_is_chatgpt(&account));
+        let identity = crate::codex_identity::CodexIdentitySelection {
+            profile_name: "default".into(),
+            codex_home: PathBuf::from("/unused"),
+            workspace_boundary: None,
+        };
+        assert_eq!(
+            codex_status_payload(
+                &identity,
+                &account,
+                crate::codex_identity::CodexAuthHealth {
+                    state: crate::codex_identity::CodexAuthState::Ready,
+                    auth_mode: None,
+                    expires_at: None,
+                    account_label: None,
+                }
+            )["signed_in"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn readiness_rejects_model_absent_from_codex_catalog() {
+        let (client, mock) = CodexAppServerClient::mock();
+        let task =
+            tokio::spawn(
+                async move { codex_model_readiness(&client, "openai-codex/gpt-5.6").await },
+            );
+        let request = mock.next_request().await.unwrap();
+        assert_eq!(request["method"], "model/list");
+        mock.respond(
+            request["id"].as_u64().unwrap(),
+            json!({
+                "data": [{"id": "gpt-5.6-sol", "model": "gpt-5.6-sol"}],
+                "nextCursor": null
+            }),
+        );
+        let (check, _) = task.await.unwrap().unwrap();
+        assert!(!check.is_ready());
+        assert!(check.detail.contains("gpt-5.6"));
+    }
+
+    #[tokio::test]
+    async fn readiness_uses_codex_advertised_default_without_model_override() {
+        let (client, mock) = CodexAppServerClient::mock();
+        let task = tokio::spawn(async move { codex_model_readiness(&client, "").await });
+        let request = mock.next_request().await.unwrap();
+        assert_eq!(request["method"], "model/list");
+        mock.respond(
+            request["id"].as_u64().unwrap(),
+            json!({
+                "data": [{"id": "gpt-5.6-sol", "model": "gpt-5.6-sol", "isDefault": true}],
+                "nextCursor": null
+            }),
+        );
+        let (check, model) = task.await.unwrap().unwrap();
+        assert!(check.is_ready());
+        assert_eq!(model, "gpt-5.6-sol");
+    }
+
+    #[test]
     fn readiness_json_is_privacy_safe() {
         let report = CodexReadinessReport {
             profile: "work".to_owned(),
             auth: CodexReadinessCheck::ready("signed in (pro)"),
+            model: CodexReadinessCheck::ready("gpt-5.5 available"),
             compatibility: CodexReadinessCheck::ready("protocol 2025-01-01"),
             tool_schema: CodexReadinessCheck::ready("compatible"),
             binding: CodexReadinessCheck::ready("clean"),
@@ -1639,6 +1870,7 @@ mod tests {
         let report = CodexReadinessReport {
             profile: "work".to_owned(),
             auth: CodexReadinessCheck::ready("ready"),
+            model: CodexReadinessCheck::ready("gpt-5.5 available"),
             compatibility: CodexReadinessCheck::ready("protocol 2025-01-01"),
             tool_schema: CodexReadinessCheck::missing("invalid_schema: bad top-level enum"),
             binding: CodexReadinessCheck::missing("corrupt binding quarantined"),
@@ -1656,6 +1888,7 @@ mod tests {
         let report = CodexReadinessReport {
             profile: "work".to_owned(),
             auth: CodexReadinessCheck::ready("configured (pro)"),
+            model: CodexReadinessCheck::ready("gpt-5.5 available"),
             compatibility: CodexReadinessCheck::ready("protocol 2025-01-01"),
             tool_schema: CodexReadinessCheck::ready("compatible"),
             binding: CodexReadinessCheck::ready("no binding yet"),
@@ -2146,6 +2379,8 @@ mod tests {
             }),
         );
 
+        respond_model_list(&mock, "gpt-5.6").await;
+
         let report = task.await.unwrap().unwrap();
         let evaluation = evaluate_readiness(report);
         assert_eq!(evaluation.exit_code, 0);
@@ -2192,6 +2427,8 @@ mod tests {
                 "requiresOpenaiAuth": false
             }),
         );
+
+        respond_model_list(&mock, "gpt-5.6").await;
 
         let evaluation = evaluate_readiness(task.await.unwrap().unwrap());
         assert_eq!(evaluation.exit_code, 0);
