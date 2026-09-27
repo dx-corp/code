@@ -104,6 +104,7 @@ pub mod session {
 }
 pub mod session_transfer;
 pub mod setup_cli;
+mod subscription_usage;
 pub use maestro_local_host::skill_cli;
 pub use maestro_local_host::skill_package_cli;
 

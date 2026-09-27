@@ -76,6 +76,26 @@ fn registry_execute_unknown() {
 }
 
 #[test]
+fn usage_is_unified_and_cost_keeps_session_details() {
+    let registry = build_command_registry();
+    assert!(matches!(
+        registry.execute("/usage", "/tmp", None, None).unwrap(),
+        CommandOutput::Action(CommandAction::ShowUnifiedUsage)
+    ));
+    assert!(matches!(
+        registry
+            .execute("/cost detailed", "/tmp", None, None)
+            .unwrap(),
+        CommandOutput::Action(CommandAction::ShowUsage(UsageAction::Detailed))
+    ));
+    assert!(
+        registry
+            .execute("/usage reset", "/tmp", None, None)
+            .is_err()
+    );
+}
+
+#[test]
 fn model_command_parses_default_subcommand() {
     let registry = build_command_registry();
 

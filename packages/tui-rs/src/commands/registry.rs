@@ -3355,7 +3355,27 @@ fn build_builtin_registry() -> CommandRegistry {
         .primary(1),
     );
 
-    // Cost/usage command
+    registry.register(
+        Command::new(
+            "usage",
+            maestro_ui::localization::tr(
+                "Show today's Maestro activity and linked subscription usage",
+            ),
+            CommandCategory::Diagnostics,
+            Box::new(|ctx| {
+                if !ctx.raw_args.trim().is_empty() {
+                    return Err(CommandError::new(maestro_ui::localization::tr(
+                        "Usage: /usage",
+                    )));
+                }
+                Ok(CommandOutput::Action(CommandAction::ShowUnifiedUsage))
+            }),
+        )
+        .localized()
+        .usage("/usage"),
+    );
+
+    // Session cost and token details remain available separately.
     registry.register(
         Command::new(
             "cost",
@@ -3381,7 +3401,6 @@ fn build_builtin_registry() -> CommandRegistry {
             }),
         )
         .localized()
-        .alias("usage")
         .alias("tokens")
         .arg(CommandArgument::choice(
             "action",

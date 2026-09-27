@@ -1749,11 +1749,20 @@ mod tests {
                 continue;
             }
             assert!(
-                bundled["models"].as_array().unwrap().iter().any(|model| {
-                    model["provider"].as_str() == Some(provider) && model["id"].as_str() == Some(id)
-                }),
-                "preferred model {provider}/{id} must have sourced catalog metadata"
+                available
+                    .iter()
+                    .any(|model| model.provider == provider && model.id == id),
+                "preferred model {provider}/{id} must be available at runtime"
             );
+            if !matches!(provider, "claude-code" | "github-copilot") {
+                assert!(
+                    bundled["models"].as_array().unwrap().iter().any(|model| {
+                        model["provider"].as_str() == Some(provider)
+                            && model["id"].as_str() == Some(id)
+                    }),
+                    "preferred model {provider}/{id} must have sourced catalog metadata"
+                );
+            }
         }
     }
 
