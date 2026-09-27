@@ -234,85 +234,11 @@ async fn send_with_response_open_timeout(
     .context("Failed to send request to OpenAI API")
 }
 
-fn required_managed_receipt_header(
-    headers: &HeaderMap,
-    name: &'static str,
-    max_len: usize,
-) -> Result<String> {
-    let value = headers
-        .get(name)
-        .with_context(|| format!("managed Gateway response is missing required {name} header"))?
-        .to_str()
-        .with_context(|| format!("managed Gateway response has invalid {name} header"))?;
-    let value = value.trim();
-    if value.is_empty() {
-        anyhow::bail!("managed Gateway response has empty {name} header");
-    }
-    if value.len() > max_len {
-        anyhow::bail!("managed Gateway response {name} header exceeds the {max_len}-byte limit");
-    }
-    Ok(value.to_string())
-}
-
-fn managed_provider_tools_evidence(headers: &reqwest::header::HeaderMap) -> Option<(String, u32)> {
-    let digest = headers
-        .get("x-evalops-provider-tools-sha256")?
-        .to_str()
-        .ok()?;
-    let hex = digest.strip_prefix("sha256:")?;
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return None;
-    }
-    let count = headers
-        .get("x-evalops-provider-tool-count")?
-        .to_str()
-        .ok()?;
-    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some((digest.to_owned(), count.parse().ok()?))
-}
-
-fn managed_gateway_receipt(
-    headers: &HeaderMap,
-    expected_lineage: Option<&str>,
-) -> Result<ManagedGatewayReceipt> {
-    let lineage_id = required_managed_receipt_header(
-        headers,
-        "x-evalops-lineage-id",
-        MANAGED_GATEWAY_RECEIPT_LINEAGE_MAX_LEN,
-    )?;
-    if let Some(expected_lineage) = expected_lineage {
-        if lineage_id != expected_lineage {
-            anyhow::bail!("managed Gateway response receipt lineage mismatch");
-        }
-    }
-    Ok(ManagedGatewayReceipt {
-        provider_prompt_sha256: None,
-        provider_tools_sha256: None,
-        provider_tool_count: None,
-        request_id: required_managed_receipt_header(
-            headers,
-            "x-request-id",
-            MANAGED_GATEWAY_RECEIPT_ID_MAX_LEN,
-        )?,
-        record_id: required_managed_receipt_header(
-            headers,
-            "x-evalops-record-id",
-            MANAGED_GATEWAY_RECEIPT_ID_MAX_LEN,
-        )?,
-        lineage_id,
-        record_status: required_managed_receipt_header(
-            headers,
-            "x-evalops-record-status",
-            MANAGED_GATEWAY_RECEIPT_STATUS_MAX_LEN,
-        )?,
-    })
-}
+#[path = "openai/managed_gateway.rs"]
+mod managed_gateway;
+use managed_gateway::{
+    managed_gateway_error_retry_after, managed_gateway_receipt, managed_provider_tools_evidence,
+};
 
 fn parse_managed_inference_authorization(encoded: &str) -> Result<(serde_json::Value, String)> {
     let authorization: serde_json::Value = serde_json::from_str(encoded)
@@ -2393,6 +2319,13 @@ impl OpenAiClient {
         // not hide the actionable HTTP status behind a receipt protocol error.
         if !response.status().is_success() {
             let status = response.status();
+            // Only typed, bounded gateway cooldowns may delay a retry.
+            let cooldown_retry_after = managed_gateway_error_retry_after(
+                self.managed_gateway,
+                status,
+                response.headers(),
+                body.get("lineage_id").and_then(serde_json::Value::as_str),
+            );
             if self.managed_gateway {
                 let expected_lineage = body.get("lineage_id").and_then(serde_json::Value::as_str);
                 if let Ok(receipt) = managed_gateway_receipt(response.headers(), expected_lineage) {
@@ -2418,7 +2351,11 @@ impl OpenAiClient {
                     super::summarize_error_body(&error_text)
                 ),
             });
-            return Ok(CancellableStream::detached(rx));
+            let stream = CancellableStream::detached(rx);
+            return Ok(match cooldown_retry_after {
+                Some(delay) => stream.with_retry_after(delay),
+                None => stream,
+            });
         }
 
         if self.managed_gateway {
