@@ -19290,6 +19290,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Show today's Maestro activity and linked subscription usage",
+        [
+            "Mostrar la actividad de Maestro de hoy y el uso de suscripciones vinculadas",
+            "Afficher l'activité de Maestro aujourd'hui et l'utilisation des abonnements liés",
+            "Heutige Maestro-Aktivität und Nutzung verknüpfter Abonnements anzeigen",
+            "今日のMaestroのアクティビティと連携済みサブスクリプションの利用状況を表示",
+            "오늘의 Maestro 활동과 연결된 구독 사용량 보기",
+            "显示今天的 Maestro 活动和已关联订阅的使用情况",
+        ],
+    ),
+    (
         "Show token usage and cost statistics",
         [
             "Mostrar el uso de fichas y estadísticas de costos",
@@ -22764,6 +22775,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "使用方法: /trust [status|grant|revoke]",
             "제품 정보: /trust [status|grant|revoke]",
             "使用量: /trust [status|grant|revoke]",
+        ],
+    ),
+    (
+        "Usage: /usage",
+        [
+            "Uso: /usage",
+            "Utilisation : /usage",
+            "Verwendung: /usage",
+            "使用方法: /usage",
+            "사용법: /usage",
+            "用法：/usage",
         ],
     ),
     (
