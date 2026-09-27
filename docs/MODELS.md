@@ -387,7 +387,7 @@ generator, so you can use them out of the box:
   `maestro codex login --device-auth` for remote/headless machines.
 
   `maestro codex ready --json` reports auth, required app-server
-  compatibility, dynamic-tool schema diagnostics, durable binding integrity,
+  compatibility, live model availability, dynamic-tool schema diagnostics, durable binding integrity,
   and optional resume/steering support. The command exits 0 only when required
   checks are usable. It exits 1 for missing auth, missing required app-server
   capabilities, tool-schema errors, or binding integrity failures. Optional
@@ -395,6 +395,9 @@ generator, so you can use them out of the box:
   command. `--model MODEL` selects the same canonical Codex model id used by
   runtime `thread/start`, which keeps readiness binding checks aligned with the
   model selected for the next run.
+  Use `maestro codex models` to list models actually offered by the current
+  ChatGPT sign-in. The shared OpenAI API catalog is not proof that a Codex
+  subscription offers a model with the same name.
 
 To add more Responses-capable models (or override these), drop them into
 `.maestro/config.json` with `api: "openai-responses"`; Maestro will normalize

@@ -602,6 +602,7 @@ mod tests {
             state: ConnectionState::Active,
             capabilities: vec!["orb:threads:read".into(), "orb:threads:write".into()],
             mcp_binding: Some(binding()),
+            owner: None,
             generation: 1,
             is_default: true,
             created_at_ms: 1,
