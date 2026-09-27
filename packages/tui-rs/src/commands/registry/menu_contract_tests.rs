@@ -8,6 +8,19 @@ fn codex_shortcut_uses_live_subscription_switch_action() {
     ));
 }
 #[test]
+fn subscription_shortcuts_select_provider_owned_routes() {
+    let registry = build_command_registry();
+    for (command, route) in [
+        ("/claude", "claude-code/sonnet"),
+        ("/copilot", "github-copilot/auto"),
+    ] {
+        assert!(matches!(
+            registry.execute(command, "/tmp", None, None).unwrap(),
+            CommandOutput::Action(CommandAction::SetModel(model)) if model == route
+        ));
+    }
+}
+#[test]
 fn primary_menu_and_compatibility_commands_share_one_registry() {
     let registry = build_command_registry();
     let names: Vec<_> = registry

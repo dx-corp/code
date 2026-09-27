@@ -1,6 +1,7 @@
 //! First-run onboarding built on the typed maestro doctor checks.
 
 use std::io::{self, IsTerminal, Write};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -175,6 +176,7 @@ pub async fn run_setup(args: &[String]) -> Result<i32> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     if options.platform {
         crate::init_cli::perform_evalops_login().await?;
+        offer_subscription_setup().await?;
         println!(
             "{}",
             crate::localization::cli_locale().format(
@@ -256,6 +258,7 @@ pub async fn run_setup(args: &[String]) -> Result<i32> {
         match selection.trim() {
             "1" | "" => {
                 crate::init_cli::perform_evalops_login().await?;
+                offer_subscription_setup().await?;
                 println!(
                     "{}",
                     crate::localization::cli_locale().format(
@@ -292,10 +295,140 @@ pub async fn run_setup(args: &[String]) -> Result<i32> {
     Ok(i32::from(!report.ready))
 }
 
+async fn run_codex_subscription_setup() -> Result<i32> {
+    if std::env::var("MAESTRO_CONNECTION")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        bail!("Unset MAESTRO_CONNECTION before linking a personal Codex subscription");
+    }
+    let profile = std::env::var("MAESTRO_CODEX_PROFILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "default".to_owned());
+    let login_result =
+        crate::codex_cli::run_codex(&["login".to_owned(), "--profile".to_owned(), profile.clone()])
+            .await?;
+    if login_result != 0 {
+        return Ok(login_result);
+    }
+    crate::connections_cli::ensure_codex_subscription_connection(&profile)?;
+    let ready_result =
+        crate::codex_cli::run_codex(&["ready".to_owned(), "--profile".to_owned(), profile]).await?;
+    if ready_result == 0 {
+        println!(
+            "ChatGPT subscription is linked to this Deixic user. Run /codex in Maestro to use it."
+        );
+    }
+    Ok(ready_result)
+}
+
+async fn offer_subscription_setup() -> Result<()> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        println!(
+            "Optional personal subscriptions: run `maestro codex login`, `claude auth login --claudeai`, or `copilot login` later. Select /codex, claude-code/sonnet, or github-copilot/auto in Maestro."
+        );
+        return Ok(());
+    }
+    if prompt_subscription_choice("Connect your ChatGPT subscription for Codex turns in Maestro?")?
+    {
+        let exit = run_codex_subscription_setup().await?;
+        if exit != 0 {
+            bail!(
+                "Codex subscription setup was not ready (exit {exit}); Deixic sign-in remains available"
+            );
+        }
+    }
+    if prompt_subscription_choice("Connect your Claude subscription for turns in Maestro?")? {
+        setup_claude_code_subscription()?;
+    }
+    if prompt_subscription_choice("Connect your GitHub Copilot subscription for turns in Maestro?")?
+    {
+        setup_copilot_subscription()?;
+    }
+    Ok(())
+}
+
+fn prompt_subscription_choice(label: &str) -> Result<bool> {
+    print!("{label} [y/N]: ");
+    io::stdout().flush()?;
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    Ok(matches!(
+        response.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn claude_subscription_ready(status: &serde_json::Value) -> bool {
+    status.get("loggedIn").and_then(serde_json::Value::as_bool) == Some(true)
+        && status.get("authMethod").and_then(serde_json::Value::as_str) == Some("claude.ai")
+}
+
+fn claude_auth_status() -> Result<bool> {
+    let output = Command::new("claude")
+        .args(["auth", "status", "--json"])
+        .output()
+        .context(
+            "Claude Code CLI is unavailable; install it, then run `claude auth login --claudeai`",
+        )?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("Claude Code returned an invalid auth status")?;
+    Ok(claude_subscription_ready(&status))
+}
+
+fn setup_claude_code_subscription() -> Result<()> {
+    if !claude_auth_status()? {
+        let status = Command::new("claude")
+            .args(["auth", "login", "--claudeai"])
+            .status()
+            .context("Could not launch Claude Code sign-in")?;
+        if !status.success() || !claude_auth_status()? {
+            bail!("Claude Code subscription sign-in did not complete");
+        }
+    }
+    println!(
+        "Claude subscription is ready. Select claude-code/sonnet in Maestro to use the signed-in Claude Code CLI. Run `claude` and `/status` to confirm the active account."
+    );
+    crate::connections_cli::ensure_cli_subscription_connection("claude-code")?;
+    Ok(())
+}
+
+fn setup_copilot_subscription() -> Result<()> {
+    let status = Command::new("copilot")
+        .args(["login"])
+        .status()
+        .context("Copilot CLI is unavailable; install it from GitHub, then run `copilot login`")?;
+    if !status.success() {
+        bail!("Copilot subscription sign-in did not complete");
+    }
+    crate::connections_cli::ensure_cli_subscription_connection("github-copilot")?;
+    println!(
+        "Copilot sign-in completed. Select github-copilot/auto in Maestro to use this account."
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::doctor::{CheckStatus, DoctorCheck, SelectedModelReport};
+
+    #[test]
+    fn claude_companion_requires_a_claude_subscription_login() {
+        assert!(claude_subscription_ready(
+            &serde_json::json!({"loggedIn": true, "authMethod": "claude.ai"})
+        ));
+        assert!(!claude_subscription_ready(
+            &serde_json::json!({"loggedIn": true, "authMethod": "apiKey"})
+        ));
+        assert!(!claude_subscription_ready(
+            &serde_json::json!({"loggedIn": false, "authMethod": "claude.ai"})
+        ));
+    }
 
     fn report(provider: &str, checks: Vec<DoctorCheck>) -> DoctorReport {
         DoctorReport {

@@ -234,11 +234,24 @@ pub fn resolve_codex_identity_from(
     }
 
     match matches.as_slice() {
-        [] => Ok(CodexIdentitySelection {
-            profile_name: "default".to_owned(),
-            codex_home: default_codex_home.to_path_buf(),
-            workspace_boundary: None,
-        }),
+        [] => {
+            // A connection pinned "default" at creation (see `run_add` in
+            // connections_cli.rs) resolves it through the explicit branch
+            // above, which prefers a literal `profiles.profiles["default"]`
+            // entry over the bare OS-default codex_home. This implicit path
+            // must agree, or a connection created here (no workspace match,
+            // bare default) silently reroutes to a different codex_home the
+            // next time it is used by pinned name, without ever having been
+            // validated against that home at creation time.
+            if let Some(profile) = profiles.profiles.get("default") {
+                return select_profile("default", profile);
+            }
+            Ok(CodexIdentitySelection {
+                profile_name: "default".to_owned(),
+                codex_home: default_codex_home.to_path_buf(),
+                workspace_boundary: None,
+            })
+        }
         [(profile_name, profile)] => select_profile(profile_name, profile),
         _ => bail!(
             "multiple Codex auth profiles own workspace {}",
@@ -501,6 +514,51 @@ mod tests {
         assert_eq!(selected.profile_name, "default");
         assert_eq!(selected.codex_home, default_codex_home);
         assert_eq!(selected.workspace_boundary, None);
+    }
+
+    #[test]
+    fn implicit_default_resolution_matches_a_pinned_default_profile_entry() {
+        // A connection created with no `--delegated-profile` and no matching
+        // workspace boundary pins the resolved name "default" (see
+        // `codex_cli.rs::run_add` / MANAGED_CONNECTIONS.md). If the operator's
+        // profiles file separately configures a literal "default" entry (a
+        // catch-all identity with no `workspace` field), the implicit
+        // resolution used at creation time must agree with the explicit
+        // `Some("default")` resolution used every time the pinned connection
+        // is later selected -- otherwise the connection silently switches
+        // Codex identity between creation and use.
+        let root = tempfile::tempdir().expect("root");
+        let workspace = root.path().join("workspace");
+        let custom_default_home = root.path().join("codex-custom-default");
+        let bare_default_home = root.path().join("codex-bare-default");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let profile_file = root.path().join("codex-auth-profiles.json");
+        fs::write(
+            &profile_file,
+            serde_json::json!({
+                "profiles": {
+                    "default": {
+                        "codex_home": custom_default_home,
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("profile file");
+
+        let implicit =
+            resolve_codex_identity_from(&profile_file, None, &workspace, &bare_default_home)
+                .expect("implicit default resolution");
+        let explicit = resolve_codex_identity_from(
+            &profile_file,
+            Some("default"),
+            &workspace,
+            &bare_default_home,
+        )
+        .expect("explicit default resolution");
+
+        assert_eq!(implicit.codex_home, custom_default_home);
+        assert_eq!(implicit, explicit);
     }
 
     #[test]

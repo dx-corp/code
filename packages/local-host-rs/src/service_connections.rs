@@ -8,17 +8,48 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use wait_timeout::ChildExt;
 use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "maestro-connections";
 const MAX_LEASE_TTL_MS: i64 = 60 * 60 * 1_000;
 const MAX_ACTIVE_LEASES: usize = 1_024;
+
+fn run_subscription_probe(
+    command: &mut Command,
+    provider: &str,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("{provider} CLI is not installed"))?;
+    let status = match child.wait_timeout(Duration::from_secs(10))? {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{provider} CLI check timed out after 10 seconds");
+        }
+    };
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .context("subscription CLI stdout unavailable")?
+        .take(64 * 1024)
+        .read_to_end(&mut stdout)?;
+    Ok((status, stdout))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +126,7 @@ pub struct ConnectionMcpProvenance {
 }
 
 /// Local attribution to a verified Deixic user. This is not proof of an
-/// OpenAI external identity and carries no provider credential.
+/// external vendor identity and carries no provider credential.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectionOwner {
@@ -110,8 +141,12 @@ impl ConnectionOwner {
 
     pub fn require_current_user(&self) -> Result<()> {
         let current = crate::credential_mode::verified_current_identity_session()?;
+        self.require_session(&current)
+    }
+
+    pub fn require_session(&self, current: &crate::credential_mode::PlatformSession) -> Result<()> {
         if !self.matches(&current.organization_id, current.user_id.as_deref()) {
-            bail!("Codex connection belongs to another Deixic user or organization");
+            bail!("subscription connection belongs to another Deixic user or organization");
         }
         Ok(())
     }
@@ -206,12 +241,38 @@ impl ServiceConnection {
         if self.generation == 0 {
             bail!("connection generation must be positive");
         }
+        if matches!(
+            self.type_id.as_str(),
+            "claude-subscription" | "copilot-subscription"
+        ) && self.owner.is_none()
+        {
+            bail!("subscription connection requires a Deixic user owner");
+        }
+        if matches!(
+            self.type_id.as_str(),
+            "claude-subscription" | "copilot-subscription"
+        ) {
+            let expected = if self.type_id == "claude-subscription" {
+                "claude-code"
+            } else {
+                "github-copilot"
+            };
+            if self.provider_id != expected
+                || self.auth_kind != ConnectionAuthKind::Subscription
+                || self.placement != ConnectionPlacement::Local
+                || !matches!(&self.secret_ref, ConnectionSecretRef::Delegated { provider, profile: None } if provider == expected)
+            {
+                bail!("subscription connection has an invalid provider-owned transport");
+            }
+        }
         if let Some(owner) = &self.owner {
-            if self.type_id != "codex-subscription"
-                || owner.organization_id.trim().is_empty()
+            if !matches!(
+                self.type_id.as_str(),
+                "codex-subscription" | "claude-subscription" | "copilot-subscription"
+            ) || owner.organization_id.trim().is_empty()
                 || owner.user_id.trim().is_empty()
             {
-                bail!("Codex connection owner must name a user and organization");
+                bail!("subscription connection owner must name a user and organization");
             }
         }
         match self.auth_kind {
@@ -611,7 +672,10 @@ impl ConnectionBroker<KeyringSecretBackend> {
     ) -> Result<Option<String>> {
         // Codex app-server owns this delegated subscription. The native host
         // selects its profile separately; there is no bearer to inject.
-        if crate::codex_auth::resolve_model_route(model).uses_app_server() {
+        if crate::codex_auth::resolve_model_route(model).uses_app_server()
+            || crate::ai::ProviderRegistry::resolve_descriptor(model)
+                .is_ok_and(|provider| matches!(provider.id, "claude-code" | "github-copilot"))
+        {
             return Ok(None);
         }
         if managed_connection_store_can_be_skipped(model, env)? {
@@ -881,6 +945,53 @@ impl<B: SecretBackend> ConnectionBroker<B> {
                 let workspace = std::env::current_dir().context("could not resolve workspace")?;
                 crate::codex_subscription::check_chatgpt_profile(profile.as_deref(), &workspace)
             }
+            ConnectionSecretRef::Delegated { provider, .. }
+                if matches!(provider.as_str(), "claude-code" | "github-copilot") =>
+            {
+                connection
+                    .owner
+                    .as_ref()
+                    .context("subscription connection has no Deixic owner")?
+                    .require_current_user()?;
+                if provider == "claude-code" {
+                    let mut command = std::process::Command::new("claude");
+                    command.args(["auth", "status", "--json"]);
+                    for key in [
+                        "ANTHROPIC_API_KEY",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_BASE_URL",
+                        "CLAUDE_CODE_USE_BEDROCK",
+                        "CLAUDE_CODE_USE_VERTEX",
+                        "CLAUDE_CODE_USE_FOUNDRY",
+                    ] {
+                        command.env_remove(key);
+                    }
+                    let (exit_status, stdout) =
+                        run_subscription_probe(&mut command, "Claude Code")?;
+                    let status: serde_json::Value = serde_json::from_slice(&stdout)
+                        .context("Claude Code returned an invalid auth status")?;
+                    if !exit_status.success()
+                        || status.get("loggedIn").and_then(serde_json::Value::as_bool) != Some(true)
+                        || status.get("authMethod").and_then(serde_json::Value::as_str)
+                            != Some("claude.ai")
+                        || status
+                            .get("apiProvider")
+                            .and_then(serde_json::Value::as_str)
+                            != Some("firstParty")
+                    {
+                        bail!("Claude Code requires a first-party claude.ai subscription login");
+                    }
+                } else {
+                    let (exit_status, _) = run_subscription_probe(
+                        std::process::Command::new("copilot").arg("--version"),
+                        "Copilot",
+                    )?;
+                    if !exit_status.success() {
+                        bail!("Copilot CLI is not available");
+                    }
+                }
+                Ok(())
+            }
             _ if connection.mcp_binding.is_some() => {
                 crate::orb_connection::validate_managed_mcp_connection(connection)
             }
@@ -967,8 +1078,9 @@ pub fn keyring_secret_ref(connection_id: &str, generation: u64) -> ConnectionSec
 /// An explicit provider profile keeps precedence; otherwise an explicitly
 /// selected or default managed connection may supply the profile name.
 pub fn selected_delegated_profile_from_env(provider_id: &str) -> Result<Option<String>> {
-    let explicit_profile = std::env::var("MAESTRO_CODEX_PROFILE")
-        .ok()
+    let explicit_profile = (provider_id == "openai-codex")
+        .then(|| std::env::var("MAESTRO_CODEX_PROFILE").ok())
+        .flatten()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let explicit_connection = std::env::var("MAESTRO_CONNECTION")
@@ -986,6 +1098,43 @@ pub fn selected_delegated_profile_from_env(provider_id: &str) -> Result<Option<S
         explicit_connection.as_deref(),
         &ConnectionStore::default_path()?,
     )
+}
+
+/// Subscription CLIs keep the vendor token, while this owned local record
+/// binds the capability to the current Deixic Identity user.
+pub fn require_owned_subscription_connection(
+    provider_id: &str,
+    identity: &crate::credential_mode::PlatformSession,
+) -> Result<()> {
+    if !matches!(provider_id, "claude-code" | "github-copilot") {
+        bail!("unsupported subscription connection provider");
+    }
+    let path = ConnectionStore::default_path()?;
+    let store = ConnectionStore::load(&path)?;
+    let explicit = std::env::var("MAESTRO_CONNECTION")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let connection = store.selected(provider_id, explicit.as_deref())?.context(
+        "Subscription is not linked to this Deixic user; connect it during managed onboarding",
+    )?;
+    let expected_type = if provider_id == "claude-code" {
+        "claude-subscription"
+    } else {
+        "copilot-subscription"
+    };
+    if connection.type_id != expected_type {
+        bail!("Selected subscription connection has the wrong type");
+    }
+    let owner = connection
+        .owner
+        .as_ref()
+        .context("Subscription connection has no Deixic owner")?;
+    owner.require_session(identity)?;
+    if !matches!(&connection.secret_ref, ConnectionSecretRef::Delegated { provider, .. } if provider == provider_id)
+    {
+        bail!("Subscription connection has an invalid delegated provider");
+    }
+    Ok(())
 }
 
 fn selected_delegated_profile_from_store(
@@ -1496,6 +1645,35 @@ mod tests {
         assert!(!owner.matches("org_a", Some("user_b")));
         assert!(!owner.matches("org_b", Some("user_a")));
         assert!(!owner.matches("org_a", None));
+    }
+
+    #[test]
+    fn cli_subscription_metadata_is_owned_and_contains_no_vendor_token() {
+        for (provider, type_id) in [
+            ("claude-code", "claude-subscription"),
+            ("github-copilot", "copilot-subscription"),
+        ] {
+            let mut linked = connection();
+            linked.type_id = type_id.into();
+            linked.provider_id = provider.into();
+            linked.auth_kind = ConnectionAuthKind::Subscription;
+            linked.env_var = None;
+            linked.secret_ref = ConnectionSecretRef::Delegated {
+                provider: provider.into(),
+                profile: None,
+            };
+            linked.owner = Some(ConnectionOwner {
+                organization_id: "org-one".into(),
+                user_id: "user-one".into(),
+            });
+            linked.capabilities = vec!["models.invoke".into()];
+            linked.validate().unwrap();
+            let encoded = serde_json::to_string(&linked).unwrap();
+            assert!(encoded.contains("user-one"));
+            assert!(!encoded.contains("token"));
+            linked.owner = None;
+            assert!(linked.validate().is_err());
+        }
     }
 
     #[test]

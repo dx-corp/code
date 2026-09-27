@@ -87,6 +87,7 @@ mod google;
 mod kimi;
 pub mod managed_authorization;
 mod model_capabilities;
+mod subscription_cli;
 pub use model_capabilities::{
     ANTHROPIC_PROMPT_CACHING_SOURCE, ASTRA_CONTEXT_TOKENS, ASTRA_OUTPUT_TOKENS,
     AnthropicRequestCapabilities, AnthropicThinkingMode, CacheBehavior, CacheBoundaryKind,

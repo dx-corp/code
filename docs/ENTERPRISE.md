@@ -35,10 +35,29 @@ never silently redirected to it.
 maestro setup
 ```
 
-The command offers two choices:
+The command offers two ways to start:
 
 1. Sign in to EvalOps (`maestro evalops login` or `maestro setup --platform`)
 2. Use your own API key (`maestro connections add` or `maestro setup --byok`)
+
+After managed Identity sign-in, interactive setup offers three optional personal
+connections. **ChatGPT** uses Codex app-server sign-in and links an
+`openai-codex` connection; `/codex` chooses its live default model. **Claude**
+uses `claude auth login --claudeai` and the first-party Claude Code CLI;
+`/claude` chooses `claude-code/sonnet`. **GitHub Copilot** uses `copilot login`
+and Copilot CLI's ACP server; `/copilot` chooses `github-copilot/auto`.
+All three local connections are bound to the verified Deixic user. Subscription
+tokens remain with the vendor CLI. Noninteractive setup prints the sign-in
+commands for later use. Each employee signs in on their own device.
+
+Claude and Copilot turns request Maestro tools as data. Their native tools are
+disabled; Maestro applies its normal tool policy, approval, and execution.
+Run `claude` and `/status` to confirm the active Claude account. A saved local
+connection associates the capability with a Deixic user, but it does not prove
+the external vendor account has not changed since onboarding.
+
+See Claude Code's [authentication](https://code.claude.com/docs/en/authentication)
+and GitHub's [Copilot ACP server](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server).
 
 `maestro doctor` reports `credential_mode`. The process is not ready until that
 check passes.

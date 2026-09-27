@@ -126,7 +126,12 @@ pub fn run_connections(args: &[String]) -> Result<i32> {
             if current_platform_session().is_some()
                 && !matches!(
                     parsed.positionals.first().map(String::as_str),
-                    Some("codex-subscription" | "openai-codex")
+                    Some(
+                        "codex-subscription"
+                            | "openai-codex"
+                            | "claude-subscription"
+                            | "copilot-subscription"
+                    )
                 )
             {
                 return run_add_platform(&parsed);
@@ -134,7 +139,7 @@ pub fn run_connections(args: &[String]) -> Result<i32> {
             run_add(&parsed)
         }
         "status" | "check" => {
-            if !local_codex_connection(&parsed)? {
+            if !local_subscription_connection(&parsed)? {
                 if let Some(session) = current_platform_session() {
                     return run_status_platform(&session, &parsed);
                 }
@@ -142,14 +147,14 @@ pub fn run_connections(args: &[String]) -> Result<i32> {
             run_status(&parsed)
         }
         "use" | "default" => {
-            if !local_codex_connection(&parsed)? && current_platform_session().is_some() {
+            if !local_subscription_connection(&parsed)? && current_platform_session().is_some() {
                 return run_use_platform(&parsed);
             }
             run_use(&parsed)
         }
         "rotate" => run_rotate(&parsed),
         "remove" | "rm" | "revoke" => {
-            if !local_codex_connection(&parsed)? {
+            if !local_subscription_connection(&parsed)? {
                 if let Some(session) = current_platform_session() {
                     return run_remove_platform(&session, &parsed);
                 }
@@ -176,11 +181,11 @@ fn has_explicit_add_options(args: &Args) -> bool {
         || args.secret_stdin
 }
 
-fn local_codex_connection(args: &Args) -> Result<bool> {
-    local_codex_connection_at(args, &ConnectionStore::default_path()?)
+fn local_subscription_connection(args: &Args) -> Result<bool> {
+    local_subscription_connection_at(args, &ConnectionStore::default_path()?)
 }
 
-fn local_codex_connection_at(args: &Args, path: &Path) -> Result<bool> {
+fn local_subscription_connection_at(args: &Args, path: &Path) -> Result<bool> {
     let Some(id) = args.positionals.first() else {
         return Ok(false);
     };
@@ -189,9 +194,12 @@ fn local_codex_connection_at(args: &Args, path: &Path) -> Result<bool> {
     Ok(ConnectionStore::load(path)
         .ok()
         .and_then(|store| {
-            store
-                .get(id)
-                .map(|connection| connection.type_id == "codex-subscription")
+            store.get(id).map(|connection| {
+                matches!(
+                    connection.type_id.as_str(),
+                    "codex-subscription" | "claude-subscription" | "copilot-subscription"
+                )
+            })
         })
         .unwrap_or(false))
 }
@@ -283,7 +291,10 @@ fn run_add(args: &Args) -> Result<i32> {
     } else {
         None
     };
-    let owner = if definition.id == "codex-subscription" && current_platform_session().is_some() {
+    let owner = if matches!(
+        definition.id.as_str(),
+        "codex-subscription" | "claude-subscription" | "copilot-subscription"
+    ) {
         let session = crate::credential_mode::verified_current_identity_session()?;
         Some(ConnectionOwner {
             organization_id: session.organization_id,
@@ -346,6 +357,149 @@ fn run_add(args: &Args) -> Result<i32> {
     Ok(0)
 }
 
+/// Keep company onboarding on the same verified user and provider-owned
+/// profile as the Codex runtime. An existing owned connection is reusable.
+pub(crate) fn ensure_codex_subscription_connection(profile: &str) -> Result<()> {
+    let session = crate::credential_mode::verified_current_identity_session()?;
+    let owner = ConnectionOwner {
+        organization_id: session.organization_id,
+        user_id: session
+            .user_id
+            .context("verified Identity user is missing")?,
+    };
+    let path = ConnectionStore::default_path()?;
+    let store = ConnectionStore::load(&path)?;
+    if let Some(connection) = owned_codex_connection(&store, &owner, profile) {
+        let id = connection.id.clone();
+        with_locked_store(&path, |store| {
+            let current = store
+                .get(&id)
+                .context("Codex connection changed during setup")?;
+            if current.owner.as_ref() != Some(&owner) || current.state != ConnectionState::Active {
+                bail!("Codex connection changed during setup");
+            }
+            if !current.is_default {
+                store.set_default(&id)?;
+                store.save(&path)?;
+            }
+            Ok(())
+        })?;
+        println!("Using your existing Codex subscription connection: {id}");
+        return Ok(());
+    }
+    let id = (1..=100)
+        .map(|index| {
+            if index == 1 {
+                "codex-work".to_owned()
+            } else {
+                format!("codex-work-{index}")
+            }
+        })
+        .find(|candidate| store.get(candidate).is_none())
+        .context("No available local Codex connection ID")?;
+    run_add(&Args {
+        command: Some("add".to_owned()),
+        positionals: vec!["codex-subscription".to_owned(), id.clone()],
+        delegated_profile: Some(profile.to_owned()),
+        default: true,
+        ..Args::default()
+    })?;
+    let saved = ConnectionStore::load(&path)?;
+    let connection = saved.get(&id).context("Codex connection was not saved")?;
+    if connection.owner.as_ref() != Some(&owner) {
+        bail!("Codex connection is not bound to the verified Deixic user");
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_cli_subscription_connection(provider: &str) -> Result<()> {
+    if std::env::var("MAESTRO_CONNECTION")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        bail!("Unset MAESTRO_CONNECTION before linking a personal subscription");
+    }
+    let (type_id, base_id) = match provider {
+        "claude-code" => ("claude-subscription", "claude-work"),
+        "github-copilot" => ("copilot-subscription", "copilot-work"),
+        _ => bail!("unsupported subscription provider"),
+    };
+    let session = crate::credential_mode::verified_current_identity_session()?;
+    let owner = ConnectionOwner {
+        organization_id: session.organization_id,
+        user_id: session
+            .user_id
+            .context("verified Identity user is missing")?,
+    };
+    let path = ConnectionStore::default_path()?;
+    let store = ConnectionStore::load(&path)?;
+    if let Some(existing) = store.connections.iter().find(|connection| {
+        connection.provider_id == provider
+            && connection.type_id == type_id
+            && connection.state == ConnectionState::Active
+            && connection.owner.as_ref() == Some(&owner)
+    }) {
+        let id = existing.id.clone();
+        with_locked_store(&path, |store| {
+            let current = store
+                .get(&id)
+                .context("Subscription connection changed during setup")?;
+            if current.owner.as_ref() != Some(&owner) || current.state != ConnectionState::Active {
+                bail!("Subscription connection changed during setup");
+            }
+            if !current.is_default {
+                store.set_default(&id)?;
+                store.save(&path)?;
+            }
+            Ok(())
+        })?;
+        println!("Using your existing {provider} subscription connection: {id}");
+        return Ok(());
+    }
+    let id = (1..=100)
+        .map(|index| {
+            if index == 1 {
+                base_id.to_owned()
+            } else {
+                format!("{base_id}-{index}")
+            }
+        })
+        .find(|candidate| store.get(candidate).is_none())
+        .context("No available local subscription connection ID")?;
+    run_add(&Args {
+        command: Some("add".to_owned()),
+        positionals: vec![type_id.to_owned(), id.clone()],
+        default: true,
+        ..Args::default()
+    })?;
+    let saved = ConnectionStore::load(&path)?;
+    let connection = saved
+        .get(&id)
+        .context("Subscription connection was not saved")?;
+    if connection.owner.as_ref() != Some(&owner) {
+        bail!("Subscription connection is not bound to the verified Deixic user");
+    }
+    Ok(())
+}
+
+fn owned_codex_connection<'a>(
+    store: &'a ConnectionStore,
+    owner: &ConnectionOwner,
+    profile: &str,
+) -> Option<&'a ServiceConnection> {
+    store
+        .connections
+        .iter()
+        .filter(|connection| {
+            connection.provider_id == "openai-codex"
+                && connection.type_id == "codex-subscription"
+                && connection.state == ConnectionState::Active
+                && connection.owner.as_ref() == Some(owner)
+                && matches!(&connection.secret_ref, ConnectionSecretRef::Delegated { profile: saved, .. } if saved.as_deref().unwrap_or("default") == profile)
+        })
+        .max_by_key(|connection| (connection.is_default, connection.updated_at_ms))
+}
+
 fn should_be_default(store: &ConnectionStore, provider_id: &str, requested: bool) -> bool {
     requested
         || !store.connections.iter().any(|connection| {
@@ -374,6 +528,10 @@ fn run_status(args: &Args) -> Result<i32> {
         "unavailable"
     } else if connection.mcp_binding.is_some() {
         "managed_unverified"
+    } else if connection.provider_id == "github-copilot" {
+        // The CLI has no read-only account-status command. A model turn is the
+        // first complete proof that its stored Copilot login can serve requests.
+        "linked_unverified"
     } else if matches!(connection.secret_ref, ConnectionSecretRef::Delegated { .. }) {
         "ready_delegated"
     } else {
@@ -557,13 +715,21 @@ fn source_for_add(
                 )
             );
         }
-        if definition.provider_id != "openai-codex" {
+        if !matches!(
+            definition.provider_id.as_str(),
+            "openai-codex" | "claude-code" | "github-copilot"
+        ) {
             bail!(
                 "{}",
                 crate::localization::cli_locale().format(
                     "no verified delegated authentication transport is available for provider {0}",
                     std::slice::from_ref(&(definition.provider_id))
                 )
+            );
+        }
+        if definition.provider_id != "openai-codex" && args.delegated_profile.is_some() {
+            bail!(
+                "Claude and Copilot CLI subscriptions use their signed-in default account, not a Maestro profile"
             );
         }
         return Ok((
@@ -875,6 +1041,30 @@ fn builtin_connection_types() -> Vec<ConnectionTypeDefinition> {
         documentation_url: None,
         mcp_binding: None,
     });
+    for (id, name, provider) in [
+        (
+            "claude-subscription",
+            "Claude Code subscription",
+            "claude-code",
+        ),
+        (
+            "copilot-subscription",
+            "GitHub Copilot subscription",
+            "github-copilot",
+        ),
+    ] {
+        values.push(ConnectionTypeDefinition {
+            id: id.into(),
+            display_name: name.into(),
+            provider_id: provider.into(),
+            auth_kind: ConnectionAuthKind::Subscription,
+            placement: ConnectionPlacement::Local,
+            env_var: None,
+            capabilities: vec!["models.invoke".into()],
+            documentation_url: None,
+            mcp_binding: None,
+        });
+    }
     values.sort_by(|left, right| left.id.cmp(&right.id));
     values
 }
@@ -1973,6 +2163,44 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    #[test]
+    fn company_setup_reuses_only_an_active_connection_owned_by_this_user() {
+        let owner = ConnectionOwner {
+            organization_id: "org-one".into(),
+            user_id: "user-one".into(),
+        };
+        let mut own = test_connection("codex-own");
+        own.type_id = "codex-subscription".into();
+        own.provider_id = "openai-codex".into();
+        own.secret_ref = ConnectionSecretRef::Delegated {
+            provider: "openai-codex".into(),
+            profile: Some("default".into()),
+        };
+        own.owner = Some(owner.clone());
+        let mut other = own.clone();
+        other.id = "codex-other".into();
+        other.owner = Some(ConnectionOwner {
+            organization_id: "org-one".into(),
+            user_id: "user-two".into(),
+        });
+        other.is_default = true;
+        let store = ConnectionStore {
+            schema_version: 1,
+            connections: vec![other, own.clone()],
+        };
+        assert_eq!(
+            owned_codex_connection(&store, &owner, "default").map(|c| c.id.as_str()),
+            Some("codex-own")
+        );
+        assert!(owned_codex_connection(&store, &owner, "other").is_none());
+        own.state = ConnectionState::Revoked;
+        let revoked = ConnectionStore {
+            schema_version: 1,
+            connections: vec![own],
+        };
+        assert!(owned_codex_connection(&revoked, &owner, "default").is_none());
+    }
+
     struct DeleteFails;
 
     impl SecretBackend for DeleteFails {
@@ -2033,14 +2261,14 @@ mod tests {
             positionals: vec!["codex-personal".into()],
             ..Default::default()
         };
-        assert!(local_codex_connection_at(&args, &path).unwrap());
+        assert!(local_subscription_connection_at(&args, &path).unwrap());
         let other = Args {
             positionals: vec!["unknown".into()],
             ..Default::default()
         };
-        assert!(!local_codex_connection_at(&other, &path).unwrap());
+        assert!(!local_subscription_connection_at(&other, &path).unwrap());
         std::fs::write(&path, "not-json").unwrap();
-        assert!(!local_codex_connection_at(&args, &path).unwrap());
+        assert!(!local_subscription_connection_at(&args, &path).unwrap());
     }
 
     #[test]
@@ -2154,6 +2382,8 @@ mod tests {
         assert!(types.iter().any(|item| item.id == "openai-api-key"));
         assert!(types.iter().any(|item| item.id == "anthropic-api-key"));
         assert!(types.iter().any(|item| item.id == "codex-subscription"));
+        assert!(types.iter().any(|item| item.id == "claude-subscription"));
+        assert!(types.iter().any(|item| item.id == "copilot-subscription"));
         assert!(types.iter().all(|item| item.provider_id != "orb"));
         assert!(
             types

@@ -30,6 +30,8 @@ const CODEX_QUICK_SWITCH_ROW: &str = "codex-subscription-quick-switch";
 /// Current coding models promoted in discovery, independently of saved runtime
 /// defaults. IDs are checked against the bundled models.dev snapshot in tests.
 const PREFERRED_MODELS: &[(&str, &str)] = &[
+    ("claude-code", "sonnet"),
+    ("github-copilot", "auto"),
     ("openai", "gpt-6-astra"),
     ("anthropic", "claude-fable-5-1"),
     ("anthropic", "claude-opus-5-5"),
@@ -195,6 +197,13 @@ fn uncatalogued_model(route: &str) -> Option<ModelInfo> {
             }
             crate::ai::ProviderProtocol::Codex => {
                 crate::model_catalog::ModelProtocol::CodexAppServer
+            }
+            crate::ai::ProviderProtocol::SubscriptionCli => {
+                if descriptor.id == "claude-code" {
+                    crate::model_catalog::ModelProtocol::Anthropic
+                } else {
+                    crate::model_catalog::ModelProtocol::OpenAiChat
+                }
             }
             // The shared catalog protocol enum has no separate variants for
             // managed and compatible provider families. Their capabilities

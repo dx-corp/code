@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
+
 use crate::ai::{Message, MessageContent, RequestConfig, Role, StreamEvent, UnifiedClient};
 use crate::doctor::CheckStatus;
 use crate::telemetry::OnboardingCheckId;
@@ -288,7 +290,18 @@ async fn model_probe(model: &str) -> anyhow::Result<()> {
         return probe_client(&client, model, PROBE_TIMEOUT).await;
     }
     let source_env: HashMap<String, String> = std::env::vars().collect();
-    let mode = crate::credential_mode::require_ready(model)?;
+    let (mode, identity) = crate::credential_mode::require_ready_with_identity(model)?;
+    if let Ok(descriptor) = crate::ai::ProviderRegistry::resolve_descriptor(model) {
+        if matches!(descriptor.id, "claude-code" | "github-copilot") {
+            let verified = identity
+                .as_ref()
+                .context("subscription route requires a verified Deixic user")?;
+            crate::service_connections::require_owned_subscription_connection(
+                descriptor.id,
+                verified,
+            )?;
+        }
+    }
     let (route, mut env) = match mode {
         crate::credential_mode::DetectedMode::Platform(session) => (
             session.managed_model_route(model),
