@@ -25,6 +25,7 @@ const FOCUSED_SLICE_LIMIT: usize = 8;
 /// the bundled/runtime catalog. Keep that row distinguishable from sourced
 /// catalog metadata so the picker can show the active choice safely.
 const ACTIVE_ROUTE_SOURCE: &str = "active-route";
+const CODEX_QUICK_SWITCH_ROW: &str = "codex-subscription-quick-switch";
 
 /// Current coding models promoted in discovery, independently of saved runtime
 /// defaults. IDs are checked against the bundled models.dev snapshot in tests.
@@ -574,7 +575,14 @@ impl ModelSelector {
     pub fn selected_show_all(&self) -> bool {
         self.picker
             .selected()
-            .is_some_and(|row| row.model_index.is_none())
+            .is_some_and(|row| row.id == "show-all")
+    }
+
+    #[must_use]
+    pub fn selected_codex_quick_switch(&self) -> bool {
+        self.picker
+            .selected()
+            .is_some_and(|row| row.id == CODEX_QUICK_SWITCH_ROW)
     }
 
     /// Toggle between the focused slice and the full catalog.
@@ -677,6 +685,18 @@ impl ModelSelector {
                 }
             })
             .collect();
+        if self.reload_live_catalog
+            && (query.is_empty() || "chatgpt subscription codex".contains(&query))
+        {
+            rows.insert(
+                0,
+                ModelRow {
+                    id: CODEX_QUICK_SWITCH_ROW.into(),
+                    model_index: None,
+                    route: None,
+                },
+            );
+        }
         if self.show_all_affordance {
             rows.push(ModelRow {
                 id: "show-all".into(),
@@ -864,6 +884,22 @@ impl ModelSelector {
                 ..PickerOptions::default()
             },
             |row| {
+                if row.id == CODEX_QUICK_SWITCH_ROW {
+                    return ListItem::new(vec![
+                        Line::from(Span::styled(
+                            maestro_ui::localization::tr("Use ChatGPT subscription"),
+                            Style::default()
+                                .fg(theme.focus)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(Span::styled(
+                            maestro_ui::localization::tr(
+                                "Select the signed-in Codex account's live default model",
+                            ),
+                            theme.muted_style(),
+                        )),
+                    ]);
+                }
                 let Some(index) = row.model_index else {
                     return ListItem::new(Line::from(Span::styled(
                         maestro_ui::localization::format(
@@ -1185,6 +1221,30 @@ mod tests {
         assert!(text.contains("No matching models"));
         assert!(text.contains("Ctrl+D default"));
         assert_eq!(selector.picker.query(), before);
+    }
+
+    #[test]
+    fn production_picker_offers_chatgpt_subscription_action() {
+        let mut selector = ModelSelector::new();
+        selector.show();
+        selector.picker.select_id(CODEX_QUICK_SWITCH_ROW);
+        assert!(selector.selected_codex_quick_switch());
+        assert!(!selector.selected_show_all());
+        assert_eq!(selector.selected_model_id(), None);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| selector.render(frame, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Use ChatGPT subscription"));
     }
 
     #[test]

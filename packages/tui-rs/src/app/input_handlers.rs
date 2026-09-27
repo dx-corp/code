@@ -1475,6 +1475,12 @@ impl App {
                 self.active_modal = ActiveModal::None;
             }
             KeyCode::Enter => {
+                if self.model_selector.selected_codex_quick_switch() {
+                    self.model_selector.hide();
+                    self.active_modal = ActiveModal::None;
+                    self.switch_to_codex_subscription(false).await;
+                    return Ok(());
+                }
                 if let Some(model_id) = self.model_selector.confirm() {
                     self.switch_model(&model_id, false);
                 }
@@ -1485,6 +1491,12 @@ impl App {
                 }
             }
             KeyCode::Char('d') if ctrl => {
+                if self.model_selector.selected_codex_quick_switch() {
+                    self.model_selector.hide();
+                    self.active_modal = ActiveModal::None;
+                    self.switch_to_codex_subscription(true).await;
+                    return Ok(());
+                }
                 // Ctrl+D: persist the highlighted model as the user default
                 // and switch to it.
                 let model_id = self.model_selector.selected_model_id();
