@@ -137,7 +137,8 @@ pub fn resolve_codex_identity_from(
     let raw = match fs::read_to_string(profile_file) {
         Ok(raw) => raw,
         Err(error)
-            if requested_profile.is_none() && error.kind() == std::io::ErrorKind::NotFound =>
+            if requested_profile.is_none_or(|profile| profile == "default")
+                && error.kind() == std::io::ErrorKind::NotFound =>
         {
             return Ok(CodexIdentitySelection {
                 profile_name: "default".to_owned(),
@@ -198,6 +199,16 @@ pub fn resolve_codex_identity_from(
     };
 
     if let Some(requested_profile) = requested_profile {
+        if requested_profile == "default" {
+            if let Some(profile) = profiles.profiles.get("default") {
+                return select_profile("default", profile);
+            }
+            return Ok(CodexIdentitySelection {
+                profile_name: "default".to_owned(),
+                codex_home: default_codex_home.to_path_buf(),
+                workspace_boundary: None,
+            });
+        }
         let profile = profiles.profiles.get(requested_profile).with_context(|| {
             format!("Codex auth profile {requested_profile:?} is not configured")
         })?;
@@ -413,6 +424,26 @@ mod tests {
         )
         .expect_err("workspace mismatch must fail closed");
         assert!(error.to_string().contains("workspace"));
+    }
+
+    #[test]
+    fn explicit_default_profile_does_not_follow_workspace_profile_mapping() {
+        let root = tempfile::tempdir().expect("root");
+        let workspace = root.path().join("workspace");
+        let named_home = root.path().join("codex-work");
+        let default_home = root.path().join("codex-default");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let profile_file = write_profile_file(root.path(), &workspace, &named_home);
+
+        let inferred = resolve_codex_identity_from(&profile_file, None, &workspace, &default_home)
+            .expect("workspace profile");
+        assert_eq!(inferred.profile_name, "work");
+
+        let explicit =
+            resolve_codex_identity_from(&profile_file, Some("default"), &workspace, &default_home)
+                .expect("explicit default profile");
+        assert_eq!(explicit.profile_name, "default");
+        assert_eq!(explicit.codex_home, default_home);
     }
 
     #[test]
