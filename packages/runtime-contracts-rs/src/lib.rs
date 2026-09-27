@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod boundary;
+mod builtin_work_type_names;
 pub mod cache_topology;
 pub mod contracts;
 pub mod default_models;
@@ -27,6 +28,9 @@ pub mod turn_outcome;
 
 pub use boundary::{
     HostedRuntimeAuthMode, HostedRuntimeBoundary, HostedRuntimeBoundaryInput, RuntimeBoundaryError,
+};
+pub use builtin_work_type_names::{
+    BuiltinWorkTypeNamesError, BuiltinWorkTypeNamesProposal, BuiltinWorkTypeNamesResult,
 };
 pub use contracts::{
     DenialReason, ExecutionPhase, ExecutionSource, ExecutionStatus,
