@@ -4705,9 +4705,29 @@ async fn handle_message_inner(
 }
 
 fn response_message_digest(message: &ToAgentMessage) -> String {
+    // Runner Host renews gateway transport credentials on every delivery attempt.
+    // The signed invocation authorization and request ID define the response;
+    // a refreshed bearer must not turn its idempotent retry into a conflict.
+    // Keep every authorization byte in the digest, and leave other responses
+    // byte-sensitive. This changes replay identity, not admission or execution.
+    let identity = match message {
+        ToAgentMessage::ManagedAuthorizationResult {
+            request_id,
+            authorization,
+            ..
+        } => Some(ToAgentMessage::ManagedAuthorizationResult {
+            request_id: request_id.clone(),
+            authorization: authorization.clone(),
+            gateway_credential: None,
+        }),
+        _ => None,
+    };
     format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(message).expect("headless messages are serializable"))
+        Sha256::digest(
+            serde_json::to_vec(identity.as_ref().unwrap_or(message))
+                .expect("headless messages are serializable")
+        )
     )
 }
 
