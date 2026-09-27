@@ -454,9 +454,13 @@ Background:
 }
 ```
 
-> Note: ChatGPT Codex subscription access is for personal subscription use.
-> Production and organization workflows should prefer OpenAI Platform or the
-> EvalOps managed gateway.
+ChatGPT Business and Enterprise seats can include Codex access. Each employee
+must sign in to Codex with their own entitled ChatGPT account; Maestro uses
+that employee's local Codex app-server session. `codex ready` proves that this
+session can use the selected model, not that the account belongs to a particular
+Business workspace or that Deixic Identity has verified an OpenAI account link.
+Hosted, unattended work needs a separately approved credential path; a local
+employee subscription connection is not a shared organization credential.
 
 For EvalOps managed gateway models, run `maestro evalops login` locally. The
 login flow uses the Identity Google callback, stores the returned organization

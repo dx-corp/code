@@ -269,12 +269,20 @@ fn run_add(args: &Args) -> Result<i32> {
     )?;
     let definitions = connection_types(args.workspace.as_deref())?;
     let definition = resolve_connection_type(&definitions, type_id)?;
-    if definition.id == "codex-subscription" {
-        maestro_local_host::codex_subscription::check_chatgpt_profile(
+    let codex_profile = if definition.id == "codex-subscription" {
+        let workspace = std::env::current_dir()?;
+        let identity = maestro_local_host::codex_identity::resolve_codex_identity(
             args.delegated_profile.as_deref(),
-            &std::env::current_dir()?,
+            &workspace,
         )?;
-    }
+        maestro_local_host::codex_subscription::check_chatgpt_profile(
+            Some(&identity.profile_name),
+            &workspace,
+        )?;
+        Some(identity.profile_name)
+    } else {
+        None
+    };
     let owner = if definition.id == "codex-subscription" && current_platform_session().is_some() {
         let session = crate::credential_mode::verified_current_identity_session()?;
         Some(ConnectionOwner {
@@ -296,7 +304,8 @@ fn run_add(args: &Args) -> Result<i32> {
                     .format("connection already exists: {0}", &[(id).to_string()])
             );
         }
-        let (secret_ref, stored_key) = source_for_add(args, &definition, id, &backend)?;
+        let (secret_ref, stored_key) =
+            source_for_add(args, &definition, id, &backend, codex_profile.as_deref())?;
         let timestamp = now_ms();
         let provider_id = definition.provider_id.clone();
         let is_default = if args.from_one_password.is_some() {
@@ -522,6 +531,7 @@ fn source_for_add(
     definition: &ConnectionTypeDefinition,
     id: &str,
     backend: &impl SecretBackend,
+    codex_profile: Option<&str>,
 ) -> Result<(ConnectionSecretRef, Option<(String, String)>)> {
     if definition.placement == ConnectionPlacement::Platform {
         bail!("{}", crate::localization::cli_locale().format("platform-only connection types must be configured by the Platform credential broker", &[]));
@@ -559,7 +569,9 @@ fn source_for_add(
         return Ok((
             ConnectionSecretRef::Delegated {
                 provider: definition.provider_id.clone(),
-                profile: args.delegated_profile.clone(),
+                profile: codex_profile
+                    .map(str::to_owned)
+                    .or_else(|| args.delegated_profile.clone()),
             },
             None,
         ));
@@ -2152,6 +2164,30 @@ mod tests {
     }
 
     #[test]
+    fn codex_connection_stores_resolved_profile_instead_of_workspace_default() {
+        let definition = builtin_connection_types()
+            .into_iter()
+            .find(|item| item.id == "codex-subscription")
+            .unwrap();
+        let (secret_ref, stored_key) = source_for_add(
+            &Args::default(),
+            &definition,
+            "codex-work",
+            &KeyringSecretBackend,
+            Some("company"),
+        )
+        .unwrap();
+        assert_eq!(stored_key, None);
+        assert_eq!(
+            secret_ref,
+            ConnectionSecretRef::Delegated {
+                provider: "openai-codex".into(),
+                profile: Some("company".into()),
+            }
+        );
+    }
+
+    #[test]
     fn local_cli_rejects_platform_only_connection_types() {
         let definition = ConnectionTypeDefinition {
             id: "platform-api-key".into(),
@@ -2169,6 +2205,7 @@ mod tests {
             &definition,
             "platform-only",
             &KeyringSecretBackend,
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("Platform credential broker"));
@@ -2192,6 +2229,7 @@ mod tests {
             &definition,
             "vendor-work",
             &KeyringSecretBackend,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -2212,7 +2250,8 @@ mod tests {
             ..Args::default()
         };
 
-        let error = source_for_add(&args, &definition, "work", &KeyringSecretBackend).unwrap_err();
+        let error =
+            source_for_add(&args, &definition, "work", &KeyringSecretBackend, None).unwrap_err();
         assert!(
             error
                 .to_string()
