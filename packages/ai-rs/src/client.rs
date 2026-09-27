@@ -263,6 +263,7 @@ pub const MANAGED_GATEWAY_STREAM_MAX_RETRIES: u32 = 2;
 pub struct CancellableStream {
     receiver: Option<mpsc::UnboundedReceiver<StreamEvent>>,
     producer: Option<tokio::task::JoinHandle<()>>,
+    retry_after: Option<std::time::Duration>,
 }
 
 impl CancellableStream {
@@ -270,6 +271,7 @@ impl CancellableStream {
         Self {
             receiver: Some(receiver),
             producer: None,
+            retry_after: None,
         }
     }
 
@@ -280,7 +282,13 @@ impl CancellableStream {
         Self {
             receiver: Some(receiver),
             producer: Some(producer),
+            retry_after: None,
         }
+    }
+
+    pub(crate) fn with_retry_after(mut self, delay: std::time::Duration) -> Self {
+        self.retry_after = Some(delay);
+        self
     }
 
     /// Receive the next event from the provider.
@@ -1015,6 +1023,8 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
     let mut begin_attempt = Some(begin_attempt);
     let stream_started = Instant::now();
     let mut events_forwarded = 0u64;
+    let mut cooldown_extra_attempt_used = false;
+    let mut pending_retry_after = None;
     loop {
         let mut attempt_rx = if let Some(first) = pending_attempt.take() {
             first
@@ -1023,9 +1033,10 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                 attempt += 1;
                 if attempt > 1 {
                     // Fast 502s must not burn the entire recovery budget in a
-                    // single burst. Keep the existing attempt limit and owner;
-                    // never replay content or tools already sent downstream.
-                    let delay = std::time::Duration::from_secs(1u64 << (attempt - 2).min(3));
+                    // single burst. A typed provider cooldown can grant one
+                    // more attempt; never replay content or tools downstream.
+                    let delay = std::time::Duration::from_secs(1u64 << (attempt - 2).min(3))
+                        .max(pending_retry_after.take().unwrap_or_default());
                     tokio::select! {
                         biased;
                         () = tx.closed() => return,
@@ -1090,6 +1101,7 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
         };
         let attempt_started = Instant::now();
         let mut committed_content = false;
+        let mut gateway_request_id = String::new();
         loop {
             let received = tokio::select! {
                 () = tx.closed() => None,
@@ -1195,6 +1207,9 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                 }
             };
             events_forwarded = events_forwarded.saturating_add(1);
+            if let StreamEvent::ManagedGatewayReceipt(receipt) = &event {
+                gateway_request_id.clone_from(&receipt.request_id);
+            }
             committed_content |= stream_event_prevents_retry(&event);
             if let StreamEvent::Usage {
                 input_tokens,
@@ -1225,8 +1240,15 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     ..
                 }
             ) && !committed_content
-                && attempt < max_attempts
+                && (attempt < max_attempts
+                    || (attempt_rx.retry_after.is_some() && !cooldown_extra_attempt_used))
             {
+                if let Some(delay) = attempt_rx.retry_after {
+                    pending_retry_after = Some(delay);
+                    if attempt >= max_attempts {
+                        cooldown_extra_attempt_used = true;
+                    }
+                }
                 tracing::warn!(
                     target: "maestro.llm",
                     event = "llm_stream_retry",
@@ -1237,6 +1259,11 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     attempt_duration_ms = attempt_started.elapsed().as_millis() as u64,
                     duration_ms = stream_started.elapsed().as_millis() as u64,
                     events_forwarded,
+                    gateway_request_id = %gateway_request_id,
+                    retry_after_ms = attempt_rx.retry_after.map_or(0, |delay| delay.as_millis() as u64),
+                    next_attempt_delay_ms = std::time::Duration::from_secs(1u64 << (attempt - 1).min(3))
+                        .max(attempt_rx.retry_after.unwrap_or_default()).as_millis() as u64,
+                    cooldown_extra_attempt_used,
                 );
                 break;
             }
@@ -1262,6 +1289,7 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     attempt_duration_ms = attempt_started.elapsed().as_millis() as u64,
                     duration_ms = stream_started.elapsed().as_millis() as u64,
                     events_forwarded,
+                    gateway_request_id = %gateway_request_id,
                 );
             }
             let terminal = terminal_error || matches!(&event, StreamEvent::MessageStop { .. });
@@ -2922,3 +2950,7 @@ mod stream_idle_policy_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "client/managed_cooldown_tests.rs"]
+mod managed_cooldown_tests;
