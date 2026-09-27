@@ -158,6 +158,16 @@ pub(super) struct ReloadableServerIdentity {
     active: Arc<RwLock<Option<ActiveServerIdentity>>>,
 }
 
+pub(super) fn log_connection_exit(stage: &'static str, reason: &'static str) {
+    tracing::info!(
+        target: "maestro.hosted",
+        event = "hosted_connection_closed",
+        stage,
+        reason,
+        "Hosted TLS connection closed by its lifecycle fence"
+    );
+}
+
 struct ActiveServerIdentity {
     tls_config: Arc<rustls::ServerConfig>,
     expires_at: DateTime<Utc>,

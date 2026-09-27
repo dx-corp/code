@@ -1686,14 +1686,14 @@ mod tests {
         assert_eq!(
             &ids[..8],
             &[
+                "sonnet",
+                "auto",
                 "gpt-6-astra",
                 "claude-fable-5-1",
                 "claude-opus-5-5",
                 "claude-opus-5",
                 "gpt-5.6",
                 "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
             ]
         );
         assert_eq!(ids.iter().filter(|id| id.starts_with("local-")).count(), 10);
@@ -1701,7 +1701,7 @@ mod tests {
 
         selector.show();
         selector.toggle_show_all();
-        assert_eq!(selector.models[selector.filtered[0]].id, "gpt-6-astra");
+        assert_eq!(selector.models[selector.filtered[0]].id, "sonnet");
         selector.insert_str("gpt");
         assert_eq!(selector.models[selector.filtered[0]].id, "gpt-6-astra");
         assert_eq!(
@@ -1729,12 +1729,25 @@ mod tests {
     }
 
     #[test]
-    fn preferred_models_exist_in_the_bundled_catalog() {
+    fn preferred_models_have_sourced_catalog_or_subscription_metadata() {
         let bundled: serde_json::Value = serde_json::from_str(include_str!(
             "../../../local-host-rs/src/model_catalog_data.json"
         ))
         .unwrap();
+        let subscription_models = [("claude-code", "sonnet"), ("github-copilot", "auto")];
+        let available = crate::model_catalog::available_models();
         for &(provider, id) in PREFERRED_MODELS {
+            if subscription_models.contains(&(provider, id)) {
+                assert!(
+                    available.iter().any(|model| {
+                        model.provider == provider
+                            && model.id == id
+                            && model.verification.source == "first-party-subscription-cli"
+                    }),
+                    "preferred subscription route {provider}/{id} must have sourced runtime metadata"
+                );
+                continue;
+            }
             assert!(
                 bundled["models"].as_array().unwrap().iter().any(|model| {
                     model["provider"].as_str() == Some(provider) && model["id"].as_str() == Some(id)
