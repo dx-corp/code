@@ -51,6 +51,47 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.97] - 2026-09-27
+
+### Added
+
+- Bind records to selected provider sources (#10896). <!-- maestro-release-note:21e3e0ec1e48 -->
+- Unify subscription usage in /usage (#10864). <!-- maestro-release-note:2ff10c4c30d5 -->
+- Project Ocrolus book identity for source binding (#10849). <!-- maestro-release-note:8d7690303ea4 -->
+- Add Ocrolus book inventory with managed exchange (#10823). <!-- maestro-release-note:d7f853504d85 -->
+- Read recent Capture Form submissions across a workspace (#10863). <!-- maestro-release-note:61b342f3a34d -->
+- Stage governed Outlook follow-ups without send admission (#10880). <!-- maestro-release-note:f40f55b0a808 -->
+- Show typed Middesk source status on bound records (#10835). <!-- maestro-release-note:bc2358d9048e -->
+- Retain Outlook reply identity metadata (#10877). <!-- maestro-release-note:31e6e365e23a -->
+
+### Changed
+
+- Overlap source inventory with typed decision (#10894). <!-- maestro-release-note:5001247445df -->
+- Refresh Middesk catalog inventory assertions (#10889). <!-- maestro-release-note:a40cdad27550 -->
+- Clarify Platform Maestro and Identity boundaries (#10888). <!-- maestro-release-note:ed3b5ee3389e -->
+- Compose banking blueprints from domain modules (#10848). <!-- maestro-release-note:1b18e33fa60f -->
+- Distinguish bootstrap transport stages (#10862). <!-- maestro-release-note:7a2629be43cc -->
+- Validate subscription model provenance (#10875). <!-- maestro-release-note:ce87d47af071 -->
+- Account for Middesk catalog inventory (#10874). <!-- maestro-release-note:905e71a3144a -->
+- Match the per-row member lock in the app source assertions (#10857). <!-- maestro-release-note:2783c2448bcc -->
+- Drop the thread-header divider from OperatingChat.tsx (#10856). <!-- maestro-release-note:a08459352c01 -->
+
+### Fixed
+
+- Preserve automatic updates when a signed release rewrites its launcher.
+- Auto-update signed release installs (#10895). <!-- maestro-release-note:3eb44d108a52 -->
+- Retry tagged release after delayed CI (#10897). <!-- maestro-release-note:714666dbf448 -->
+- Refresh Outlook request-plan fixture (#10893). <!-- maestro-release-note:c8d28f561486 -->
+- Preserve managed authorization replay across credential renewal (#10892). <!-- maestro-release-note:4cd72f3e2483 -->
+- Keep exec tool results in native host (#10891). <!-- maestro-release-note:6a56e979d754 -->
+- Ignore workflow comments in Bazel cache policy scan (#10890). <!-- maestro-release-note:a25977a01e33 -->
+- Remove legacy governance comment tokens (#10884). <!-- maestro-release-note:b5de05e56e3e -->
+- Format lifecycle RPC test for Rust CI (#10873). <!-- maestro-release-note:6ed92592bf03 -->
+- Narrow stale public visibility (#10879). <!-- maestro-release-note:b76221b352c4 -->
+- Load phase-scoped model context (#10866). <!-- maestro-release-note:9482307faee6 -->
+- Retry acknowledged resident transport gaps promptly (#10832). <!-- maestro-release-note:48554f3ed843 -->
+- Close revoked SSE streams cleanly (#10860). <!-- maestro-release-note:4611c22703f2 -->
+
 ## [0.10.96] - 2026-09-23
 
 ### Added
