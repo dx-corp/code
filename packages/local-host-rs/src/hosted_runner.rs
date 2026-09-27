@@ -2600,16 +2600,35 @@ async fn serve_mtls(
                         () = connection_shutdown.cancelled() => return,
                         () = identity_changed.cancelled() => return,
                         result = acceptor.accept(socket) => {
-                            let Ok(socket) = result else {
-                                return;
-                            };
-                            socket
+                            match result {
+                                Ok(socket) => socket,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        target: "maestro.hosted",
+                                        event = "hosted_connection_failed",
+                                        stage = "tls_handshake",
+                                        error_kind = ?error.kind(),
+                                        "Hosted connection failed before its HTTP request"
+                                    );
+                                    return;
+                                }
+                            }
                         }
                     };
                     tokio::select! {
                         () = connection_shutdown.cancelled() => {}
                         () = identity_changed.cancelled() => {}
-                        _ = handle_socket(socket, shared, peer_addr) => {}
+                        result = handle_socket(socket, shared, peer_addr) => {
+                            if let Err(error) = result {
+                                tracing::warn!(
+                                    target: "maestro.hosted",
+                                    event = "hosted_connection_failed",
+                                    stage = "http_exchange",
+                                    error_kind = ?error.kind(),
+                                    "Hosted connection failed during its HTTP exchange"
+                                );
+                            }
+                        }
                     }
                 });
             }
@@ -5889,9 +5908,13 @@ where
     );
     socket.write_all(headers.as_bytes()).await?;
     socket.write_all(body).await?;
-    // TLS may accept plaintext while ciphertext is still buffered. Drain it
-    // before handle_socket drops this single-response connection.
-    socket.flush().await
+    // Drain buffered ciphertext and send TLS close_notify before dropping
+    // this single-response connection. A bare drop truncates the TLS stream
+    // even after the HTTP body has been flushed.
+    socket.flush().await?;
+    tokio::time::timeout(Duration::from_secs(1), socket.shutdown())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS response close timed out"))?
 }
 
 async fn write_sse_headers<S>(socket: &mut S) -> io::Result<()>
