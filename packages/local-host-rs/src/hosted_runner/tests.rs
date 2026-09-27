@@ -15095,3 +15095,120 @@ fn managed_authorization_pending_request_survives_replay_eviction_until_ack() {
     assert!(shared.controller_pending_events(&mut state).is_empty());
     assert!(state.pending_controller_events.is_empty());
 }
+
+#[tokio::test]
+async fn managed_authorization_replay_accepts_renewed_gateway_credential() {
+    check_managed_authorization_replay(false).await;
+}
+
+#[tokio::test]
+async fn managed_authorization_replay_reconciles_pending_with_renewed_gateway_credential() {
+    check_managed_authorization_replay(true).await;
+}
+
+async fn check_managed_authorization_replay(pending: bool) {
+    let workspace = tempdir().unwrap();
+    let executor = Arc::new(ResponseRecordingExecutor::default());
+    let handle = start_hosted_runner_with_message_executor(
+        test_config(workspace.path().to_path_buf()),
+        executor.clone(),
+    )
+    .await
+    .unwrap();
+    let client = reqwest::Client::new();
+    let (capability, subscription_id) =
+        attach_thread_controller(&client, &handle.base_url(), "conn_auth_replay").await;
+    let headers = HashMap::from([
+        (
+            "x-maestro-headless-connection-id".into(),
+            "conn_auth_replay".into(),
+        ),
+        ("x-maestro-headless-subscriber-id".into(), subscription_id),
+        (
+            "x-maestro-headless-connection-capability".into(),
+            capability,
+        ),
+        (
+            "x-maestro-idempotency-key".into(),
+            "auth-response-key".into(),
+        ),
+    ]);
+    let message = |request: &str, authorization: &str, bearer: &str, expiry| {
+        ToAgentMessage::ManagedAuthorizationResult {
+            request_id: request.into(),
+            authorization: crate::agent::ManagedInferenceAuthorization::new(authorization),
+            gateway_credential: Some(maestro_runtime_contracts::ManagedGatewayCredential::new(
+                bearer, expiry,
+            )),
+        }
+    };
+    if pending {
+        // The previous delivery was accepted but its executor acknowledgement
+        // was lost. Reconcile under the same key with a freshly minted bearer.
+        let mut state = handle.shared.state.lock().unwrap();
+        upsert_pending_response_idempotency(
+            &mut state,
+            "auth-response-key".into(),
+            message(
+                "invocation-1",
+                "signed-invocation-marker",
+                "old-transport-marker",
+                50,
+            ),
+        )
+        .unwrap();
+        state
+            .response_request_owners
+            .insert("invocation-1".into(), "auth-response-key".into());
+    }
+    for (bearer, expiry, replayed) in [
+        ("first-transport-marker", 100, false),
+        ("renewed-transport-marker", 200, true),
+    ] {
+        let ResponseBody::Json { status, body } = handle_message(
+            handle.shared.clone(),
+            "sess_test",
+            headers.clone(),
+            message("invocation-1", "signed-invocation-marker", bearer, expiry),
+        )
+        .await
+        .unwrap() else {
+            panic!("expected JSON");
+        };
+        assert_eq!(status, 200);
+        assert_eq!(body["replayed"], replayed);
+    }
+    assert_eq!(
+        executor.messages.lock().unwrap().len(),
+        1,
+        "a renewed transport credential must not execute the response twice"
+    );
+    for changed in [
+        message(
+            "invocation-1",
+            "different-signed-authority",
+            "renewed-transport-marker",
+            200,
+        ),
+        message(
+            "invocation-2",
+            "signed-invocation-marker",
+            "renewed-transport-marker",
+            200,
+        ),
+    ] {
+        let error = match handle_message(
+            handle.shared.clone(),
+            "sess_test",
+            headers.clone(),
+            changed,
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("changed invocation authority must conflict"),
+        };
+        assert_eq!(error.code, HostedRunnerErrorCode::IdempotencyConflict);
+    }
+    handle.shutdown().await;
+}
