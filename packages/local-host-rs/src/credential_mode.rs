@@ -868,6 +868,11 @@ pub fn byok_sources_ready(model: &str, env: &HashMap<String, String>) -> bool {
     let Ok(descriptor) = ProviderRegistry::resolve_descriptor(model) else {
         return false;
     };
+    if matches!(descriptor.id, "claude-code" | "github-copilot") {
+        // The provider CLI owns the login. A route remains selectable and
+        // reports an actionable CLI auth error if that login is missing.
+        return true;
+    }
     if !descriptor.requires_auth() {
         return true;
     }
@@ -887,8 +892,12 @@ pub fn byok_sources_ready(model: &str, env: &HashMap<String, String>) -> bool {
 }
 
 fn is_delegated_byok_transport(model: &str) -> bool {
-    ProviderRegistry::resolve_descriptor(model)
-        .is_ok_and(|descriptor| matches!(descriptor.id, "openai-codex" | "codex"))
+    ProviderRegistry::resolve_descriptor(model).is_ok_and(|descriptor| {
+        matches!(
+            descriptor.id,
+            "openai-codex" | "codex" | "claude-code" | "github-copilot"
+        )
+    })
 }
 
 pub fn connection_covers_provider(model: &str, env: &HashMap<String, String>) -> Result<bool> {
@@ -1038,7 +1047,11 @@ pub fn setup_next_commands(
     identity_required: bool,
     byok_required: bool,
 ) -> Vec<(&'static str, &'static str, String)> {
-    let byok_command = if matches!(provider, "openai-codex" | "codex") {
+    let byok_command = if provider == "claude-code" {
+        "claude auth login --claudeai".to_owned()
+    } else if matches!(provider, "github-copilot" | "copilot") {
+        "copilot login".to_owned()
+    } else if matches!(provider, "openai-codex" | "codex") {
         "deixic-code codex login".to_owned()
     } else {
         "deixic-code connections add".to_owned()

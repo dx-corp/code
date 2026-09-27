@@ -84,7 +84,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use maestro_ai::UnifiedClient;
 
 use crate::agent::native_host::LocalNativeExecutionHost;
@@ -540,6 +540,17 @@ fn resolve_native_client(
     }
 
     let (credential_mode, identity) = crate::credential_mode::require_ready_with_identity(model)?;
+    if let Ok(descriptor) = crate::ai::ProviderRegistry::resolve_descriptor(model) {
+        if matches!(descriptor.id, "claude-code" | "github-copilot") {
+            let verified = identity
+                .as_ref()
+                .context("subscription route requires a verified Deixic user")?;
+            crate::service_connections::require_owned_subscription_connection(
+                descriptor.id,
+                verified,
+            )?;
+        }
+    }
     let identity_scope = identity.as_ref().and_then(|identity| {
         crate::telemetry::TelemetryIdentityScope::new(
             &identity.organization_id,

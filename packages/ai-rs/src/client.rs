@@ -17,6 +17,7 @@ use super::google::GoogleClient;
 use super::openai::OpenAiClient;
 use super::providers::{ProviderProtocol, ProviderRegistry, ResolvedProvider};
 use super::scripted::ScriptedClient;
+use super::subscription_cli::SubscriptionCliClient;
 use super::types::{
     Message, ProviderStreamErrorKind, RequestConfig, StreamEvent, StreamObservation, StreamObserver,
 };
@@ -167,12 +168,13 @@ pub fn provider_model_name(model: &str) -> String {
     }
 
     match provider.to_ascii_lowercase().as_str() {
-        "anthropic" | "claude" | "openai" | "openai-codex" | "codex" | "azure-openai" | "azure"
-        | "google" | "gemini" | "google-gemini-cli" | "google-antigravity" | "mistral" | "groq"
-        | "vertex-ai" | "vertex" | "deepseek" | "moonshot" | "kimi" | "dashscope" | "qwen"
-        | "minimax" | "zai" | "zhipu" | "evalops" | "maestro-managed" | "bedrock"
-        | "aws-bedrock" | "writer" | "xai" | "grok" | "cerebras" | "llamacpp" | "llama.cpp"
-        | "llama-cpp" | "lmstudio" | "lm-studio" | "ollama" => {
+        "anthropic" | "claude" | "claude-code" | "openai" | "openai-codex" | "codex"
+        | "github-copilot" | "copilot" | "azure-openai" | "azure" | "google" | "gemini"
+        | "google-gemini-cli" | "google-antigravity" | "mistral" | "groq" | "vertex-ai"
+        | "vertex" | "deepseek" | "moonshot" | "kimi" | "dashscope" | "qwen" | "minimax"
+        | "zai" | "zhipu" | "evalops" | "maestro-managed" | "bedrock" | "aws-bedrock"
+        | "writer" | "xai" | "grok" | "cerebras" | "llamacpp" | "llama.cpp" | "llama-cpp"
+        | "lmstudio" | "lm-studio" | "ollama" => {
             // OpenRouter model ids are opaque and may themselves begin with
             // `openrouter/`; the OpenAI-compatible transport strips the
             // outer routing prefix exactly once at its boundary.
@@ -366,6 +368,7 @@ pub enum UnifiedClient {
     /// Deterministic scripted replay client (`scripted.rs`). Not resolvable
     /// through `from_model` -- callers inject it explicitly.
     Scripted(ScriptedClient),
+    SubscriptionCli(SubscriptionCliClient),
 }
 
 impl UnifiedClient {
@@ -433,6 +436,7 @@ impl UnifiedClient {
 
     fn stream_idle_policy(&self) -> (std::time::Duration, u32) {
         match self {
+            Self::SubscriptionCli(_) => (std::time::Duration::from_secs(190), 0),
             Self::OpenAI(client) if client.is_managed_gateway() => (
                 MANAGED_GATEWAY_STREAM_IDLE_TIMEOUT,
                 MANAGED_GATEWAY_STREAM_MAX_RETRIES,
@@ -443,6 +447,7 @@ impl UnifiedClient {
 
     fn stream_owner_starts_initial_attempt(&self) -> bool {
         matches!(self, Self::OpenAI(client) if client.is_managed_gateway())
+            || matches!(self, Self::SubscriptionCli(_))
     }
 
     /// Create client for Anthropic
@@ -566,6 +571,9 @@ impl UnifiedClient {
         env: &HashMap<String, String>,
     ) -> Result<Self> {
         match resolved.provider.protocol {
+            ProviderProtocol::SubscriptionCli => Ok(Self::SubscriptionCli(
+                SubscriptionCliClient::new(resolved.provider.id)?,
+            )),
             ProviderProtocol::Anthropic => {
                 let credential = resolved
                     .credential
@@ -732,6 +740,7 @@ impl UnifiedClient {
             Self::MiniMax(_) => AiProvider::MiniMax,
             Self::Zai(_) => AiProvider::Zai,
             Self::Scripted(_) => AiProvider::Scripted,
+            Self::SubscriptionCli(client) => client.provider(),
         }
     }
 
@@ -758,6 +767,7 @@ impl UnifiedClient {
             Self::MiniMax(_) => "minimax",
             Self::Zai(_) => "zai",
             Self::Scripted(_) => "scripted",
+            Self::SubscriptionCli(client) => client.provider_name(),
         }
     }
 
@@ -953,6 +963,7 @@ impl UnifiedClient {
             Self::Google(client) => client.stream(messages, config).await.map(Into::into),
             Self::VertexAi(client) => client.stream(messages, config).await.map(Into::into),
             Self::Scripted(client) => client.stream(messages, config).await.map(Into::into),
+            Self::SubscriptionCli(client) => client.stream(messages, config).await,
         }
     }
 }
@@ -1397,7 +1408,7 @@ pub fn create_client_for_model(model: &str) -> Result<UnifiedClient> {
 
 fn ai_provider_for_descriptor(id: &str) -> AiProvider {
     match id {
-        "anthropic" => AiProvider::Anthropic,
+        "anthropic" | "claude-code" => AiProvider::Anthropic,
         "bedrock" => AiProvider::Bedrock,
         "google" | "google-gemini-cli" | "google-antigravity" => AiProvider::Google,
         "vertex-ai" => AiProvider::VertexAi,
@@ -1415,6 +1426,18 @@ fn ai_provider_for_descriptor(id: &str) -> AiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_routes_use_their_first_party_transports() {
+        for (route, provider) in [
+            ("claude-code/sonnet", "claude-code"),
+            ("github-copilot/auto", "github-copilot"),
+        ] {
+            let client = UnifiedClient::from_model_with_env(route, &HashMap::new()).unwrap();
+            assert_eq!(client.provider_name(), provider);
+            assert!(matches!(client, UnifiedClient::SubscriptionCli(_)));
+        }
+    }
 
     #[test]
     fn unauthenticated_llamacpp_uses_local_openai_compatible_endpoint() {

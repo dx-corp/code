@@ -248,6 +248,8 @@ pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
         "anthropic" | "claude" => Some("claude-sonnet-4-6"),
         "openai" => Some("gpt-5.6"),
         "openai-codex" | "codex" => Some("gpt-5.6"),
+        "claude-code" => Some("sonnet"),
+        "github-copilot" | "copilot" => Some("auto"),
         "google" | "gemini" | "vertex-ai" | "vertex" => Some("gemini-2.5-pro"),
         "xai" | "grok" => Some("grok-4.5"),
         "openrouter" => Some("openai/gpt-4o-mini"),
@@ -287,14 +289,60 @@ pub fn available_models() -> Vec<ModelInfo> {
     append_managed_models(&mut models);
     append_builtin_local_models(&mut models);
     mirror_vertex_models(&mut models);
+    for (provider, id) in [
+        ("claude-code", "sonnet"),
+        ("claude-code", "opus"),
+        ("claude-code", "haiku"),
+        ("github-copilot", "auto"),
+    ] {
+        models.push(subscription_model_info(provider, id));
+    }
     models
+}
+
+fn subscription_model_info(provider: &str, id: &str) -> ModelInfo {
+    ModelInfo {
+        id: id.to_owned(),
+        name: format!(
+            "{} · {} subscription",
+            id,
+            if provider == "claude-code" {
+                "Claude"
+            } else {
+                "Copilot"
+            }
+        ),
+        provider: provider.to_owned(),
+        description:
+            "Uses the signed-in first-party CLI; model availability depends on the account"
+                .to_owned(),
+        capabilities: ModelCapabilities {
+            protocol: if provider == "claude-code" {
+                ModelProtocol::Anthropic
+            } else {
+                ModelProtocol::OpenAiChat
+            },
+            tools: true,
+            vision: false,
+            reasoning: false,
+            streaming: false,
+            context_tokens: 0,
+            output_tokens: None,
+        },
+        verification: ModelVerification {
+            state: VerificationState::Unknown,
+            source: "first-party-subscription-cli".to_owned(),
+            detail: Some("CLI account and model are checked on the first turn".to_owned()),
+        },
+    }
 }
 
 /// Return the provider-preserving route for model consumers that start a run.
 #[must_use]
 pub fn model_route(model: &ModelInfo) -> String {
     match model.provider.as_str() {
-        "evalops" | "google" | "vertex-ai" | "llamacpp" | "lmstudio" | "ollama" | "openrouter" => {
+        "evalops" | "google" | "vertex-ai" | "llamacpp" | "lmstudio" | "ollama" | "openrouter"
+        | "claude-code" | "github-copilot" => {
             format!("{}/{}", model.provider, model.id)
         }
         _ => model.id.clone(),
@@ -1179,6 +1227,9 @@ pub fn find_model(id: &str) -> Option<ModelInfo> {
                     .into_iter()
                     .find(|model| model.id == bare_id && model.provider == "openai");
             }
+            if matches!(descriptor.id, "claude-code" | "github-copilot") && !bare_id.is_empty() {
+                return Some(subscription_model_info(descriptor.id, bare_id));
+            }
             // `anthropic/claude-sonnet-4.5` is an OpenRouter model id, not a
             // native Anthropic catalog row. Prefer the native hit above.
             if descriptor.id != "openrouter" {
@@ -1387,6 +1438,11 @@ pub fn has_provider_mismatch(id: &str) -> bool {
     if crate::local_models::LOCAL_RUNTIME_IDS.contains(&descriptor.id) {
         return false;
     }
+    // The first-party CLI owns the live model list and entitlement decision.
+    // A shared catalog entry under another provider is not a mismatch.
+    if matches!(descriptor.id, "claude-code" | "github-copilot") {
+        return false;
+    }
     let models = available_models();
     // Prefer an exact provider+id hit (openai-codex/gpt-5.6 vs openai/gpt-5.6).
     if models
@@ -1416,6 +1472,16 @@ pub fn has_provider_mismatch(id: &str) -> bool {
 pub fn verify_model_offline(model_id: &str) -> ModelVerification {
     let env = std::env::vars().collect();
     match ProviderRegistry::resolve(model_id, &env) {
+        Ok(provider) if matches!(provider.provider.id, "claude-code" | "github-copilot") => {
+            ModelVerification {
+                state: VerificationState::Unknown,
+                source: "first-party-subscription-cli".to_owned(),
+                detail: Some(
+                    "Identity link, CLI account and model are checked when a turn starts"
+                        .to_owned(),
+                ),
+            }
+        }
         Ok(provider) if provider.credential.is_some() || !provider.provider.requires_auth() => {
             let authless = !provider.provider.requires_auth();
             ModelVerification {
@@ -1454,6 +1520,7 @@ pub fn protocol_name(protocol: ProviderProtocol) -> &'static str {
         ProviderProtocol::Google => "google",
         ProviderProtocol::VertexAi => "vertex-ai",
         ProviderProtocol::Codex => "codex-app-server",
+        ProviderProtocol::SubscriptionCli => "subscription-cli",
         ProviderProtocol::AzureOpenAi => "azure-openai",
         ProviderProtocol::Bedrock => "bedrock",
         ProviderProtocol::Managed => "managed",
@@ -1485,6 +1552,19 @@ mod tests {
             missing.is_empty(),
             "default models absent from the bundled catalog: {missing:?}"
         );
+    }
+
+    #[test]
+    fn subscription_routes_allow_the_cli_to_select_entitled_models() {
+        for route in [
+            "claude-code/sonnet",
+            "claude-code/claude-opus-4-6",
+            "github-copilot/auto",
+            "github-copilot/gpt-5.5",
+        ] {
+            assert!(!has_provider_mismatch(route), "{route}");
+            assert!(find_model(route).is_some(), "{route}");
+        }
     }
 
     /// Anthropic's published 1M-context list, pinned against the snapshot.

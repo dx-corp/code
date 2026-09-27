@@ -402,8 +402,27 @@ fn llm_evaluator(model: String) -> EvaluatorFn {
                 .map_err(|error| GuardianError::Llm(error.to_string()))?
             {
                 Some(client) => client,
-                None => create_client_for_model(&model)
-                    .map_err(|error| GuardianError::Llm(error.to_string()))?,
+                None => {
+                    if let Ok(provider) = crate::ai::ProviderRegistry::resolve_descriptor(&model) {
+                        if matches!(provider.id, "claude-code" | "github-copilot") {
+                            let (_, identity) =
+                                crate::credential_mode::require_ready_with_identity(&model)
+                                    .map_err(|error| GuardianError::Llm(error.to_string()))?;
+                            let verified = identity.as_ref().ok_or_else(|| {
+                                GuardianError::Llm(
+                                    "subscription route requires a verified Deixic user".to_owned(),
+                                )
+                            })?;
+                            crate::service_connections::require_owned_subscription_connection(
+                                provider.id,
+                                verified,
+                            )
+                            .map_err(|error| GuardianError::Llm(error.to_string()))?;
+                        }
+                    }
+                    create_client_for_model(&model)
+                        .map_err(|error| GuardianError::Llm(error.to_string()))?
+                }
             };
             let messages = vec![Message {
                 role: Role::User,

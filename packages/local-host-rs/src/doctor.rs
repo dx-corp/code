@@ -266,6 +266,7 @@ fn metadata_request(
         | ProviderProtocol::Google
         | ProviderProtocol::VertexAi
         | ProviderProtocol::Codex
+        | ProviderProtocol::SubscriptionCli
         | ProviderProtocol::AzureOpenAi
         | ProviderProtocol::Bedrock
         | ProviderProtocol::Managed => return Ok(None),
@@ -438,6 +439,8 @@ async fn live_metadata_check_with_env(
 const AUTH_HEALTH_PROVIDERS: &[&str] = &[
     "openai",
     "openai-codex",
+    "claude-code",
+    "github-copilot",
     "anthropic",
     "google",
     "vertex-ai",
@@ -520,6 +523,31 @@ fn auth_health_check(provider_id: &str, env: &HashMap<String, String>) -> Doctor
             false,
         );
     };
+    if matches!(provider_id, "claude-code" | "github-copilot") {
+        let linked = crate::service_connections::ConnectionStore::default_path()
+            .ok()
+            .and_then(|path| crate::service_connections::ConnectionStore::load(&path).ok())
+            .and_then(|store| store.selected(provider_id, None).ok().flatten().cloned())
+            .is_some_and(|connection| connection.owner.is_some());
+        return check(
+            "auth_health",
+            CheckStatus::Warning,
+            format!(
+                "{provider_id}: {}",
+                if linked {
+                    "subscription metadata found; owner and CLI login are verified on the next turn"
+                } else {
+                    "no owned subscription connection found"
+                }
+            ),
+            Some(if provider_id == "claude-code" {
+                "Run `claude auth login --claudeai` and link during managed onboarding".to_owned()
+            } else {
+                "Run `copilot login` and link during managed onboarding".to_owned()
+            }),
+            false,
+        );
+    }
     let configured = descriptor.auth_env.iter().find_map(|name| {
         env.get(*name)
             .map(String::as_str)
@@ -1210,6 +1238,16 @@ pub async fn build_report(model_override: Option<&str>, live: bool, cwd: &Path) 
             CheckStatus::Pass,
             format!("{} resolved with credentials", provider.provider.id),
             provider.auth_source,
+            false,
+        ),
+        Ok(provider) if provider.provider.protocol == ProviderProtocol::SubscriptionCli => check(
+            "provider",
+            CheckStatus::Warning,
+            format!(
+                "{} requires an owned CLI subscription connection",
+                provider.provider.id
+            ),
+            None,
             false,
         ),
         Ok(provider) if !provider.provider.requires_auth() => check(
