@@ -398,6 +398,10 @@ generator, so you can use them out of the box:
   Use `maestro codex models` to list models actually offered by the current
   ChatGPT sign-in. The shared OpenAI API catalog is not proof that a Codex
   subscription offers a model with the same name.
+  In the interactive UI, enter `/codex` to switch the current session to this
+  sign-in's live default Codex model. The model picker also offers **Use ChatGPT
+  subscription**; Ctrl+D on that choice saves the resolved model as the user
+  default. If sign-in is missing, the UI prompts for `maestro codex login`.
 
 To add more Responses-capable models (or override these), drop them into
 `.maestro/config.json` with `api: "openai-responses"`; Maestro will normalize

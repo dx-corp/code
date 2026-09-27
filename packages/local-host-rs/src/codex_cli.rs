@@ -278,41 +278,7 @@ async fn handle_models(params: &[String]) -> Result<i32> {
         if !account_is_chatgpt(&client.read_account(true).await?) {
             bail!("Codex profile is not signed in with ChatGPT");
         }
-        let mut cursor: Option<String> = None;
-        let mut seen = std::collections::HashSet::new();
-        let mut models = Vec::new();
-        loop {
-            let page = client
-                .request(
-                    "model/list",
-                    Some(json!({"includeHidden": false, "cursor": cursor})),
-                    Some(5_000),
-                )
-                .await?;
-            let data = page
-                .get("data")
-                .and_then(Value::as_array)
-                .context("Codex model/list returned invalid data")?;
-            for model in data {
-                if let Some(id) = model
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .or_else(|| model.get("id").and_then(Value::as_str))
-                {
-                    models.push(json!({
-                        "model": format!("openai-codex/{id}"),
-                        "default": model.get("isDefault").and_then(Value::as_bool).unwrap_or(false)
-                    }));
-                }
-            }
-            let Some(next) = page.get("nextCursor").and_then(Value::as_str) else {
-                break;
-            };
-            if !seen.insert(next.to_owned()) || seen.len() > 100 {
-                bail!("Codex model/list did not converge");
-            }
-            cursor = Some(next.to_owned());
-        }
+        let models = list_offered_codex_models(&client).await?;
         if options.json {
             println!("{}", serde_json::to_string_pretty(&models)?);
         } else {
@@ -333,6 +299,74 @@ async fn handle_models(params: &[String]) -> Result<i32> {
     .await;
     client.close();
     result
+}
+
+/// Resolve the same profile as a Codex turn and choose a model this ChatGPT
+/// account actually offers. Used by the TUI's one-action subscription switch.
+pub async fn preferred_chatgpt_model() -> Result<String> {
+    let identity = requested_identity_with_profile(None)?;
+    let client = spawn_for_identity(&identity).await?;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        client.initialize(InitializeOptions::default()).await?;
+        if !account_is_chatgpt(&client.read_account(true).await?) {
+            bail!("Sign in with ChatGPT using `maestro codex login` first");
+        }
+        preferred_model_from_list(&list_offered_codex_models(&client).await?)
+    })
+    .await
+    .context("Timed out checking ChatGPT subscription models")
+    .and_then(|result| result);
+    client.close();
+    result
+}
+
+fn preferred_model_from_list(models: &[Value]) -> Result<String> {
+    models
+        .iter()
+        .find(|model| model["default"] == true)
+        .or_else(|| models.first())
+        .and_then(|model| model["model"].as_str())
+        .map(str::to_owned)
+        .context("This ChatGPT sign-in offers no Codex models")
+}
+
+async fn list_offered_codex_models(client: &CodexAppServerClient) -> Result<Vec<Value>> {
+    let mut cursor: Option<String> = None;
+    let mut seen = std::collections::HashSet::new();
+    let mut models = Vec::new();
+    loop {
+        let page = client
+            .request(
+                "model/list",
+                Some(json!({"includeHidden": false, "cursor": cursor})),
+                Some(5_000),
+            )
+            .await?;
+        let data = page
+            .get("data")
+            .and_then(Value::as_array)
+            .context("Codex model/list returned invalid data")?;
+        for model in data {
+            if let Some(id) = model
+                .get("model")
+                .and_then(Value::as_str)
+                .or_else(|| model.get("id").and_then(Value::as_str))
+            {
+                models.push(json!({
+                    "model": format!("openai-codex/{id}"),
+                    "default": model.get("isDefault").and_then(Value::as_bool).unwrap_or(false)
+                }));
+            }
+        }
+        let Some(next) = page.get("nextCursor").and_then(Value::as_str) else {
+            break;
+        };
+        if !seen.insert(next.to_owned()) || seen.len() > 100 {
+            bail!("Codex model/list did not converge");
+        }
+        cursor = Some(next.to_owned());
+    }
+    Ok(models)
 }
 
 async fn build_readiness_report(
@@ -1493,6 +1527,19 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::sync::Arc;
+
+    #[test]
+    fn quick_switch_uses_live_default_instead_of_first_catalog_model() {
+        let offered = vec![
+            json!({"model": "openai-codex/gpt-5.5", "default": false}),
+            json!({"model": "openai-codex/gpt-5.6-sol", "default": true}),
+        ];
+        assert_eq!(
+            preferred_model_from_list(&offered).unwrap(),
+            "openai-codex/gpt-5.6-sol"
+        );
+        assert!(preferred_model_from_list(&[]).is_err());
+    }
 
     fn sample_tool(name: &str, description: &str, parameters: Value) -> CodingTool {
         CodingTool {

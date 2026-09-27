@@ -240,6 +240,8 @@ pub enum CommandAction {
     SetTheme(String),
     /// Set the current model
     SetModel(String),
+    /// Switch to the selected ChatGPT subscription's live default Codex model.
+    SwitchToCodex,
     /// Increase intelligence for the current task at a safe request boundary.
     Boost,
     /// Review uncommitted changes with a different model (second opinion).
