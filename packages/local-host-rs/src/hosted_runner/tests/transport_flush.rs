@@ -32,10 +32,10 @@ async fn http_frames_are_visible_before_the_writer_returns() {
 }
 
 #[tokio::test]
-async fn tls_response_survives_backpressure_before_connection_drop() {
+async fn tls_response_drains_backpressure_and_closes_cleanly() {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut server_config = rustls::ServerConfig::builder_with_provider(provider.clone())
+    let server_config = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .unwrap()
         .with_no_client_auth()
@@ -44,7 +44,6 @@ async fn tls_response_survives_backpressure_before_connection_drop() {
             rustls::pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()).into(),
         )
         .unwrap();
-    server_config.send_tls13_tickets = 0;
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert.cert.der().clone()).unwrap();
     let client_config = rustls::ClientConfig::builder_with_provider(provider)
@@ -55,9 +54,9 @@ async fn tls_response_survives_backpressure_before_connection_drop() {
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
     let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
 
-    // A TLS record exceeds this transport capacity. The writer must wait for
-    // the reader rather than dropping accepted but still-buffered ciphertext.
-    let (server_io, client_io) = tokio::io::duplex(64);
+    // Keep room for the default TLS session tickets during the handshake,
+    // but less than a response record so the writer encounters backpressure.
+    let (server_io, client_io) = tokio::io::duplex(2048);
     let exchange = async {
         let (server, client) = tokio::join!(
             acceptor.accept(server_io),
@@ -78,8 +77,11 @@ async fn tls_response_survives_backpressure_before_connection_drop() {
             drop(server);
         };
         let receive = async {
-            let mut received = vec![0; expected.len()];
-            client.read_exact(&mut received).await.unwrap();
+            let mut received = Vec::new();
+            client
+                .read_to_end(&mut received)
+                .await
+                .expect("response must close TLS with close_notify");
             assert_eq!(received, expected.as_bytes());
         };
         tokio::join!(send, receive);
@@ -87,4 +89,41 @@ async fn tls_response_survives_backpressure_before_connection_drop() {
     tokio::time::timeout(Duration::from_secs(5), exchange)
         .await
         .expect("TLS response must drain without another application write");
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_close_has_a_deadline_after_the_frame_is_flushed() {
+    struct StalledClose(Vec<u8>);
+
+    impl AsyncWrite for StalledClose {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            self.0.extend_from_slice(bytes);
+            std::task::Poll::Ready(Ok(bytes.len()))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    let mut socket = StalledClose(Vec::new());
+    let error = write_response(&mut socket, 200, "application/json", b"{}")
+        .await
+        .expect_err("a peer that stops reading must not pin the response task");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(socket.0.ends_with(b"\r\n\r\n{}"));
 }
