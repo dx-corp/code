@@ -60,6 +60,8 @@ pub mod rendezvous_carrier;
 pub mod rendezvous_protocol;
 pub mod rendezvous_runtime;
 mod shared;
+mod sse_stream;
+use self::sse_stream::write_sse_stream;
 mod snapshots;
 mod thread_protocol;
 mod workload_identity;
@@ -2597,8 +2599,8 @@ async fn serve_mtls(
                     };
                     let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
                     let socket = tokio::select! {
-                        () = connection_shutdown.cancelled() => return,
-                        () = identity_changed.cancelled() => return,
+                        () = connection_shutdown.cancelled() => return workload_identity::log_connection_exit("tls_handshake", "server_shutdown"),
+                        () = identity_changed.cancelled() => return workload_identity::log_connection_exit("tls_handshake", "identity_changed"),
                         result = acceptor.accept(socket) => {
                             match result {
                                 Ok(socket) => socket,
@@ -2616,8 +2618,8 @@ async fn serve_mtls(
                         }
                     };
                     tokio::select! {
-                        () = connection_shutdown.cancelled() => {}
-                        () = identity_changed.cancelled() => {}
+                        () = connection_shutdown.cancelled() => workload_identity::log_connection_exit("http_exchange", "server_shutdown"),
+                        () = identity_changed.cancelled() => workload_identity::log_connection_exit("http_exchange", "identity_changed"),
                         result = handle_socket(socket, shared, peer_addr) => {
                             if let Err(error) = result {
                                 tracing::warn!(
@@ -2655,75 +2657,20 @@ where
         }
         Ok(ResponseBody::Sse {
             replay,
-            mut rx,
+            rx,
             shared,
-            mut filter,
+            filter,
             controller_authorization,
         }) => {
-            write_sse_headers(&mut socket).await?;
-            if controller_authorization
-                .as_ref()
-                .is_some_and(|authorization| !shared.controller_stream_is_authorized(authorization))
-            {
-                return Ok(());
-            }
-            for envelope in replay {
-                for envelope in filter.apply(envelope) {
-                    if !write_sse_event_if_authorized(
-                        &mut socket,
-                        &shared,
-                        controller_authorization.as_ref(),
-                        &envelope,
-                    )
-                    .await?
-                    {
-                        return Ok(());
-                    }
-                }
-            }
-            loop {
-                match rx.recv().await {
-                    Ok(envelope) => {
-                        if controller_authorization
-                            .as_ref()
-                            .is_some_and(|authorization| {
-                                !shared.controller_stream_is_authorized(authorization)
-                            })
-                        {
-                            break;
-                        }
-                        for envelope in filter.apply(envelope) {
-                            if !write_sse_event_if_authorized(
-                                &mut socket,
-                                &shared,
-                                controller_authorization.as_ref(),
-                                &envelope,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        let envelope = shared.reset_envelope(format!("broadcast_lag:{skipped}"));
-                        for envelope in filter.apply(envelope) {
-                            if !write_sse_event_if_authorized(
-                                &mut socket,
-                                &shared,
-                                controller_authorization.as_ref(),
-                                &envelope,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            Ok(())
+            write_sse_stream(
+                &mut socket,
+                replay,
+                rx,
+                shared,
+                filter,
+                controller_authorization,
+            )
+            .await
         }
         Err(error) => write_error(&mut socket, error).await,
     }
@@ -5923,10 +5870,24 @@ where
 {
     socket
         .write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
         )
         .await?;
     socket.flush().await
+}
+
+async fn close_sse_stream<S>(socket: &mut S) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    // A revoked writer may leave buffered ciphertext behind. Bound the flush
+    // and close_notify together so a non-reading peer cannot pin this task.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        socket.flush().await?;
+        socket.shutdown().await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS SSE close timed out"))?
 }
 
 async fn write_sse_event<S>(socket: &mut S, envelope: &StreamEnvelope) -> io::Result<()>
