@@ -133,6 +133,13 @@ fn fetch_from(
 fn present(response: &GetModelReadinessResponse) -> DoctorCheck {
     let (status, label) = match Status::try_from(response.state).unwrap_or(Status::Unspecified) {
         Status::Ready => (CheckStatus::Pass, "Ready"),
+        Status::ActivationRequired
+            if response
+                .next_actions
+                .contains(&(Action::ViewFunding as i32)) =>
+        {
+            (CheckStatus::Warning, "Activation and funding required")
+        }
         Status::ActivationRequired => (CheckStatus::Warning, "Activation required"),
         Status::FundingRequired => (CheckStatus::Warning, "Funding required"),
         Status::LimitReached => (CheckStatus::Warning, "Limit reached"),
@@ -209,6 +216,21 @@ mod tests {
             assert_eq!(report.summary, expected);
             assert_eq!(report.status == CheckStatus::Pass, state == Status::Ready);
         }
+    }
+
+    #[test]
+    fn managed_inference_readiness_names_both_activation_blockers() {
+        let response = GetModelReadinessResponse {
+            state: Status::ActivationRequired.into(),
+            next_actions: vec![
+                Action::ContactAdministrator.into(),
+                Action::ViewFunding.into(),
+            ],
+            ..Default::default()
+        };
+        let report = present(&response);
+        assert_eq!(report.summary, "Activation and funding required");
+        assert!(report.detail.unwrap().contains("View funding"));
     }
 
     #[tokio::test]

@@ -1348,7 +1348,10 @@ pub async fn build_report(model_override: Option<&str>, live: bool, cwd: &Path) 
             true,
         ));
     }
-    let ok = !checks.iter().any(|item| item.status == CheckStatus::Fail);
+    let ok = !checks.iter().any(|item| {
+        item.status == CheckStatus::Fail
+            || (live && item.id == "managed_inference" && item.status == CheckStatus::Warning)
+    });
     DoctorReport {
         schema_version: REPORT_SCHEMA_VERSION,
         ok,
