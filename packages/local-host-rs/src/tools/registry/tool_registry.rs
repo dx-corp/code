@@ -1121,29 +1121,57 @@ impl ToolRegistry {
         tools.insert(
             "gh_pr".to_string(),
             ToolDefinition {
-                tool: Tool::new("gh_pr", "GitHub pull request operations via gh api.").with_schema(
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string"},
-                            "number": {"type": "number"},
-                            "title": {"type": "string"},
-                            "body": {"type": "string"},
-                            "branch": {"type": "string"},
-                            "base": {"type": "string"},
-                            "draft": {"type": "boolean"},
-                            "state": {"type": "string"},
-                            "author": {"type": "string"},
-                            "label": {"type": "array", "items": {"type": "string"}},
-                            "milestone": {"type": "string"},
-                            "limit": {"type": "number"},
-                            "json": {"type": "boolean"},
-                            "nameOnly": {"type": "boolean"},
-                            "repository": {"type": "string"}
+                tool: Tool::new(
+                    "gh_pr",
+                    "GitHub pull request operations via gh api. Actions: create, list, view, \
+                     checkout, comment, checks (one-shot CI snapshot), diff. Use \
+                     review_threads to read unresolved review feedback (path/line, whether a \
+                     thread is outdated, and each comment) before acting on a review -- prefer \
+                     it over guessing from the PR page. Use reply_review_thread (threadId from \
+                     review_threads, body) to answer a reviewer inline, and \
+                     resolve_review_thread (threadId) only after the feedback is actually \
+                     addressed in code or in the reply. Use checks_watch (number, optional \
+                     timeoutSecs) instead of polling checks yourself: it blocks until every \
+                     check completes or the timeout is hit, and returns a bounded tail of the \
+                     failure log for any check that failed.",
+                )
+                .with_schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "number": {"type": "number"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "branch": {"type": "string"},
+                        "base": {"type": "string"},
+                        "draft": {"type": "boolean"},
+                        "state": {"type": "string"},
+                        "author": {"type": "string"},
+                        "label": {"type": "array", "items": {"type": "string"}},
+                        "milestone": {"type": "string"},
+                        "limit": {"type": "number"},
+                        "json": {"type": "boolean"},
+                        "nameOnly": {"type": "boolean"},
+                        "repository": {"type": "string"},
+                        "threadId": {
+                            "type": "string",
+                            "description": "PullRequestReviewThread GraphQL node id \
+                                (PRRT_...) from review_threads. Required by \
+                                reply_review_thread and resolve_review_thread."
                         },
-                        "required": ["action"]
-                    }),
-                ),
+                        "includeResolved": {
+                            "type": "boolean",
+                            "description": "review_threads: also return already-resolved \
+                                threads. Defaults to unresolved-only."
+                        },
+                        "timeoutSecs": {
+                            "type": "number",
+                            "description": "checks_watch: seconds to poll before giving up. \
+                                Default 900, max 3600."
+                        }
+                    },
+                    "required": ["action"]
+                })),
                 requires_approval: true,
             },
         );

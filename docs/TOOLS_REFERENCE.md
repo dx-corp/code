@@ -72,9 +72,15 @@ error distinctions.
 
 | Tool | Description | Actions / Options |
 | ---- | ----------- | ----------------- |
-| `gh_pr` | Pull request operations | **Actions:** `create`, `checkout`, `view`, `list`, `comment`<br>**Options:** `number`, `title`, `body`, `branch`, `base`, `draft`, `state`, `author`, `limit`, `json` |
+| `gh_pr` | Pull request operations | **Actions:** `create`, `checkout`, `view`, `list`, `comment`, `checks`, `diff`, `review_threads`, `reply_review_thread`, `resolve_review_thread`, `checks_watch`<br>**Options:** `number`, `title`, `body`, `branch`, `base`, `draft`, `state`, `author`, `limit`, `json`, `nameOnly`, `threadId`, `includeResolved`, `timeoutSecs` |
 | `gh_issue` | Issue operations | **Actions:** `create`, `view`, `list`, `comment`, `close`<br>**Options:** `number`, `title`, `body`, `labels`, `state`, `author`, `limit`, `json` |
 | `gh_repo` | Repository operations | **Actions:** `view`, `fork`, `clone`<br>**Options:** `repository`, `directory`, `json` |
+
+**Review and CI loop (`gh_pr`):**
+- `review_threads` (`number`, optional `includeResolved`) -- lists unresolved review threads via GraphQL (`gh api graphql`), each with `path`, `line`, `isResolved`, `isOutdated`, the thread's GraphQL `id`, and its comments (author, body, `createdAt`), plus top-level review summaries (state + body). Output is bounded: comment/review bodies and the thread/review counts are capped and marked `truncated` when a PR has more than fits.
+- `reply_review_thread` (`threadId`, `body`) -- replies inline to a thread returned by `review_threads` (GraphQL `addPullRequestReviewThreadReply`).
+- `resolve_review_thread` (`threadId`) -- marks a thread resolved (GraphQL `resolveReviewThread`) once it's actually been addressed.
+- `checks_watch` (`number`, optional `timeoutSecs`, default 900s / max 3600s) -- polls CI every 30s until every check is `completed` or the timeout elapses, instead of a single `checks` snapshot. Returns a per-check summary and, for failed checks, up to 3 jobs' worth of failure-log tail (`gh run view --log-failed`, capped to 200 lines / 16KiB each).
 
 **Prerequisites:**
 - GitHub CLI (`gh`) must be installed: `brew install gh` (macOS) or see [cli.github.com](https://cli.github.com)
