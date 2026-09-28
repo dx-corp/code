@@ -489,7 +489,7 @@ grep -q '^export MAESTRO_DATA_DIR=' "$install_dir/maestro" ||
   fail "launcher did not retain its data directory"
 grep -q '^export MAESTRO_UPDATE_CHANNEL=' "$install_dir/maestro" ||
   fail "launcher did not retain its update channel"
-grep -Fq 'export MAESTRO_AUTO_UPDATE="${MAESTRO_AUTO_UPDATE:-apply}"' "$install_dir/maestro" ||
+grep -Fq "export MAESTRO_AUTO_UPDATE=\"\${MAESTRO_AUTO_UPDATE:-apply}\"" "$install_dir/maestro" ||
   fail "signed release launcher did not enable automatic updates with an opt-out"
 [[ "$(MAESTRO_UPDATE_CHANNEL='' "$install_dir/maestro" --version)" == "maestro 0.0.1" ]] ||
   fail "launcher with a persisted stable channel did not execute"
