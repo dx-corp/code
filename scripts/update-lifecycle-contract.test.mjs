@@ -27,6 +27,13 @@ test("update lifecycle contract names every machine-readable surface", () => {
 	);
 });
 
+test("startup checks use the public release source with a workable bound", () => {
+	const updater = read("packages/tui-rs/src/update_cli.rs");
+	assert.match(updater, /https:\/\/api\.github\.com\/repos\/dx-corp\/code\/releases/);
+	assert.match(updater, /https:\/\/github\.com\/dx-corp\/code\/releases\/latest\/download\/channel-manifest\.json/);
+	assert.match(updater, /DEFAULT_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs\(2\)/);
+});
+
 test("release metadata carries changelog notes and exact runtime passports", async () => {
 	const passport = {
 		artifact: { name: "maestro-linux-x64", digest: `sha256:${"a".repeat(64)}` },

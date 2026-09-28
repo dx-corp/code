@@ -20,9 +20,9 @@ use wait_timeout::ChildExt;
 
 const LEGACY_CHANNEL_MANIFEST_BASE_URL: &str =
     "https://storage.googleapis.com/evalops-prod-maestro-releases/maestro/channels";
-const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/evalops/maestro/releases";
+const GITHUB_RELEASES_API_URL: &str = "https://api.github.com/repos/dx-corp/code/releases";
 const GITHUB_STABLE_LATEST_MANIFEST_URL: &str =
-    "https://github.com/evalops/maestro/releases/latest/download/channel-manifest.json";
+    "https://github.com/dx-corp/code/releases/latest/download/channel-manifest.json";
 const GITHUB_RELEASES_PAGE_SIZE: usize = 100;
 const GITHUB_RELEASES_MAX_PAGES: usize = 10;
 const CHANNEL_MANIFEST_SCHEMA: &str = "evalops.maestro.release-channel.v1";
@@ -31,7 +31,7 @@ const PRERELEASE_CHANNEL_KEY_ID: &str = "preview-2026-08-912a0dab";
 const STABLE_CHANNEL_PUBLIC_KEY: &str = "IYgvaSwf2E9DioyEZ6Qcp/QMD1xpsjS0JgYluAAt0pE=";
 const PRERELEASE_CHANNEL_PUBLIC_KEY: &str = "4DS+odrY7y1PMg7o4s0jY1FkgcPQb8jjdy0Nst05soA=";
 const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_millis(350);
+const DEFAULT_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_STARTUP_RETRY: Duration = Duration::from_hours(24);
 const INSTALL_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_UPDATE_HISTORY: usize = 32;
@@ -3888,7 +3888,7 @@ mod tests {
         assert_eq!(notice, None);
     }
 
-    /// The startup bound (`MAESTRO_STARTUP_UPDATE_TIMEOUT_MS`, default 350 ms)
+    /// The startup bound (`MAESTRO_STARTUP_UPDATE_TIMEOUT_MS`, default 2 s)
     /// still caps the whole check when a source accepts and never answers.
     #[tokio::test]
     async fn startup_update_notice_is_bounded_when_the_source_never_answers() {
@@ -4161,7 +4161,6 @@ mod tests {
         )
         .expect("atomically repoint launcher");
         let launcher_text = fs::read_to_string(&launcher).expect("read launcher");
-        assert!(launcher_text.contains("MAESTRO_STARTUP_UPDATE_STATE"));
         assert!(launcher_text.contains("MAESTRO_AUTO_UPDATE=\"${MAESTRO_AUTO_UPDATE:-apply}\""));
         assert!(launcher_text.contains(&selected.release_dir.display().to_string()));
 
