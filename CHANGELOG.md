@@ -51,6 +51,13 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.99] - 2026-09-28
+
+### Fixed
+
+- Check the signed launcher's automatic-update default with a ShellCheck-safe assertion.
+- Install the pinned macOS Mise binary on signed-release runners.
+
 ## [0.10.98] - 2026-09-28
 
 ### Fixed
