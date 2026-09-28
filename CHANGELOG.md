@@ -51,6 +51,19 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.101] - 2026-09-28
+
+### Changed
+
+- Include annual reviews in Views inventory (#10943). <!-- maestro-release-note:378a045804dc -->
+- Restore UI public directory for image builds (#10942). <!-- maestro-release-note:b899f7552f54 -->
+
+### Fixed
+
+- Build image without retired public assets (#10941). <!-- maestro-release-note:43c41fde911d -->
+- Include Outlook conversation IDs in the connector sync fixture so it satisfies the declared response contract.
+- Give the signed release and public mirror up to 120 minutes for exact-source CI to finish.
+
 ## [0.10.100] - 2026-09-28
 
 ### Fixed
