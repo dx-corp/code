@@ -51,6 +51,16 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.103] - 2026-09-28
+
+### Changed
+
+- Restore the Deixic ghost artwork in the desktop app (#10931).
+
+### Fixed
+
+- Dispatch release validation from the immutable version tag when a main CI run is canceled (#10954).
+
 ## [0.10.102] - 2026-09-28
 
 ### Fixed

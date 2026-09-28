@@ -1,6 +1,6 @@
 [package]
 name = "maestro"
-version = "0.10.102"
+version = "0.10.103"
 edition = "2021"
 license = "MIT"
 description = "Canonical native Rust CLI for Deixic Code"
