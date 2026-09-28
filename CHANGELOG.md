@@ -51,6 +51,13 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.98] - 2026-09-28
+
+### Fixed
+
+- Use the canonical public release URL and a two-second startup check (#10904). <!-- maestro-release-note:b5fa39b32134 -->
+- Localize unified usage command (#10902). <!-- maestro-release-note:c8f3967868d6 -->
+
 ## [0.10.97] - 2026-09-27
 
 ### Added
