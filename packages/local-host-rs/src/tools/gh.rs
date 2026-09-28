@@ -22,9 +22,113 @@ use serde_json::Value;
 use std::process::{Output, Stdio};
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::ToolResult;
+
+/// Output-bounding limits for `gh_pr` actions that fan out over
+/// model-authored or third-party text (review threads, reviews, CI logs).
+/// Mirrors the cap-and-mark-truncated pattern used by `tools/exa.rs`
+/// (`MAX_OUTPUT_CHARS`) so an unattended agent can never be handed an
+/// unbounded response from a PR with hundreds of comments or a noisy CI log.
+mod bounds {
+    /// Review threads returned by `review_threads` (GraphQL `first:`).
+    pub(super) const MAX_REVIEW_THREADS: usize = 50;
+    /// Comments returned per thread (GraphQL `first:`).
+    pub(super) const MAX_THREAD_COMMENTS: usize = 20;
+    /// Top-level review summaries returned (GraphQL `first:`).
+    pub(super) const MAX_REVIEWS: usize = 20;
+    /// Characters kept per review-thread comment body.
+    pub(super) const MAX_COMMENT_BODY_CHARS: usize = 2000;
+    /// Characters kept per top-level review body.
+    pub(super) const MAX_REVIEW_BODY_CHARS: usize = 4000;
+    /// Final safety net on the serialized `review_threads` output.
+    pub(super) const MAX_OUTPUT_CHARS: usize = 20_000;
+    /// Poll interval for `checks_watch`.
+    pub(super) const CHECKS_WATCH_INTERVAL_SECS: u64 = 30;
+    /// Default `checks_watch` timeout when the caller doesn't specify one.
+    pub(super) const CHECKS_WATCH_DEFAULT_TIMEOUT_SECS: u64 = 900;
+    /// Hard ceiling on `checks_watch` timeout regardless of caller input.
+    pub(super) const CHECKS_WATCH_MAX_TIMEOUT_SECS: u64 = 3600;
+    /// Failed jobs whose logs are fetched by `checks_watch`.
+    pub(super) const MAX_FAILED_JOB_LOGS: usize = 3;
+    /// Lines kept per failed-job log tail.
+    pub(super) const MAX_LOG_TAIL_LINES: usize = 200;
+    /// Bytes kept per failed-job log tail.
+    pub(super) const MAX_LOG_TAIL_BYTES: usize = 16 * 1024;
+}
+
+/// Truncate `text` to at most `max_chars` UTF-8 scalar values, appending a
+/// `(truncated)` marker when truncation actually happened.
+fn truncate_text(text: &str, max_chars: usize) -> (String, bool) {
+    if text.chars().count() <= max_chars {
+        return (text.to_string(), false);
+    }
+    let mut truncated: String = text.chars().take(max_chars).collect();
+    truncated.push_str("\n\n(truncated)");
+    (truncated, true)
+}
+
+/// Keep the last `max_lines` lines of `text`, further bounded to
+/// `max_bytes`. Used to cap CI failure logs, which can otherwise run to
+/// megabytes for a single job.
+fn tail_text(text: &str, max_lines: usize, max_bytes: usize) -> (String, bool) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut truncated_lines = lines.len() > max_lines;
+    let start = lines.len().saturating_sub(max_lines);
+    let mut tail = lines[start..].join("\n");
+    if tail.len() > max_bytes {
+        truncated_lines = true;
+        // Byte-safe: walk back to a char boundary before slicing.
+        let mut cut = tail.len() - max_bytes;
+        while cut < tail.len() && !tail.is_char_boundary(cut) {
+            cut += 1;
+        }
+        tail = tail[cut..].to_string();
+    }
+    (tail, truncated_lines)
+}
+
+/// Validate a GitHub GraphQL node id used to address a pull request review
+/// thread. Real ids look like `PRRT_kwDOA...`: an opaque prefix identifying
+/// the node type, an underscore, then a base64url-ish payload. Reject
+/// anything else up front so a malformed or hallucinated id fails with a
+/// clear tool error instead of reaching `gh api graphql` as an untrusted
+/// argument.
+fn is_valid_review_thread_id(id: &str) -> bool {
+    match id.strip_prefix("PRRT_") {
+        Some(rest) => {
+            !rest.is_empty()
+                && rest.len() <= 128
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '=')
+        }
+        None => false,
+    }
+}
+
+/// Extract `(run_id, job_id)` from a check run's `details_url`, e.g.
+/// `https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}`.
+/// Returns `None` for check runs that aren't backed by a GitHub Actions job
+/// (third-party checks apps use their own `details_url` shape).
+fn parse_run_and_job_ids(details_url: &str) -> Option<(String, String)> {
+    let runs_at = details_url.find("/actions/runs/")?;
+    let rest = &details_url[runs_at + "/actions/runs/".len()..];
+    let (run_id, rest) = rest.split_once('/')?;
+    let rest = rest.strip_prefix("job/")?;
+    let job_id = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    if run_id.chars().all(|c| c.is_ascii_digit())
+        && !run_id.is_empty()
+        && job_id.chars().all(|c| c.is_ascii_digit())
+        && !job_id.is_empty()
+    {
+        Some((run_id.to_string(), job_id.to_string()))
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 static TEST_GH_BINARY: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
@@ -377,6 +481,18 @@ pub struct GhPrArgs {
     name_only: Option<bool>,
     #[serde(default)]
     repository: Option<String>,
+    /// GraphQL node id of a `PullRequestReviewThread`, e.g. `PRRT_kwDOA...`.
+    /// Required by `reply_review_thread` and `resolve_review_thread`.
+    #[serde(default, alias = "threadId")]
+    thread_id: Option<String>,
+    /// `review_threads`: include resolved threads too (default: unresolved
+    /// only, since that's what an unattended agent needs to act on).
+    #[serde(default, alias = "includeResolved")]
+    include_resolved: Option<bool>,
+    /// `checks_watch`: how long to poll before giving up. Defaults to 900s,
+    /// clamped to a 3600s ceiling.
+    #[serde(default, alias = "timeoutSecs")]
+    timeout_secs: Option<u64>,
 }
 
 /// Arguments for GitHub Issue operations.
@@ -512,6 +628,75 @@ async fn run_gh_api(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Run a `gh api graphql` query or mutation and return the decoded JSON
+/// response body.
+///
+/// `is_mutation` controls the same cancellation policy `run_gh_api` derives
+/// from the HTTP method: queries behave like a `GET` (safe to abandon on
+/// cancellation) while mutations behave like a `POST` (a cancellation after
+/// the process starts must await the real terminal response so a write that
+/// already landed isn't reported as failed/retryable). GraphQL always
+/// transports as POST at the HTTP layer, so that policy can't be inferred
+/// from the method the way `run_gh_api` does.
+async fn run_gh_graphql(
+    query: &str,
+    variables: Vec<(String, Value)>,
+    gh_repo: Option<&str>,
+    cancel: Option<&CancellationToken>,
+    is_mutation: bool,
+) -> Result<Value, GhCommandError> {
+    let mut cmd = new_gh_command();
+    cmd.arg("api").arg("graphql");
+    cmd.arg("-f").arg(format!("query={query}"));
+
+    let mut args: Vec<String> = Vec::new();
+    for (key, value) in variables {
+        append_field(&mut args, &key, &value);
+    }
+    if !args.is_empty() {
+        cmd.args(args);
+    }
+    if let Some(repo) = gh_repo {
+        cmd.env("GH_REPO", repo);
+    }
+
+    let output = run_command_output_with_policy(cmd, cancel, is_mutation)
+        .await
+        .map_err(|error| match error {
+            GhCommandError::Failed(message) => {
+                GhCommandError::Failed(format!("Failed to run gh api graphql: {message}"))
+            }
+            GhCommandError::Cancelled => GhCommandError::Cancelled,
+            GhCommandError::Indeterminate(message) => GhCommandError::Indeterminate(message),
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(GhCommandError::Failed(if stderr.is_empty() {
+            "gh api graphql failed".to_string()
+        } else {
+            stderr
+        }));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let json: Value = serde_json::from_str(&stdout)
+        .map_err(|error| GhCommandError::Failed(format!("Invalid GraphQL response: {error}")))?;
+    if let Some(errors) = json.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            let messages: Vec<String> = errors
+                .iter()
+                .filter_map(|error| error.get("message").and_then(Value::as_str))
+                .map(std::string::ToString::to_string)
+                .collect();
+            return Err(GhCommandError::Failed(if messages.is_empty() {
+                "GraphQL request returned errors".to_string()
+            } else {
+                messages.join("; ")
+            }));
+        }
+    }
+    Ok(json)
+}
+
 async fn git_current_branch(
     cwd: &str,
     cancel: Option<&CancellationToken>,
@@ -610,8 +795,24 @@ async fn resolve_repo_full_name(
 /// - `view` - View a specific PR (requires `number`) or list all
 /// - `checkout` - Checkout a PR branch locally (requires `number`)
 /// - `comment` - Add a comment to a PR (requires `number`, `body`)
-/// - `checks` - View CI check status (requires `number`)
+/// - `checks` - View CI check status once (requires `number`)
 /// - `diff` - Get PR diff (requires `number`, optional `nameOnly`)
+/// - `review_threads` - List PR review threads and top-level review
+///   summaries (requires `number`, optional `includeResolved`). Use this
+///   before acting on review feedback: it defaults to unresolved threads
+///   only, with each comment's author, body, and whether the thread is
+///   outdated (superseded by a later push).
+/// - `reply_review_thread` - Reply inline to a specific review thread
+///   (requires `threadId` from `review_threads`, and `body`). Use this to
+///   answer a reviewer's comment in place instead of a general PR comment.
+/// - `resolve_review_thread` - Mark a review thread resolved (requires
+///   `threadId`). Only resolve a thread after actually addressing it in
+///   code or in a reply; resolving without addressing it hides the feedback.
+/// - `checks_watch` - Poll CI to completion instead of a one-shot snapshot
+///   (requires `number`, optional `timeoutSecs`, default 900s, max 3600s).
+///   Returns a per-check summary and, for any check that failed, a bounded
+///   tail of its job log. Prefer this over repeated `checks` calls after
+///   opening or updating a PR.
 ///
 /// # Arguments
 ///
@@ -942,9 +1143,519 @@ pub(crate) async fn gh_pr(
                 }
             }
         }
+        "review_threads" => {
+            let number = match parsed.number {
+                Some(val) => val,
+                None => {
+                    return ToolResult::failure("number required for review_threads".to_string());
+                }
+            };
+            let full_name = match resolve_repo_full_name(repo, cancel).await {
+                Ok(name) => name,
+                Err(err) => return gh_error_result(err),
+            };
+            let Some((owner, repo_name)) = full_name.split_once('/') else {
+                return ToolResult::failure(format!("Unexpected repository name '{full_name}'"));
+            };
+            let include_resolved = parsed.include_resolved.unwrap_or(false);
+            let query = review_threads_query();
+            let variables = vec![
+                ("owner".to_string(), Value::String(owner.to_string())),
+                ("repo".to_string(), Value::String(repo_name.to_string())),
+                ("number".to_string(), Value::Number(number.into())),
+            ];
+            let response = match run_gh_graphql(&query, variables, repo, cancel, false).await {
+                Ok(json) => json,
+                Err(err) => return gh_error_result(err),
+            };
+            let Some(pr) = response.pointer("/data/repository/pullRequest") else {
+                return ToolResult::failure(
+                    "GraphQL response missing repository.pullRequest".to_string(),
+                );
+            };
+            build_review_threads_result(pr, include_resolved)
+        }
+        "reply_review_thread" => {
+            let thread_id = match parsed.thread_id.as_deref() {
+                Some(val) if is_valid_review_thread_id(val) => val.to_string(),
+                Some(_) => {
+                    return ToolResult::failure(
+                        "threadId is not a valid PullRequestReviewThread id (expected PRRT_...)"
+                            .to_string(),
+                    );
+                }
+                None => {
+                    return ToolResult::failure(
+                        "threadId required for reply_review_thread".to_string(),
+                    );
+                }
+            };
+            let body = match parsed.body {
+                Some(val) => val,
+                None => {
+                    return ToolResult::failure(
+                        "body required for reply_review_thread".to_string(),
+                    );
+                }
+            };
+            let variables = vec![
+                ("threadId".to_string(), Value::String(thread_id)),
+                ("body".to_string(), Value::String(body)),
+            ];
+            match run_gh_graphql(
+                reply_review_thread_mutation(),
+                variables,
+                repo,
+                cancel,
+                true,
+            )
+            .await
+            {
+                Ok(json) => ToolResult::success(
+                    serde_json::to_string_pretty(
+                        json.pointer("/data/addPullRequestReviewThreadReply/comment")
+                            .unwrap_or(&Value::Null),
+                    )
+                    .unwrap_or_else(|_| json.to_string()),
+                ),
+                Err(err) => gh_error_result(err),
+            }
+        }
+        "resolve_review_thread" => {
+            let thread_id = match parsed.thread_id.as_deref() {
+                Some(val) if is_valid_review_thread_id(val) => val.to_string(),
+                Some(_) => {
+                    return ToolResult::failure(
+                        "threadId is not a valid PullRequestReviewThread id (expected PRRT_...)"
+                            .to_string(),
+                    );
+                }
+                None => {
+                    return ToolResult::failure(
+                        "threadId required for resolve_review_thread".to_string(),
+                    );
+                }
+            };
+            let variables = vec![("threadId".to_string(), Value::String(thread_id))];
+            match run_gh_graphql(
+                resolve_review_thread_mutation(),
+                variables,
+                repo,
+                cancel,
+                true,
+            )
+            .await
+            {
+                Ok(json) => ToolResult::success(
+                    serde_json::to_string_pretty(
+                        json.pointer("/data/resolveReviewThread/thread")
+                            .unwrap_or(&Value::Null),
+                    )
+                    .unwrap_or_else(|_| json.to_string()),
+                ),
+                Err(err) => gh_error_result(err),
+            }
+        }
+        "checks_watch" => {
+            let number = match parsed.number {
+                Some(val) => val,
+                None => return ToolResult::failure("number required for checks_watch".to_string()),
+            };
+            let timeout_secs = clamp_checks_watch_timeout(parsed.timeout_secs);
+            watch_checks(number, timeout_secs, repo, cancel).await
+        }
         _ => ToolResult::failure("Unsupported gh_pr action".to_string()),
     };
     with_repo_origin(result, repo)
+}
+
+/// Build the bounded GraphQL query used by the `review_threads` action.
+/// Factored out from the `gh_pr` dispatch so its shape (field selection and
+/// `first:` bounds) can be asserted directly in tests.
+fn review_threads_query() -> String {
+    format!(
+        "query($owner: String!, $repo: String!, $number: Int!) {{ \
+           repository(owner: $owner, name: $repo) {{ \
+             pullRequest(number: $number) {{ \
+               reviews(first: {max_reviews}) {{ \
+                 totalCount \
+                 nodes {{ author {{ login }} state body submittedAt }} \
+               }} \
+               reviewThreads(first: {max_threads}) {{ \
+                 totalCount \
+                 nodes {{ \
+                   id isResolved isOutdated path line \
+                   comments(first: {max_comments}) {{ \
+                     totalCount \
+                     nodes {{ author {{ login }} body createdAt }} \
+                   }} \
+                 }} \
+               }} \
+             }} \
+           }} \
+         }}",
+        max_reviews = bounds::MAX_REVIEWS,
+        max_threads = bounds::MAX_REVIEW_THREADS,
+        max_comments = bounds::MAX_THREAD_COMMENTS,
+    )
+}
+
+/// GraphQL mutation used by the `reply_review_thread` action.
+fn reply_review_thread_mutation() -> &'static str {
+    "mutation($threadId: ID!, $body: String!) { \
+        addPullRequestReviewThreadReply(input: { \
+          pullRequestReviewThreadId: $threadId, body: $body \
+        }) { \
+          comment { id body createdAt author { login } } \
+        } \
+      }"
+}
+
+/// GraphQL mutation used by the `resolve_review_thread` action.
+fn resolve_review_thread_mutation() -> &'static str {
+    "mutation($threadId: ID!) { \
+        resolveReviewThread(input: { threadId: $threadId }) { \
+          thread { id isResolved } \
+        } \
+      }"
+}
+
+/// Clamp a caller-supplied `checks_watch` timeout into `[1,
+/// CHECKS_WATCH_MAX_TIMEOUT_SECS]`, defaulting to
+/// `CHECKS_WATCH_DEFAULT_TIMEOUT_SECS` when unset. A caller cannot request
+/// an unbounded or zero-length poll.
+fn clamp_checks_watch_timeout(requested: Option<u64>) -> u64 {
+    requested
+        .unwrap_or(bounds::CHECKS_WATCH_DEFAULT_TIMEOUT_SECS)
+        .clamp(1, bounds::CHECKS_WATCH_MAX_TIMEOUT_SECS)
+}
+
+/// Shape the GraphQL `pullRequest` payload from `review_threads` into the
+/// bounded, model-facing summary: unresolved (by default) review threads
+/// with their comments, plus top-level review state summaries.
+fn build_review_threads_result(pr: &Value, include_resolved: bool) -> ToolResult {
+    let mut truncated_any = false;
+
+    let reviews_total = pr
+        .pointer("/reviews/totalCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let review_nodes = pr
+        .pointer("/reviews/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if reviews_total > review_nodes.len() as u64 {
+        truncated_any = true;
+    }
+    let reviews: Vec<Value> = review_nodes
+        .into_iter()
+        .map(|review| {
+            let (body, body_truncated) = truncate_text(
+                review.get("body").and_then(Value::as_str).unwrap_or(""),
+                bounds::MAX_REVIEW_BODY_CHARS,
+            );
+            truncated_any |= body_truncated;
+            serde_json::json!({
+                "author": review.pointer("/author/login").and_then(Value::as_str),
+                "state": review.get("state").and_then(Value::as_str),
+                "body": body,
+                "submittedAt": review.get("submittedAt").and_then(Value::as_str),
+            })
+        })
+        .collect();
+
+    let threads_total = pr
+        .pointer("/reviewThreads/totalCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let thread_nodes = pr
+        .pointer("/reviewThreads/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if threads_total > thread_nodes.len() as u64 {
+        truncated_any = true;
+    }
+
+    let threads: Vec<Value> = thread_nodes
+        .into_iter()
+        .filter(|thread| {
+            include_resolved
+                || !thread
+                    .get("isResolved")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .map(|thread| {
+            let comments_total = thread
+                .pointer("/comments/totalCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let comment_nodes = thread
+                .pointer("/comments/nodes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let comments_truncated = comments_total > comment_nodes.len() as u64;
+            truncated_any |= comments_truncated;
+            let comments: Vec<Value> = comment_nodes
+                .into_iter()
+                .map(|comment| {
+                    let (body, body_truncated) = truncate_text(
+                        comment.get("body").and_then(Value::as_str).unwrap_or(""),
+                        bounds::MAX_COMMENT_BODY_CHARS,
+                    );
+                    truncated_any |= body_truncated;
+                    serde_json::json!({
+                        "author": comment.pointer("/author/login").and_then(Value::as_str),
+                        "body": body,
+                        "createdAt": comment.get("createdAt").and_then(Value::as_str),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "id": thread.get("id").and_then(Value::as_str),
+                "path": thread.get("path").and_then(Value::as_str),
+                "line": thread.get("line"),
+                "isResolved": thread.get("isResolved").and_then(Value::as_bool).unwrap_or(false),
+                "isOutdated": thread.get("isOutdated").and_then(Value::as_bool).unwrap_or(false),
+                "comments": comments,
+                "commentsTruncated": comments_truncated,
+            })
+        })
+        .collect();
+
+    let payload = serde_json::json!({
+        "reviews": reviews,
+        "threads": threads,
+        "includeResolved": include_resolved,
+    });
+    let rendered = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+    let (output, output_truncated) = truncate_text(&rendered, bounds::MAX_OUTPUT_CHARS);
+    truncated_any |= output_truncated;
+
+    let mut result = ToolResult::success(output);
+    if truncated_any {
+        result = result.with_details(serde_json::json!({ "truncated": true }));
+    }
+    result
+}
+
+/// Poll `repos/{owner}/{repo}/commits/{sha}/check-runs` for PR `number`
+/// until every check reports `status: "completed"`, `timeout_secs` elapses,
+/// or `cancel` fires. Returns a per-check summary and, for failed checks, a
+/// bounded tail of the job's failure log.
+async fn watch_checks(
+    number: u64,
+    timeout_secs: u64,
+    repo: Option<&str>,
+    cancel: Option<&CancellationToken>,
+) -> ToolResult {
+    watch_checks_with_interval(
+        number,
+        timeout_secs,
+        Duration::from_secs(bounds::CHECKS_WATCH_INTERVAL_SECS),
+        repo,
+        cancel,
+    )
+    .await
+}
+
+/// `watch_checks` with an injectable poll interval so tests can exercise
+/// the completion/timeout state machine against a fake `gh` command runner
+/// without waiting on the real 30s production interval.
+async fn watch_checks_with_interval(
+    number: u64,
+    timeout_secs: u64,
+    interval: Duration,
+    repo: Option<&str>,
+    cancel: Option<&CancellationToken>,
+) -> ToolResult {
+    let pr_output = match run_gh_api(
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}"),
+        "GET",
+        Vec::new(),
+        Vec::new(),
+        repo,
+        cancel,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(err) => return gh_error_result(err),
+    };
+    let pr_json: Value = match serde_json::from_str(&pr_output) {
+        Ok(val) => val,
+        Err(err) => return ToolResult::failure(format!("Invalid PR response: {err}")),
+    };
+    let Some(sha) = pr_json
+        .pointer("/head/sha")
+        .and_then(Value::as_str)
+        .map(std::string::ToString::to_string)
+    else {
+        return ToolResult::failure("Missing PR head sha".to_string());
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut check_runs: Vec<Value>;
+    let mut timed_out = false;
+
+    loop {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return gh_error_result(GhCommandError::Cancelled);
+        }
+        let checks_output = match run_gh_api(
+            &format!("repos/{{owner}}/{{repo}}/commits/{sha}/check-runs"),
+            "GET",
+            vec![("per_page".to_string(), Value::Number(100.into()))],
+            Vec::new(),
+            repo,
+            cancel,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(err) => return gh_error_result(err),
+        };
+        let checks_json: Value = match serde_json::from_str(&checks_output) {
+            Ok(val) => val,
+            Err(err) => return ToolResult::failure(format!("Invalid check-runs response: {err}")),
+        };
+        check_runs = checks_json
+            .get("check_runs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let all_completed = !check_runs.is_empty()
+            && check_runs
+                .iter()
+                .all(|run| run.get("status").and_then(Value::as_str) == Some("completed"));
+        if all_completed {
+            break;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            break;
+        }
+
+        match cancel {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => return gh_error_result(GhCommandError::Cancelled),
+                    () = tokio::time::sleep(interval) => {}
+                }
+            }
+            None => tokio::time::sleep(interval).await,
+        }
+    }
+
+    let mut failed_logs: Vec<Value> = Vec::new();
+    let failed_runs = check_runs.iter().filter(|run| {
+        run.get("status").and_then(Value::as_str) == Some("completed")
+            && !matches!(
+                run.get("conclusion").and_then(Value::as_str),
+                Some("success" | "neutral" | "skipped")
+            )
+    });
+    for run in failed_runs.take(bounds::MAX_FAILED_JOB_LOGS) {
+        let name = run
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let Some((run_id, job_id)) = run
+            .get("details_url")
+            .and_then(Value::as_str)
+            .and_then(parse_run_and_job_ids)
+        else {
+            continue;
+        };
+        let mut cmd = new_gh_command();
+        cmd.arg("run")
+            .arg("view")
+            .arg(&run_id)
+            .arg("--job")
+            .arg(&job_id)
+            .arg("--log-failed");
+        if let Some(repo) = repo {
+            cmd.env("GH_REPO", repo);
+        }
+        match run_command_output(cmd, cancel).await {
+            Ok(output) if output.status.success() => {
+                let raw = String::from_utf8_lossy(&output.stdout).to_string();
+                let (tail, truncated) =
+                    tail_text(&raw, bounds::MAX_LOG_TAIL_LINES, bounds::MAX_LOG_TAIL_BYTES);
+                failed_logs.push(serde_json::json!({
+                    "name": name,
+                    "runId": run_id,
+                    "jobId": job_id,
+                    "log": tail,
+                    "truncated": truncated,
+                }));
+            }
+            Err(GhCommandError::Cancelled) => return gh_error_result(GhCommandError::Cancelled),
+            Ok(_) | Err(_) => {
+                // A missing/expired log (or a non-zero `gh run view` exit)
+                // must not fail the whole watch; the per-check summary
+                // already reports the failure.
+                failed_logs.push(serde_json::json!({
+                    "name": name,
+                    "runId": run_id,
+                    "jobId": job_id,
+                    "log": Value::Null,
+                    "truncated": false,
+                }));
+            }
+        }
+    }
+
+    let summary: Vec<Value> = check_runs
+        .iter()
+        .map(|run| {
+            serde_json::json!({
+                "name": run.get("name").and_then(Value::as_str),
+                "status": run.get("status").and_then(Value::as_str),
+                "conclusion": run.get("conclusion").and_then(Value::as_str),
+                "detailsUrl": run.get("details_url").and_then(Value::as_str),
+            })
+        })
+        .collect();
+    let all_completed = !check_runs.is_empty()
+        && check_runs
+            .iter()
+            .all(|run| run.get("status").and_then(Value::as_str) == Some("completed"));
+    let all_succeeded = all_completed
+        && check_runs.iter().all(|run| {
+            matches!(
+                run.get("conclusion").and_then(Value::as_str),
+                Some("success" | "neutral" | "skipped")
+            )
+        });
+
+    let payload = serde_json::json!({
+        "complete": all_completed,
+        "timedOut": timed_out,
+        "allSucceeded": all_succeeded,
+        "checks": summary,
+        "failedLogs": failed_logs,
+    });
+    // The loop above only ever exits via `all_completed` (success) or
+    // `timed_out` (failure); `all_completed` is recomputed here from the
+    // last fetched `check_runs` rather than threaded out of the loop, but
+    // the two conditions are exhaustive and mutually exclusive by
+    // construction.
+    let output = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+    if all_completed {
+        ToolResult::success(output)
+    } else {
+        ToolResult::failure(format!(
+            "checks_watch timed out after {timeout_secs}s before all checks completed"
+        ))
+        .with_details(payload)
+    }
 }
 
 /// Execute a GitHub Issue operation.
@@ -1856,5 +2567,862 @@ mod tests {
         let result: Result<GhIssueArgs, _> = serde_json::from_value(json);
         // Missing required "action" field
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // review_threads / reply_review_thread / resolve_review_thread /
+    // checks_watch -- argument validation
+    // ========================================================================
+
+    #[test]
+    fn test_gh_pr_args_thread_id_snake_case() {
+        let json = serde_json::json!({
+            "action": "resolve_review_thread",
+            "thread_id": "PRRT_kwDOA1234"
+        });
+        let args: GhPrArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.thread_id.unwrap(), "PRRT_kwDOA1234");
+    }
+
+    #[test]
+    fn test_gh_pr_args_thread_id_camel_case_alias() {
+        let json = serde_json::json!({
+            "action": "resolve_review_thread",
+            "threadId": "PRRT_kwDOA1234"
+        });
+        let args: GhPrArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.thread_id.unwrap(), "PRRT_kwDOA1234");
+    }
+
+    #[test]
+    fn test_gh_pr_args_include_resolved_alias() {
+        let json = serde_json::json!({
+            "action": "review_threads",
+            "number": 5,
+            "includeResolved": true
+        });
+        let args: GhPrArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.include_resolved, Some(true));
+    }
+
+    #[test]
+    fn test_gh_pr_args_timeout_secs_alias() {
+        let json = serde_json::json!({
+            "action": "checks_watch",
+            "number": 5,
+            "timeoutSecs": 120
+        });
+        let args: GhPrArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.timeout_secs, Some(120));
+    }
+
+    #[test]
+    fn test_gh_pr_args_number_must_be_numeric() {
+        let json = serde_json::json!({
+            "action": "checks_watch",
+            "number": "not-a-number"
+        });
+        let result: Result<GhPrArgs, _> = serde_json::from_value(json);
+        assert!(result.is_err(), "a string PR number must fail closed");
+    }
+
+    // ========================================================================
+    // is_valid_review_thread_id
+    // ========================================================================
+
+    #[test]
+    fn test_review_thread_id_accepts_real_shape() {
+        assert!(is_valid_review_thread_id("PRRT_kwDOE5NpvM5okADy"));
+    }
+
+    #[test]
+    fn test_review_thread_id_rejects_missing_prefix() {
+        assert!(!is_valid_review_thread_id("kwDOE5NpvM5okADy"));
+        assert!(!is_valid_review_thread_id(
+            "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3VGhyZWFkMTIzNDU2Nzg="
+        ));
+    }
+
+    #[test]
+    fn test_review_thread_id_rejects_empty_suffix() {
+        assert!(!is_valid_review_thread_id("PRRT_"));
+    }
+
+    #[test]
+    fn test_review_thread_id_rejects_shell_metacharacters() {
+        assert!(!is_valid_review_thread_id("PRRT_abc; rm -rf /"));
+        assert!(!is_valid_review_thread_id("PRRT_abc$(whoami)"));
+        assert!(!is_valid_review_thread_id("PRRT_abc/../etc"));
+        assert!(!is_valid_review_thread_id("PRRT_ abc"));
+    }
+
+    #[test]
+    fn test_review_thread_id_rejects_oversized_suffix() {
+        let oversized = format!("PRRT_{}", "a".repeat(200));
+        assert!(!is_valid_review_thread_id(&oversized));
+    }
+
+    #[test]
+    fn test_review_thread_id_accepts_base64url_and_padding_chars() {
+        assert!(is_valid_review_thread_id("PRRT_A-Za_0-9="));
+    }
+
+    // ========================================================================
+    // GraphQL query/mutation construction
+    // ========================================================================
+
+    #[test]
+    fn test_review_threads_query_is_bounded_and_shaped() {
+        let query = review_threads_query();
+        assert!(query.contains("$owner: String!"));
+        assert!(query.contains("$repo: String!"));
+        assert!(query.contains("$number: Int!"));
+        assert!(query.contains("reviewThreads(first: 50)"));
+        assert!(query.contains("reviews(first: 20)"));
+        assert!(query.contains("comments(first: 20)"));
+        assert!(query.contains("isResolved"));
+        assert!(query.contains("isOutdated"));
+        assert!(query.contains("path"));
+        assert!(query.contains("line"));
+        assert!(query.contains("createdAt"));
+        assert!(query.contains("submittedAt"));
+        assert!(query.contains("state"));
+    }
+
+    #[test]
+    fn test_reply_review_thread_mutation_shape() {
+        let mutation = reply_review_thread_mutation();
+        assert!(mutation.contains("addPullRequestReviewThreadReply"));
+        assert!(mutation.contains("pullRequestReviewThreadId: $threadId"));
+        assert!(mutation.contains("body: $body"));
+    }
+
+    #[test]
+    fn test_resolve_review_thread_mutation_shape() {
+        let mutation = resolve_review_thread_mutation();
+        assert!(mutation.contains("resolveReviewThread"));
+        assert!(mutation.contains("threadId: $threadId"));
+        assert!(mutation.contains("isResolved"));
+    }
+
+    // ========================================================================
+    // clamp_checks_watch_timeout
+    // ========================================================================
+
+    #[test]
+    fn test_clamp_checks_watch_timeout_defaults_to_900() {
+        assert_eq!(clamp_checks_watch_timeout(None), 900);
+    }
+
+    #[test]
+    fn test_clamp_checks_watch_timeout_caps_at_3600() {
+        assert_eq!(clamp_checks_watch_timeout(Some(1_000_000)), 3600);
+    }
+
+    #[test]
+    fn test_clamp_checks_watch_timeout_rejects_zero() {
+        assert_eq!(clamp_checks_watch_timeout(Some(0)), 1);
+    }
+
+    #[test]
+    fn test_clamp_checks_watch_timeout_passes_through_in_range() {
+        assert_eq!(clamp_checks_watch_timeout(Some(120)), 120);
+    }
+
+    // ========================================================================
+    // truncate_text / tail_text
+    // ========================================================================
+
+    #[test]
+    fn test_truncate_text_no_op_under_limit() {
+        let (text, truncated) = truncate_text("short", 100);
+        assert_eq!(text, "short");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn test_truncate_text_marks_truncated_over_limit() {
+        let (text, truncated) = truncate_text(&"a".repeat(50), 10);
+        assert!(truncated);
+        assert!(text.starts_with(&"a".repeat(10)));
+        assert!(text.contains("(truncated)"));
+    }
+
+    #[test]
+    fn test_tail_text_keeps_last_n_lines() {
+        let input: String = (1..=10)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (tail, truncated) = tail_text(&input, 3, 10_000);
+        assert!(truncated);
+        assert_eq!(tail, "line-8\nline-9\nline-10");
+    }
+
+    #[test]
+    fn test_tail_text_enforces_byte_cap() {
+        let input = "x".repeat(1000);
+        let (tail, truncated) = tail_text(&input, 10_000, 100);
+        assert!(truncated);
+        assert_eq!(tail.len(), 100);
+    }
+
+    #[test]
+    fn test_tail_text_no_op_under_both_limits() {
+        let input = "a\nb\nc";
+        let (tail, truncated) = tail_text(input, 10, 100);
+        assert_eq!(tail, "a\nb\nc");
+        assert!(!truncated);
+    }
+
+    // ========================================================================
+    // parse_run_and_job_ids
+    // ========================================================================
+
+    #[test]
+    fn test_parse_run_and_job_ids_extracts_ids() {
+        let url = "https://github.com/acme/widget/actions/runs/1234567/job/9876543";
+        assert_eq!(
+            parse_run_and_job_ids(url),
+            Some(("1234567".to_string(), "9876543".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_parse_run_and_job_ids_rejects_non_actions_url() {
+        assert_eq!(
+            parse_run_and_job_ids("https://example.com/some/other/path"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_run_and_job_ids_rejects_non_numeric_ids() {
+        assert_eq!(
+            parse_run_and_job_ids("https://github.com/acme/widget/actions/runs/abc/job/def"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_run_and_job_ids_ignores_trailing_query() {
+        let url = "https://github.com/acme/widget/actions/runs/111/job/222?pr=1";
+        assert_eq!(
+            parse_run_and_job_ids(url),
+            Some(("111".to_string(), "222".to_string()))
+        );
+    }
+
+    // ========================================================================
+    // build_review_threads_result -- output parsing from fixture JSON
+    // ========================================================================
+
+    fn review_threads_fixture() -> Value {
+        serde_json::json!({
+            "reviews": {
+                "totalCount": 1,
+                "nodes": [
+                    {
+                        "author": {"login": "reviewer1"},
+                        "state": "CHANGES_REQUESTED",
+                        "body": "Please fix the error handling.",
+                        "submittedAt": "2026-09-01T00:00:00Z"
+                    }
+                ]
+            },
+            "reviewThreads": {
+                "totalCount": 2,
+                "nodes": [
+                    {
+                        "id": "PRRT_unresolved1",
+                        "isResolved": false,
+                        "isOutdated": false,
+                        "path": "src/lib.rs",
+                        "line": 42,
+                        "comments": {
+                            "totalCount": 1,
+                            "nodes": [
+                                {
+                                    "author": {"login": "reviewer1"},
+                                    "body": "This needs a null check.",
+                                    "createdAt": "2026-09-01T00:00:00Z"
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "id": "PRRT_resolved1",
+                        "isResolved": true,
+                        "isOutdated": true,
+                        "path": "src/main.rs",
+                        "line": 7,
+                        "comments": {
+                            "totalCount": 1,
+                            "nodes": [
+                                {
+                                    "author": {"login": "reviewer2"},
+                                    "body": "Already fixed, thanks.",
+                                    "createdAt": "2026-09-02T00:00:00Z"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn test_build_review_threads_result_filters_resolved_by_default() {
+        let fixture = review_threads_fixture();
+        let result = build_review_threads_result(&fixture, false);
+        assert!(result.success);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        let threads = payload["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0]["id"], "PRRT_unresolved1");
+        assert_eq!(threads[0]["isResolved"], false);
+    }
+
+    #[test]
+    fn test_build_review_threads_result_includes_resolved_when_requested() {
+        let fixture = review_threads_fixture();
+        let result = build_review_threads_result(&fixture, true);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        let threads = payload["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 2);
+    }
+
+    #[test]
+    fn test_build_review_threads_result_marks_outdated() {
+        let fixture = review_threads_fixture();
+        let result = build_review_threads_result(&fixture, true);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        let threads = payload["threads"].as_array().unwrap();
+        let resolved_thread = threads
+            .iter()
+            .find(|t| t["id"] == "PRRT_resolved1")
+            .unwrap();
+        assert_eq!(resolved_thread["isOutdated"], true);
+        let unresolved_thread = threads
+            .iter()
+            .find(|t| t["id"] == "PRRT_unresolved1")
+            .unwrap();
+        assert_eq!(unresolved_thread["isOutdated"], false);
+    }
+
+    #[test]
+    fn test_build_review_threads_result_reports_review_summaries() {
+        let fixture = review_threads_fixture();
+        let result = build_review_threads_result(&fixture, false);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        let reviews = payload["reviews"].as_array().unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0]["author"], "reviewer1");
+        assert_eq!(reviews[0]["state"], "CHANGES_REQUESTED");
+        assert_eq!(reviews[0]["body"], "Please fix the error handling.");
+    }
+
+    #[test]
+    fn test_build_review_threads_result_truncates_long_comment_body() {
+        let mut fixture = review_threads_fixture();
+        let long_body = "x".repeat(bounds::MAX_COMMENT_BODY_CHARS + 500);
+        fixture["reviewThreads"]["nodes"][0]["comments"]["nodes"][0]["body"] =
+            Value::String(long_body);
+        let result = build_review_threads_result(&fixture, false);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        let comment_body = payload["threads"][0]["comments"][0]["body"]
+            .as_str()
+            .unwrap();
+        assert!(comment_body.len() < bounds::MAX_COMMENT_BODY_CHARS + 500);
+        assert!(comment_body.contains("(truncated)"));
+        assert_eq!(
+            result
+                .details
+                .as_ref()
+                .and_then(|d| d.get("truncated"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_build_review_threads_result_marks_comments_truncated_when_more_exist() {
+        let mut fixture = review_threads_fixture();
+        fixture["reviewThreads"]["nodes"][0]["comments"]["totalCount"] = Value::from(5);
+        let result = build_review_threads_result(&fixture, false);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(payload["threads"][0]["commentsTruncated"], true);
+    }
+
+    #[test]
+    fn test_build_review_threads_result_handles_empty_threads() {
+        let fixture = serde_json::json!({
+            "reviews": {"totalCount": 0, "nodes": []},
+            "reviewThreads": {"totalCount": 0, "nodes": []}
+        });
+        let result = build_review_threads_result(&fixture, false);
+        assert!(result.success);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(payload["threads"].as_array().unwrap().len(), 0);
+        assert_eq!(payload["reviews"].as_array().unwrap().len(), 0);
+    }
+
+    // ========================================================================
+    // gh_pr dispatch -- process-backed integration tests (unix only, mirrors
+    // the existing TestGhOverride/TEST_GH_OVERRIDE_LOCK convention above)
+    // ========================================================================
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gh_pr_review_threads_requires_number() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        let reached_path = workspace.path().join("reached-api");
+        std::fs::write(
+            &fake_gh,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+                 printf reached > '{}'\n\
+                 echo '{{}}'\n",
+                reached_path.display()
+            ),
+        )
+        .expect("write fake gh");
+        let mut permissions = std::fs::metadata(&fake_gh)
+            .expect("fake gh metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_gh, permissions).expect("make fake gh executable");
+        let _override = TestGhOverride::install(fake_gh);
+
+        let result = gh_pr(
+            serde_json::json!({"action": "review_threads"}),
+            workspace.path().to_str().unwrap(),
+            None,
+        )
+        .await;
+
+        assert!(!result.success);
+        assert!(
+            !reached_path.exists(),
+            "missing number must fail before any gh api call"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gh_pr_reply_review_thread_rejects_malformed_thread_id() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        let reached_path = workspace.path().join("reached-api");
+        std::fs::write(
+            &fake_gh,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+                 printf reached > '{}'\n\
+                 echo '{{}}'\n",
+                reached_path.display()
+            ),
+        )
+        .expect("write fake gh");
+        let mut permissions = std::fs::metadata(&fake_gh)
+            .expect("fake gh metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_gh, permissions).expect("make fake gh executable");
+        let _override = TestGhOverride::install(fake_gh);
+
+        let result = gh_pr(
+            serde_json::json!({
+                "action": "reply_review_thread",
+                "threadId": "not-a-real-id",
+                "body": "thanks"
+            }),
+            workspace.path().to_str().unwrap(),
+            None,
+        )
+        .await;
+
+        assert!(!result.success);
+        assert!(
+            !reached_path.exists(),
+            "an invalid threadId must fail before any gh api call"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gh_pr_resolve_review_thread_requires_thread_id() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let result = gh_pr(
+            serde_json::json!({"action": "resolve_review_thread"}),
+            workspace.path().to_str().unwrap(),
+            None,
+        )
+        .await;
+        // ensure_gh_available runs first and will fail if the real `gh` is
+        // absent from PATH in this environment, but either way the tool
+        // must not report success without a threadId.
+        assert!(!result.success);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hung_mutating_reply_review_thread_returns_bounded_indeterminate_outcome() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        let pid_path = workspace.path().join("api.pid");
+        let completion_path = workspace.path().join("completed");
+        std::fs::write(
+            &fake_gh,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+                 printf '%s' \"$$\" > '{}'\n\
+                 sleep 60\n\
+                 printf completed > '{}'\n",
+                pid_path.display(),
+                completion_path.display()
+            ),
+        )
+        .expect("write fake gh");
+        let mut permissions = std::fs::metadata(&fake_gh)
+            .expect("fake gh metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_gh, permissions).expect("make fake gh executable");
+        let _override = TestGhOverride::install(fake_gh);
+
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        let workspace_path = workspace.path().to_str().unwrap().to_string();
+        let execution = tokio::spawn(async move {
+            gh_pr(
+                serde_json::json!({
+                    "action": "reply_review_thread",
+                    "threadId": "PRRT_kwDOA1234",
+                    "body": "must become indeterminate"
+                }),
+                &workspace_path,
+                Some(&cancel_for_task),
+            )
+            .await
+        });
+        tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
+            while !pid_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake mutating gh graphql call should start");
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("hung mutating gh_pr call must finish within the shutdown bound")
+            .expect("gh_pr task should not panic");
+        assert!(!result.success);
+        let details = result.details.expect("indeterminate details");
+        assert_eq!(details["remoteOutcome"], "unknown");
+        assert_eq!(details["requiresReconciliation"], true);
+        assert!(
+            !completion_path.exists(),
+            "timed-out gh graphql mutation survived after indeterminate outcome"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hung_review_threads_query_is_plain_cancelled_not_indeterminate() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        let pid_path = workspace.path().join("api.pid");
+        let completion_path = workspace.path().join("completed");
+        std::fs::write(
+            &fake_gh,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+                 case \"$*\" in\n\
+                 *graphql*) printf '%s' \"$$\" > '{pid}'; sleep 60; printf completed > '{done}';;\n\
+                 *) echo '{{\"full_name\":\"acme/widget\"}}';;\n\
+                 esac\n",
+                pid = pid_path.display(),
+                done = completion_path.display()
+            ),
+        )
+        .expect("write fake gh");
+        let mut permissions = std::fs::metadata(&fake_gh)
+            .expect("fake gh metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_gh, permissions).expect("make fake gh executable");
+        let _override = TestGhOverride::install(fake_gh);
+
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        let workspace_path = workspace.path().to_str().unwrap().to_string();
+        let execution = tokio::spawn(async move {
+            gh_pr(
+                serde_json::json!({"action": "review_threads", "number": 7}),
+                &workspace_path,
+                Some(&cancel_for_task),
+            )
+            .await
+        });
+        tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
+            while !pid_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake gh graphql query should start");
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("hung review_threads query must finish within the shutdown bound")
+            .expect("gh_pr task should not panic");
+        assert!(!result.success);
+        let details = result.details.expect("cancellation details");
+        assert_eq!(details["cancelled"], true);
+        assert!(
+            details.get("requiresReconciliation").is_none(),
+            "a read-only query must not be reported as needing reconciliation"
+        );
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            !completion_path.exists(),
+            "cancelled read-only query survived and mutated after shutdown"
+        );
+    }
+
+    // ========================================================================
+    // checks_watch -- completion/timeout against a fake command runner
+    // ========================================================================
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &std::path::Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::write(path, contents).expect("write fake gh script");
+        let mut permissions = std::fs::metadata(path)
+            .expect("fake gh metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).expect("make fake gh executable");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn checks_watch_completes_once_status_transitions_and_fetches_failed_log() {
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        let count_path = workspace.path().join("check-runs.count");
+        write_executable_script(
+            &fake_gh,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+                 if [ \"$1\" = \"run\" ]; then\n\
+                 for i in $(seq 1 300); do echo \"log line $i\"; done\n\
+                 exit 0\n\
+                 fi\n\
+                 case \"$2\" in\n\
+                 *check-runs*)\n\
+                   count=$(cat '{count}' 2>/dev/null || echo 0)\n\
+                   count=$((count+1))\n\
+                   echo \"$count\" > '{count}'\n\
+                   if [ \"$count\" -lt 3 ]; then\n\
+                     echo '{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null,\"details_url\":\"https://github.com/acme/widget/actions/runs/111/job/222\"}}]}}'\n\
+                   else\n\
+                     echo '{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\",\"details_url\":\"https://github.com/acme/widget/actions/runs/111/job/222\"}}]}}'\n\
+                   fi\n\
+                   ;;\n\
+                 *)\n\
+                   echo '{{\"head\":{{\"sha\":\"deadbeefsha\"}}}}'\n\
+                   ;;\n\
+                 esac\n",
+                count = count_path.display(),
+            ),
+        );
+        let _override = TestGhOverride::install(fake_gh);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            watch_checks_with_interval(42, 60, Duration::from_millis(20), None, None),
+        )
+        .await
+        .expect("checks_watch must not hang against a fake command runner");
+
+        // The watch itself succeeded (it reached a final, non-timed-out
+        // answer); the fact that a check failed is data in the payload, not
+        // a tool error -- the same convention the existing one-shot
+        // `checks` action uses (it reports success and lets the model read
+        // the conclusions out of the body).
+        assert!(
+            result.success,
+            "reaching a final answer is a tool success even when a check failed: {:?}",
+            result.error
+        );
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(payload["complete"], true);
+        assert_eq!(payload["timedOut"], false);
+        assert_eq!(payload["allSucceeded"], false);
+        let checks = payload["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0]["status"], "completed");
+        assert_eq!(checks[0]["conclusion"], "failure");
+        let logs = payload["failedLogs"].as_array().unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["runId"], "111");
+        assert_eq!(logs[0]["jobId"], "222");
+        let log_text = logs[0]["log"].as_str().unwrap();
+        assert!(log_text.lines().count() <= 200);
+        assert!(log_text.contains("log line 300"));
+        assert!(!log_text.contains("log line 1\n"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn checks_watch_times_out_when_checks_never_complete() {
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        write_executable_script(
+            &fake_gh,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+             case \"$2\" in\n\
+             *check-runs*)\n\
+               echo '{\"total_count\":1,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null,\"details_url\":null}]}'\n\
+               ;;\n\
+             *)\n\
+               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
+               ;;\n\
+             esac\n",
+        );
+        let _override = TestGhOverride::install(fake_gh);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            watch_checks_with_interval(42, 0, Duration::from_millis(20), None, None),
+        )
+        .await
+        .expect("checks_watch must time out rather than hang forever");
+
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|message| message.contains("timed out")),
+            "{:?}",
+            result.error
+        );
+        let details = result.details.expect("checks_watch timeout details");
+        assert_eq!(details["complete"], false);
+        assert_eq!(details["timedOut"], true);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn checks_watch_succeeds_when_all_checks_pass() {
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        write_executable_script(
+            &fake_gh,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+             case \"$2\" in\n\
+             *check-runs*)\n\
+               echo '{\"total_count\":2,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"neutral\"}]}'\n\
+               ;;\n\
+             *)\n\
+               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
+               ;;\n\
+             esac\n",
+        );
+        let _override = TestGhOverride::install(fake_gh);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            watch_checks_with_interval(42, 60, Duration::from_millis(20), None, None),
+        )
+        .await
+        .expect("checks_watch must not hang against a fake command runner");
+
+        assert!(result.success);
+        let payload: Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(payload["complete"], true);
+        assert_eq!(payload["allSucceeded"], true);
+        assert_eq!(payload["failedLogs"].as_array().unwrap().len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn checks_watch_cancellation_stops_polling() {
+        let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
+        let workspace = tempfile::tempdir().expect("workspace");
+        let fake_gh = workspace.path().join("gh");
+        write_executable_script(
+            &fake_gh,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
+             case \"$2\" in\n\
+             *check-runs*)\n\
+               echo '{\"total_count\":1,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null}]}'\n\
+               ;;\n\
+             *)\n\
+               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
+               ;;\n\
+             esac\n",
+        );
+        let _override = TestGhOverride::install(fake_gh);
+
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        let execution = tokio::spawn(async move {
+            watch_checks_with_interval(
+                42,
+                600,
+                Duration::from_millis(50),
+                None,
+                Some(&cancel_for_task),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("cancelled checks_watch must stop within the shutdown bound")
+            .expect("checks_watch task should not panic");
+        assert!(!result.success);
+        assert_eq!(
+            result
+                .details
+                .as_ref()
+                .and_then(|d| d.get("cancelled"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 }
