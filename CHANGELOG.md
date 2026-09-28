@@ -51,6 +51,13 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.100] - 2026-09-28
+
+### Fixed
+
+- Restore exact-source release CI by declaring the BYOK capability manifest as a Bazel compile input.
+- Keep Dex and Slack turn code within the existing source limits by moving capability answers, account linking, and tracing into dedicated modules.
+
 ## [0.10.99] - 2026-09-28
 
 ### Fixed
