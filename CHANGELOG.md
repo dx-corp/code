@@ -51,6 +51,13 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.102] - 2026-09-28
+
+### Fixed
+
+- Accept the release gate's 360 polls so signed builds can wait up to 120
+  minutes for exact-source CI.
+
 ## [0.10.101] - 2026-09-28
 
 ### Changed
