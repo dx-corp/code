@@ -932,6 +932,7 @@ mod tests {
             attempt: 1,
             delay_ms: 100,
             rate_limited: true,
+            failure_code: None,
         });
         tracker.handle_event(&FromAgent::ResponseEnd {
             response_id: "response-a".into(),

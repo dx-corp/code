@@ -163,6 +163,22 @@ impl App {
                 }
                 record!(event);
             }
+            FromAgent::ManagedGatewayReceipt { request_id, .. } => {
+                let mut event =
+                    self.new_session_event(Lane::Model, "model.gateway.receipt", Phase::Info);
+                if let Some(event) = &mut event {
+                    event.correlation_id = Some(request_id.clone());
+                }
+                record!(event);
+            }
+            FromAgent::ProviderError { kind, .. } => {
+                let mut event =
+                    self.new_session_event(Lane::Model, "model.response.failed", Phase::Failed);
+                if let Some(event) = &mut event {
+                    event.name = Some(format!("{kind:?}").to_ascii_lowercase());
+                }
+                record!(event);
+            }
             FromAgent::TurnCompleted { response_id, .. } => {
                 let mut event =
                     self.new_session_event(Lane::User, "turn.completed", Phase::Completed);
@@ -207,12 +223,14 @@ impl App {
                 attempt,
                 delay_ms,
                 rate_limited,
+                failure_code,
             } => {
                 let mut event =
                     self.new_session_event(Lane::Runtime, "retry.scheduled", Phase::Requested);
                 if let Some(event) = &mut event {
                     event.attempt = Some(*attempt);
                     event.delay_ms = Some(*delay_ms);
+                    event.name = failure_code.clone();
                 }
                 record!(event);
                 if *rate_limited {

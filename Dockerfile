@@ -3,12 +3,21 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+# Keep the local Dex host available in the published Maestro binary. Its
+# dex-loop dependency belongs to mono's separate Rust workspace; narrow that
+# workspace to this crate inside the image while retaining its shared versions
+# and lint configuration.
+COPY --from=dex-loop-workspace /Cargo.toml /rust/Cargo.toml
+COPY --from=dex-loop-workspace /crates/dex-loop /rust/crates/dex-loop
+RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/dex-loop"]' /rust/Cargo.toml \
+    && sed -i '/^\[patch.crates-io\]/,/^\[workspace.package\]/c\[workspace.package]' /rust/Cargo.toml
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
 COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
+COPY packages/dex-host-rs ./packages/dex-host-rs
 COPY packages/local-host-rs ./packages/local-host-rs
 COPY packages/sandbox-rs ./packages/sandbox-rs
 COPY packages/workspace-rs ./packages/workspace-rs
@@ -33,6 +42,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
 COPY --from=planner /app/recipe.json recipe.json
+COPY --from=planner /rust /rust
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
@@ -41,6 +51,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
 COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
+COPY packages/dex-host-rs ./packages/dex-host-rs
 COPY packages/local-host-rs ./packages/local-host-rs
 COPY packages/sandbox-rs ./packages/sandbox-rs
 COPY packages/workspace-rs ./packages/workspace-rs

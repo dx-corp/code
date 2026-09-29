@@ -304,7 +304,7 @@ impl AnthropicClient {
         // This task runs independently and sends events through the channel.
         tokio::spawn(async move {
             // Buffer for accumulating incomplete SSE events
-            let mut buffer = String::new();
+            let mut buffer = Vec::new();
             // Parser state - local to this stream, avoiding thread-local race conditions
             let mut parser_state = SseParserState::default();
 
@@ -312,14 +312,23 @@ impl AnthropicClient {
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        // Convert bytes to UTF-8 and append to buffer
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        buffer.extend_from_slice(&bytes);
 
                         // Process all complete SSE events in the buffer
                         // SSE events are delimited by double newlines: "\n\n"
-                        while let Some(pos) = buffer.find("\n\n") {
-                            let event_data = buffer[..pos].to_string();
-                            buffer = buffer[pos + 2..].to_string();
+                        loop {
+                            let event_data = match super::sse::take_frame(&mut buffer) {
+                                Ok(Some(event_data)) => event_data,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    let _ = tx.send(StreamEvent::Error {
+                                        message: format!(
+                                            "Invalid UTF-8 in Anthropic SSE event: {error}"
+                                        ),
+                                    });
+                                    return;
+                                }
+                            };
 
                             // Parse SSE event and send to receiver
                             if let Some(event) = parse_sse_event(&event_data, &mut parser_state) {
@@ -612,9 +621,9 @@ fn parse_sse_event(data: &str, state: &mut SseParserState) -> Option<StreamEvent
     // Extract event type and data from SSE lines
     // ─────────────────────────────────────────────────────────────
     for line in data.lines() {
-        if let Some(t) = line.strip_prefix("event: ") {
+        if let Some(t) = line.strip_prefix("event:") {
             event_type = Some(t.trim());
-        } else if let Some(d) = line.strip_prefix("data: ") {
+        } else if let Some(d) = line.strip_prefix("data:") {
             event_data = Some(d.trim());
         }
     }
@@ -894,6 +903,13 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let mut state = new_state();
         let event = parse_sse_event(data, &mut state).unwrap();
         assert!(matches!(event, StreamEvent::TextDelta { text, .. } if text == "Hello"));
+    }
+
+    #[test]
+    fn parse_text_delta_accepts_sse_fields_without_a_space() {
+        let data = "event:content_block_delta\ndata:{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"café 🌊\"}}";
+        let event = parse_sse_event(data, &mut new_state()).unwrap();
+        assert!(matches!(event, StreamEvent::TextDelta { text, .. } if text == "café 🌊"));
     }
 
     #[test]

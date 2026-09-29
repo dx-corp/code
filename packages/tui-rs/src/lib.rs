@@ -194,6 +194,10 @@ pub mod palette;
 pub mod a2a_cli;
 pub mod cli_commands;
 pub mod cloud_cli;
+pub mod deixic_operating_client;
+/// The one-loop kernel consumer for local (non-cloud) turns, behind
+/// `MAESTRO_DEX_LOOP=1`. See `docs/design/maestro-on-dex-loop.md`.
+pub mod dex_loop_local;
 pub mod mission_run;
 pub mod workflow_cli;
 pub use maestro_codex::codex_app_server;

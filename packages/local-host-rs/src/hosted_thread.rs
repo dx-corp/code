@@ -106,6 +106,9 @@ pub struct Event {
     pub request_id: String,
     pub request_type: i32,
     pub request_call_id: String,
+    pub tool_name: String,
+    pub terminal_code: String,
+    pub terminal_message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -114,6 +117,7 @@ pub struct ListResponse {
     pub next_cursor: i64,
     pub has_more: bool,
     pub reset_required: bool,
+    pub active_turn_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -198,6 +202,14 @@ impl From<wire::TaskEvent> for Event {
             request_id: value.request_id,
             request_type: value.request_kind,
             request_call_id: value.call_id,
+            tool_name: value.tool_name,
+            terminal_code: value
+                .terminal_error
+                .as_ref()
+                .map_or(String::new(), |error| error.code.clone()),
+            terminal_message: value
+                .terminal_error
+                .map_or(String::new(), |error| error.message),
         }
     }
 }
@@ -399,15 +411,46 @@ impl ThreadClient {
                 },
             )
             .await?;
+        let active_turn_id = result
+            .snapshot_turns
+            .iter()
+            .rev()
+            .find(|turn| !matches!(turn.state, 6..=8))
+            .map(|turn| turn.turn_id.clone());
         Ok(ListResponse {
             events: result.events.into_iter().map(Into::into).collect(),
             next_cursor: result.next_cursor,
             has_more: result.has_more,
             reset_required: result.reset_required,
+            active_turn_id,
         })
     }
 
+    pub async fn interrupt(&self, turn_id: Option<&str>, reason: &str) -> Result<()> {
+        let _: wire::InterruptTaskResponse = self
+            .call(
+                "InterruptTask",
+                wire::InterruptTaskRequest {
+                    scope: Some(self.scope()?),
+                    thread_id: self.channel_id.clone(),
+                    turn_id: turn_id.unwrap_or_default().to_owned(),
+                    idempotency_key: Uuid::new_v4().to_string(),
+                    reason: reason.to_owned(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn submit(&self, body: String) -> Result<SubmitResponse> {
+        self.submit_with_key(body, Uuid::new_v4().to_string()).await
+    }
+
+    pub async fn submit_with_key(
+        &self,
+        body: String,
+        idempotency_key: String,
+    ) -> Result<SubmitResponse> {
         if body.trim().is_empty() || body.len() > 20_000 {
             bail!("message must contain 1 to 20000 bytes");
         }
@@ -418,7 +461,7 @@ impl ThreadClient {
                     scope: Some(self.scope()?),
                     thread_id: self.channel_id.clone(),
                     body,
-                    idempotency_key: Uuid::new_v4().to_string(),
+                    idempotency_key,
                     ..Default::default()
                 },
             )
@@ -445,7 +488,17 @@ impl ThreadClient {
         action: i32,
         text: String,
     ) -> Result<RespondResponse> {
-        let key = Uuid::new_v4().to_string();
+        self.respond_with_key(pending, action, text, Uuid::new_v4().to_string())
+            .await
+    }
+
+    pub async fn respond_with_key(
+        &self,
+        pending: &Event,
+        action: i32,
+        text: String,
+        key: String,
+    ) -> Result<RespondResponse> {
         let result: wire::RespondToRequestResponse = self
             .call(
                 "RespondToRequest",

@@ -460,6 +460,13 @@ fn specialist_tool_ceiling(existing: Option<HashSet<String>>, tools: &[String]) 
 
 /// Run one prompt non-interactively and print the final answer.
 pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
+    // `MAESTRO_DEX_LOOP=1` routes this single-shot turn through the
+    // dex-loop kernel (`dex_loop_local.rs`) instead of the native agent
+    // below. Unset (the default), this is a no-op and the rest of this
+    // function is unchanged. See `docs/design/maestro-on-dex-loop.md`.
+    if let Some(exit_code) = crate::dex_loop_local::maybe_run(&options).await? {
+        return Ok(exit_code);
+    }
     let workspace = dunce::canonicalize(
         &std::env::current_dir().context("resolve print-mode working directory")?,
     )

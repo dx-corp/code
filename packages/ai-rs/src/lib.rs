@@ -106,6 +106,7 @@ mod provider_matrix;
 mod providers;
 pub mod sanitize;
 mod scripted;
+mod sse;
 mod transform;
 mod types;
 mod vertex;

@@ -156,7 +156,91 @@ pub(crate) fn set_new_process_group(_cmd: &mut tokio::process::Command) {}
 pub(crate) fn set_std_process_group(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
+    #[cfg(target_os = "linux")]
+    if let Err(errno) = enable_descendant_reaping() {
+        // Refuse the spawn if this host cannot own orphaned descendants.
+        // SAFETY: the child closure only constructs an errno-backed error.
+        unsafe {
+            cmd.pre_exec(move || Err(std::io::Error::from_raw_os_error(errno)));
+        }
+    }
 }
+
+/// Killing a shell before its children reparents them. Own those orphans on
+/// Linux instead of depending on PID 1 to reap them before cancellation ends.
+#[cfg(target_os = "linux")]
+fn enable_descendant_reaping() -> Result<(), i32> {
+    static ENABLED: std::sync::OnceLock<Result<(), i32>> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        // SAFETY: this process-wide ownership flag takes integer arguments.
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO))
+        }
+    })
+}
+
+/// Reap only adopted children in the groups this cancellation owns. The
+/// direct child stays with its existing Child/wait owner; never steal its
+/// exit status or reap a different tool's group.
+#[cfg(target_os = "linux")]
+pub(crate) fn reap_owned_process_groups(groups: &[u32], direct_child: Option<u32>) {
+    let tasks = match std::fs::read_dir("/proc/self/task") {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            tracing::warn!(%error, "cannot inspect adopted tool children");
+            return;
+        }
+    };
+    for task in tasks.flatten() {
+        // A worker thread can exit between listing its task and reading it.
+        let Ok(children) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        for child in children
+            .split_whitespace()
+            .filter_map(|pid| pid.parse::<u32>().ok())
+        {
+            if Some(child) == direct_child {
+                continue;
+            }
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{child}/stat")) else {
+                continue;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                continue;
+            };
+            let mut fields = fields.split_whitespace();
+            let state = fields.next();
+            let parent = fields.next().and_then(|pid| pid.parse::<u32>().ok());
+            let group = fields.next().and_then(|pid| pid.parse::<u32>().ok());
+            if state != Some("Z")
+                || parent != Some(std::process::id())
+                || !group.is_some_and(|group| groups.contains(&group))
+            {
+                continue;
+            }
+            let Ok(child) = i32::try_from(child) else {
+                continue;
+            };
+            // SAFETY: a positive, adopted zombie in an owned group only.
+            // WNOHANG never waits for a live child; ECHILD means another
+            // cleanup owner already reaped this process.
+            if unsafe { libc::waitpid(child, std::ptr::null_mut(), libc::WNOHANG) } < 0 {
+                let error = std::io::Error::last_os_error();
+                if !matches!(error.raw_os_error(), Some(libc::ECHILD | libc::EINTR)) {
+                    tracing::warn!(%error, "cannot reap an adopted tool child");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn reap_owned_process_groups(_groups: &[u32], _direct_child: Option<u32>) {}
 
 /// Own a group created before exec, including pipes inherited after leader exit.
 #[cfg(unix)]
@@ -186,6 +270,7 @@ impl Drop for ProcessGroupGuard {
         // that inherit its pipes. Do not wait indefinitely for unreaped zombies.
         for _ in 0..20 {
             self.terminate();
+            reap_owned_process_groups(&[pid], Some(pid));
             if !process_group_exists(pid) {
                 break;
             }
@@ -198,6 +283,52 @@ impl Drop for ProcessGroupGuard {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn group_cleanup_reaps_orphans_without_stealing_the_direct_child_status() {
+        use tokio::io::AsyncBufReadExt;
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "sleep 60 & printf '%s\n' \"$!\"; exit 7"]);
+        command.stdout(std::process::Stdio::piped());
+        set_new_process_group(&mut command);
+        let mut child = command.spawn().expect("owned command");
+        let root = child.id().expect("direct child pid");
+        let guard = ProcessGroupGuard::new(Some(root));
+        let mut reader = tokio::io::BufReader::new(child.stdout.take().expect("pid pipe"));
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("descendant pid");
+        let descendant: i32 = line.trim().parse().expect("pid");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let stat =
+                    std::fs::read_to_string(format!("/proc/{root}/stat")).expect("direct child");
+                if stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, fields)| fields.starts_with("Z "))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("direct child exits without being reaped");
+        reap_owned_process_groups(&[root], Some(root));
+        // The original Child remains the sole owner of its exit status.
+        assert_eq!(
+            child.wait().await.expect("direct child status").code(),
+            Some(7)
+        );
+        drop(guard);
+        // Reaping, not merely SIGKILL: signal 0 must see no zombie either.
+        // SAFETY: signal 0 only probes this test's recorded descendant.
+        assert_eq!(unsafe { libc::kill(descendant, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
 
     #[tokio::test]
     async fn dropping_group_owner_stops_commands_after_readiness() {

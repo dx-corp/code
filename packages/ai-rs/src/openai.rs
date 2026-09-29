@@ -797,6 +797,19 @@ fn classify_error(error: &serde_json::Value) -> ApiError {
     }
 }
 
+// Keep raw bytes until a complete line arrives. Decoding each HTTP chunk would
+// replace a UTF-8 character split between chunks and corrupt a JSON error.
+fn take_chat_sse_line(buffer: &mut Vec<u8>) -> Option<Result<String, std::string::FromUtf8Error>> {
+    let end = buffer.iter().position(|byte| *byte == b'\n')?;
+    let line = buffer.drain(..=end).collect::<Vec<_>>();
+    Some(String::from_utf8(line))
+}
+
+fn chat_sse_data(line: &str) -> Option<&str> {
+    line.strip_prefix("data:")
+        .map(|data| data.strip_prefix(' ').unwrap_or(data))
+}
+
 fn response_failed_error(
     response: Option<&serde_json::Value>,
 ) -> (ProviderStreamErrorKind, String) {
@@ -2397,6 +2410,7 @@ impl OpenAiClient {
 
         // Spawn task to process SSE stream
         let model = config.model.clone();
+        let managed_gateway = self.managed_gateway;
 
         let producer = if is_responses_api {
             // Use eventsource-stream for proper SSE parsing (Responses API)
@@ -2752,6 +2766,21 @@ impl OpenAiClient {
                                 "response.failed" => {
                                     let (kind, message) =
                                         response_failed_error(event.response.as_ref());
+                                    let message = if managed_gateway
+                                        && event
+                                            .response
+                                            .as_ref()
+                                            .and_then(|response| response.get("error"))
+                                            .and_then(|error| error.get("code"))
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some("provider_stream_timeout")
+                                    {
+                                        format!(
+                                            "managed_gateway_stream_error: provider_stream_timeout: {message}"
+                                        )
+                                    } else {
+                                        message
+                                    };
                                     let _ = tx.send(StreamEvent::ProviderError { kind, message });
                                     return;
                                 }
@@ -2779,7 +2808,7 @@ impl OpenAiClient {
             // Chat Completions API - uses simpler line-based SSE
             let mut stream = response.bytes_stream();
             tokio::spawn(async move {
-                let mut buffer = String::new();
+                let mut buffer = Vec::new();
                 let mut message_id = String::new();
                 let mut current_tool_calls: Vec<ToolCallAccumulator> = Vec::new();
                 let mut content_started = false;
@@ -2797,18 +2826,24 @@ impl OpenAiClient {
                     };
                     match chunk {
                         Ok(bytes) => {
-                            buffer.push_str(&String::from_utf8_lossy(&bytes));
+                            buffer.extend_from_slice(&bytes);
 
                             // Process complete SSE lines
-                            while let Some(pos) = buffer.find('\n') {
-                                let line = buffer[..pos].trim().to_string();
-                                buffer = buffer[pos + 1..].to_string();
+                            while let Some(line) = take_chat_sse_line(&mut buffer) {
+                                let Ok(line) = line else {
+                                    let _ = tx.send(StreamEvent::ProviderError {
+                                        kind: ProviderStreamErrorKind::TransientProtocol,
+                                        message: "Chat stream contained invalid UTF-8".to_string(),
+                                    });
+                                    return;
+                                };
+                                let line = line.trim();
 
                                 if line.is_empty() {
                                     continue;
                                 }
 
-                                if line == "data: [DONE]" {
+                                if chat_sse_data(line) == Some("[DONE]") {
                                     let Some(stop_reason) = terminal_reason else {
                                         let _ = tx.send(StreamEvent::ProviderError {
                                             kind: ProviderStreamErrorKind::TransientProtocol,
@@ -2858,7 +2893,29 @@ impl OpenAiClient {
                                     return;
                                 }
 
-                                if let Some(data) = line.strip_prefix("data: ") {
+                                if let Some(data) = chat_sse_data(line) {
+                                    if let Ok(payload) =
+                                        serde_json::from_str::<serde_json::Value>(data)
+                                    {
+                                        if let Some(error) = payload.get("error") {
+                                            let (kind, classified) =
+                                                response_failed_error(Some(&payload));
+                                            let code = error
+                                                .get("code")
+                                                .and_then(serde_json::Value::as_str)
+                                                .unwrap_or("unknown");
+                                            let source = if managed_gateway {
+                                                "managed_gateway_stream_error"
+                                            } else {
+                                                "chat_stream_error"
+                                            };
+                                            let _ = tx.send(StreamEvent::ProviderError {
+                                                kind,
+                                                message: format!("{source}: {code}: {classified}"),
+                                            });
+                                            return;
+                                        }
+                                    }
                                     if let Ok(chunk) = serde_json::from_str::<OpenAiChunk>(data) {
                                         if message_id.is_empty() {
                                             message_id = chunk.id.clone();
@@ -4449,6 +4506,142 @@ mod tests {
         })
         .await
         .expect("managed stream should terminate")
+    }
+
+    #[test]
+    fn chat_sse_lines_survive_seeded_network_chunk_boundaries() {
+        let frame = "event: error\r\ndata:{\"error\":{\"code\":\"provider_stream_timeout\",\"message\":\"réessayer 🌊\"}}\r\n\r\n";
+        for seed in 0..512_u64 {
+            let mut state = seed + 1;
+            let mut buffer = Vec::new();
+            let mut lines = Vec::new();
+            let mut cursor = 0;
+            while cursor < frame.len() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let end = (cursor + (state as usize % 17) + 1).min(frame.len());
+                buffer.extend_from_slice(&frame.as_bytes()[cursor..end]);
+                while let Some(line) = take_chat_sse_line(&mut buffer) {
+                    lines.push(line.expect("valid UTF-8 after joining chunks"));
+                }
+                cursor = end;
+            }
+            assert!(buffer.is_empty(), "seed {seed}");
+            assert_eq!(lines.concat(), frame, "seed {seed}");
+            let payload = chat_sse_data(lines[1].trim()).expect("valid no-space data field");
+            let error: serde_json::Value = serde_json::from_str(payload).expect("intact JSON");
+            assert_eq!(error["error"]["code"], "provider_stream_timeout");
+            assert_eq!(error["error"]["message"], "réessayer 🌊");
+        }
+    }
+
+    #[test]
+    fn chat_sse_invalid_utf8_fails_explicitly() {
+        let mut buffer = b"data: \xff\n".to_vec();
+        assert!(take_chat_sse_line(&mut buffer).unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn chat_gateway_timeout_accepts_no_space_after_data_colon() {
+        let sse = "event: error\ndata:{\"error\":{\"type\":\"server_error\",\"code\":\"provider_stream_timeout\",\"message\":\"attempt deadline\"}}\n\n";
+        let (client, _request) = managed_gateway_test_client(sse, &managed_receipt_headers());
+        let mut receiver = client
+            .stream_authorized_invocation(
+                &[],
+                &RequestConfig {
+                    model: "evalops/openai/gpt-4o-mini".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open chat stream");
+        let events = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut events = Vec::new();
+            while let Some(event) = receiver.recv().await {
+                events.push(event);
+            }
+            events
+        })
+        .await
+        .expect("gateway error stream should terminate");
+        assert!(
+            matches!(events.last(), Some(StreamEvent::ProviderError {
+            kind: ProviderStreamErrorKind::TransientProtocol,
+            message,
+        }) if message.starts_with("managed_gateway_stream_error: provider_stream_timeout:")),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_gateway_timeout_frame_preserves_its_typed_error() {
+        let sse = "event: error\ndata: {\"error\":{\"type\":\"server_error\",\"code\":\"provider_stream_timeout\",\"message\":\"Provider stream exceeded its attempt deadline\"}}\n\n";
+        let (client, _request) = managed_gateway_test_client(sse, &managed_receipt_headers());
+        let mut receiver = client
+            .stream_authorized_invocation(
+                &[],
+                &RequestConfig {
+                    model: "evalops/openai/gpt-4o-mini".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open chat stream");
+        let events = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut events = Vec::new();
+            while let Some(event) = receiver.recv().await {
+                events.push(event);
+            }
+            events
+        })
+        .await
+        .expect("gateway error stream should terminate");
+        assert!(
+            matches!(
+                events.last(),
+                Some(StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    message,
+                }) if message.starts_with("managed_gateway_stream_error: provider_stream_timeout:")
+            ),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_gateway_timeout_frame_uses_the_same_retryable_error() {
+        let sse = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"response-1\",\"error\":{\"type\":\"server_error\",\"code\":\"provider_stream_timeout\",\"message\":\"Provider stream exceeded its attempt deadline\"}}}\n\n";
+        let (client, _request) = managed_gateway_test_client(sse, &managed_receipt_headers());
+        let mut receiver = client
+            .stream_authorized_invocation(
+                &[],
+                &RequestConfig {
+                    model: "evalops/openai/gpt-5.6-terra".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open responses stream");
+        let events = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut events = Vec::new();
+            while let Some(event) = receiver.recv().await {
+                events.push(event);
+            }
+            events
+        })
+        .await
+        .expect("gateway error stream should terminate");
+        assert!(
+            matches!(
+                events.last(),
+                Some(StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    message,
+                }) if message.starts_with("managed_gateway_stream_error: provider_stream_timeout:")
+            ),
+            "{events:?}"
+        );
     }
 
     fn managed_receipt_headers() -> [(&'static str, &'static str); 4] {

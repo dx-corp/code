@@ -140,6 +140,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::details::BashDetails;
 #[cfg(unix)]
+use super::process_utils::reap_owned_process_groups;
+#[cfg(unix)]
 use super::process_utils::{kill_process_group, process_group_exists};
 use super::process_utils::{kill_process_tree_tracked, set_child_subreaper, set_new_process_group};
 use super::shell_env::resolve_shell_environment;
@@ -224,6 +226,7 @@ async fn monitor_background_process_group(
     background_shutdown: &CancellationToken,
 ) {
     while process_group_exists(process_group_id) {
+        reap_owned_process_groups(&[process_group_id], Some(process_group_id));
         tokio::select! {
             () = external_cancel.cancelled() => {
                 kill_process_group(process_group_id);
@@ -239,6 +242,7 @@ async fn monitor_background_process_group(
 
     let _ = timeout(Duration::from_secs(1), async {
         while process_group_exists(process_group_id) {
+            reap_owned_process_groups(&[process_group_id], Some(process_group_id));
             sleep(Duration::from_millis(10)).await;
         }
     })
@@ -246,9 +250,10 @@ async fn monitor_background_process_group(
 }
 
 #[cfg(unix)]
-async fn wait_for_process_groups(process_group_ids: &[u32]) {
+async fn wait_for_process_groups(process_group_ids: &[u32], direct_child: Option<u32>) {
     let _ = timeout(Duration::from_secs(1), async {
         loop {
+            reap_owned_process_groups(process_group_ids, direct_child);
             if process_group_ids
                 .iter()
                 .all(|process_group_id| !process_group_exists(*process_group_id))
@@ -262,7 +267,7 @@ async fn wait_for_process_groups(process_group_ids: &[u32]) {
 }
 
 #[cfg(not(unix))]
-async fn wait_for_process_groups(_process_group_ids: &[u32]) {}
+async fn wait_for_process_groups(_process_group_ids: &[u32], _direct_child: Option<u32>) {}
 
 #[cfg(target_os = "linux")]
 fn background_supervisor_script() -> &'static str {
@@ -2007,7 +2012,7 @@ impl BashTool {
                     Vec::new()
                 };
                 let _ = timeout(Duration::from_secs(1), child_for_wait.wait()).await;
-                wait_for_process_groups(&killed_process_groups).await;
+                wait_for_process_groups(&killed_process_groups, pid_for_wait).await;
                 if let Some(pid) = pid_for_wait {
                     super::process_registry::unregister(pid);
                 }
@@ -2041,13 +2046,13 @@ impl BashTool {
                         let killed_process_groups =
                             pid_for_wait.map(kill_process_tree_tracked).unwrap_or_default();
                         let _ = timeout(Duration::from_secs(1), child_for_wait.wait()).await;
-                        wait_for_process_groups(&killed_process_groups).await;
+                        wait_for_process_groups(&killed_process_groups, pid_for_wait).await;
                     }
                     () = background_shutdown.cancelled() => {
                         let killed_process_groups =
                             pid_for_wait.map(kill_process_tree_tracked).unwrap_or_default();
                         let _ = timeout(Duration::from_secs(1), child_for_wait.wait()).await;
-                        wait_for_process_groups(&killed_process_groups).await;
+                        wait_for_process_groups(&killed_process_groups, pid_for_wait).await;
                     }
                 }
                 if let Some(pid) = pid_for_wait {
@@ -2141,7 +2146,7 @@ impl BashTool {
                     };
                     // Best-effort reap to avoid zombies
                     let _ = timeout(Duration::from_secs(1), child.wait()).await;
-                    wait_for_process_groups(&killed_process_groups).await;
+                    wait_for_process_groups(&killed_process_groups, child_pid).await;
                     let mut details = self.stamp_details(
                         BashDetails::cancelled(&args.command) // exit 130 = SIGINT
                             .with_cwd(cwd_string)
@@ -2286,7 +2291,7 @@ impl BashTool {
                 };
                 // Best-effort reap to avoid zombies
                 let _ = timeout(Duration::from_secs(1), child.wait()).await;
-                wait_for_process_groups(&killed_process_groups).await;
+                wait_for_process_groups(&killed_process_groups, child_pid).await;
                 let mut details = self.stamp_details(
                     BashDetails::failed(&args.command, 124) // 124 = timeout exit code
                         .with_cwd(cwd_string)

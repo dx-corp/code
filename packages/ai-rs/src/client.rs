@@ -1278,11 +1278,47 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                 );
                 break;
             }
+            let mut event = match event {
+                StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    mut message,
+                } if committed_content
+                    && message
+                        .starts_with("managed_gateway_stream_error: provider_stream_timeout:") =>
+                {
+                    // The native turn discards an incomplete assistant reply
+                    // before retrying. Preserve this exact gateway timeout so
+                    // the outer turn can retry even after thinking was streamed.
+                    message.push_str("; ");
+                    message.push_str(PARTIAL_CONTENT_STREAM_FAILURE_MARKER);
+                    StreamEvent::ProviderError {
+                        kind: ProviderStreamErrorKind::TransientProtocol,
+                        message,
+                    }
+                }
+                other => other,
+            };
             let terminal_error = matches!(
                 &event,
                 StreamEvent::Error { .. } | StreamEvent::ProviderError { .. }
             );
             if terminal_error {
+                let gateway_timeout = matches!(
+                    &event,
+                    StreamEvent::ProviderError {
+                        kind: ProviderStreamErrorKind::TransientProtocol,
+                        message,
+                    } if message.starts_with("managed_gateway_stream_error: provider_stream_timeout:")
+                );
+                if !gateway_request_id.is_empty() {
+                    let message = match &mut event {
+                        StreamEvent::Error { message }
+                        | StreamEvent::ProviderError { message, .. } => message,
+                        _ => unreachable!("terminal error has an error message"),
+                    };
+                    message.push_str("; gateway request ID: ");
+                    message.push_str(&gateway_request_id);
+                }
                 let error_message_len = match &event {
                     StreamEvent::Error { message } | StreamEvent::ProviderError { message, .. } => {
                         message.len()
@@ -1301,6 +1337,12 @@ async fn forward_stream_with_idle_policy_with_span<F, Fut, S>(
                     duration_ms = stream_started.elapsed().as_millis() as u64,
                     events_forwarded,
                     gateway_request_id = %gateway_request_id,
+                    gateway_error_code = if gateway_timeout { "provider_stream_timeout" } else { "" },
+                    turn_retryable = matches!(
+                        &event,
+                        StreamEvent::ProviderError { kind, message }
+                            if is_retryable_partial_content_stream_failure(*kind, message)
+                    ),
                 );
             }
             let terminal = terminal_error || matches!(&event, StreamEvent::MessageStop { .. });
@@ -2000,7 +2042,7 @@ mod tests {
 #[cfg(test)]
 mod stream_idle_policy_tests {
     use super::*;
-    use crate::types::ProviderStreamErrorKind;
+    use crate::types::{ManagedGatewayReceipt, ProviderStreamErrorKind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::time::Duration;
@@ -2497,6 +2539,60 @@ mod stream_idle_policy_tests {
                 }
             ]
         ));
+    }
+
+    #[tokio::test]
+    async fn gateway_timeout_after_partial_thinking_can_retry_the_model_turn() {
+        let (attempt_tx, attempt_rx) = mpsc::unbounded_channel();
+        attempt_tx
+            .send(StreamEvent::ManagedGatewayReceipt(ManagedGatewayReceipt {
+                request_id: "gateway-request-123".to_owned(),
+                record_id: "record-123".to_owned(),
+                lineage_id: "lineage-123".to_owned(),
+                record_status: "accepted".to_owned(),
+                provider_prompt_sha256: None,
+                provider_tools_sha256: None,
+                provider_tool_count: None,
+            }))
+            .unwrap();
+        attempt_tx
+            .send(StreamEvent::ThinkingDelta {
+                index: 0,
+                thinking: "working".to_owned(),
+            })
+            .unwrap();
+        attempt_tx
+            .send(StreamEvent::ProviderError {
+                kind: ProviderStreamErrorKind::TransientProtocol,
+                message: "managed_gateway_stream_error: provider_stream_timeout: Provider stream exceeded its attempt deadline".to_owned(),
+            })
+            .unwrap();
+        drop(attempt_tx);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        forward_stream_with_idle_policy(
+            Some(attempt_rx),
+            || async { unreachable!("the stream owner must not replay partial output") },
+            IDLE,
+            RETRIES,
+            tx,
+        )
+        .await;
+
+        let events = drain(&mut rx);
+        assert!(
+            matches!(
+                events.last(),
+                Some(StreamEvent::ProviderError {
+                    kind: ProviderStreamErrorKind::TransientProtocol,
+                    message,
+                }) if is_retryable_partial_content_stream_failure(
+                    ProviderStreamErrorKind::TransientProtocol,
+                    message,
+                ) && message.contains("provider_stream_timeout")
+                    && message.contains("gateway request ID: gateway-request-123")
+            ),
+            "{events:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]

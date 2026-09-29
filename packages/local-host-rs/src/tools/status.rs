@@ -371,9 +371,23 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 // SAFETY: signal 0 only probes process existence.
-                if unsafe { libc::kill(pid, 0) } != 0
-                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                {
+                let reaped = unsafe { libc::kill(pid, 0) } != 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+                // A killed grandchild may remain a zombie until its new
+                // parent reaps it. It cannot execute or keep pipes open, but
+                // kill(pid, 0) still reports it as an existing process.
+                #[cfg(target_os = "linux")]
+                let stopped = reaped
+                    || std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                        .ok()
+                        .is_some_and(|stat| {
+                            stat.rsplit_once(") ").is_some_and(|(_, fields)| {
+                                matches!(fields.chars().next(), Some('Z' | 'X' | 'x'))
+                            })
+                        });
+                #[cfg(not(target_os = "linux"))]
+                let stopped = reaped;
+                if stopped {
                     break;
                 }
                 tokio::task::yield_now().await;

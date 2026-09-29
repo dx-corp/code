@@ -341,6 +341,7 @@ pub(crate) enum TelemetryEvent {
         attempt: u32,
         delay_ms: u64,
         rate_limited: bool,
+        failure_code: Option<InlineLabel>,
     },
     CompactionMeasured {
         duration_ms: u64,
@@ -852,10 +853,12 @@ impl TelemetryEvent {
                 attempt,
                 delay_ms,
                 rate_limited,
+                failure_code,
             } => FromAgent::RequestRetryScheduled {
                 attempt,
                 delay_ms,
                 rate_limited,
+                failure_code: failure_code.map(|code| code.as_str().to_owned()),
             },
             Self::CompactionMeasured { duration_ms } => {
                 FromAgent::CompactionMeasured { duration_ms }
@@ -1030,10 +1033,12 @@ fn sanitized_event(event: &FromAgent) -> Option<TelemetryEvent> {
             attempt,
             delay_ms,
             rate_limited,
+            failure_code,
         } => TelemetryEvent::RequestRetryScheduled {
             attempt: *attempt,
             delay_ms: *delay_ms,
             rate_limited: *rate_limited,
+            failure_code: failure_code.as_deref().map(InlineLabel::new),
         },
         FromAgent::CompactionMeasured { duration_ms } => TelemetryEvent::CompactionMeasured {
             duration_ms: *duration_ms,

@@ -51,6 +51,132 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.108] - 2026-09-29
+
+### Fixed
+
+- Snapshot the committed Rust workspace and `dex-loop` inputs when syncing the public source tree (#11355).
+- Request public release credentials for `dx-corp/code`, the actual publishing repository (#11362).
+
+## [0.10.107] - 2026-09-29
+
+### Fixed
+
+- Include the exact `dex-loop` source in public release mirrors so the published source builds on its own (#11320).
+- Check macOS release signing material before native compilation and resolve it from the runner home (#11311).
+
+## [0.10.106] - 2026-09-29
+
+### Added
+
+- Persist provider reasoning with the model step (#11274). <!-- maestro-release-note:77091c9b3392 -->
+
+### Changed
+
+- Main-heavy capacity is 14 max / 2 min (#11278). <!-- maestro-release-note:675931ac07b5 -->
+
+### Fixed
+
+- Route cloud turns through the public protocol so signed releases pass the artifact guard (#11289). <!-- maestro-release-note:dabfffd49f98 -->
+- Use stable key sorting for find results (#11277). <!-- maestro-release-note:9820e365b8ad -->
+- Isolate crash replay database ports (#11276). <!-- maestro-release-note:45bb6928687b -->
+- Send the guardian review to Messages on Anthropic (#11275). <!-- maestro-release-note:fff4d72b1d47 -->
+
+## [0.10.105] - 2026-09-29
+
+### Added
+
+- Run Claude with adaptive thinking over /v1/messages (#11262). <!-- maestro-release-note:37a30d848a9f -->
+- Workload-token-only mode when no login provider is enabled (#11252). <!-- maestro-release-note:0dc9cbbb1b3a -->
+- Dex.find estate and connector scopes over tool-execution (#11250). <!-- maestro-release-note:bf91afcf665e -->
+- Dex.make capability over the platform-api artifact owner (#11216). <!-- maestro-release-note:42fbb51e3d20 -->
+- Platform-api dex.find/dex.read backend for history, skills and forms (#11246). <!-- maestro-release-note:2c6e0bdfd126 -->
+- Render one-loop tool progress without tool names (#11239). <!-- maestro-release-note:e95bb298d8b6 -->
+- Add dex.describe over the capability catalogs (#11229). <!-- maestro-release-note:5bea4046259f -->
+- Dex.find dispatcher and owner refs for dex.read (#11236). <!-- maestro-release-note:7ada7e571733 -->
+- Compute over tool-execution, resuming its approval parks under Dex approval (#11222). <!-- maestro-release-note:fb8b87ee32ac -->
+- Tell Dex to look up, cite, and make one artifact (#11219). <!-- maestro-release-note:70475ae833cb -->
+- Govern change and act by their arguments (#11213). <!-- maestro-release-note:f2761d50be66 -->
+- Platform-api endpoint for one-loop platform tools, starting with conversation history (#11210). <!-- maestro-release-note:a11a333b2066 -->
+
+### Changed
+
+- Treat killed Linux zombies as stopped in the process cleanup test (#11268). <!-- maestro-release-note:a07130929951 -->
+- Name the stub's recorded call type for clippy (#11263). <!-- maestro-release-note:81bbc66786e0 -->
+- One-loop e2e fake gateway speaks Responses (#11259). <!-- maestro-release-note:144c852f5510 -->
+- Dex e2e fake gateway speaks Responses (#11258). <!-- maestro-release-note:f5ddb8d87375 -->
+- Run the client-tool one-loop test on the no-remote-tools wiring (#11254). <!-- maestro-release-note:14644e6e0f19 -->
+- Record failed optimization executions during qualification (#11255). <!-- maestro-release-note:ca630298a34a -->
+- Fix manual replays and record measured gate timings (#11253). <!-- maestro-release-note:680f2b2f3c70 -->
+- One-loop fake gateway speaks Responses (#11251). <!-- maestro-release-note:9e397d8f06f1 -->
+- Stage decision-packet evaluation and bootstrap by world (#11248). <!-- maestro-release-note:e3fcd1063729 -->
+- Run dex-harness-parity in the platform-api shard on the production wiring (#11209). <!-- maestro-release-note:a8dd7ef6986d -->
+- Score evals and canaries on capabilities, not old tool names (#11247). <!-- maestro-release-note:e5df79501d7e -->
+- Fix optimization Clippy and downstream Cargo lock freshness (#11244). <!-- maestro-release-note:0e7d88d264e3 -->
+
+### Fixed
+
+- Verify Mise with the runner platform digest so macOS release builds can proceed (#11266). <!-- maestro-release-note:ba0f4e6a881a -->
+- Require an accepted turn on the dex artifact endpoint (#11265). <!-- maestro-release-note:0aaeea452aff -->
+- Class compute calls per action (shell guardian, write approval) (#11261). <!-- maestro-release-note:d019c6377dbc -->
+- Make the computer attach replay instead of 409ing on the next call (#11264). <!-- maestro-release-note:8a109e62accd -->
+- Honor dex.read range.offset for platform-api refs (#11260). <!-- maestro-release-note:42c747eb34d7 -->
+- Register dex.find in production; stop advertising dex.change/dex.act (#11257). <!-- maestro-release-note:c9576ab0f5cd -->
+- Render unknown Dex event kinds safely (#11256). <!-- maestro-release-note:8c8139c2ce0f -->
+- Serve Dex model steps through dex-model's Responses client (#11249). <!-- maestro-release-note:db433b03253f -->
+- Preserve guarded background replies and prove transport parity (#11245). <!-- maestro-release-note:8915e94eaf47 -->
+- Cover every fuzz prompt boundary (#11243). <!-- maestro-release-note:c28808aa6eca -->
+- Preserve retained computer classifier names (#11242). <!-- maestro-release-note:00307d78f072 -->
+- Make the model stream Send again after stored-output reads (#11237). <!-- maestro-release-note:bb794614f11d -->
+
+## [0.10.104] - 2026-09-29
+
+### Added
+
+- Compute over tool-execution, resuming its approval parks under Dex approval (#11222). <!-- maestro-release-note:fb8b87ee32ac -->
+- Tell Dex to look up, cite, and make one artifact (#11219). <!-- maestro-release-note:70475ae833cb -->
+- Govern change and act by their arguments (#11213). <!-- maestro-release-note:f2761d50be66 -->
+- Platform-api endpoint for one-loop platform tools, starting with conversation history (#11210). <!-- maestro-release-note:a11a333b2066 -->
+- Add make dex-send ENV=staging and the Dex staging runbook (#11212). <!-- maestro-release-note:baa78b48aa94 -->
+- Web client tools through the shared Dex loop SDK (#11208). <!-- maestro-release-note:30a309bfefd1 -->
+- Gate and wire candidate character assets (#11204). <!-- maestro-release-note:d30e2babd147 -->
+- Add make dex-trace for one-command Dex thread timelines (#11202). <!-- maestro-release-note:dbf06381e703 -->
+- Carry server-derived call context to platform tools (#11197). <!-- maestro-release-note:45bc8532399b -->
+- Platform-api artifact endpoint for the one loop (#11200). <!-- maestro-release-note:2ae312816d28 -->
+- Add draft character asset pipeline and pilot (#11187). <!-- maestro-release-note:3348916943fb -->
+- Own workload identity with per-tenant least-scope tokens (#11148). <!-- maestro-release-note:9b91309098e5 -->
+
+### Changed
+
+- Add seeded high-volume one-loop fuzz harness (#11225). <!-- maestro-release-note:1c54e9e3df17 -->
+- Expect clientTools in the pinned submit argument list (#11211). <!-- maestro-release-note:27ed58c158c6 -->
+- Add pre-cutover tool usage counts to the parity inventory (#11205). <!-- maestro-release-note:5d2632614474 -->
+- Fail when a managed migration file is unregistered (#11201). <!-- maestro-release-note:266f3a719f68 -->
+- One-loop tool parity inventory (#11195). <!-- maestro-release-note:c2ffe5fa0cef -->
+- Settle preflight on verified descendants and log every poll (#11194). <!-- maestro-release-note:36d0fa7363ac -->
+- Refresh service-scoped Rust publisher targets (#11191). <!-- maestro-release-note:5ad6cc726eca -->
+- Remove unused ToolCatalog renderer (#11192). <!-- maestro-release-note:d6a03523f6bc -->
+- Remove retired MCP catalog attachment helpers (#11190). <!-- maestro-release-note:fcd749d673f3 -->
+- Remove source-coupled Make harness assertions (#11189). <!-- maestro-release-note:41cda51203c9 -->
+- Bump pillow (#11188). <!-- maestro-release-note:800c76a60c3c -->
+- Remove unreachable swarm checkpoint persistence (#11186). <!-- maestro-release-note:be58098a1e32 -->
+
+### Fixed
+
+- Recover managed gateway stream timeouts after partial thinking, with bounded turn retry and request diagnostics (#11178).
+- Namespace the change and act capability names (#11224). <!-- maestro-release-note:4dc34edab553 -->
+- The model reads stored tool output (#11226). <!-- maestro-release-note:5f3dd8fe163b -->
+- Compile from_send and give checkpoint tests a token (#11217). <!-- maestro-release-note:6b60ee1dfaec -->
+- Preserve chat SSE errors across byte boundaries (#11223). <!-- maestro-release-note:392317befbd9 -->
+- Validate secrets and URLs at startup; probe dex-runtime credential for /readyz (#11220). <!-- maestro-release-note:1cc46820892a -->
+- Preserve streaming without content guardrail rules (#11215). <!-- maestro-release-note:2767c9639547 -->
+- Bind PNG cache to Pillow runtime (#11218). <!-- maestro-release-note:57d831da2f8f -->
+- Classify the reqwest error before without_url consumes it (#11214). <!-- maestro-release-note:30631a035daa -->
+- Mark retired coding_* capabilities non-executable in the registry (#11207). <!-- maestro-release-note:b5600ef6cc4e -->
+- Register dex-runtime as its own tool-execute caller (#11203). <!-- maestro-release-note:3783ae3faa13 -->
+- Stop 503ing runtime dispatch for guardrailed workspaces (#11196). <!-- maestro-release-note:a8a30ebb7db4 -->
+- Align synthetic contracts with current Dex loop (#11198). <!-- maestro-release-note:4191ee6fc679 -->
+
 ## [0.10.103] - 2026-09-28
 
 ### Changed

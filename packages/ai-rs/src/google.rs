@@ -232,22 +232,21 @@ async fn stream_google_response(
     // Parse SSE stream
     let mut stream = response.bytes_stream();
 
-    let mut buffer = String::new();
+    let mut buffer = Vec::new();
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
     let mut cache_read_tokens = None;
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Failed to read chunk")?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        buffer.extend_from_slice(&chunk);
 
         // Process complete SSE events
-        while let Some(pos) = buffer.find("\n\n") {
-            let event = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
-
+        while let Some(event) =
+            super::sse::take_frame(&mut buffer).context("Invalid UTF-8 in Google SSE event")?
+        {
             // Parse SSE data
-            if let Some(data) = event.strip_prefix("data: ") {
+            if let Some(data) = google_sse_data(&event) {
                 if data.trim() == "[DONE]" {
                     break;
                 }
@@ -313,6 +312,12 @@ async fn stream_google_response(
     ));
 
     Ok(())
+}
+
+fn google_sse_data(event: &str) -> Option<&str> {
+    event
+        .lines()
+        .find_map(|line| line.strip_prefix("data:").map(str::trim))
 }
 
 /// Google prompt counts include cached tokens. Keep cache absence distinct from zero.
@@ -427,6 +432,14 @@ struct UsageMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_data_accepts_event_header_and_no_space_after_colon() {
+        assert_eq!(
+            google_sse_data("event: update\ndata:{\"value\":\"東京\"}"),
+            Some("{\"value\":\"東京\"}")
+        );
+    }
 
     #[test]
     fn provider_cache_usage_distinguishes_hit_miss_and_unknown() {

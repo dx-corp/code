@@ -2005,6 +2005,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dex-loop"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3738,7 +3752,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "maestro"
-version = "0.10.103"
+version = "0.10.108"
 dependencies = [
  "anyhow",
  "ctor",
@@ -3818,6 +3832,23 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "maestro-dex-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dex-loop",
+ "fd-lock",
+ "futures-util",
+ "maestro-ai",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -4115,6 +4146,7 @@ dependencies = [
  "maestro-ai",
  "maestro-codex",
  "maestro-context",
+ "maestro-dex-host",
  "maestro-execpolicy",
  "maestro-interaction",
  "maestro-local-host",
