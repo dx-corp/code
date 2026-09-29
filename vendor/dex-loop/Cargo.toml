@@ -1,0 +1,59 @@
+[package]
+name = "dex-loop"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.95"
+
+[dependencies]
+futures-util = "0.3"
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+# Only the timer, to race the model stream against `budget.wall` in
+# `Engine::model_step` and each tool call against its deadline: the crate
+# still does no I/O of its own.
+tokio = { version = "1.48", features = ["time"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+proptest = "1.9"
+rand = "0.8"
+tokio = { version = "1.48", features = ["macros", "rt", "sync", "test-util", "time"] }
+
+[lints.rust]
+non_ascii_idents = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+unused_lifetimes = "warn"
+
+[lints.clippy]
+await_holding_lock = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+empty_drop = "deny"
+exit = "deny"
+filetype_is_file = "deny"
+fn_to_numeric_cast_any = "deny"
+lossy_float_literal = "deny"
+mem_forget = "deny"
+mutex_atomic = "deny"
+rc_buffer = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+string_add = "deny"
+string_lit_as_bytes = "deny"
+todo = "deny"
+unchecked_time_subtraction = "deny"
+undocumented_unsafe_blocks = "deny"
+verbose_file_reads = "deny"
+
+# Trim debug info in local dev/test builds: full `debug = true` is the
+# default and was measured at ~49% of artifact bytes. Line tables keep
+# backtraces and panic locations useful. CI overrides both profiles to 0
+# via CARGO_PROFILE_DEV_DEBUG / CARGO_PROFILE_TEST_DEBUG, which take
+# precedence over these manifest values.
+
+[workspace]
