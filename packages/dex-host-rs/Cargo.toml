@@ -1,0 +1,33 @@
+[package]
+name = "maestro-dex-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local dex-loop host for Maestro: Log, Tools and Effects ports backed by the workspace filesystem"
+
+[lib]
+name = "maestro_dex_host"
+path = "src/lib.rs"
+
+[dependencies]
+# dex-loop lives in the mono root's `rust/` Cargo workspace, not this one;
+# this is a path dependency across the workspace boundary, the same shape
+# `maestro-swarm` already uses to reach crates outside `products/maestro`.
+dex-loop = { path = "../../vendor/dex-loop" }
+# `AiRsModel` (`src/model.rs`) wraps this crate's `UnifiedClient::stream` as a
+# `dex_loop::Model` -- default features off, matching every other consumer's
+# workspace alias, so this stays Bedrock-free.
+maestro-ai.workspace = true
+
+anyhow.workspace = true
+fd-lock.workspace = true
+futures-util = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "rt", "sync"] }
+tokio-stream.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

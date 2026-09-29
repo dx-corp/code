@@ -56,6 +56,8 @@ futures.workspace = true
 
 # AI provider client layer (packages/ai-rs); re-exported at crate::ai
 maestro-ai = { workspace = true, features = ["bedrock"] }
+# The local dex-loop host (`MAESTRO_DEX_LOOP=1`, `dex_loop_local.rs`).
+maestro-dex-host.workspace = true
 maestro-context.workspace = true
 maestro-execpolicy.workspace = true
 maestro-runtime.workspace = true

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["examples/hooks/wasm-plugin", "vendor/*"]
+exclude = ["examples/hooks/wasm-plugin", "vendor/*", "vendor/dex-loop"]
 members = [
     "packages/maestro-rs",
     "packages/runtime-rs",
@@ -25,6 +25,7 @@ members = [
     "packages/ui-preview-rs",
     "packages/interaction-rs",
     "packages/ambient-agent-rs",
+    "packages/dex-host-rs",
 ]
 
 [workspace.dependencies]
@@ -83,6 +84,7 @@ maestro-ui = { path = "packages/ui-rs" }
 maestro-presentation = { path = "packages/presentation-rs" }
 unicode-width = "0.2"
 maestro-interaction = { path = "packages/interaction-rs" }
+maestro-dex-host = { path = "packages/dex-host-rs" }
 ratatui = { version = "0.30.2", default-features = false }
 # Shared by maestro-tui and maestro-runtime-gateway; keep both crates on the
 # same version here so a security bump (e.g. the lopdf RUSTSEC-2026-0187

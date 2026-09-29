@@ -2,8 +2,8 @@
 //! shell, builds and git all run in a persistent remote workspace on EvalOps
 //! remote runners. See `docs/cloud-mode.md`.
 //!
-//! Phase 1 drives the existing `RemoteRunnerService` and the Runner Host
-//! operating-thread routes from the client:
+//! Phase 1 drives `RemoteRunnerService` for sandbox lifecycle and the public
+//! Platform thread API for turns:
 //!
 //! 1. `cloud up`: `CreateRunnerSession` keyed by the workspace identity
 //!    (so a second `up` from any machine resolves the same live session),
@@ -11,15 +11,23 @@
 //!    with `ExecuteRunnerSessionStep` (`GENERIC`): `gh` login from stdin, a
 //!    partial clone of the merge base, a `git bundle` of local commits, the
 //!    working-tree diff and untracked files, all uploaded in stdin chunks.
-//! 2. `cloud attach`: a line REPL. Each prompt is one `user_message` turn on
-//!    `/internal/v1/operating-threads/{thread}/turns`; events come from
-//!    `/events/replay`; approvals and user-input requests are answered on
-//!    `/responses`. `/detach` leaves the turn running in the sandbox.
+//! 2. `cloud attach`: a line REPL. Each prompt is one `SubmitTask`
+//!    call against platform-api's public `deixicpublic.v1.DeixicPublicService`,
+//!    so the turn itself runs on dex-runtime rather than inside the sandbox.
+//!    Events are polled from `ListEvents`; approvals and user-input
+//!    requests are answered on `RespondToRequest`; `/exit` interrupts any
+//!    running turn (`InterruptTask`) before stopping the sandbox. `/detach`
+//!    leaves the turn running.
+//!    (Previously this called Runner Host's own
+//!    `/internal/v1/operating-threads/{thread}/...` routes directly; see
+//!    `docs/design/maestro-on-dex-loop.md`.)
 //! 3. `cloud pull`: the sandbox commits its tree and pushes
 //!    `cloud/<name>`; the laptop fast-forwards onto it.
 //!
 //! The GitHub token travels only as step stdin. Runner Host persists the
 //! stdin SHA-256, never the bytes (`rust/services/runner-host/src/handlers/steps.rs`).
+//! The sandbox itself (creation, TTL, repo sync) still goes through
+//! `RemoteRunnerService`, unchanged; only the agent-turn machinery moved.
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write as _};
@@ -34,6 +42,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
+use crate::deixic_operating_client::{
+    DeixicOperatingClient, DeixicOperatingConfig, EventsPage, ThreadEvent, TurnEnd as WireTurnEnd,
+    classify_turn_end,
+};
 use crate::remote_cli::{
     ClientOpts, Config, EVENTS_PATH, LIST_PATH, STOP_PATH, Session, array_events, array_sessions,
     first_str, get_session, post, print_json, print_table, require_config, strip_null, wait_ready,
@@ -58,8 +70,6 @@ const DEFAULT_TTL_MINUTES: u64 = 8 * 60;
 const EXTEND_BELOW_MINUTES: i64 = 60;
 const READY_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 const READY_POLL_MS: u64 = 5_000;
-const BINDING_TIMEOUT: Duration = Duration::from_mins(3);
-const BINDING_POLL: Duration = Duration::from_secs(3);
 const REPLAY_POLL: Duration = Duration::from_secs(1);
 const REPLAY_IDLE_TIMEOUT: Duration = Duration::from_mins(30);
 const STEP_HTTP_SLACK_MS: u64 = 15_000;
@@ -101,6 +111,7 @@ Shared options:
   --org <id>            EvalOps organization id
   --token <token>       EvalOps access token
   --base-url <url>      Remote runner URL (default: https://runner.evalops.dev)
+  --platform-url <url>  Platform API URL for turns (default: MAESTRO_EVALOPS_BASE_URL)
   --json                Machine-readable output
 
 The GitHub token is read from MAESTRO_CLOUD_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN,
@@ -156,6 +167,7 @@ const VALUE_FLAGS: &[&str] = &[
     "org",
     "token",
     "base-url",
+    "platform-url",
     "after",
     "limit",
     "state",
@@ -854,7 +866,7 @@ async fn synced_marker(tenant: &Tenant, session_id: &str) -> Result<Option<Strin
 }
 
 // ---------------------------------------------------------------------------
-// Operating-thread routes: binding, turns, replay, responses
+// Public thread routes: binding, turns, replay, responses
 // ---------------------------------------------------------------------------
 
 struct Emitter {
@@ -871,198 +883,70 @@ impl Emitter {
     }
 }
 
-/// Runtime binding for the session's operating thread.
-struct ThreadBinding {
-    thread_id: String,
-    runtime_generation: u64,
-}
-
-fn thread_route(thread_id: &str, suffix: &str) -> String {
-    format!(
-        "/internal/v1/operating-threads/{}/{suffix}",
-        urlencoding::encode(thread_id)
-    )
-}
-
-/// Waits until Runner Host reports a resident runtime generation for the
-/// thread. `503 runtime_not_ready` and `404` are retried until the deadline.
-async fn wait_thread_binding(tenant: &Tenant, thread_id: &str) -> Result<ThreadBinding> {
-    let deadline = Instant::now() + BINDING_TIMEOUT;
-    let mut last_error;
-    loop {
-        let body = json!({
-            "organizationId": tenant.config.organization_id,
-            "workspaceId": tenant.workspace_id,
-            "verifyResident": true,
-        });
-        match post(&tenant.config, &thread_route(thread_id, "binding"), body).await {
-            Ok(payload) => {
-                let generation = payload
-                    .get("runtime_generation")
-                    .or_else(|| payload.get("runtimeGeneration"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if generation > 0 {
-                    return Ok(ThreadBinding {
-                        thread_id: thread_id.to_owned(),
-                        runtime_generation: generation,
-                    });
-                }
-                last_error = anyhow!("binding returned runtime generation 0");
-            }
-            Err(error) => {
-                if format!("{error:#}").contains("returned 403") {
-                    return Err(annotate_rpc_error(error));
-                }
-                last_error = error;
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(anyhow!(
-                "the hosted runtime did not bind within {}s: {last_error:#}",
-                BINDING_TIMEOUT.as_secs()
-            ));
-        }
-        tokio::time::sleep(BINDING_POLL).await;
-    }
+/// Builds the public Platform client for this tenant's cloud turns.
+/// `--platform-url`/`MAESTRO_CLOUD_PLATFORM_URL` (or the shared
+/// `MAESTRO_EVALOPS_BASE_URL`) select the host; auth is the same EvalOps
+/// login `resolve_tenant` already resolved for `RemoteRunnerService`.
+fn deixic_client(tenant: &Tenant, platform_url: Option<&str>) -> Result<DeixicOperatingClient> {
+    let config = DeixicOperatingConfig::resolve(
+        platform_url,
+        tenant.config.token.clone(),
+        tenant.config.organization_id.clone(),
+        tenant.workspace_id.clone(),
+    )?;
+    Ok(DeixicOperatingClient::new(config))
 }
 
 /// Appends one `user_message` turn. Returns the turn id and the cursor from
 /// which replay must start.
 async fn append_turn(
-    tenant: &Tenant,
-    binding: &ThreadBinding,
-    content: String,
+    client: &DeixicOperatingClient,
+    thread_id: &str,
+    content: &str,
 ) -> Result<(String, u64)> {
-    let turn_id = format!("cloud-turn-{}", Uuid::new_v4());
-    let body = json!({
-        "organizationId": tenant.config.organization_id,
-        "workspaceId": tenant.workspace_id,
-        "runtimeGeneration": binding.runtime_generation,
-        "turnId": turn_id,
-        "kind": "user_message",
-        "content": content,
-        "attachments": [],
-    });
-    let payload = post(
-        &tenant.config,
-        &thread_route(&binding.thread_id, "turns"),
-        body,
-    )
-    .await
-    .map_err(annotate_rpc_error)?;
-    let cursor = payload
-        .get("accepted_cursor")
-        .or_else(|| payload.get("cursor"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    Ok((turn_id, cursor.saturating_sub(1)))
-}
-
-/// One safe thread event from `/events/replay`.
-#[derive(Debug, Clone)]
-struct ThreadEvent {
-    cursor: u64,
-    turn_id: String,
-    kind: String,
-    text: String,
-    error_code: String,
-    request_id: Option<String>,
-    request_type: Option<String>,
-    tool_name: Option<String>,
-}
-
-fn parse_thread_events(payload: &Value) -> Vec<ThreadEvent> {
-    payload
-        .get("events")
-        .and_then(Value::as_array)
-        .map(|events| {
-            events
-                .iter()
-                .map(|event| ThreadEvent {
-                    cursor: event
-                        .get("source_cursor")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    turn_id: first_str(event, &["turn_id", "turnId"]).unwrap_or_default(),
-                    kind: first_str(event, &["kind"]).unwrap_or_default(),
-                    text: first_str(event, &["safe_text", "safeText"]).unwrap_or_default(),
-                    error_code: first_str(event, &["error_code", "errorCode"]).unwrap_or_default(),
-                    request_id: first_str(event, &["request_id", "requestId"]),
-                    request_type: first_str(event, &["request_type", "requestType"]),
-                    tool_name: first_str(event, &["tool_name", "toolName", "request_tool"]),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    let submitted = client
+        .submit_message(
+            thread_id,
+            content,
+            &format!("cloud-send:{}", Uuid::new_v4()),
+        )
+        .await
+        .map_err(annotate_rpc_error)?;
+    Ok((submitted.turn_id, submitted.replay_cursor.saturating_sub(1)))
 }
 
 async fn replay_events(
-    tenant: &Tenant,
-    binding: &ThreadBinding,
+    client: &DeixicOperatingClient,
+    thread_id: &str,
     after_cursor: u64,
-) -> Result<(Vec<ThreadEvent>, u64, Value)> {
-    let body = json!({
-        "organizationId": tenant.config.organization_id,
-        "workspaceId": tenant.workspace_id,
-        "runtimeGeneration": binding.runtime_generation,
-        "afterCursor": after_cursor,
-    });
-    let payload = post(
-        &tenant.config,
-        &thread_route(&binding.thread_id, "events/replay"),
-        body,
-    )
-    .await
-    .map_err(annotate_rpc_error)?;
-    let next = payload
-        .get("next_cursor")
-        .or_else(|| payload.get("nextCursor"))
-        .and_then(Value::as_u64)
-        .unwrap_or(after_cursor);
-    let snapshot = payload.get("snapshot").cloned().unwrap_or(Value::Null);
-    Ok((parse_thread_events(&payload), next, snapshot))
+) -> Result<EventsPage> {
+    client
+        .list_events(thread_id, after_cursor)
+        .await
+        .map_err(annotate_rpc_error)
 }
 
 /// Answers an approval or user-input request while the user is attached.
 /// Approvals are granted: the sandbox is isolated, and the user sees every
 /// `tool_proposed` event as it happens and can `/detach` or `/exit`.
 async fn respond_to_request(
-    tenant: &Tenant,
-    binding: &ThreadBinding,
+    client: &DeixicOperatingClient,
+    thread_id: &str,
     turn_id: &str,
     event: &ThreadEvent,
 ) -> Result<()> {
-    let (Some(request_id), Some(request_type)) =
-        (event.request_id.as_deref(), event.request_type.as_deref())
-    else {
-        return Ok(());
-    };
-    let (action, text) = match request_type {
-        "approval" => ("approve", String::new()),
-        "user_input" => ("answer", UNATTENDED_USER_INPUT_ANSWER.to_owned()),
-        _ => return Ok(()),
-    };
-    let body = json!({
-        "organizationId": tenant.config.organization_id,
-        "workspaceId": tenant.workspace_id,
-        "runtimeGeneration": binding.runtime_generation,
-        "turnId": turn_id,
-        "requestId": request_id,
-        "callId": "",
-        "requestType": request_type,
-        "action": action,
-        "text": text,
-        "isError": false,
-        "idempotencyKey": format!("cloud-response:{request_id}"),
-    });
-    post(
-        &tenant.config,
-        &thread_route(&binding.thread_id, "responses"),
-        body,
-    )
-    .await
-    .map(|_| ())
+    use crate::deixic_operating_client::request_type;
+    match event.request_type.as_deref() {
+        Some(kind) if kind == request_type::APPROVAL => {
+            client.approve(thread_id, turn_id, event).await
+        }
+        Some(kind) if kind == request_type::USER_INPUT => {
+            client
+                .answer(thread_id, turn_id, event, UNATTENDED_USER_INPUT_ANSWER)
+                .await
+        }
+        _ => Ok(()),
+    }
     .map_err(annotate_rpc_error)
 }
 
@@ -1076,34 +960,31 @@ pub enum TurnEnd {
     Detached,
 }
 
-/// Classifies a replay event. `None` means the turn is still running.
-pub fn classify_turn_event(kind: &str, error_code: &str, text: &str) -> Option<TurnEnd> {
-    match kind {
-        "turn_completed" => Some(TurnEnd::Completed),
-        "turn_failed" => Some(TurnEnd::Failed(if error_code.is_empty() {
-            text.to_owned()
-        } else {
-            format!("{error_code}: {text}")
-        })),
-        "turn_interrupted" => Some(TurnEnd::Interrupted(text.to_owned())),
-        _ => None,
+impl From<WireTurnEnd> for TurnEnd {
+    fn from(end: WireTurnEnd) -> Self {
+        match end {
+            WireTurnEnd::Completed => Self::Completed,
+            WireTurnEnd::Failed(reason) => Self::Failed(reason),
+            WireTurnEnd::Interrupted(reason) => Self::Interrupted(reason),
+        }
     }
 }
 
 /// Polls replay until the turn ends or Ctrl-C. Prints assistant deltas and
 /// tool proposals and answers requests.
 async fn follow_turn(
-    tenant: &Tenant,
-    binding: &ThreadBinding,
+    client: &DeixicOperatingClient,
+    thread_id: &str,
     turn_id: &str,
     mut cursor: u64,
     emit: &Emitter,
 ) -> Result<TurnEnd> {
     let mut line_open = false;
+    let mut saw_assistant_delta = false;
     let mut answered: Vec<String> = Vec::new();
     let mut last_progress = Instant::now();
     loop {
-        let replay = tokio::select! {
+        let page = tokio::select! {
             biased;
             _ = tokio::signal::ctrl_c() => {
                 if line_open && !emit.json {
@@ -1111,13 +992,12 @@ async fn follow_turn(
                 }
                 return Ok(TurnEnd::Detached);
             }
-            replay = replay_events(tenant, binding, cursor) => replay?,
+            page = replay_events(client, thread_id, cursor) => page?,
         };
-        let (events, next, snapshot) = replay;
-        if !events.is_empty() {
+        if !page.events.is_empty() {
             last_progress = Instant::now();
         }
-        for event in &events {
+        for event in &page.events {
             if emit.json {
                 let _ = print_json(&json!({
                     "type": "event",
@@ -1125,7 +1005,7 @@ async fn follow_turn(
                     "turn_id": event.turn_id,
                     "kind": event.kind,
                     "text": event.text,
-                    "error_code": event.error_code,
+                    "error_code": event.terminal_code,
                     "tool": event.tool_name,
                 }));
             }
@@ -1133,48 +1013,53 @@ async fn follow_turn(
                 continue;
             }
             match event.kind.as_str() {
-                "assistant_text_delta" if !emit.json => {
+                crate::deixic_operating_client::event_kind::ASSISTANT_TEXT_DELTA if !emit.json => {
+                    saw_assistant_delta = true;
                     print!("{}", event.text);
                     let _ = io::stdout().flush();
                     line_open = !event.text.ends_with('\n');
                 }
-                "tool_proposed" if !emit.json => {
+                crate::deixic_operating_client::event_kind::TOOL_PROPOSED if !emit.json => {
                     if line_open {
                         println!();
                         line_open = false;
                     }
                     eprintln!("[tool] {}", event.tool_name.as_deref().unwrap_or("-"));
                 }
-                "approval_required" | "input_required" => {
+                crate::deixic_operating_client::event_kind::MODEL_ATTEMPT_ABANDONED
+                    if !emit.json =>
+                {
+                    saw_assistant_delta = false;
+                    if line_open {
+                        println!();
+                        line_open = false;
+                    }
+                    eprintln!("[model] partial output abandoned; waiting for retry");
+                }
+                crate::deixic_operating_client::event_kind::APPROVAL_REQUIRED
+                | crate::deixic_operating_client::event_kind::INPUT_REQUIRED => {
                     if let Some(id) = event.request_id.as_deref() {
                         if !answered.iter().any(|seen| seen == id) {
-                            respond_to_request(tenant, binding, turn_id, event).await?;
+                            respond_to_request(client, thread_id, turn_id, event).await?;
                             answered.push(id.to_owned());
                         }
                     }
                 }
                 _ => {}
             }
-            if let Some(end) = classify_turn_event(&event.kind, &event.error_code, &event.text) {
+            if let Some(end) = classify_turn_end(event) {
                 if line_open && !emit.json {
                     println!();
                 }
-                return Ok(end);
+                if !emit.json && !saw_assistant_delta && matches!(end, WireTurnEnd::Completed) {
+                    if let Some(message) = client.latest_assistant_message(thread_id).await? {
+                        println!("{message}");
+                    }
+                }
+                return Ok(end.into());
             }
         }
-        if let Some(error) = snapshot
-            .get("terminal_error")
-            .filter(|error| !error.is_null())
-        {
-            if line_open && !emit.json {
-                println!();
-            }
-            let message = first_str(error, &["display_safe_message", "displaySafeMessage"])
-                .unwrap_or_default();
-            let code = first_str(error, &["code"]).unwrap_or_default();
-            return Ok(TurnEnd::Failed(format!("{code}: {message}")));
-        }
-        cursor = next.max(cursor);
+        cursor = page.next_cursor.max(cursor);
         if last_progress.elapsed() > REPLAY_IDLE_TIMEOUT {
             if line_open && !emit.json {
                 println!();
@@ -1186,21 +1071,6 @@ async fn follow_turn(
         }
         tokio::time::sleep(REPLAY_POLL).await;
     }
-}
-
-fn active_turn_id(snapshot: &Value) -> Option<String> {
-    first_str(snapshot, &["active_turn_id", "activeTurnId"]).or_else(|| {
-        snapshot
-            .get("turns")
-            .and_then(Value::as_array)
-            .and_then(|turns| turns.last())
-            .filter(|turn| {
-                first_str(turn, &["phase"]).is_some_and(|phase| {
-                    !matches!(phase.as_str(), "completed" | "failed" | "interrupted")
-                })
-            })
-            .and_then(|turn| first_str(turn, &["turn_id", "turnId"]))
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,14 +1111,15 @@ async fn attached_repl(
     tenant: &Tenant,
     session: &Session,
     thread_id: &str,
+    platform_url: Option<&str>,
     emit: &Emitter,
 ) -> Result<bool> {
-    let binding = wait_thread_binding(tenant, thread_id).await?;
+    let client = deixic_client(tenant, platform_url)?;
     // Follow a turn that is still running from a previous attach.
-    let (_events, _next, snapshot) = replay_events(tenant, &binding, 0).await?;
-    if let Some(turn_id) = active_turn_id(&snapshot) {
+    let initial = replay_events(&client, thread_id, 0).await?;
+    if let Some(turn_id) = initial.active_turn_id {
         emit.status("following the running turn (Ctrl-C detaches)");
-        match follow_turn(tenant, &binding, &turn_id, 0, emit).await? {
+        match follow_turn(&client, thread_id, &turn_id, 0, emit).await? {
             TurnEnd::Detached => return Ok(false),
             TurnEnd::Failed(reason) | TurnEnd::Interrupted(reason) => {
                 eprintln!("turn ended: {reason}");
@@ -1280,19 +1151,21 @@ async fn attached_repl(
             ReplInput::Empty => {}
             ReplInput::Help => println!("{REPL_HELP}"),
             ReplInput::Detach => return Ok(false),
-            ReplInput::Exit => return Ok(true),
+            ReplInput::Exit => {
+                // `follow_turn` only returns once its turn is terminal or the
+                // user detached; either way nothing is running through this
+                // REPL right now. Interrupt anyway, best-effort: it is a
+                // no-op if the thread has no open turn, and covers the one
+                // case that matters -- a turn left running by an earlier,
+                // now-gone client -- before the caller stops the sandbox out
+                // from under it.
+                let _ = client.interrupt(thread_id, None, "cloud_exit").await;
+                return Ok(true);
+            }
             ReplInput::Status => {
-                let current = get_session(
-                    &session.id,
-                    &ClientOpts {
-                        base_url: Some(tenant.config.base_url.clone()),
-                        token: Some(tenant.config.token.clone()),
-                        organization_id: Some(tenant.config.organization_id.clone()),
-                        workspace_id: Some(tenant.workspace_id.clone()),
-                    },
-                )
-                .await
-                .map_err(annotate_rpc_error)?;
+                let current = get_session(&session.id, &tenant_client_opts(tenant))
+                    .await
+                    .map_err(annotate_rpc_error)?;
                 println!(
                     "{}  {}  expires {}",
                     current.id,
@@ -1301,8 +1174,9 @@ async fn attached_repl(
                 );
             }
             ReplInput::Prompt(prompt) => {
-                let (turn_id, cursor) = append_turn(tenant, &binding, prompt).await?;
-                match follow_turn(tenant, &binding, &turn_id, cursor, emit).await? {
+                let (turn_id, cursor) = append_turn(&client, thread_id, &prompt).await?;
+                let end = follow_turn(&client, thread_id, &turn_id, cursor, emit).await?;
+                match end {
                     TurnEnd::Completed => {}
                     TurnEnd::Detached => {
                         eprintln!(
@@ -1410,7 +1284,14 @@ async fn cmd_up(args: &[String]) -> Result<i32> {
         println!("ready; attach with: deixic-code cloud attach");
         return Ok(0);
     }
-    let stop = attached_repl(&tenant, &ready, &thread_id, &emit).await?;
+    let stop = attached_repl(
+        &tenant,
+        &ready,
+        &thread_id,
+        opts.flag("platform-url").as_deref(),
+        &emit,
+    )
+    .await?;
     if stop {
         stop_session(&tenant, &session.id, "cloud_exit").await?;
         println!("workspace stopped");
@@ -1518,7 +1399,14 @@ async fn cmd_attach(args: &[String]) -> Result<i32> {
     )
     .await?;
     extend_if_needed(&tenant, &session).await?;
-    let stop = attached_repl(&tenant, &session, &thread_id, &emit).await?;
+    let stop = attached_repl(
+        &tenant,
+        &session,
+        &thread_id,
+        opts.flag("platform-url").as_deref(),
+        &emit,
+    )
+    .await?;
     if stop {
         stop_session(&tenant, &session.id, "cloud_exit").await?;
         println!("workspace stopped");
@@ -1592,12 +1480,17 @@ async fn stop_session(tenant: &Tenant, session_id: &str, reason: &str) -> Result
 async fn cmd_down(args: &[String]) -> Result<i32> {
     let opts = parse_opts(args);
     let tenant = resolve_tenant(&opts)?;
-    let (session, _thread_id) = resolve_bound_session(
+    let (session, thread_id) = resolve_bound_session(
         &tenant,
         opts.positionals.first().map(String::as_str),
         opts.flag("name").as_deref(),
     )
     .await?;
+    // Best-effort: interrupt any turn still open on the thread (e.g. left
+    // running by a now-detached client) before the sandbox under it stops.
+    if let Ok(client) = deixic_client(&tenant, opts.flag("platform-url").as_deref()) {
+        let _ = client.interrupt(&thread_id, None, "cloud_down").await;
+    }
     let stopped = stop_session(&tenant, &session.id, "cloud_down").await?;
     if opts.has("json") {
         print_json(&json!({"session": stopped}))?;
@@ -1819,45 +1712,191 @@ mod tests {
 
     #[test]
     fn classifies_turn_end_events() {
-        assert_eq!(classify_turn_event("assistant_text_delta", "", "hi"), None);
+        // Wire-level parsing and classification of `ThreadEvent`/`TurnEnd`
+        // live in `deixic_operating_client`'s own tests; this only checks
+        // `cloud_cli`'s `WireTurnEnd -> TurnEnd` conversion (adds `Detached`,
+        // a REPL-only concept with no wire representation).
+        assert_eq!(TurnEnd::from(WireTurnEnd::Completed), TurnEnd::Completed);
         assert_eq!(
-            classify_turn_event("turn_completed", "", ""),
-            Some(TurnEnd::Completed)
+            TurnEnd::from(WireTurnEnd::Failed("provider_error: boom".to_owned())),
+            TurnEnd::Failed("provider_error: boom".to_owned())
         );
         assert_eq!(
-            classify_turn_event("turn_failed", "provider_error", "boom"),
-            Some(TurnEnd::Failed("provider_error: boom".to_owned()))
-        );
-        assert_eq!(
-            classify_turn_event("turn_interrupted", "", "cancelled"),
-            Some(TurnEnd::Interrupted("cancelled".to_owned()))
+            TurnEnd::from(WireTurnEnd::Interrupted("cancelled".to_owned())),
+            TurnEnd::Interrupted("cancelled".to_owned())
         );
     }
 
-    #[test]
-    fn parses_replay_events_and_active_turn() {
-        let payload = json!({
-            "next_cursor": 7,
-            "snapshot": {"active_turn_id": "t1", "turns": []},
-            "events": [
-                {"source_cursor": 5, "turn_id": "t1", "kind": "assistant_text_delta", "safe_text": "hello", "error_code": ""},
-                {"source_cursor": 6, "turn_id": "t1", "kind": "approval_required", "safe_text": "", "error_code": "", "request_id": "r1", "request_type": "approval", "tool_name": "bash"}
-            ]
+    /// Public cloud turn, including a Platform still projecting assistant
+    /// deltas as unspecified events: fetch the final durable message.
+    #[tokio::test]
+    async fn cloud_turn_runs_through_platform_api_submit_poll_respond() {
+        use maestro_local_host::public_protocol as wire;
+        use prost::Message;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for method in [
+                "SubmitTask",
+                "ListEvents",
+                "RespondToRequest",
+                "GetThread",
+                "InterruptTask",
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let (body_offset, body_length) = loop {
+                    let mut chunk = [0_u8; 4096];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    assert!(read > 0, "request closed before body");
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                        assert!(headers.contains(&format!(
+                            "/deixicpublic.v1.deixicpublicservice/{}",
+                            method.to_ascii_lowercase()
+                        )));
+                        assert!(headers.contains("authorization: bearer cloud-token"));
+                        assert!(headers.contains("x-organization-id: org-1"));
+                        assert!(headers.contains("x-workspace-id: ws-1"));
+                        assert!(headers.contains("content-type: application/proto"));
+                        let length = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        break (end + 4, length);
+                    }
+                };
+                while bytes.len() - body_offset < body_length {
+                    let mut chunk = [0_u8; 4096];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+                let body = &bytes[body_offset..body_offset + body_length];
+                let response = match method {
+                    "SubmitTask" => {
+                        let request = wire::SubmitTaskRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread-1");
+                        assert_eq!(request.body, "fix the bug");
+                        assert!(request.idempotency_key.starts_with("cloud-send:"));
+                        wire::SubmitTaskResponse {
+                            accepted_turn: Some(wire::TaskTurn {
+                                turn_id: "turn-1".into(),
+                                ..Default::default()
+                            }),
+                            replay_cursor: 1,
+                            ..Default::default()
+                        }
+                        .encode_to_vec()
+                    }
+                    "ListEvents" => {
+                        let request = wire::ListEventsRequest::decode(body).unwrap();
+                        assert_eq!(request.after_cursor, 0);
+                        wire::ListEventsResponse {
+                            events: vec![
+                                wire::TaskEvent {
+                                    cursor: 1,
+                                    turn_id: "turn-1".into(),
+                                    kind: 0,
+                                    text: "Sure, ".into(),
+                                    ..Default::default()
+                                },
+                                wire::TaskEvent {
+                                    cursor: 2,
+                                    turn_id: "turn-1".into(),
+                                    kind: 4,
+                                    request_id: "r1".into(),
+                                    request_kind: 1,
+                                    tool_name: "bash".into(),
+                                    call_id: "call-1".into(),
+                                    ..Default::default()
+                                },
+                                wire::TaskEvent {
+                                    cursor: 3,
+                                    turn_id: "turn-1".into(),
+                                    kind: 7,
+                                    ..Default::default()
+                                },
+                            ],
+                            next_cursor: 3,
+                            ..Default::default()
+                        }
+                        .encode_to_vec()
+                    }
+                    "RespondToRequest" => {
+                        let request = wire::RespondToRequestRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread-1");
+                        assert_eq!(request.turn_id, "turn-1");
+                        assert_eq!(request.request_id, "r1");
+                        assert_eq!(request.call_id, "call-1");
+                        assert_eq!(request.request_kind, 1);
+                        assert_eq!(request.action, 1);
+                        wire::RespondToRequestResponse::default().encode_to_vec()
+                    }
+                    "GetThread" => {
+                        let request = wire::GetThreadRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread-1");
+                        wire::GetThreadResponse {
+                            thread: Some(wire::Thread {
+                                id: "thread-1".into(),
+                                ..Default::default()
+                            }),
+                            messages: vec![wire::TaskMessage {
+                                role: 2,
+                                body: "Done".into(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }
+                        .encode_to_vec()
+                    }
+                    "InterruptTask" => {
+                        let request = wire::InterruptTaskRequest::decode(body).unwrap();
+                        assert_eq!(request.thread_id, "thread-1");
+                        assert_eq!(request.turn_id, "turn-1");
+                        assert_eq!(request.reason, "cloud_exit");
+                        wire::InterruptTaskResponse::default().encode_to_vec()
+                    }
+                    _ => unreachable!(),
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/proto\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len()
+                );
+                stream.write_all(header.as_bytes()).await.unwrap();
+                stream.write_all(&response).await.unwrap();
+            }
         });
-        let events = parse_thread_events(&payload);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].text, "hello");
-        assert_eq!(events[1].request_id.as_deref(), Some("r1"));
-        assert_eq!(events[1].tool_name.as_deref(), Some("bash"));
-        assert_eq!(active_turn_id(&payload["snapshot"]).as_deref(), Some("t1"));
-        let finished = json!({"turns": [{"turn_id": "t2", "phase": "completed"}]});
-        assert_eq!(active_turn_id(&finished), None);
-        let running = json!({"turns": [{"turn_id": "t3", "phase": "running"}]});
-        assert_eq!(active_turn_id(&running).as_deref(), Some("t3"));
-        assert_eq!(
-            thread_route("cloud-x", "events/replay"),
-            "/internal/v1/operating-threads/cloud-x/events/replay"
-        );
+
+        let config = DeixicOperatingConfig::resolve(
+            Some(&format!("http://{address}")),
+            "cloud-token".to_owned(),
+            "org-1".to_owned(),
+            "ws-1".to_owned(),
+        )
+        .unwrap();
+        let client = DeixicOperatingClient::new(config);
+        let emit = Emitter { json: false };
+        let (turn_id, cursor) = append_turn(&client, "thread-1", "fix the bug")
+            .await
+            .unwrap();
+        assert_eq!(turn_id, "turn-1");
+        assert_eq!(cursor, 0);
+        let end = follow_turn(&client, "thread-1", &turn_id, cursor, &emit)
+            .await
+            .unwrap();
+        assert_eq!(end, TurnEnd::Completed);
+        client
+            .interrupt("thread-1", Some("turn-1"), "cloud_exit")
+            .await
+            .unwrap();
+        server.await.unwrap();
     }
 
     #[test]

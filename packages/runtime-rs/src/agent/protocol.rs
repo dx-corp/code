@@ -995,6 +995,9 @@ pub enum FromAgent {
         attempt: u32,
         delay_ms: u64,
         rate_limited: bool,
+        /// Stable, content-free cause when a known provider error triggered the retry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_code: Option<String>,
     },
 
     /// Elapsed work for a completed context compaction, including enhancement.
@@ -1226,12 +1229,14 @@ mod tests {
             attempt: 2,
             delay_ms: 1_500,
             rate_limited: true,
+            failure_code: Some("provider_stream_timeout".into()),
         })
         .unwrap();
         assert_eq!(value["type"], "request_retry_scheduled");
         assert_eq!(value["attempt"], 2);
         assert_eq!(value["delay_ms"], 1_500);
         assert_eq!(value["rate_limited"], true);
+        assert_eq!(value["failure_code"], "provider_stream_timeout");
         assert!(value.get("message").is_none());
         assert!(value.get("prompt").is_none());
     }

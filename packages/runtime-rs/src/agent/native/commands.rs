@@ -990,6 +990,13 @@ impl NativeAgentRunner {
                                                     error_kind,
                                                     crate::agent::retry::ErrorKind::RateLimited { .. }
                                                 ),
+                                                failure_code: provider_stream_failure
+                                                    .as_ref()
+                                                    .and_then(|(_, message)| {
+                                                        message
+                                                            .starts_with("managed_gateway_stream_error: provider_stream_timeout:")
+                                                            .then(|| "provider_stream_timeout".to_owned())
+                                                    }),
                                             });
                                         if current_prompt_uses_codex
                                             && !self.codex_current_prompt_started

@@ -1848,6 +1848,68 @@ async fn stream_closed_mid_response_retries_the_turn_and_completes_on_the_script
 }
 
 #[tokio::test]
+async fn gateway_timeout_retry_reports_the_cause_and_completes_the_turn() {
+    let scripted = crate::ai::ScriptedClient::new(
+        "gateway-timeout-retry",
+        vec![
+            crate::ai::ScriptedResponse {
+                blocks: vec![
+                    crate::ai::ScriptedBlock::Text("Incomplete reply".to_owned()),
+                    crate::ai::ScriptedBlock::ProviderError {
+                        kind: crate::ai::ProviderStreamErrorKind::TransientProtocol,
+                        message: format!(
+                            "managed_gateway_stream_error: provider_stream_timeout: attempt deadline; {}",
+                            crate::ai::PARTIAL_CONTENT_STREAM_FAILURE_MARKER
+                        ),
+                    },
+                ],
+                stop_reason: crate::ai::StopReason::EndTurn,
+                error: None,
+            },
+            crate::ai::ScriptedResponse::text("Recovered reply."),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config = NativeAgentConfig {
+        model: "scripted/gateway-timeout-retry".to_owned(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..NativeAgentConfig::default()
+    };
+    let (agent, mut events) =
+        NativeAgent::new_with_test_client(config, UnifiedClient::Scripted(scripted.clone()))
+            .expect("scripted agent");
+    agent
+        .prompt("Say something.".to_owned(), vec![])
+        .await
+        .expect("prompt");
+
+    let mut saw_timeout_retry = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Some(FromAgent::RequestRetryScheduled { failure_code, .. }) => {
+                    assert_eq!(failure_code.as_deref(), Some("provider_stream_timeout"));
+                    saw_timeout_retry = true;
+                }
+                Some(FromAgent::ProviderError { message, .. }) => {
+                    panic!("timeout should be recovered: {message}")
+                }
+                Some(FromAgent::TurnCompleted { .. }) => break,
+                Some(_) => {}
+                None => panic!("event channel closed before turn completion"),
+            }
+        }
+    })
+    .await
+    .expect("turn completion timeout");
+    agent.shutdown().await;
+
+    assert!(saw_timeout_retry);
+    assert_eq!(scripted.remaining(), 0);
+}
+
+#[tokio::test]
 async fn managed_gateway_retry_open_failures_emit_one_terminal_without_a_fourth_request() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
