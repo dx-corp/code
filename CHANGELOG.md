@@ -51,6 +51,38 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.110] - 2026-09-29
+
+### Added
+
+- Dispatch a Dex-approved call without parking for its own resume (#11373). <!-- maestro-release-note:fc4185e21ce8 -->
+
+### Changed
+
+- Release v0.10.109 (#11403). <!-- maestro-release-note:ee392391626d -->
+- Stabilize the parallel cold-provision timing check (#11393). <!-- maestro-release-note:01525800399d -->
+- Platform-worker: continue the Slack trace through reply projection and delivery; slack_delivery_* logs (#11389). <!-- maestro-release-note:cb75862159a2 -->
+- Add bounded gateway command load proof (#11386). <!-- maestro-release-note:4256d0e220f9 -->
+- Channel-edge-slack: correlate every Slack event log line (event_id, retry_num, trace_id) (#11385). <!-- maestro-release-note:1a393b12eff5 -->
+- Platform-api: add dex_turn_submit_seconds and phase histograms (#11379). <!-- maestro-release-note:6a48a876c2c3 -->
+- Model-gateway: drop unbounded labels from provider latency histogram, extend buckets to 120s (#11378). <!-- maestro-release-note:209ed1efd319 -->
+- Tool-executor: latency histograms for computer.start and tool calls (#11375). <!-- maestro-release-note:5e5647fd9492 -->
+
+### Fixed
+
+- Select current Dex loop budget test. <!-- maestro-release-note:14992aad47c8 -->
+- Browse recent conversations without keyword guesses (#11407). <!-- maestro-release-note:f9b1e14914f5 -->
+- Promptly clean up failed computer pool fills (#11406). <!-- maestro-release-note:de8d2e10b626 -->
+- Preserve requested Sandboxwich publications (#11399). <!-- maestro-release-note:1033a2a5b2cc -->
+- Advance active Dex turn cursors from durable events (#11398). <!-- maestro-release-note:db7601c04212 -->
+- Stop a runner session when anchor provisioning is cancelled (#11400). <!-- maestro-release-note:ad1b2830ba16 -->
+- Seek one event per open turn on snapshot reconcile (#11402). <!-- maestro-release-note:dfc7ad6ee628 -->
+- Admit expired leases ahead of fresh unleased threads (#11401). <!-- maestro-release-note:fa501965d34a -->
+- Classify Dex history learning under known component (#11404). <!-- maestro-release-note:76b70f9f54a2 -->
+- Reserve candidates before contended claims (#11405). <!-- maestro-release-note:4202285d2ea9 -->
+- Unblock Maestro release validation (#11397). <!-- maestro-release-note:0bf28330bba1 -->
+- Stop saturated workers scanning queued jobs (#11396). <!-- maestro-release-note:30f2a14ae377 -->
+
 ## [0.10.109] - 2026-09-29
 
 ### Added
