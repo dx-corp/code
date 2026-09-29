@@ -51,6 +51,42 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.109] - 2026-09-29
+
+### Added
+
+- Dispatch a Dex-approved call without parking for its own resume (#11373). <!-- maestro-release-note:fc4185e21ce8 -->
+
+### Changed
+
+- Add bounded gateway command load proof (#11386). <!-- maestro-release-note:4256d0e220f9 -->
+- Channel-edge-slack: correlate every Slack event log line (event_id, retry_num, trace_id) (#11385). <!-- maestro-release-note:1a393b12eff5 -->
+- Platform-api: add dex_turn_submit_seconds and phase histograms (#11379). <!-- maestro-release-note:6a48a876c2c3 -->
+- Model-gateway: drop unbounded labels from provider latency histogram, extend buckets to 120s (#11378). <!-- maestro-release-note:209ed1efd319 -->
+- Tool-executor: latency histograms for computer.start and tool calls (#11375). <!-- maestro-release-note:5e5647fd9492 -->
+- Stabilize the parallel cold-provision timing check (#11393). <!-- maestro-release-note:01525800399d -->
+- Platform-worker: continue the Slack trace through reply projection and delivery; slack_delivery_* logs (#11389). <!-- maestro-release-note:cb75862159a2 -->
+
+### Fixed
+
+- Clear two deny-level clippy lints on main (#11392). <!-- maestro-release-note:4a03d59956fa -->
+- Park dex approval for human-held API keys (#11390). <!-- maestro-release-note:e38b98413144 -->
+- Declare tools the history calls but the request does not offer (#11388). <!-- maestro-release-note:46d862d3e289 -->
+- Route public projection off saturated PR runners (#11387). <!-- maestro-release-note:3296e7bcc5ff -->
+- Repair dex-loop build and provider SSE framing (#11383). <!-- maestro-release-note:9090527a6ab7 -->
+- Resident-process PUT counts as activity (#11384). <!-- maestro-release-note:11824636cccb -->
+- Record sandbox audit binding production applier (#11382). <!-- maestro-release-note:6a60d2b1e2ad -->
+- Execute Dex gateway commands on placement workers (#11381). <!-- maestro-release-note:25b18bbb0df4 -->
+- Remove stash-conflict marker that left deixic_operating_threads_tests.rs unparseable (#11380). <!-- maestro-release-note:f6d426f86031 -->
+- Preflight public mirror App access before build (#11374). <!-- maestro-release-note:d855a193f499 -->
+- Own the sandbox idle policy; sandboxwich TTL is a safety net (#11376). <!-- maestro-release-note:bf679739c311 -->
+- Grant delivery worker the ack-obligation table (#11377). <!-- maestro-release-note:19ed9d6d21ca -->
+- Unblock Maestro release validation (#11397). <!-- maestro-release-note:0bf28330bba1 -->
+- Stop saturated workers scanning queued jobs (#11396). <!-- maestro-release-note:30f2a14ae377 -->
+- Don't surface React Query CancelledError as a thread load error (#11395). <!-- maestro-release-note:2c239e3178bf -->
+- Log why a Gemini stream failed and the shape of a rejected history (#11394). <!-- maestro-release-note:14818c237b97 -->
+- Close the learning-outbox test left open by a stash marker (#11391). <!-- maestro-release-note:9153bad05a2a -->
+
 ## [0.10.108] - 2026-09-29
 
 ### Fixed
