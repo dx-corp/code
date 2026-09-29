@@ -35,6 +35,8 @@ test("internal tag-release dispatches public-release-mirror after creating a tag
 	assert.match(internalWorkflow, /resolve-maestro-version-commit\.py/);
 	assert.match(internalWorkflow, /tag-target-sha: \$\{\{ steps\.tag-target\.outputs\.commit \}\}/);
 	const apexCheck = internalWorkflow.indexOf("python3 evals/dex-customer-readiness/test_measure.py");
+	const mirrorCheck = internalWorkflow.indexOf("python3 scripts/release/test-maestro-sync-public-release-mirror.py");
 	const tagCreation = internalWorkflow.indexOf('create-tag-if-missing: "true"');
 	assert.ok(apexCheck > 0 && tagCreation > apexCheck, "Apex source contracts must pass before the immutable tag is created");
+	assert.ok(mirrorCheck > 0 && tagCreation > mirrorCheck, "public mirror source staging must pass before the immutable tag is created");
 });
