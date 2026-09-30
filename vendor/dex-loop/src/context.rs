@@ -146,6 +146,9 @@ pub struct Context {
     /// `Final`) are never attributed to the turn that raced in ahead of them.
     pending_turns: Vec<PendingTurn>,
     authorized_principal: Option<PrincipalId>,
+    /// Unknown call outcomes in this turn, derived from the durable log.
+    /// Kept outside model history so compaction cannot permit a fresh retry.
+    uncertain_calls: Vec<ProposedCall>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -184,6 +187,7 @@ impl Context {
             authorized_tools: Vec::new(),
             approval_mode: ApprovalMode::Interactive,
             authorized_principal: None,
+            uncertain_calls: Vec::new(),
             pending_turns: Vec::new(),
         }
     }
@@ -300,6 +304,16 @@ impl Context {
 
     pub(crate) fn open_step(&self) -> Option<&OpenStep> {
         self.open_step.as_ref()
+    }
+
+    /// A fresh ID does not make an unresolved operation safe to repeat.
+    pub(crate) fn has_uncertain_call(&self, call: &ProposedCall) -> bool {
+        self.uncertain_calls.iter().any(|prior| {
+            prior.id != call.id
+                && prior.tool == call.tool
+                && prior.args_digest == call.args_digest
+                && prior.principal == call.principal
+        })
     }
 
     /// The step of a model attempt that started but never completed.
@@ -470,6 +484,15 @@ impl Context {
                 output,
                 receipt,
             } => {
+                self.uncertain_calls.retain(|prior| &prior.id != call);
+                if *outcome == Outcome::Unknown
+                    && let Some(proposal) = self
+                        .open_step
+                        .as_ref()
+                        .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
+                {
+                    self.uncertain_calls.push(proposal.clone());
+                }
                 if let Some(state) = self.state_mut(call) {
                     *state = CallState::Done(ToolResult {
                         outcome: *outcome,
@@ -564,6 +587,7 @@ impl Context {
         self.attempt = None;
         self.interrupt_requested = false;
         self.exposed.clear();
+        self.uncertain_calls.clear();
         self.client_tools = client_tools;
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;

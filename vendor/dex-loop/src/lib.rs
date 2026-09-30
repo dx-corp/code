@@ -31,7 +31,7 @@ mod sanitize;
 pub use budget::{Budget, BudgetAxis};
 pub use compaction::{Compaction, Compactor, NoCompaction, Summarize, Threshold};
 pub use context::{Context, Entry, Message};
-pub use engine::{DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
+pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
 pub use event::{
     ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor, ErrorCode, Event,
     HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId, ProposedCall,
