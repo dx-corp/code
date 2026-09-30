@@ -358,6 +358,32 @@ pub fn check_log(
         }
     }
 
+    // (7) Only reads start ahead of their step's commit point: a mutation
+    // or client call whose `ToolStarted` precedes the `ModelStepCompleted`
+    // that proposes it began before the model finished.
+    let mut committed_at: HashMap<&CallId, Cursor> = HashMap::new();
+    for (cursor, event) in events {
+        if let Event::ModelStepCompleted { calls, .. } = event {
+            for call in calls {
+                committed_at.insert(&call.id, *cursor);
+            }
+        }
+    }
+    for (call, history) in &calls {
+        let (Some(started), Some(committed)) = (history.started_at, committed_at.get(call)) else {
+            continue;
+        };
+        let is_read = !mutation_names.contains(history.tool.as_str())
+            && !client_names.contains(history.tool.as_str());
+        if started < *committed && !is_read {
+            let violation = Violation::new(format!(
+                "call {call} ({}) started before its step committed, but is not a read",
+                history.tool
+            ));
+            violations.push(tag_known_pending(violation, &history.tool, client_names));
+        }
+    }
+
     // (6) Interrupt never turns a started call into "not run".
     for (call, history) in &calls {
         if history.started_at.is_none() {

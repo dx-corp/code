@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
 use crate::event::{
-    ApprovalId, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning, ThreadId,
-    ToolName, ToolResult, Usage,
+    ApprovalId, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning, ServedBy,
+    ThreadId, ToolName, ToolResult, Usage,
 };
 
 /// The log or the effect ledger refused a write. The engine stops at once and
@@ -68,6 +68,10 @@ pub enum ModelChunk {
     /// stores it on `ModelStepCompleted`; history returns it on
     /// `Message::Assistant`.
     Reasoning(ProviderReasoning),
+    /// Which provider route and model served this response. Sent at most
+    /// once, before the first other chunk; the engine stores it on
+    /// `ModelStepCompleted`.
+    Served(ServedBy),
 }
 
 /// The model call failed after the `Model` port's own retries.
@@ -173,9 +177,13 @@ pub trait Tools: Send + Sync {
     /// caller-chosen, so the same `CallId` string can occur in two different
     /// threads. Where the downstream system needs a globally unique
     /// idempotency key, build it from `thread` and `call.id` together, not
-    /// `call.id` alone. For read-only calls `cancel` fires on interrupt and
-    /// the engine waits for the call to return; for mutations it never
-    /// fires.
+    /// `call.id` alone. `cancel` fires on interrupt for reads and mutations
+    /// alike, and the engine keeps awaiting the call to return either way:
+    /// it never drops a mutation's future, and it records whatever result
+    /// comes back in the effect ledger. What cancel means is the tool's to
+    /// decide. A read abandons its work; a mutation that can stop cleanly
+    /// (a background process, say) stops it and returns the partial outcome,
+    /// and one that cannot simply finishes.
     fn run(
         &self,
         thread: &ThreadId,

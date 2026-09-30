@@ -29,14 +29,14 @@ mod rehydrate;
 mod sanitize;
 
 pub use budget::{Budget, BudgetAxis};
-pub use compaction::{Compaction, Compactor, NoCompaction, Summarize, Threshold};
+pub use compaction::{Compaction, Compactor, Cut, NoCompaction, Summarize, Threshold, plan_cut};
 pub use context::{Context, Entry, Message};
 pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
 pub use event::{
     AUTO_APPROVER, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor,
     ErrorCode, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId,
-    ProposedCall, ProviderReasoning, ReceiptId, ThreadId, ToolName, ToolResult, TurnId, Usage,
-    args_digest,
+    ProposedCall, ProviderReasoning, ReceiptId, ServedBy, ThreadId, ToolName, ToolResult, TurnId,
+    Usage, args_digest,
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,

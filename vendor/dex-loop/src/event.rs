@@ -138,6 +138,17 @@ impl fmt::Debug for ProviderReasoning {
     }
 }
 
+/// The provider route and model that actually served one model step. With
+/// ordered failover the serving route can differ from the configured
+/// primary, so surfaces and metering read it from the step, not config.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServedBy {
+    /// The model-gateway provider id, e.g. `vertex-anthropic`, `vertex-ai`.
+    pub provider: String,
+    /// The provider model id, e.g. `claude-opus-5-5`.
+    pub model: String,
+}
+
 /// Model spend reported by one model response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
@@ -447,6 +458,11 @@ pub enum Event {
         /// written before this field existed still deserialize, to `None`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reasoning: Option<ProviderReasoning>,
+        /// The provider and model that served the step
+        /// (`ModelChunk::Served`); `None` for steps logged before the field
+        /// existed or from a model port that does not report it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        served: Option<ServedBy>,
     },
     /// A model attempt with no `ModelStepCompleted` (a crash mid-stream or a
     /// model failure). Its streamed text is dropped from model context;
@@ -619,6 +635,7 @@ mod tests {
                     PrincipalId::new("alice"),
                 )],
                 reasoning: None,
+                served: None,
             },
             Event::ModelStepCompleted {
                 step: 2,
@@ -628,6 +645,10 @@ mod tests {
                     format: "google.gemini.v1".into(),
                     model: "gemini-3.6-flash".into(),
                     payload: serde_json::json!({"calls": [{"thought_signature": "c2ln"}]}),
+                }),
+                served: Some(ServedBy {
+                    provider: "vertex-ai".into(),
+                    model: "gemini-3.6-flash".into(),
                 }),
             },
             Event::ToolFinished {

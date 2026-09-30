@@ -198,32 +198,6 @@ impl FakeLog {
     pub fn refused(&self) -> usize {
         lock(&self.state).refused
     }
-
-    /// The digest the engine put on the approval request for `call`.
-    pub fn requested_digest(&self, call: &CallId) -> String {
-        self.events()
-            .into_iter()
-            .find_map(|event| match event {
-                Event::ApprovalRequested {
-                    call: requested,
-                    args_digest,
-                    ..
-                } if &requested == call => Some(args_digest),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("no approval requested for {call}"))
-    }
-
-    pub fn decide(&self, call: &CallId, approval: &str, approved: bool) {
-        let args_digest = self.requested_digest(call);
-        self.host_append(Event::ApprovalDecided {
-            call: call.clone(),
-            approval: ApprovalId::new(approval),
-            args_digest,
-            approved,
-            principal: alice(),
-        });
-    }
 }
 
 impl Log for FakeLog {
@@ -291,6 +265,8 @@ pub fn usage(
 struct ModelState {
     scripts: VecDeque<Vec<Result<ModelChunk, ModelError>>>,
     chunk_delay: Duration,
+    /// After its script, a call's stream never yields again or ends.
+    hang: bool,
     seen: Vec<Vec<Message>>,
     offered: Vec<Vec<String>>,
 }
@@ -310,6 +286,14 @@ impl FakeModel {
 
     pub fn with_chunk_delay(self, delay: Duration) -> Self {
         lock(&self.state).chunk_delay = delay;
+        self
+    }
+
+    /// Each call's stream stays open after its script: no further chunk and
+    /// no end, as a provider that stalls mid-response.
+    #[allow(dead_code)] // used by tests/prefetch.rs only
+    pub fn hanging(self) -> Self {
+        lock(&self.state).hang = true;
         self
     }
 
@@ -350,12 +334,21 @@ impl Model for FakeModel {
             })]
         });
         let delay = state.chunk_delay;
-        stream::iter(script).then(move |chunk| async move {
-            if !delay.is_zero() {
-                tokio::time::sleep(delay).await;
+        let hang = state.hang;
+        let hold = stream::once(async move {
+            if hang {
+                std::future::pending::<()>().await;
             }
-            chunk
         })
+        .filter_map(|()| async { None });
+        stream::iter(script)
+            .then(move |chunk| async move {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                chunk
+            })
+            .chain(hold)
     }
 }
 
@@ -363,6 +356,19 @@ impl Model for FakeModel {
 
 pub fn read_tool(name: &str) -> ToolSpec {
     spec(name, true, true, ExecutorKind::InProcess)
+}
+
+/// A read whose arguments must be an object with a string `key`.
+#[allow(dead_code)] // used by tests/prefetch.rs only
+pub fn strict_read_tool(name: &str) -> ToolSpec {
+    ToolSpec {
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        }),
+        ..read_tool(name)
+    }
 }
 
 pub fn write_tool(name: &str) -> ToolSpec {
@@ -843,6 +849,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             text: String::new(),
             calls: vec![call.clone()],
             reasoning: None,
+            served: None,
         },
         Event::ToolStarted {
             call: call.id.clone(),
