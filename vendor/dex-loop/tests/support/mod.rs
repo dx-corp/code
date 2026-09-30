@@ -754,6 +754,11 @@ pub fn shape(event: &Event) -> String {
             format!("completed:{text}:[{}]", ids(calls))
         }
         Event::ModelAttemptAbandoned { step } => format!("abandoned:{step}"),
+        Event::ModelAttemptFailed {
+            step, code, then, ..
+        } => {
+            format!("attempt_failed:{step}:{code}:{then:?}")
+        }
         Event::ToolStarted { call, .. } => format!("started:{call}"),
         Event::ToolProgress { call, label } => format!("progress:{call}:{label}"),
         Event::ToolsExposed { tools, .. } => format!(

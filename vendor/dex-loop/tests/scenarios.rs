@@ -2258,3 +2258,59 @@ async fn uncertain_mutations_keep_their_principal_identity() {
     assert_eq!(tools.policy_checks()[0].1, "bob");
     assert_eq!(ctx, log.rehydrate());
 }
+
+// Failed route attempts are debug rows: the engine appends each one at once,
+// before the step's commit point, and they never change the history the next
+// model request renders.
+#[tokio::test]
+async fn failed_attempt_rows_precede_the_commit_and_never_change_history() {
+    let failed = |then| {
+        Ok(dex_loop::ModelChunk::AttemptFailed {
+            provider: "vertex-anthropic".into(),
+            model: "claude-opus-5-5".into(),
+            code: "provider_unavailable".into(),
+            elapsed_ms: 42,
+            then,
+        })
+    };
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![vec![
+        failed(dex_loop::AttemptNext::Retry),
+        failed(dex_loop::AttemptNext::Failover),
+        text("Hello"),
+        usage(3, 2, 7),
+    ]]);
+    let tools = FakeTools::new(vec![]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "hi");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(
+        log.shapes_after(2),
+        strings(&[
+            "attempt_failed:1:provider_unavailable:Retry",
+            "attempt_failed:1:provider_unavailable:Failover",
+            "delta:Hello",
+            "usage:5",
+            "completed:Hello:[]",
+            "final:Hello",
+        ])
+    );
+    let with_rows = log.entries();
+    let without_rows: Vec<_> = with_rows
+        .iter()
+        .filter(|(_, event)| !matches!(event, Event::ModelAttemptFailed { .. }))
+        .cloned()
+        .collect();
+    assert_ne!(with_rows.len(), without_rows.len());
+    assert_eq!(
+        history(&dex_loop::rehydrate(thread(), &with_rows)),
+        history(&dex_loop::rehydrate(thread(), &without_rows)),
+    );
+    assert_eq!(
+        history(&ctx),
+        history(&dex_loop::rehydrate(thread(), &with_rows))
+    );
+}
