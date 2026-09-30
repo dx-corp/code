@@ -90,6 +90,12 @@ pub trait Model: Send + Sync {
         ctx: &'a Context,
         tools: &'a [&'a ToolSpec],
     ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a;
+
+    /// Called once when a turn is admitted, before its first step, with the
+    /// context that step will see. An implementation may start work the
+    /// first request needs (it must not block: spawn it) so that request
+    /// finds it done. The default does nothing.
+    fn prepare_turn(&self, _ctx: &Context) {}
 }
 
 /// Which governance a tool falls under. Read by `Tools::policy`, not by the

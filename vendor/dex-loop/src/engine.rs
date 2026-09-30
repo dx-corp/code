@@ -18,6 +18,8 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::{Pin, pin};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
@@ -137,15 +139,83 @@ enum StreamStep {
 /// in the step's calls.
 type PrefetchFuture<'e> = Pin<Box<dyn Future<Output = (usize, ToolResult)> + Send + 'e>>;
 
-/// Reads started while the model streamed (see the module doc). Lives in
-/// `Engine::run` for one step: filled by `model_step`, drained by
-/// `dispatch`, and dropped whole when the attempt does not commit.
-struct Prefetch<'e> {
+/// The reads that are running or finished ahead of their step's commit.
+struct Reads<'e> {
     /// Still running. Each carries its own deadline, the one a wave would
     /// have given it.
     pending: FuturesUnordered<PrefetchFuture<'e>>,
     /// Returned before the step committed.
     done: HashMap<usize, ToolResult>,
+}
+
+/// The reads' shared handle. A read is only polled while the engine polls
+/// it, and a read can be suspended inside a log write of its own (a client
+/// request, a progress label) holding the thread's row lock. If the engine
+/// then awaited a log write without polling the reads, the two would wait on
+/// each other forever. [`ReadsHandle::drive`] polls the reads alongside any
+/// engine await, so that never happens.
+#[derive(Clone)]
+struct ReadsHandle<'e>(Arc<Mutex<Reads<'e>>>);
+
+impl<'e> ReadsHandle<'e> {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Reads {
+            pending: FuturesUnordered::new(),
+            done: HashMap::new(),
+        })))
+    }
+
+    /// Never held across an await: every use is one short synchronous step.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Reads<'e>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn push(&self, read: PrefetchFuture<'e>) {
+        self.lock().pending.push(read);
+    }
+
+    fn has_pending(&self) -> bool {
+        !self.lock().pending.is_empty()
+    }
+
+    fn take_done(&self, index: usize) -> Option<ToolResult> {
+        self.lock().done.remove(&index)
+    }
+
+    fn take_pending(&self) -> FuturesUnordered<PrefetchFuture<'e>> {
+        std::mem::take(&mut self.lock().pending)
+    }
+
+    /// The next read to return, if any is running. Cancel-safe: dropping it
+    /// loses nothing, the read stays in the set.
+    async fn next_done(&self) -> Option<(usize, ToolResult)> {
+        std::future::poll_fn(|cx| self.lock().pending.poll_next_unpin(cx)).await
+    }
+
+    /// Awaits `work` while polling the running reads, so a read suspended in
+    /// a log write can finish it. Results that arrive meanwhile are kept in
+    /// `done`.
+    async fn drive<T>(&self, work: impl Future<Output = T>) -> T {
+        let mut work = pin!(work);
+        std::future::poll_fn(|cx| {
+            if let Poll::Ready(output) = work.as_mut().poll(cx) {
+                return Poll::Ready(output);
+            }
+            let mut reads = self.lock();
+            while let Poll::Ready(Some((index, result))) = reads.pending.poll_next_unpin(cx) {
+                reads.done.insert(index, result);
+            }
+            Poll::Pending
+        })
+        .await
+    }
+}
+
+/// Reads started while the model streamed (see the module doc). Lives in
+/// `Engine::run` for one step: filled by `model_step`, drained by
+/// `dispatch`, and dropped whole when the attempt does not commit.
+struct Prefetch<'e> {
+    reads: ReadsHandle<'e>,
     /// Indices whose `ToolStarted` is already on the log.
     started: HashSet<usize>,
     /// The `ToolStarted` rows appended mid-stream. The model stream borrows
@@ -156,8 +226,7 @@ struct Prefetch<'e> {
 impl Prefetch<'_> {
     fn new() -> Self {
         Self {
-            pending: FuturesUnordered::new(),
-            done: HashMap::new(),
+            reads: ReadsHandle::new(),
             started: HashSet::new(),
             unobserved: Vec::new(),
         }
@@ -294,7 +363,11 @@ where
                 return self.interrupt(ctx).await;
             }
             if ctx.open_step().is_some() {
-                if let Some(exit) = self.dispatch(ctx, cancel, started, &mut prefetch).await? {
+                let reads = prefetch.reads.clone();
+                if let Some(exit) = reads
+                    .drive(self.dispatch(ctx, cancel, started, &mut prefetch))
+                    .await?
+                {
                     return Ok(exit);
                 }
                 continue;
@@ -407,7 +480,7 @@ where
                 // `FuturesUnordered::next` on an empty set resolves at once
                 // with `None`; the guard keeps it out of the race until a
                 // read is actually running.
-                let has_pending = !prefetch.pending.is_empty();
+                let has_pending = prefetch.reads.has_pending();
                 let outcome = tokio::select! {
                     biased;
                     () = cancel.cancelled() => StreamStep::Cancelled,
@@ -416,7 +489,7 @@ where
                         Some(chunk) => StreamStep::Chunk(chunk),
                         None => StreamStep::Ended,
                     },
-                    done = prefetch.pending.next(), if has_pending => match done {
+                    done = prefetch.reads.next_done(), if has_pending => match done {
                         Some((index, result)) => StreamStep::Prefetched(index, result),
                         None => continue,
                     },
@@ -424,21 +497,19 @@ where
                 match outcome {
                     StreamStep::Chunk(Ok(ModelChunk::Thinking(delta))) => {
                         if let Some(summary) = thinking.push(&delta, !text.is_empty()) {
-                            self.log
-                                .append(&[Event::ThinkingDelta { text: summary }])
-                                .await?;
+                            let event = [Event::ThinkingDelta { text: summary }];
+                            prefetch.reads.drive(self.log.append(&event)).await?;
                         }
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Text(delta))) => {
                         if let Some(summary) = thinking.flush() {
-                            self.log
-                                .append(&[Event::ThinkingDelta { text: summary }])
-                                .await?;
+                            let event = [Event::ThinkingDelta { text: summary }];
+                            prefetch.reads.drive(self.log.append(&event)).await?;
                         }
                         let safe = filter.push(&delta);
                         if !safe.is_empty() {
                             text.push_str(&safe);
-                            self.log.append_text(safe).await?;
+                            prefetch.reads.drive(self.log.append_text(safe)).await?;
                         }
                     }
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
@@ -454,7 +525,7 @@ where
                         calls.push(call);
                     }
                     StreamStep::Prefetched(index, result) => {
-                        prefetch.done.insert(index, result);
+                        prefetch.reads.lock().done.insert(index, result);
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Usage(usage))) => {
                         pending_usage.push(Event::Usage(usage));
@@ -478,14 +549,13 @@ where
             }
             if failure.is_none() && !wall_exceeded {
                 if let Some(summary) = thinking.flush() {
-                    self.log
-                        .append(&[Event::ThinkingDelta { text: summary }])
-                        .await?;
+                    let event = [Event::ThinkingDelta { text: summary }];
+                    prefetch.reads.drive(self.log.append(&event)).await?;
                 }
                 let tail = filter.finish();
                 if !tail.is_empty() {
                     text.push_str(&tail);
-                    self.log.append_text(tail).await?;
+                    prefetch.reads.drive(self.log.append_text(tail)).await?;
                 }
             }
         }
@@ -599,7 +669,9 @@ where
             reasoning,
             served,
         });
-        self.emit(ctx, events).await?;
+        // The reads started during the stream are still running: keep
+        // polling them through the commit (see `ReadsHandle`).
+        prefetch.reads.drive(self.emit(ctx, events)).await?;
         Ok(None)
     }
 
@@ -636,7 +708,10 @@ where
         }
         // Appended without `ctx.observe`: the stream still borrows `ctx`.
         let event = started(call, &spec);
-        let cursors = self.log.append(std::slice::from_ref(&event)).await?;
+        let cursors = prefetch
+            .reads
+            .drive(self.log.append(std::slice::from_ref(&event)))
+            .await?;
         let [cursor] = cursors[..] else {
             return Err(Fenced::new(format!(
                 "log returned {} cursors for 1 event",
@@ -648,7 +723,7 @@ where
         let deadline = self.call_deadline(run_started);
         let thread = ctx.thread().clone();
         let call = call.clone();
-        prefetch.pending.push(Box::pin(async move {
+        prefetch.reads.push(Box::pin(async move {
             let run = self.tools.run(&thread, &call, cancel);
             let result = match tokio::time::timeout(deadline, run).await {
                 Ok(result) => result,
@@ -1063,7 +1138,7 @@ where
         let deadline = self.call_deadline(run_started);
         let mut running: FuturesUnordered<PrefetchFuture<'e>> = FuturesUnordered::new();
         for &index in &wave {
-            if let Some(result) = prefetch.done.remove(&index) {
+            if let Some(result) = prefetch.reads.take_done(index) {
                 self.finish(ctx, &calls[index], result).await?;
                 continue;
             }
@@ -1083,7 +1158,7 @@ where
                 (index, result)
             }));
         }
-        for future in std::mem::take(&mut prefetch.pending) {
+        for future in prefetch.reads.take_pending() {
             running.push(future);
         }
         // On `Fenced` the remaining reads are dropped: a stale owner must not
