@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::Context;
 use crate::event::{
     ApprovalId, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning, ServedBy,
-    ThreadId, ToolName, ToolResult, Usage,
+    StepTiming, ThreadId, ToolName, ToolResult, Usage,
 };
 
 /// The log or the effect ledger refused a write. The engine stops at once and
@@ -72,6 +72,9 @@ pub enum ModelChunk {
     /// once, before the first other chunk; the engine stores it on
     /// `ModelStepCompleted`.
     Served(ServedBy),
+    /// Where the step's time went. Sent at most once, after a clean
+    /// terminal; the engine stores it on `ModelStepCompleted`.
+    Timing(StepTiming),
 }
 
 /// The model call failed after the `Model` port's own retries.
@@ -166,6 +169,22 @@ pub enum Verdict {
     Deny(String),
     /// Park the turn. `summary` is customer-safe and shown on the approval card.
     NeedsApproval {
+        approval: ApprovalId,
+        summary: String,
+    },
+    /// Nothing runs. The call finishes with `preview` as its result (a
+    /// structured `needs_confirmation` document the model reads and turns into
+    /// one plain question for the user) and the turn goes on. No approval is
+    /// parked: the user's answer arrives as an ordinary message, and the model
+    /// calls again with a confirmation bound to the same arguments.
+    NeedsConfirmation {
+        preview: String,
+    },
+    /// The user confirmed this exact call in chat. Granted at once; the engine
+    /// writes the receipt under the confirming user's principal
+    /// (`call.principal`), not `AUTO_APPROVER`. `summary` carries the
+    /// `confirmed_by_user` decision label.
+    Confirmed {
         approval: ApprovalId,
         summary: String,
     },

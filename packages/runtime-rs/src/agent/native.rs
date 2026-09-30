@@ -447,6 +447,7 @@ mod deferred_tool_tests;
 mod model_dynamics;
 mod provider_history;
 mod provider_loop;
+mod provider_payload;
 mod read_only_tools;
 mod side_questions;
 #[cfg(test)]
@@ -3794,12 +3795,7 @@ fn vault_provider_history(
     messages: &[Message],
     credential_vault: &CredentialVault,
 ) -> Result<Vec<Message>> {
-    // Scan the final provider projection as a last boundary check. This also
-    // catches raw material introduced by prompts, hooks, or extensions after
-    // tool output was first vaulted. Existing references remain opaque.
-    let serialized = serde_json::to_value(messages).context("serialize provider history")?;
-    let safe = credential_vault.vault_in_json(&serialized);
-    serde_json::from_value(safe).context("deserialize vaulted provider history")
+    provider_payload::vault_history(messages, credential_vault)
 }
 
 fn vault_provider_history_shared(
@@ -3857,10 +3853,7 @@ impl ProviderSafeRequest {
         // Config preparation may discover a credential present in history.
         let messages = vault_provider_history_shared(&messages, vault)?;
         config.system = config.system.map(|system| vault.vault_in_text(&system));
-        let history_json = serde_json::to_value(messages.as_ref())?;
-        let attestation = vault
-            .attest_provider_json(&history_json)
-            .map_err(anyhow::Error::msg)?;
+        let attestation = provider_payload::attest_history(&messages, vault)?;
         if let Some(system) = &config.system {
             let system_attestation = vault
                 .attest_provider_text(system)
@@ -3870,10 +3863,7 @@ impl ProviderSafeRequest {
                 "credential vault changed during provider request preparation"
             );
         }
-        let tools_json = serde_json::to_value(config.tools.as_ref())?;
-        let tools_attestation = vault
-            .attest_provider_json(&tools_json)
-            .map_err(anyhow::Error::msg)?;
+        let tools_attestation = provider_payload::attest_tools(&config.tools, vault)?;
         anyhow::ensure!(
             attestation == tools_attestation,
             "credential vault changed during provider request preparation"
@@ -3900,9 +3890,9 @@ fn vault_provider_tools(
 ) -> Result<Arc<Vec<Tool>>> {
     let mut safe_tools = Vec::with_capacity(tools.len());
     for tool in tools {
-        if credential_vault.vault_in_text(&tool.name) != tool.name {
-            anyhow::bail!("credential detected in provider tool name");
-        }
+        credential_vault
+            .attest_provider_identifier(&tool.name)
+            .map_err(anyhow::Error::msg)?;
         let mut safe = tool.clone();
         safe.description = credential_vault.vault_in_text(&tool.description);
         safe.input_schema = vault_provider_schema(&tool.input_schema, credential_vault)?;
@@ -3912,9 +3902,9 @@ fn vault_provider_tools(
     // only as a schema key or tool name. Validate structural names again with
     // the complete vault before handing the definitions to the provider.
     for safe in &mut safe_tools {
-        if credential_vault.vault_in_text(&safe.name) != safe.name {
-            anyhow::bail!("credential detected in provider tool name");
-        }
+        credential_vault
+            .attest_provider_identifier(&safe.name)
+            .map_err(anyhow::Error::msg)?;
         safe.description = credential_vault.vault_in_text(&safe.description);
         safe.input_schema = vault_provider_schema(&safe.input_schema, credential_vault)?;
     }
@@ -3933,10 +3923,18 @@ fn vault_provider_schema(value: &Value, credential_vault: &CredentialVault) -> R
         Value::Object(entries) => {
             let mut safe = serde_json::Map::new();
             for (key, value) in entries {
-                if credential_vault.vault_in_text(key) != *key {
-                    anyhow::bail!("credential detected in provider tool schema key");
-                }
-                safe.insert(key.clone(), vault_provider_schema(value, credential_vault)?);
+                credential_vault
+                    .attest_provider_identifier(key)
+                    .map_err(anyhow::Error::msg)?;
+                safe.insert(
+                    key.clone(),
+                    if provider_payload::schema_protocol_keyword(key) {
+                        provider_payload::attest_protocol_json(value, credential_vault)?;
+                        value.clone()
+                    } else {
+                        vault_provider_schema(value, credential_vault)?
+                    },
+                );
             }
             Ok(Value::Object(safe))
         }

@@ -192,10 +192,13 @@ impl ChunkTranslator {
             StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
-                ..
+                cache_read_tokens,
+                cache_creation_tokens,
             } => vec![Ok(ModelChunk::Usage(Usage {
                 input_tokens,
                 output_tokens,
+                cache_read_input_tokens: cache_read_tokens.unwrap_or_default(),
+                cache_creation_input_tokens: cache_creation_tokens.unwrap_or_default(),
                 // Not attributed here; see the module doc comment.
                 cost_micros: 0,
             }))],
@@ -253,6 +256,28 @@ mod tests {
             workspace: "ws-1".into(),
             thread: "thread-1".into(),
         }
+    }
+
+    #[test]
+    fn retains_provider_reported_cache_usage() {
+        let chunks = ChunkTranslator::default().translate(StreamEvent::Usage {
+            input_tokens: 10,
+            output_tokens: 3,
+            cache_read_tokens: Some(20),
+            cache_creation_tokens: Some(7),
+        });
+        assert!(matches!(&chunks[0], Ok(ModelChunk::Usage(usage))
+            if usage.input_tokens == 10 && usage.output_tokens == 3
+                && usage.cache_read_input_tokens == 20
+                && usage.cache_creation_input_tokens == 7));
+        let absent = ChunkTranslator::default().translate(StreamEvent::Usage {
+            input_tokens: 10,
+            output_tokens: 3,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        });
+        assert!(matches!(&absent[0], Ok(ModelChunk::Usage(usage))
+            if usage.cache_read_input_tokens == 0 && usage.cache_creation_input_tokens == 0));
     }
 
     #[tokio::test]

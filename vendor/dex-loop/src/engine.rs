@@ -15,7 +15,7 @@
 //! those calls as not run; a committed step adopts their results in place
 //! of running them again.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -146,6 +146,15 @@ struct Reads<'e> {
     pending: FuturesUnordered<PrefetchFuture<'e>>,
     /// Returned before the step committed.
     done: HashMap<usize, ToolResult>,
+    completion_order: VecDeque<usize>,
+}
+
+impl Reads<'_> {
+    fn record_done(&mut self, index: usize, result: ToolResult) {
+        if self.done.insert(index, result).is_none() {
+            self.completion_order.push_back(index);
+        }
+    }
 }
 
 /// The reads' shared handle. A read is only polled while the engine polls
@@ -162,6 +171,7 @@ impl<'e> ReadsHandle<'e> {
         Self(Arc::new(Mutex::new(Reads {
             pending: FuturesUnordered::new(),
             done: HashMap::new(),
+            completion_order: VecDeque::new(),
         })))
     }
 
@@ -192,6 +202,20 @@ impl<'e> ReadsHandle<'e> {
         std::future::poll_fn(|cx| self.lock().pending.poll_next_unpin(cx)).await
     }
 
+    /// Drain peers completed during a log append before polling remaining reads.
+    async fn next_completed(&self) -> Option<(usize, ToolResult)> {
+        std::future::poll_fn(|cx| {
+            let mut reads = self.lock();
+            while let Some(index) = reads.completion_order.pop_front() {
+                if let Some(result) = reads.done.remove(&index) {
+                    return Poll::Ready(Some((index, result)));
+                }
+            }
+            reads.pending.poll_next_unpin(cx)
+        })
+        .await
+    }
+
     /// Awaits `work` while polling the running reads, so a read suspended in
     /// a log write can finish it. Results that arrive meanwhile are kept in
     /// `done`.
@@ -203,7 +227,7 @@ impl<'e> ReadsHandle<'e> {
             }
             let mut reads = self.lock();
             while let Poll::Ready(Some((index, result))) = reads.pending.poll_next_unpin(cx) {
-                reads.done.insert(index, result);
+                reads.record_done(index, result);
             }
             Poll::Pending
         })
@@ -460,6 +484,7 @@ where
         // The route and model that served this attempt, kept for every
         // `ModelStepCompleted` below, including a cut-off or cancelled one.
         let mut served = None;
+        let mut timing = None;
         {
             // The answer-only call offers nothing, not even `tools.search`.
             let answer_only = self.budget.answer_only(step.saturating_sub(1));
@@ -525,7 +550,7 @@ where
                         calls.push(call);
                     }
                     StreamStep::Prefetched(index, result) => {
-                        prefetch.reads.lock().done.insert(index, result);
+                        prefetch.reads.lock().record_done(index, result);
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Usage(usage))) => {
                         pending_usage.push(Event::Usage(usage));
@@ -535,6 +560,9 @@ where
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Served(by))) => {
                         served = Some(by);
+                    }
+                    StreamStep::Chunk(Ok(ModelChunk::Timing(t))) => {
+                        timing = Some(t);
                     }
                     StreamStep::Chunk(Err(error)) => {
                         failure = Some(error.message);
@@ -600,6 +628,7 @@ where
                 calls: Vec::new(),
                 reasoning: None,
                 served: served.clone(),
+                timing: timing.take(),
             });
             events.push(Event::Final { text });
             self.emit(ctx, events).await?;
@@ -625,6 +654,7 @@ where
                 calls: Vec::new(),
                 reasoning: None,
                 served: served.clone(),
+                timing: timing.take(),
             });
             self.emit(ctx, events).await?;
             return self.interrupt(ctx).await.map(Some);
@@ -654,6 +684,7 @@ where
                 calls: Vec::new(),
                 reasoning,
                 served,
+                timing,
             });
             if !continues {
                 events.push(Event::Final { text });
@@ -668,6 +699,7 @@ where
             calls,
             reasoning,
             served,
+            timing,
         });
         // The reads started during the stream are still running: keep
         // polling them through the commit (see `ReadsHandle`).
@@ -919,6 +951,12 @@ where
                         .await?;
                     continue;
                 }
+                // No park: the preview is the call's result, nothing runs, and
+                // the model asks the user in its reply.
+                Verdict::NeedsConfirmation { preview } => {
+                    self.finish(ctx, call, ToolResult::error(preview)).await?;
+                    continue;
+                }
                 verdict => verdict,
             };
             if let Some(decision) = decision.as_ref() {
@@ -939,14 +977,29 @@ where
             // Policy asked for approval: no human is asked. The call is
             // granted at once and the receipt goes to the log before the
             // effect; the pending wave runs first so effects keep order.
-            if let (None, Verdict::NeedsApproval { approval, summary }) = (decision, verdict) {
-                if self
-                    .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
-                    .await?
-                {
-                    break;
+            match (decision, verdict) {
+                (None, Verdict::NeedsApproval { approval, summary }) => {
+                    if self
+                        .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
+                        .await?
+                    {
+                        break;
+                    }
+                    self.auto_approve(ctx, call, approval, summary).await?;
                 }
-                self.auto_approve(ctx, call, approval, summary).await?;
+                // The user confirmed this exact call in chat: the receipt
+                // names them, not the auto approver.
+                (None, Verdict::Confirmed { approval, summary }) => {
+                    if self
+                        .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
+                        .await?
+                    {
+                        break;
+                    }
+                    self.record_grant(ctx, call, approval, summary, call.principal.clone())
+                        .await?;
+                }
+                _ => {}
             }
 
             if spec.executor == ExecutorKind::User {
@@ -1136,7 +1189,7 @@ where
         // gets the full time. A read that overruns is dropped and finished
         // `Failed`; a read has no effect to wait for, so retrying is safe.
         let deadline = self.call_deadline(run_started);
-        let mut running: FuturesUnordered<PrefetchFuture<'e>> = FuturesUnordered::new();
+        let running = ReadsHandle::new();
         for &index in &wave {
             if let Some(result) = prefetch.reads.take_done(index) {
                 self.finish(ctx, &calls[index], result).await?;
@@ -1163,7 +1216,7 @@ where
         }
         // On `Fenced` the remaining reads are dropped: a stale owner must not
         // append, and the new owner runs them again.
-        while let Some((index, result)) = running.next().await {
+        while let Some((index, result)) = running.next_completed().await {
             let still_open = ctx
                 .open_step()
                 .and_then(|step| step.states.get(index))
@@ -1173,7 +1226,9 @@ where
             if !still_open || !(wave.contains(&index) || prefetch.started.contains(&index)) {
                 continue;
             }
-            self.finish(ctx, &calls[index], result).await?;
+            running
+                .drive(self.finish(ctx, &calls[index], result))
+                .await?;
         }
         Ok(())
     }
@@ -1326,15 +1381,28 @@ where
     /// `dex_tools::client::declare` for dex-runtime's host); the engine
     /// does not merge them in itself, so they are never offered twice.
     fn offered(&self, ctx: &Context) -> Vec<ToolSpec> {
-        std::iter::once(self.search.clone())
+        // Search and the core tools come first, in catalog order, on every
+        // step. Exposed tools follow in the order they were exposed, so an
+        // exposure only appends: the prefix the provider cached last step is
+        // unchanged and only the new tail is uncached.
+        let mut offered: Vec<ToolSpec> = std::iter::once(self.search.clone())
             .chain(
                 self.tools
                     .catalog()
                     .iter()
-                    .filter(|spec| spec.core || ctx.exposed_tools().contains(&spec.name))
+                    .filter(|spec| spec.core)
                     .cloned(),
             )
-            .collect()
+            .collect();
+        for name in ctx.exposed_tools() {
+            if offered.iter().any(|spec| &spec.name == name) {
+                continue;
+            }
+            if let Some(spec) = self.tools.catalog().iter().find(|spec| &spec.name == name) {
+                offered.push(spec.clone());
+            }
+        }
+        offered
     }
 
     /// A tool the model was offered. Calls to anything else are unknown.
@@ -1462,6 +1530,26 @@ where
         approval: ApprovalId,
         summary: String,
     ) -> Result<Decision, Fenced> {
+        self.record_grant(
+            ctx,
+            call,
+            approval,
+            summary,
+            PrincipalId::new(AUTO_APPROVER),
+        )
+        .await
+    }
+
+    /// Writes the durable grant receipt (`Event::AutoApproved`) for `call`
+    /// under `principal`.
+    async fn record_grant(
+        &self,
+        ctx: &mut Context,
+        call: &ProposedCall,
+        approval: ApprovalId,
+        summary: String,
+        principal: PrincipalId,
+    ) -> Result<Decision, Fenced> {
         self.emit(
             ctx,
             vec![Event::AutoApproved {
@@ -1469,7 +1557,7 @@ where
                 approval,
                 args_digest: call.args_digest.clone(),
                 summary,
-                principal: PrincipalId::new(AUTO_APPROVER),
+                principal,
             }],
         )
         .await?;
@@ -1510,6 +1598,7 @@ fn search_spec() -> ToolSpec {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "What you need to do"}},
             "required": ["query"],
+            "additionalProperties": false,
         }),
         read_only: true,
         core: true,

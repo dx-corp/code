@@ -373,6 +373,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
             calls: vec![send.clone(), search],
             reasoning: None,
             served: None,
+            timing: None,
         },
         Event::ApprovalRequested {
             call: send.id.clone(),
@@ -1373,6 +1374,99 @@ async fn headless_turn_auto_approves_an_ask_gated_tool_and_records_the_audit_pai
     assert_eq!(rehydrated, ctx);
 }
 
+/// A `NeedsConfirmation` verdict parks nothing and runs nothing: its preview
+/// is the call's result, the turn goes on, and the model answers.
+#[tokio::test]
+async fn a_confirmation_verdict_returns_its_preview_without_running_or_parking() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("send_email", json!({"to": "bob"}))],
+        vec![text("Send this to bob?")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("send_email")]).verdict(
+        "send_email",
+        Verdict::NeedsConfirmation {
+            preview: "{\"status\":\"needs_confirmation\"}".into(),
+        },
+    );
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "email bob");
+
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(tools.run_ids().is_empty(), "nothing ran");
+    assert_eq!(
+        log.shapes_after(1),
+        strings(&[
+            "step:1",
+            "completed::[t1-1-0]",
+            "finished:t1-1-0:err",
+            "step:2",
+            "delta:Send this to bob?",
+            "completed:Send this to bob?:[]",
+            "final:Send this to bob?",
+        ])
+    );
+    let events = log.events();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested { .. }
+                | Event::ApprovalDecided { .. }
+                | Event::AutoApproved { .. }
+        )),
+        "no approval of any kind is written: {events:?}"
+    );
+    assert!(
+        view(&model.seen()[1])
+            .iter()
+            .any(|line| line.contains("tool:t1-1-0:err:{\"status\":\"needs_confirmation\"}")),
+        "the model reads the preview"
+    );
+}
+
+/// A `Confirmed` verdict runs the call once and the receipt names the user
+/// who confirmed, under the call's digest.
+#[tokio::test]
+async fn a_confirmed_verdict_is_receipted_under_the_confirming_user() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("send_email", json!({"to": "bob"}))],
+        vec![text("sent")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("send_email")]).verdict(
+        "send_email",
+        Verdict::Confirmed {
+            approval: ApprovalId::new("ap-1"),
+            summary: "decision=confirmed_by_user; Send an email".into(),
+        },
+    );
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "yes, send it");
+
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    let call = call_id("t1", 1, 0);
+    let digest = dex_loop::args_digest(&tools.run_of(&call).args);
+    let events = log.events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::AutoApproved { call: receipt_call, args_digest, principal, summary, .. }
+                if *receipt_call == call
+                    && *args_digest == digest
+                    && principal.as_str() == "alice"
+                    && summary.contains("confirmed_by_user")
+        )),
+        "{events:?}"
+    );
+}
+
 #[tokio::test]
 async fn headless_turn_keeps_a_hard_deny_denied() {
     let log = FakeLog::default();
@@ -1592,6 +1686,37 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
         strings(&["tool:t1-1-0:ok:crm_lookup: Label for crm.lookup"])
     );
     assert_eq!(log.rehydrate(), ctx);
+}
+
+// An exposure only appends: search and core tools keep their place and the
+// exposed tools follow in the order the search returned them, so the prefix
+// the provider cached on the previous step is unchanged.
+#[tokio::test]
+async fn exposed_tools_are_appended_in_exposure_order() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("tools.search", json!({"query": "crm"}))],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![
+        read_tool("search"),
+        hidden_read_tool("crm.alpha"),
+        hidden_read_tool("crm.zed"),
+    ])
+    .search_result("crm", &["crm.zed", "crm.alpha"]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "find acme in the crm");
+
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    let offered = model.offered();
+    assert_eq!(offered[0], strings(&["tools.search", "search"]));
+    assert_eq!(
+        offered[1],
+        strings(&["tools.search", "search", "crm.zed", "crm.alpha"])
+    );
 }
 
 // A question parks the turn; the answer is the call's result.

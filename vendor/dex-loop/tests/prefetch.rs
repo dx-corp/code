@@ -68,21 +68,26 @@ async fn reads_start_while_the_model_streams_and_the_step_adopts_their_results()
         Ok(Exit::Done)
     );
 
+    // Guaranteed: both reads start in call order during the stream, and both
+    // finish after the commit. Which finish is recorded first is not: a read
+    // that returned before the commit is adopted in call order, one that is
+    // still running is recorded as it returns, and two 10 ms reads can
+    // return in either order on a loaded host.
+    let shapes = log.shapes_after(1);
     assert_eq!(
-        log.shapes_after(1),
-        strings(&[
-            "step:1",
-            "started:t1-1-0",
-            "started:t1-1-1",
-            "delta:tail",
-            "completed:tail:[t1-1-0,t1-1-1]",
-            "finished:t1-1-0:ok",
-            "finished:t1-1-1:ok",
-            "step:2",
-            "delta:done",
-            "completed:done:[]",
-            "final:done",
-        ])
+        shapes[..4],
+        strings(&["step:1", "started:t1-1-0", "started:t1-1-1", "delta:tail",])
+    );
+    assert_eq!(shapes[4], "completed:tail:[t1-1-0,t1-1-1]");
+    let mut finished = shapes[5..7].to_vec();
+    finished.sort();
+    assert_eq!(
+        finished,
+        strings(&["finished:t1-1-0:ok", "finished:t1-1-1:ok"])
+    );
+    assert_eq!(
+        shapes[7..],
+        strings(&["step:2", "delta:done", "completed:done:[]", "final:done"])
     );
     // Adopted, not run again.
     let mut runs = tools.run_ids();
@@ -368,9 +373,21 @@ async fn a_new_turn_after_a_failed_stream_starts_its_own_calls_once() {
     for id in ["t1-1-0", "t2-1-0"] {
         assert_eq!(started_and_finished(&log, id), (1, 1), "{id}");
     }
-    // The first turn's read ran (a read has no effect), but its result was
-    // never committed; the second turn's call ran once.
-    assert_eq!(tools.run_ids(), strings(&["t1-1-0", "t2-1-0"]));
+    // The first turn's read may or may not have been polled before the stream
+    // failed and dropped it (a read has no effect, and its `ToolStarted` and
+    // `ToolFinished` rows are on the log either way, checked above); it never
+    // ran twice. Its result was never committed. The second turn's call ran
+    // once.
+    let runs = tools.run_ids();
+    assert!(
+        runs.iter().filter(|id| *id == "t1-1-0").count() <= 1,
+        "{runs:?}"
+    );
+    assert_eq!(
+        runs.iter().filter(|id| *id == "t2-1-0").count(),
+        1,
+        "{runs:?}"
+    );
     assert!(
         history(&ctx).iter().all(|row| !row.contains("t1-1-0")),
         "{:?}",
@@ -391,7 +408,16 @@ async fn an_interrupt_during_the_stream_ends_cleanly_with_a_read_in_flight() {
     let cancel = CancellationToken::new();
 
     let host = async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Interrupt once the read has started, however long a loaded host
+        // takes to get there; the model then hangs, so the stream is
+        // still open.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while started_and_finished(&log, "t1-1-0").0 == 0 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("the read started");
         log.host_append(Event::Interrupt { principal: alice() });
         cancel.cancel();
     };
@@ -413,6 +439,14 @@ async fn an_interrupt_during_the_stream_ends_cleanly_with_a_read_in_flight() {
     );
     assert_eq!(started_and_finished(&log, "t1-1-0"), (1, 1));
     assert_eq!(history(&ctx), strings(&["user:go", "assistant::[]"]));
+    // The log an interrupt racing the commit leaves replays to the same turn
+    // state. (The control watermark differs: the live engine learned of the
+    // interrupt from the cancel token, not by reading the control rows, and
+    // the turn is over either way.)
+    let replayed = log.rehydrate();
+    assert_eq!(history(&replayed), history(&ctx));
+    assert_eq!(replayed.cursor(), ctx.cursor());
+    assert!(!replayed.turn_running());
 }
 
 #[tokio::test]
@@ -427,7 +461,9 @@ async fn a_stream_that_outlives_the_wall_budget_closes_its_reads() {
         &model,
         &tools,
         Budget {
-            wall: Duration::from_millis(150),
+            // Long enough that a loaded host still starts the read (the
+            // first chunk is 5 ms out) before the budget runs out.
+            wall: Duration::from_millis(600),
             ..budget()
         },
     );

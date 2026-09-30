@@ -35,8 +35,8 @@ pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS
 pub use event::{
     AUTO_APPROVER, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor,
     ErrorCode, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId,
-    ProposedCall, ProviderReasoning, ReceiptId, ServedBy, ThreadId, ToolName, ToolResult, TurnId,
-    Usage, args_digest,
+    ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName,
+    ToolResult, TurnId, Usage, args_digest,
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,

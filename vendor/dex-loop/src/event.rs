@@ -152,9 +152,18 @@ pub struct ServedBy {
 /// Model spend reported by one model response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// All prompt tokens, cached or not.
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_micros: u64,
+    /// The part of `input_tokens` served from the prompt cache. Zero on rows
+    /// written before the field existed, and for providers that do not
+    /// report it.
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    /// The part of `input_tokens` written to the prompt cache. Same default.
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
 }
 
 impl Usage {
@@ -168,7 +177,32 @@ impl AddAssign for Usage {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.cost_micros = self.cost_micros.saturating_add(other.cost_micros);
+        self.cache_read_input_tokens = self
+            .cache_read_input_tokens
+            .saturating_add(other.cache_read_input_tokens);
+        self.cache_creation_input_tokens = self
+            .cache_creation_input_tokens
+            .saturating_add(other.cache_creation_input_tokens);
     }
+}
+
+/// Where one model step's wall clock went. Every span is measured from the
+/// moment the step's request began. Nothing here is request or response
+/// content, and it never enters the model request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepTiming {
+    /// Building the request. Zero on a retry.
+    pub prepare_ms: u64,
+    /// Minting the gateway bearer.
+    pub mint_ms: u64,
+    /// Request start to the gateway's response headers.
+    pub headers_ms: u64,
+    /// Request start to the first bytes of the response body.
+    pub first_event_ms: Option<u64>,
+    /// Request start to the first text delta released to the loop.
+    pub first_text_ms: Option<u64>,
+    /// Request start to the end of the response.
+    pub total_ms: u64,
 }
 
 /// The default for `ClientToolRequested::deadline_ms` on a row written
@@ -463,6 +497,12 @@ pub enum Event {
         /// existed or from a model port that does not report it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         served: Option<ServedBy>,
+        /// Where the step's time went (`ModelChunk::Timing`); `None` for
+        /// steps logged before the field existed, cut-off steps, or a model
+        /// port that does not report it. Debug data: never part of model
+        /// history.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<StepTiming>,
     },
     /// A model attempt with no `ModelStepCompleted` (a crash mid-stream or a
     /// model failure). Its streamed text is dropped from model context;
@@ -583,9 +623,124 @@ impl Event {
     }
 }
 
+impl Event {
+    /// Storage-adapter metadata for a lossless JSON-string event. JSONB
+    /// cannot represent NUL codepoints directly, but it can store escaped
+    /// JSON text inside a string. This key is outside the event vocabulary.
+    pub const STORED_JSON_V1_KEY: &'static str = "_dex_event_json_v1";
+
+    /// Intentionally unsupported by ordinary `Event` deserialization: an
+    /// older reader must refuse an encoded row instead of executing its
+    /// non-authoritative, sanitized projection.
+    pub const STORED_JSON_V1_TYPE: &'static str = "_dex_event_json_v1";
+
+    /// Decode legacy event JSON or a lossless storage-adapter envelope.
+    /// Durable readers pass the independently stored row kind. A malformed
+    /// envelope never falls back to the projection, and its original tool
+    /// argument digests are checked without rewriting any accepted value.
+    pub fn from_stored_json(
+        payload: &serde_json::Value,
+        expected_kind: Option<&str>,
+    ) -> Result<Self, serde_json::Error> {
+        let encoded = payload.get(Self::STORED_JSON_V1_KEY);
+        let event: Self = match encoded {
+            Some(exact) => {
+                if payload.get("type").and_then(serde_json::Value::as_str)
+                    != Some(Self::STORED_JSON_V1_TYPE)
+                {
+                    return Err(serde::de::Error::custom(
+                        "encoded event has no storage type marker",
+                    ));
+                }
+                let exact: String = serde_json::from_value(exact.clone())?;
+                serde_json::from_str(&exact)?
+            }
+            None => serde_json::from_value(payload.clone())?,
+        };
+        if let Some(expected_kind) = expected_kind
+            && serde_json::to_value(&event)?
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                != Some(expected_kind)
+        {
+            return Err(serde::de::Error::custom(
+                "event type does not match its stored row kind",
+            ));
+        }
+        if let Self::ModelStepCompleted { calls, .. } = &event
+            && calls
+                .iter()
+                .any(|call| call.args_digest != args_digest(&call.args))
+        {
+            return Err(serde::de::Error::custom(
+                "event tool arguments do not match their digest",
+            ));
+        }
+        Ok(event)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_approval_receipts_decode_losslessly_and_never_become_control_events() {
+        let event = Event::AutoApproved {
+            call: CallId::new("t1-1-0"),
+            approval: ApprovalId::new("ap-1"),
+            args_digest: args_digest(&serde_json::json!({"key": "w"})),
+            summary: "Send\0email".into(),
+            principal: PrincipalId::new(AUTO_APPROVER),
+        };
+        let exact = serde_json::to_string(&event).expect("serialize receipt");
+        let envelope = serde_json::json!({
+            "type": Event::STORED_JSON_V1_TYPE,
+            "_dex_event_json_v1": exact,
+            "summary": "non-authoritative projection",
+        });
+        assert_eq!(
+            Event::from_stored_json(&envelope, Some("auto_approved")).expect("exact receipt"),
+            event
+        );
+        assert!(Event::from_stored_json(&envelope, Some("approval_decided")).is_err());
+        assert!(
+            !event.is_control(),
+            "engine receipts must not advance the host control cursor"
+        );
+    }
+
+    #[test]
+    fn stored_event_decoder_refuses_corrupt_envelopes_and_call_digests() {
+        let event = Event::ModelStepCompleted {
+            step: 1,
+            text: String::new(),
+            calls: vec![ProposedCall::new(
+                CallId::new("turn-1-0"),
+                ToolName::new("dex.report_feedback"),
+                serde_json::json!({"diagnosis": "exact\0value"}),
+                PrincipalId::new("alice"),
+            )],
+            reasoning: None,
+            served: None,
+            timing: None,
+        };
+        let mut envelope = serde_json::json!({
+            "type": Event::STORED_JSON_V1_TYPE,
+            "_dex_event_json_v1": serde_json::to_string(&event).unwrap(),
+            "calls": [],
+        });
+        assert_eq!(
+            Event::from_stored_json(&envelope, Some("model_step_completed")).unwrap(),
+            event
+        );
+        assert!(Event::from_stored_json(&envelope, Some("tool_started")).is_err());
+        envelope[Event::STORED_JSON_V1_KEY] = serde_json::json!("invalid JSON");
+        assert!(Event::from_stored_json(&envelope, Some("model_step_completed")).is_err());
+        let mut tampered = serde_json::to_value(&event).unwrap();
+        tampered["calls"][0]["args"]["diagnosis"] = serde_json::json!("changed");
+        assert!(Event::from_stored_json(&tampered, Some("model_step_completed")).is_err());
+    }
 
     #[test]
     fn events_round_trip_through_json() {
@@ -624,6 +779,7 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 2,
                 cost_micros: 3,
+                ..Usage::default()
             }),
             Event::ModelStepCompleted {
                 step: 1,
@@ -636,6 +792,7 @@ mod tests {
                 )],
                 reasoning: None,
                 served: None,
+                timing: None,
             },
             Event::ModelStepCompleted {
                 step: 2,
@@ -650,6 +807,7 @@ mod tests {
                     provider: "vertex-ai".into(),
                     model: "gemini-3.6-flash".into(),
                 }),
+                timing: None,
             },
             Event::ToolFinished {
                 call: CallId::new("t1-1-0"),
@@ -825,5 +983,80 @@ mod tests {
         assert_eq!(a.args_digest, b.args_digest);
         assert_ne!(a.args_digest, c.args_digest);
         assert_eq!(a.args_digest.len(), 64);
+    }
+
+    /// Rows written before `timing` and the cache token counts existed still
+    /// decode, to `None` and zero; new rows round-trip.
+    #[test]
+    fn old_rows_without_timing_or_cache_counts_decode() {
+        let old_step = serde_json::json!({
+            "type": "model_step_completed", "step": 1, "text": "hi", "calls": []
+        });
+        let Event::ModelStepCompleted { timing, .. } =
+            serde_json::from_value::<Event>(old_step).expect("old step row")
+        else {
+            panic!("expected ModelStepCompleted");
+        };
+        assert_eq!(timing, None);
+
+        let old_usage = serde_json::json!({
+            "type": "usage", "input_tokens": 3, "output_tokens": 4, "cost_micros": 5
+        });
+        assert_eq!(
+            serde_json::from_value::<Event>(old_usage).expect("old usage row"),
+            Event::Usage(Usage {
+                input_tokens: 3,
+                output_tokens: 4,
+                cost_micros: 5,
+                ..Usage::default()
+            })
+        );
+    }
+
+    #[test]
+    fn step_timing_and_cache_counts_round_trip_and_none_is_omitted() {
+        let step = Event::ModelStepCompleted {
+            step: 2,
+            text: String::new(),
+            calls: Vec::new(),
+            reasoning: None,
+            served: None,
+            timing: Some(StepTiming {
+                prepare_ms: 1,
+                mint_ms: 2,
+                headers_ms: 3,
+                first_event_ms: Some(4),
+                first_text_ms: None,
+                total_ms: 5,
+            }),
+        };
+        let value = serde_json::to_value(&step).expect("encode");
+        assert_eq!(
+            serde_json::from_value::<Event>(value).expect("decode"),
+            step
+        );
+        let untimed = Event::ModelStepCompleted {
+            step: 2,
+            text: String::new(),
+            calls: Vec::new(),
+            reasoning: None,
+            served: None,
+            timing: None,
+        };
+        let text = serde_json::to_string(&untimed).expect("encode");
+        assert!(!text.contains("timing"), "{text}");
+
+        let usage = Event::Usage(Usage {
+            input_tokens: 10,
+            output_tokens: 2,
+            cost_micros: 1,
+            cache_read_input_tokens: 7,
+            cache_creation_input_tokens: 1,
+        });
+        let value = serde_json::to_value(&usage).expect("encode");
+        assert_eq!(
+            serde_json::from_value::<Event>(value).expect("decode"),
+            usage
+        );
     }
 }

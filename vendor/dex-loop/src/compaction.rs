@@ -218,6 +218,7 @@ mod tests {
                 calls,
                 reasoning: None,
                 served: None,
+                timing: None,
             },
         ]
     }

@@ -7216,6 +7216,21 @@ fn provider_history_and_tool_execution_preserve_references() {
 }
 
 #[test]
+fn provider_history_role_survives_a_short_registered_password() {
+    let vault = CredentialVault::new();
+    let reference = vault.store("a", crate::agent::CredentialType::Password);
+    let history = Arc::new(vec![Message {
+        role: Role::Assistant,
+        content: MessageContent::text("a"),
+    }]);
+    let safe = ProviderSafeRequest::prepare(&history, RequestConfig::default(), &vault)
+        .expect("credential substitution must preserve typed provider history");
+    assert_eq!(safe.messages[0].role, Role::Assistant);
+    assert_eq!(safe.messages[0].content.as_text(), Some(reference.as_str()));
+    safe.ensure_current(&vault).unwrap();
+}
+
+#[test]
 fn incident_tool_output_remains_opaque_through_tool_execution() {
     let vault = CredentialVault::new();
     let source = "bearer_token: None\n(None, None, None)";

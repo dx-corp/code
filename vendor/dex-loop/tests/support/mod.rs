@@ -258,6 +258,7 @@ pub fn usage(
         input_tokens,
         output_tokens,
         cost_micros,
+        ..Usage::default()
     }))
 }
 
@@ -853,6 +854,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             calls: vec![call.clone()],
             reasoning: None,
             served: None,
+            timing: None,
         },
         Event::ToolStarted {
             call: call.id.clone(),

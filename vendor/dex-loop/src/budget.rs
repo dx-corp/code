@@ -96,6 +96,7 @@ mod tests {
             input_tokens: tokens,
             output_tokens: 0,
             cost_micros: cost,
+            ..Usage::default()
         };
         let short = Duration::from_millis(1);
         assert_eq!(budget.exhausted(1, usage(10, 1), short), None);
