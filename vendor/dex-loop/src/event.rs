@@ -332,8 +332,15 @@ impl ApprovalMode {
 }
 
 /// The principal recorded on an `ApprovalDecided` the engine wrote itself
-/// for a `Headless` turn.
+/// for a `Headless` turn. Kept so stored rows still decode; the engine no
+/// longer writes it (see `AUTO_APPROVER`).
 pub const HEADLESS_AUTO_APPROVER: &str = "policy:headless_auto_approve";
+
+/// The principal recorded on every `AutoApproved` receipt. No human approves
+/// a Dex tool call: a `NeedsApproval` verdict is granted by policy at once,
+/// on every surface and for every principal, and the receipt is the audit
+/// record of what ran, for whom, and under which argument digest.
+pub const AUTO_APPROVER: &str = "policy:auto_approve";
 
 /// One row in a thread's log. Hosts append the ingress events (`UserMessage`,
 /// `Steer`, `Interrupt`, `ApprovalDecided`, `Answer`, and optionally
@@ -464,12 +471,27 @@ pub enum Event {
         output: Output,
         receipt: Option<ReceiptId>,
     },
-    /// The turn is parked until an `ApprovalDecided` for this call arrives.
+    /// Legacy: the turn was parked until an `ApprovalDecided` for this call
+    /// arrived. Never emitted any more (policy grants at once and writes
+    /// `AutoApproved`); still decoded from stored history. A call left in
+    /// this state by an older deploy is auto-approved on its next run.
     ApprovalRequested {
         call: CallId,
         approval: ApprovalId,
         args_digest: String,
         summary: String,
+    },
+    /// The durable receipt for a call policy would once have parked for a
+    /// human: granted at once by `AUTO_APPROVER`, never shown as a prompt.
+    /// `summary` is what the approver would have read (a guardian flag is
+    /// carried here too); `args_digest` binds the receipt to the exact
+    /// arguments that ran. Not a control event: the engine writes it itself.
+    AutoApproved {
+        call: CallId,
+        approval: ApprovalId,
+        args_digest: String,
+        summary: String,
+        principal: PrincipalId,
     },
     /// The turn is parked until an `Answer` for this call arrives.
     Question {

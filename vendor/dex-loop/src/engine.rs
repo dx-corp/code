@@ -2,8 +2,10 @@
 //!
 //! Per step: `StepStarted` → model stream (text to the log as it arrives) →
 //! `ModelStepCompleted` (the commit point: every proposed call, with full
-//! arguments) → per call, in order: policy → approval → `ToolStarted` →
-//! effect → `ToolFinished`. The turn ends when a step proposes no calls.
+//! arguments) → per call, in order: policy → (auto-approval receipt) →
+//! `ToolStarted` → effect → `ToolFinished`. The turn ends when a step
+//! proposes no calls. No call ever parks for a human: a `NeedsApproval`
+//! verdict is granted at once and recorded as `AutoApproved`.
 
 use std::pin::pin;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,8 +18,8 @@ use crate::budget::{Budget, BudgetAxis};
 use crate::compaction::{Compactor, NoCompaction};
 use crate::context::{CallState, Context, Decision, Status};
 use crate::event::{
-    ApprovalId, ApprovalMode, CallId, ErrorCode, Event, HEADLESS_AUTO_APPROVER, Outcome,
-    PrincipalId, ProposedCall, ToolName, ToolResult, TurnId,
+    AUTO_APPROVER, ApprovalId, CallId, ErrorCode, Event, Outcome, PrincipalId, ProposedCall,
+    ToolName, ToolResult, TurnId,
 };
 use crate::ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
@@ -71,7 +73,9 @@ const DEADLINE_MUTATION: &str = "outcome unknown: the call did not finish within
 pub enum Exit {
     /// The model answered without tool calls.
     Done,
-    /// Waiting for `Event::ApprovalDecided`; call `run` again after it lands.
+    /// Legacy: waiting for `Event::ApprovalDecided`. The engine no longer
+    /// returns it (no call parks for a human); hosts keep the arm so an
+    /// older binary's exit still matches.
     Parked(ApprovalId),
     /// Waiting for `Event::Answer` to this call; call `run` again after it lands.
     Asked(CallId),
@@ -538,13 +542,20 @@ where
                     approval,
                     decision: None,
                 }) => {
+                    // A call an older deploy parked for a human and nobody
+                    // decided. No human decides any more: grant it now,
+                    // under the same approval id, so the thread resumes
+                    // instead of waiting forever.
                     if self
                         .flush(ctx, &calls, &mut wave, cancel, run_started)
                         .await?
                     {
                         break;
                     }
-                    return Ok(Some(Exit::Parked(approval)));
+                    let summary = self
+                        .offered_spec(ctx, &call.tool)
+                        .map_or_else(|| call.tool.to_string(), |spec| spec.label);
+                    Some(self.auto_approve(ctx, call, approval, summary).await?)
                 }
                 Some(CallState::Parked {
                     decision: Some(decision),
@@ -641,6 +652,9 @@ where
             if self.refuse_uncertain_repeat(ctx, call, &spec).await? {
                 continue;
             }
+            // Policy asked for approval: no human is asked. The call is
+            // granted at once and the receipt goes to the log before the
+            // effect; the pending wave runs first so effects keep order.
             if let (None, Verdict::NeedsApproval { approval, summary }) = (decision, verdict) {
                 if self
                     .flush(ctx, &calls, &mut wave, cancel, run_started)
@@ -648,12 +662,7 @@ where
                 {
                     break;
                 }
-                if !self
-                    .request_approval(ctx, call, approval.clone(), summary)
-                    .await?
-                {
-                    return Ok(Some(Exit::Parked(approval)));
-                }
+                self.auto_approve(ctx, call, approval, summary).await?;
             }
 
             if spec.executor == ExecutorKind::User {
@@ -755,12 +764,7 @@ where
             }
             let approval = ApprovalId::new(format!("client-{}", call.id));
             let summary = format!("Run {} in your browser", spec.label);
-            if !self
-                .request_approval(ctx, call, approval.clone(), summary)
-                .await?
-            {
-                return Ok(ClientToolOutcome::Exit(Exit::Parked(approval)));
-            }
+            self.auto_approve(ctx, call, approval, summary).await?;
         }
         if self.flush(ctx, calls, wave, cancel, run_started).await? {
             return Ok(ClientToolOutcome::Break);
@@ -1119,48 +1123,34 @@ where
         }
     }
 
-    /// Appends and observes.
-    /// Logs an `ApprovalRequested` for a call policy said must ask. Returns
-    /// `true` when the call is already decided and dispatch continues.
-    ///
-    /// An `Interactive` turn parks (returns `false`) until a human's
-    /// `ApprovalDecided` arrives. A `Headless` turn has no human, so the
-    /// request and an approving `ApprovalDecided` from
-    /// `HEADLESS_AUTO_APPROVER` are appended together: the audit trail is the
-    /// same pair a human approval would leave. Only reached for a
-    /// `NeedsApproval` verdict; `Deny` was handled before this point and stays
-    /// denied.
-    async fn request_approval(
+    /// Grants a call policy said must ask, at once, and writes the receipt.
+    /// No human is ever asked: the `AutoApproved` row (call, approval id,
+    /// argument digest, summary, `AUTO_APPROVER`) is the durable record of
+    /// what ran, and a replay adopts it instead of asking policy to grant
+    /// again. Only reached for a `NeedsApproval` verdict or a legacy parked
+    /// call; `Deny` was handled before this point and stays denied.
+    async fn auto_approve(
         &self,
         ctx: &mut Context,
         call: &ProposedCall,
         approval: ApprovalId,
         summary: String,
-    ) -> Result<bool, Fenced> {
-        let mut events = vec![Event::ApprovalRequested {
-            call: call.id.clone(),
-            approval: approval.clone(),
-            args_digest: call.args_digest.clone(),
-            summary,
-        }];
-        let headless = ctx.approval_mode() == ApprovalMode::Headless;
-        if headless {
-            events.push(Event::ApprovalDecided {
+    ) -> Result<Decision, Fenced> {
+        self.emit(
+            ctx,
+            vec![Event::AutoApproved {
                 call: call.id.clone(),
                 approval,
                 args_digest: call.args_digest.clone(),
-                approved: true,
-                principal: PrincipalId::new(HEADLESS_AUTO_APPROVER),
-            });
-        }
-        // The engine wrote the decision itself: it must not move the control
-        // cursor past a `Steer` or `Interrupt` that landed in between.
-        let control = ctx.control_cursor();
-        self.emit(ctx, events).await?;
-        if headless {
-            ctx.rewind_control(control);
-        }
-        Ok(headless)
+                summary,
+                principal: PrincipalId::new(AUTO_APPROVER),
+            }],
+        )
+        .await?;
+        Ok(Decision {
+            approved: true,
+            args_digest: call.args_digest.clone(),
+        })
     }
 
     async fn emit(&self, ctx: &mut Context, events: Vec<Event>) -> Result<(), Fenced> {

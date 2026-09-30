@@ -73,6 +73,7 @@ fn kind_str(event: &Event) -> &'static str {
         Event::ToolsExposed { .. } => "tools_exposed",
         Event::ToolFinished { .. } => "tool_finished",
         Event::ApprovalRequested { .. } => "approval_requested",
+        Event::AutoApproved { .. } => "auto_approved",
         Event::Question { .. } => "question",
         Event::ClientToolRequested { .. } => "client_tool_requested",
         Event::Compaction { .. } => "compaction",
@@ -313,6 +314,46 @@ pub fn check_log(
                 history.tool
             ));
             violations.push(tag_known_pending(violation, &history.tool, client_names));
+        }
+    }
+
+    // (3b) Auto-approval receipts: no call is ever parked for a human (no
+    // `ApprovalRequested` in a fresh trace), and every receipt is bound to
+    // the digest of the call it granted.
+    let mut proposed_digests: HashMap<CallId, String> = HashMap::new();
+    for (_, event) in events {
+        if let Event::ModelStepCompleted { calls, .. } = event {
+            for call in calls {
+                proposed_digests.insert(call.id.clone(), call.args_digest.clone());
+            }
+        }
+    }
+    for (_, event) in events {
+        match event {
+            Event::ApprovalRequested { call, .. } => {
+                violations.push(Violation::new(format!(
+                    "call {call} was parked for a human approval; policy grants at once"
+                )));
+            }
+            Event::AutoApproved {
+                call,
+                args_digest,
+                principal,
+                ..
+            } => {
+                if proposed_digests.get(call) != Some(args_digest) {
+                    violations.push(Violation::new(format!(
+                        "call {call} has an auto-approval receipt whose digest is not the call's"
+                    )));
+                }
+                if principal.as_str() != dex_loop::AUTO_APPROVER {
+                    violations.push(Violation::new(format!(
+                        "call {call} has an auto-approval receipt from {principal}, want {}",
+                        dex_loop::AUTO_APPROVER
+                    )));
+                }
+            }
+            _ => {}
         }
     }
 

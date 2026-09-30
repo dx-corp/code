@@ -510,6 +510,24 @@ impl Context {
                     };
                 }
             }
+            Event::AutoApproved {
+                call,
+                approval,
+                args_digest,
+                ..
+            } => {
+                // The receipt is the decision: the call is dispatchable at
+                // once, and a replay adopts the same digest the engine bound.
+                if let Some(state) = self.state_mut(call) {
+                    *state = CallState::Parked {
+                        approval: approval.clone(),
+                        decision: Some(Decision {
+                            approved: true,
+                            args_digest: args_digest.clone(),
+                        }),
+                    };
+                }
+            }
             Event::Question { call, .. } => {
                 if let Some(state) = self.state_mut(call) {
                     *state = CallState::Asked { answer: None };
