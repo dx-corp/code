@@ -23,6 +23,7 @@ pub const WRITE_FILE: &str = "fs.write_file";
 fn catalog() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
+            description: "Read a text file from the workspace.".into(),
             name: ToolName::new(READ_FILE),
             label: "Read a workspace file".into(),
             schema: serde_json::json!({
@@ -42,6 +43,7 @@ fn catalog() -> Vec<ToolSpec> {
             executor: ExecutorKind::InProcess,
         },
         ToolSpec {
+            description: "Write text content to a file in the workspace.".into(),
             name: ToolName::new(WRITE_FILE),
             label: "Write a workspace file".into(),
             schema: serde_json::json!({

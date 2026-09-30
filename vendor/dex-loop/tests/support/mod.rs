@@ -258,6 +258,7 @@ pub fn usage(
         input_tokens,
         output_tokens,
         cost_micros,
+        ..Usage::default()
     }))
 }
 
@@ -362,6 +363,7 @@ pub fn read_tool(name: &str) -> ToolSpec {
 #[allow(dead_code)] // used by tests/prefetch.rs only
 pub fn strict_read_tool(name: &str) -> ToolSpec {
     ToolSpec {
+        description: String::new(),
         schema: serde_json::json!({
             "type": "object",
             "properties": {"key": {"type": "string"}},
@@ -398,6 +400,7 @@ pub fn client_tool(name: &str, read_only: bool) -> ClientToolSpec {
 /// would offer one already resolved from a client's declaration.
 pub fn client_executed_tool(name: &str, read_only: bool) -> ToolSpec {
     ToolSpec {
+        description: String::new(),
         name: ToolName::new(name),
         label: format!("Label for {name}"),
         schema: serde_json::json!({"type": "object"}),
@@ -419,6 +422,7 @@ pub fn hidden_read_tool(name: &str) -> ToolSpec {
 
 fn spec(name: &str, read_only: bool, core: bool, executor: ExecutorKind) -> ToolSpec {
     ToolSpec {
+        description: String::new(),
         name: ToolName::new(name),
         label: format!("Label for {name}"),
         schema: serde_json::json!({"type": "object"}),
@@ -850,6 +854,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             calls: vec![call.clone()],
             reasoning: None,
             served: None,
+            timing: None,
         },
         Event::ToolStarted {
             call: call.id.clone(),

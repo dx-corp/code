@@ -260,6 +260,7 @@ fn thread_for(name: &str) -> ThreadId {
 
 fn mutation_catalog() -> Vec<ToolSpec> {
     vec![ToolSpec {
+        description: String::new(),
         name: ToolName::new("mutator"),
         label: "Mutator".into(),
         schema: serde_json::json!({"type": "object"}),

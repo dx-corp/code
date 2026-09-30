@@ -58,6 +58,7 @@ fn catalog() -> Vec<ToolSpec> {
     let spec =
         |name: &str, read_only: bool, governance: GovernanceClass, executor: ExecutorKind| {
             ToolSpec {
+                description: String::new(),
                 name: ToolName::new(name),
                 label: format!("Label for {name}"),
                 schema: serde_json::json!({"type": "object"}),

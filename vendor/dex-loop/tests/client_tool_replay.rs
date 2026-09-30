@@ -66,6 +66,7 @@ fn log_up_to_model_step(log: &FakeLog, call: &ProposedCall) {
         calls: vec![call.clone()],
         reasoning: None,
         served: None,
+        timing: None,
     });
 }
 

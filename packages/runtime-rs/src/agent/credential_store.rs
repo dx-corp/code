@@ -829,6 +829,22 @@ impl CredentialVault {
         Ok(state.attestation())
     }
 
+    /// Protocol identifiers are not prose: a one-character password inside
+    /// a longer identifier is an incidental spelling overlap. Exact values,
+    /// standalone characters, longer credentials and unowned references still
+    /// fail. Content values retain the stricter full substring check.
+    pub(crate) fn attest_provider_identifier(
+        &self,
+        text: &str,
+    ) -> Result<CredentialAttestation, &'static str> {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        attest_provider_identifier_with_store(&state.store, text)?;
+        Ok(state.attestation())
+    }
+
     /// Check JSON before serialization can escape credential bytes. Object
     /// keys are provider content too, even though vault_in_json leaves them
     /// intact to preserve the schema.
@@ -848,7 +864,7 @@ impl CredentialVault {
                 }
                 serde_json::Value::Object(entries) => {
                     for (key, value) in entries {
-                        attest_provider_text_with_store(store, key)?;
+                        attest_provider_identifier_with_store(store, key)?;
                         visit(store, value)?;
                     }
                 }
@@ -1000,6 +1016,50 @@ fn attest_provider_text_with_store(
     }
     if store.vault_known_values(text, &[]) != text {
         return Err("provider content contains a plaintext vaulted credential");
+    }
+    Ok(())
+}
+
+fn attest_provider_identifier_with_store(
+    store: &CredentialStore,
+    text: &str,
+) -> Result<(), &'static str> {
+    let references = store.references();
+    for (start, end) in credential_reference_like_ranges(text) {
+        if !references.contains(&text[start..end]) {
+            return Err("provider identifier contains an unowned credential reference");
+        }
+    }
+    let protected = REFERENCE_PATTERN
+        .find_iter(text)
+        .map(|reference| (reference.start(), reference.end()))
+        .collect::<Vec<_>>();
+    for credential in store.credentials.values() {
+        let value = credential.value.as_str();
+        if value.is_empty() {
+            continue;
+        }
+        for (start, _) in text.match_indices(value) {
+            let end = start + value.len();
+            if protected
+                .iter()
+                .any(|(left, right)| start >= *left && end <= *right)
+            {
+                continue;
+            }
+            let single_character = value.chars().count() == 1;
+            let within_word = text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+                || text[end..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_alphanumeric);
+            if !single_character || !within_word {
+                return Err("provider identifier contains a plaintext vaulted credential");
+            }
+        }
     }
     Ok(())
 }
