@@ -7,8 +7,9 @@ mod support;
 use std::time::{Duration, Instant};
 
 use dex_loop::{
-    ApprovalId, ApprovalMode, Budget, CUT_OFF_NOTICE, CancellationToken, Engine, Event, Exit,
-    Lexicon, ModelError, OutputRef, ProposedCall, Threshold, ToolName, ToolResult, TurnId, Verdict,
+    ApprovalId, ApprovalMode, Budget, CUT_OFF_NOTICE, CancellationToken, Cursor, Engine, Event,
+    Exit, Fenced, Lexicon, ModelError, OutputRef, PrincipalId, ProposedCall, Threshold, ToolName,
+    ToolResult, TurnId, Verdict,
 };
 use serde_json::json;
 use support::*;
@@ -191,10 +192,11 @@ async fn mutating_call_runs_serially_after_the_wave() {
     );
 }
 
-// 4a. Park B with C pending, crash, rehydrate: after approval, policy runs
-// again, then B and C run with their original arguments, read from the log.
+// 4a. Policy asks for approval on B: nobody is asked. The receipt lands
+// before B runs, bound to B's digest, and the rest of the step runs in
+// order with the original arguments.
 #[tokio::test]
-async fn park_crash_rehydrate_runs_the_rest_of_the_step_with_original_args() {
+async fn an_approval_class_call_is_granted_at_once_recorded_and_runs_in_order() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![
@@ -210,10 +212,7 @@ async fn park_crash_rehydrate_runs_the_rest_of_the_step_with_original_args() {
     let mut ctx = log.start_turn("t1", "email them");
     let cancel = CancellationToken::new();
 
-    assert_eq!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(ApprovalId::new("ap-1")))
-    );
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
     assert_eq!(
         log.shapes_after(1),
         strings(&[
@@ -221,41 +220,7 @@ async fn park_crash_rehydrate_runs_the_rest_of_the_step_with_original_args() {
             "completed::[t1-1-0,t1-1-1,t1-1-2]",
             "started:t1-1-0",
             "finished:t1-1-0:ok",
-            "approval:t1-1-1",
-        ])
-    );
-    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
-    // Parked with no decision: running again changes nothing.
-    assert_eq!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(ApprovalId::new("ap-1")))
-    );
-    let parked_len = log.len();
-
-    // A decision for another approval id authorizes nothing.
-    log.host_append(Event::ApprovalDecided {
-        call: call_id("t1", 1, 1),
-        approval: ApprovalId::new("ap-other"),
-        args_digest: log.requested_digest(&call_id("t1", 1, 1)),
-        approved: true,
-        principal: alice(),
-    });
-    // -- crash: a fresh engine and context from the log --
-    let engine = support::engine(&log, &model, &tools, budget());
-    let mut ctx = log.rehydrate();
-    assert_eq!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(ApprovalId::new("ap-1")))
-    );
-    assert_eq!(log.len(), parked_len + 1);
-
-    log.decide(&call_id("t1", 1, 1), "ap-1", true);
-    let mut ctx = log.rehydrate();
-    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
-
-    assert_eq!(
-        log.shapes_after(parked_len + 2),
-        strings(&[
+            "auto_approved:t1-1-1",
             "started:t1-1-1",
             "finished:t1-1-1:ok",
             "started:t1-1-2",
@@ -266,19 +231,39 @@ async fn park_crash_rehydrate_runs_the_rest_of_the_step_with_original_args() {
             "final:sent",
         ])
     );
+    let receipt = log
+        .events()
+        .into_iter()
+        .find(|event| matches!(event, Event::AutoApproved { .. }))
+        .expect("the receipt");
+    assert_eq!(
+        receipt,
+        Event::AutoApproved {
+            call: call_id("t1", 1, 1),
+            approval: ApprovalId::new("ap-1"),
+            args_digest: dex_loop::args_digest(&json!({"key": "w", "to": "ops@example.com"})),
+            summary: "Approve ap-1".into(),
+            principal: PrincipalId::new(dex_loop::AUTO_APPROVER),
+        }
+    );
+    assert!(
+        !log.events()
+            .iter()
+            .any(|event| matches!(event, Event::ApprovalRequested { .. })),
+        "no approval request is ever written"
+    );
     assert_eq!(tools.run_ids(), strings(&["t1-1-0", "t1-1-1", "t1-1-2"]));
     assert_eq!(
         tools.run_of(&call_id("t1", 1, 1)).args,
         json!({"key": "w", "to": "ops@example.com"})
     );
-    assert_eq!(tools.run_of(&call_id("t1", 1, 2)).args, json!({"key": "b"}));
-    // Policy ran for B at proposal and again on resume, and once for C.
+    // Policy ran once per call: nothing resumed, so nothing re-checked.
     let checks: Vec<String> = tools
         .policy_checks()
         .into_iter()
         .map(|(call, _)| call)
         .collect();
-    assert_eq!(checks, strings(&["t1-1-0", "t1-1-1", "t1-1-1", "t1-1-2"]));
+    assert_eq!(checks, strings(&["t1-1-0", "t1-1-1", "t1-1-2"]));
     assert_eq!(
         view(&model.seen()[1])[2..],
         strings(&[
@@ -290,125 +275,187 @@ async fn park_crash_rehydrate_runs_the_rest_of_the_step_with_original_args() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// 4b. A declined approval becomes a result the model sees, and the rest of the
-// step still runs. This variant resumes on the warm context.
+// 4b. A crash between the receipt and `ToolStarted`: the rehydrated engine
+// adopts the receipt (no second one, no second policy grant) and runs the
+// call once with its original arguments.
 #[tokio::test]
-async fn declined_approval_is_a_visible_result_and_the_step_continues() {
-    let log = FakeLog::default();
-    let model = FakeModel::new(vec![
-        vec![
-            call("send_email", json!({"key": "w"})),
-            call("search", json!({"key": "b"})),
-        ],
-        vec![text("not sent")],
-    ]);
-    let tools = FakeTools::new(vec![read_tool("search"), write_tool("send_email")])
-        .verdict("send_email", approval("ap-1"));
-    let engine = engine(&log, &model, &tools, budget());
-    let mut ctx = log.start_turn("t1", "email them");
-    let cancel = CancellationToken::new();
-
-    assert_eq!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(ApprovalId::new("ap-1")))
-    );
-    let parked_len = log.len();
-    log.decide(&call_id("t1", 1, 0), "ap-1", false);
-    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
-
-    assert_eq!(
-        log.shapes_after(parked_len + 1),
-        strings(&[
-            "finished:t1-1-0:err",
-            "started:t1-1-1",
-            "finished:t1-1-1:ok",
-            "step:2",
-            "delta:not sent",
-            "completed:not sent:[]",
-            "final:not sent",
-        ])
-    );
-    assert_eq!(tools.run_ids(), strings(&["t1-1-1"]));
-    assert_eq!(
-        view(&model.seen()[1])[2..],
-        strings(&[
-            "tool:t1-1-0:err:denied: the approver declined this call",
-            "tool:t1-1-1:ok:out/t1-1-1",
-        ])
-    );
-    assert_eq!(log.rehydrate(), ctx);
-}
-
-// 4c. Approval is necessary, not sufficient: a grant revoked while the call
-// was parked denies the approved call on resume.
-#[tokio::test]
-async fn revoked_grant_denies_an_approved_call_on_resume() {
+async fn a_receipt_survives_a_crash_and_the_call_runs_once_after_rehydrate() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![call("send_email", json!({"key": "w"}))],
-        vec![text("could not send")],
+        vec![text("sent")],
     ]);
     let tools =
         FakeTools::new(vec![write_tool("send_email")]).verdict("send_email", approval("ap-1"));
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn("t1", "email them");
     let cancel = CancellationToken::new();
+    // user, step, completed, auto_approved land; the `ToolStarted` write is
+    // refused, which is the crash.
+    log.fence_after(3);
     assert!(matches!(
         engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(_))
+        Err(Fenced { .. })
     ));
+    assert_eq!(
+        log.shapes_after(1),
+        strings(&["step:1", "completed::[t1-1-0]", "auto_approved:t1-1-0"])
+    );
+    assert!(tools.runs().is_empty(), "nothing ran before the crash");
 
-    log.decide(&call_id("t1", 1, 0), "ap-1", true);
-    tools.set_verdict(
+    log.fence_after(usize::MAX);
+    let engine = support::engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(
+        log.shapes_after(4),
+        strings(&[
+            "started:t1-1-0",
+            "finished:t1-1-0:ok",
+            "step:2",
+            "delta:sent",
+            "completed:sent:[]",
+            "final:sent",
+        ])
+    );
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event, Event::AutoApproved { .. }))
+            .count(),
+        1,
+        "one receipt per call, across the crash"
+    );
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+// 4c. A call an older deploy parked for a human (an `ApprovalRequested` with
+// no decision) is granted on its next run, under the same approval id, and
+// the step continues; the thread is never stranded.
+#[tokio::test]
+async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![vec![], vec![text("sent")]]);
+    let tools = FakeTools::new(vec![read_tool("search"), write_tool("send_email")])
+        .verdict("send_email", approval("ap-1"));
+    let send = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("send_email"),
+        json!({"key": "w"}),
+        alice(),
+    );
+    let search = ProposedCall::new(
+        call_id("t1", 1, 1),
+        ToolName::new("search"),
+        json!({"key": "b"}),
+        alice(),
+    );
+    for event in [
+        Event::UserMessage {
+            turn: TurnId::new("t1"),
+            message_id: None,
+            principal: alice(),
+            text: "email them".into(),
+            attachments: vec![],
+            client_tools: vec![],
+            authorized_tools: Vec::new(),
+            approval_mode: dex_loop::ApprovalMode::Interactive,
+        },
+        Event::StepStarted {
+            step: 1,
+            control_through: Cursor::START,
+        },
+        Event::ModelStepCompleted {
+            step: 1,
+            text: String::new(),
+            calls: vec![send.clone(), search],
+            reasoning: None,
+        },
+        Event::ApprovalRequested {
+            call: send.id.clone(),
+            approval: ApprovalId::new("ap-1"),
+            args_digest: send.args_digest.clone(),
+            summary: "Approve ap-1".into(),
+        },
+    ] {
+        log.host_append(event);
+    }
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    let cancel = CancellationToken::new();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(
+        log.shapes_after(4),
+        strings(&[
+            "auto_approved:t1-1-0",
+            "started:t1-1-0",
+            "finished:t1-1-0:ok",
+            "started:t1-1-1",
+            "finished:t1-1-1:ok",
+            "step:2",
+            "delta:sent",
+            "completed:sent:[]",
+            "final:sent",
+        ])
+    );
+    let receipt = log
+        .events()
+        .into_iter()
+        .find(|event| matches!(event, Event::AutoApproved { .. }))
+        .expect("the receipt");
+    assert!(
+        matches!(&receipt, Event::AutoApproved { approval, args_digest, .. }
+            if approval.as_str() == "ap-1" && args_digest == &send.args_digest),
+        "{receipt:?}"
+    );
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0", "t1-1-1"]));
+    assert_eq!(tools.run_of(&send.id).args, json!({"key": "w"}));
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+// 4d. Policy's own denial still denies: a grant is not an override, and a
+// stale human decision in the log (from a client that still sends one)
+// changes nothing about a call that already has its receipt.
+#[tokio::test]
+async fn a_policy_denial_still_denies_and_a_stale_decision_is_inert() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("send_email", json!({"key": "w"}))],
+        vec![text("could not send")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("send_email")]).verdict(
         "send_email",
         Verdict::Deny("the mail grant was revoked".into()),
     );
-    let mut ctx = log.rehydrate();
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "email them");
+    let cancel = CancellationToken::new();
     assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
-
+    assert!(tools.runs().is_empty(), "a denied call still ran");
     assert!(
-        tools.runs().is_empty(),
-        "a revoked grant still ran the call"
+        !log.events()
+            .iter()
+            .any(|event| matches!(event, Event::AutoApproved { .. })),
+        "a denial writes no receipt"
     );
     assert_eq!(
         view(&model.seen()[1])[2..],
         strings(&["tool:t1-1-0:err:denied: the mail grant was revoked"])
     );
-}
 
-// 4d. An approval must match the proposed call's argument digest.
-#[tokio::test]
-async fn approval_decision_with_a_different_digest_is_denied() {
-    for approved in [true, false] {
-        let log = FakeLog::default();
-        let model = FakeModel::new(vec![
-            vec![call("send_email", json!({"key": "w"}))],
-            vec![text("no")],
-        ]);
-        let tools =
-            FakeTools::new(vec![write_tool("send_email")]).verdict("send_email", approval("ap-1"));
-        let engine = engine(&log, &model, &tools, budget());
-        let mut ctx = log.start_turn("t1", "email them");
-        let cancel = CancellationToken::new();
-        assert!(matches!(
-            engine.run(&mut ctx, &cancel).await,
-            Ok(Exit::Parked(_))
-        ));
-
-        log.host_append(Event::ApprovalDecided {
-            call: call_id("t1", 1, 0),
-            approval: ApprovalId::new("ap-1"),
-            args_digest: dex_loop::args_digest(&json!({"key": "other"})),
-            approved,
-            principal: alice(),
-        });
-        assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
-        assert!(tools.runs().is_empty());
-        assert_eq!(
-            view(&model.seen()[1])[2..],
-            strings(&["tool:t1-1-0:err:denied: the approval does not match this call's arguments"])
-        );
-    }
+    let before = log.len();
+    log.host_append(Event::ApprovalDecided {
+        call: call_id("t1", 1, 0),
+        approval: ApprovalId::new("ap-1"),
+        args_digest: dex_loop::args_digest(&json!({"key": "w"})),
+        approved: true,
+        principal: alice(),
+    });
+    let mut ctx = log.rehydrate();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(log.len(), before + 1, "a stale decision appends nothing");
+    assert!(tools.runs().is_empty());
 }
 
 // 5. Bob steers in Alice's turn: the steer becomes Bob's user message before
@@ -624,35 +671,6 @@ async fn interrupt_during_a_mutation_completes_it_then_stops() {
             "interrupted",
         ])
     );
-}
-
-// 6c. An Interrupt already in the log ends a parked turn without a token.
-#[tokio::test]
-async fn interrupt_event_ends_a_parked_turn() {
-    let log = FakeLog::default();
-    let model = FakeModel::new(vec![vec![call("send_email", json!({}))]]);
-    let tools =
-        FakeTools::new(vec![write_tool("send_email")]).verdict("send_email", approval("ap-1"));
-    let engine = engine(&log, &model, &tools, budget());
-    let mut ctx = log.start_turn("t1", "go");
-    let cancel = CancellationToken::new();
-    assert!(matches!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::Parked(_))
-    ));
-    log.host_append(Event::Interrupt { principal: bob() });
-    let mut ctx = log.rehydrate();
-    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Interrupted));
-    assert_eq!(
-        log.shapes_after(3),
-        strings(&[
-            "approval:t1-1-0",
-            "interrupt",
-            "finished:t1-1-0:err",
-            "interrupted",
-        ])
-    );
-    assert!(tools.runs().is_empty());
 }
 
 // 7. Each budget axis stops the turn with budget_exhausted.

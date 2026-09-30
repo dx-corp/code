@@ -755,6 +755,7 @@ pub fn shape(event: &Event) -> String {
             ..
         } => format!("finished:{call}:{}", outcome(*result)),
         Event::ApprovalRequested { call, .. } => format!("approval:{call}"),
+        Event::AutoApproved { call, .. } => format!("auto_approved:{call}"),
         Event::Question { call, text } => format!("question:{call}:{text}"),
         Event::ClientToolRequested { call, tool, .. } => format!("client_tool:{call}:{tool}"),
         Event::ClientToolResult {

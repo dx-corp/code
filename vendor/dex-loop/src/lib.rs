@@ -33,9 +33,10 @@ pub use compaction::{Compaction, Compactor, NoCompaction, Summarize, Threshold};
 pub use context::{Context, Entry, Message};
 pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
 pub use event::{
-    ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor, ErrorCode, Event,
-    HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId, ProposedCall,
-    ProviderReasoning, ReceiptId, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
+    AUTO_APPROVER, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor,
+    ErrorCode, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId,
+    ProposedCall, ProviderReasoning, ReceiptId, ThreadId, ToolName, ToolResult, TurnId, Usage,
+    args_digest,
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
