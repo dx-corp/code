@@ -7,8 +7,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use dex_loop::{
-    ApprovalId, ApprovalMode, Budget, CancellationToken, Engine, Event, Exit, Lexicon, ModelError,
-    OutputRef, ProposedCall, Threshold, ToolName, ToolResult, TurnId, Verdict,
+    ApprovalId, ApprovalMode, Budget, CUT_OFF_NOTICE, CancellationToken, Engine, Event, Exit,
+    Lexicon, ModelError, OutputRef, ProposedCall, Threshold, ToolName, ToolResult, TurnId, Verdict,
 };
 use serde_json::json;
 use support::*;
@@ -981,6 +981,41 @@ async fn usage_reported_before_a_failed_attempt_still_lands_with_the_abandon() {
     assert_eq!(model.calls(), 1);
 }
 
+// 8d3. A stream that fails after the customer saw text keeps that text as
+// the answer, marked as cut off: a long answer that loses its stream near
+// the end must not vanish.
+#[tokio::test]
+async fn a_stream_that_fails_after_text_keeps_the_answer_marked_cut_off() {
+    let (log, model, exit) = run_to_budget(
+        budget(),
+        FakeModel::new(vec![vec![
+            text("A long answer, "),
+            text("nearly done"),
+            usage(10, 5, 100),
+            Err(ModelError {
+                message: "provider_stream_timeout: provider stream timed out".into(),
+            }),
+        ]]),
+    )
+    .await;
+    assert_eq!(exit, Exit::Done);
+    let kept = format!("A long answer, nearly done{CUT_OFF_NOTICE}");
+    assert_eq!(
+        log.shapes_after(2),
+        strings(&[
+            &format!("delta:{kept}"),
+            "usage:15",
+            &format!("completed:{kept}:[]"),
+            &format!("final:{kept}"),
+        ])
+    );
+    assert_eq!(
+        model.calls(),
+        1,
+        "text was shown, so the step is not retried"
+    );
+}
+
 // 8e. A `Started` call whose tool vanished from the offered catalog (deploy,
 // grant revoke) resolves through the ledger, never as "unknown tool": the
 // model must not be told to retry a call that may have already run under
@@ -1818,4 +1853,214 @@ async fn reasoning_is_committed_with_its_step_and_returned_after_park_and_crash(
         .collect();
     assert_eq!(returned, vec![Some(reasoning)]);
     assert_eq!(log.rehydrate(), ctx);
+}
+#[tokio::test]
+async fn fresh_call_ids_cannot_repeat_an_unknown_mutation() {
+    let log = FakeLog::default();
+    let write = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("update"),
+        json!({"key":"w"}),
+        alice(),
+    );
+    crashed_after_start(&log, &write);
+    let effects = FakeEffects::default().seed(
+        write.id.clone(),
+        Some(ToolResult::unknown("executor lost the result")),
+    );
+    let model = FakeModel::new(vec![
+        vec![call("update", json!({"key":"w"}))],
+        vec![call("update", json!({"key":"w"}))],
+        vec![text("check the original")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let engine = engine_with(&log, &model, &tools, &effects, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(
+        tools.runs().is_empty(),
+        "a fresh ID repeated an unknown mutation"
+    );
+    assert_eq!(
+        tools.policy_checks().len(),
+        2,
+        "current policy still applies"
+    );
+    for step in [2, 3] {
+        assert_eq!(
+            effects.recorded(&call_id("t1", step, 0)),
+            None,
+            "refusal must not claim a second effect"
+        );
+    }
+    assert_eq!(
+        effects.recorded(&write.id).unwrap().unwrap().outcome,
+        dex_loop::Outcome::Unknown
+    );
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn uncertain_repeat_guard_preserves_reads_distinct_operations_and_known_retries() {
+    for (prior_outcome, next_tool, next_args) in [
+        (
+            ToolResult::unknown("lost"),
+            "update",
+            json!({"key":"different"}),
+        ),
+        (ToolResult::unknown("lost"), "other", json!({"key":"w"})),
+        (ToolResult::unknown("lost"), "search", json!({"key":"w"})),
+        (ToolResult::error("not run"), "update", json!({"key":"w"})),
+    ] {
+        let log = FakeLog::default();
+        let write = ProposedCall::new(
+            call_id("t1", 1, 0),
+            ToolName::new("update"),
+            json!({"key":"w"}),
+            alice(),
+        );
+        crashed_after_start(&log, &write);
+        let effects = FakeEffects::default().seed(write.id.clone(), Some(prior_outcome));
+        let model = FakeModel::new(vec![vec![call(next_tool, next_args)], vec![text("done")]]);
+        let tools = FakeTools::new(vec![
+            write_tool("update"),
+            write_tool("other"),
+            read_tool("search"),
+        ]);
+        let engine = engine_with(&log, &model, &tools, &effects, budget());
+        let mut ctx = log.rehydrate();
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(Exit::Done)
+        );
+        assert_eq!(tools.runs().len(), 1);
+        assert_eq!(ctx, log.rehydrate());
+    }
+}
+
+#[tokio::test]
+async fn uncertain_mutation_guard_survives_compaction_and_a_new_turn_is_explicit() {
+    let log = FakeLog::default();
+    let write = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("update"),
+        json!({"key":"w"}),
+        alice(),
+    );
+    crashed_after_start(&log, &write);
+    let cursor = log.host_append(Event::ToolFinished {
+        call: write.id.clone(),
+        outcome: dex_loop::Outcome::Unknown,
+        output: dex_loop::Output::Text("lost result".into()),
+        receipt: None,
+    });
+    log.host_append(Event::Compaction {
+        covers_to_cursor: cursor,
+        summary: "Earlier work requires reconciliation".into(),
+    });
+    let effects =
+        FakeEffects::default().seed(write.id.clone(), Some(ToolResult::unknown("lost result")));
+    let model = FakeModel::new(vec![
+        vec![call("update", json!({"key":"w"}))],
+        vec![text("await a decision")],
+        vec![call("update", json!({"key":"w"}))],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let engine = engine_with(&log, &model, &tools, &effects, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(tools.runs().is_empty());
+    assert_eq!(ctx, log.rehydrate());
+    let mut ctx = log.start_turn("t2", "I checked; try it again");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(tools.runs().len(), 1);
+    assert_eq!(tools.policy_checks().len(), 2);
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn unknown_client_mutations_are_not_requested_again_and_unknown_reads_can_retry() {
+    for read_only in [false, true] {
+        let log = FakeLog::default();
+        let prior = ProposedCall::new(
+            call_id("t1", 1, 0),
+            ToolName::new("client.operation"),
+            json!({"key":"w"}),
+            alice(),
+        );
+        crashed_after_start(&log, &prior);
+        log.host_append(Event::ToolFinished {
+            call: prior.id.clone(),
+            outcome: dex_loop::Outcome::Unknown,
+            output: dex_loop::Output::Text("lost".into()),
+            receipt: None,
+        });
+        let model = FakeModel::new(vec![
+            vec![call("client.operation", json!({"key":"w"}))],
+            vec![text("check before retry")],
+        ]);
+        let tools = FakeTools::new(vec![if read_only {
+            read_tool("client.operation")
+        } else {
+            client_executed_tool("client.operation", false)
+        }]);
+        let engine = engine(&log, &model, &tools, budget());
+        let mut ctx = log.rehydrate();
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(Exit::Done)
+        );
+        assert_eq!(tools.runs().len(), usize::from(read_only));
+        assert!(!log.events().iter().any(|event| matches!(
+            event,
+            Event::ClientToolRequested { .. } | Event::ApprovalRequested { .. }
+        )));
+        assert_eq!(ctx, log.rehydrate());
+    }
+}
+
+#[tokio::test]
+async fn uncertain_mutations_keep_their_principal_identity() {
+    let log = FakeLog::default();
+    let prior = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("update"),
+        json!({"key":"w"}),
+        alice(),
+    );
+    crashed_after_start(&log, &prior);
+    log.host_append(Event::ToolFinished {
+        call: prior.id.clone(),
+        outcome: dex_loop::Outcome::Unknown,
+        output: dex_loop::Output::Text("lost".into()),
+        receipt: None,
+    });
+    log.host_append(Event::Steer {
+        principal: bob(),
+        text: "I checked my operation".into(),
+    });
+    let model = FakeModel::new(vec![
+        vec![call("update", json!({"key":"w"}))],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(tools.runs().len(), 1);
+    assert_eq!(tools.policy_checks()[0].1, "bob");
+    assert_eq!(ctx, log.rehydrate());
 }

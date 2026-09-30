@@ -36,6 +36,7 @@ const UNKNOWN_INTERRUPTED: &str =
 /// a `Running` outcome that nothing will update: both invite the model to
 /// retry, which mints a new `CallId` and can run the mutation twice.
 const UNKNOWN_NO_RETRY: &str = "outcome unknown: this call already started; do not retry it without first checking whether it took effect";
+const UNCERTAIN_REPEAT: &str = "not run: the same operation has an unknown outcome in this turn; check whether it took effect before trying again";
 const APPROVER_DECLINED: &str = "denied: the approver declined this call";
 const APPROVAL_MISMATCH: &str = "denied: the approval does not match this call's arguments";
 const MISSING_QUESTION: &str = "invalid call: args.question must be a non-empty string";
@@ -382,6 +383,30 @@ where
             self.emit(ctx, events).await?;
             return Ok(Some(Exit::Failed));
         }
+        if failure.is_some() && !text.is_empty() && !cancel.is_cancelled() {
+            // The customer already read this text. Keep it as the
+            // answer, visibly marked as cut off, instead of withdrawing
+            // it: a long answer that loses its stream near the end (a
+            // provider or gateway limit) must not vanish.
+            let mut text = text;
+            let tail = filter.finish();
+            if !tail.is_empty() {
+                text.push_str(&tail);
+                self.log.append_text(tail).await?;
+            }
+            self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
+            text.push_str(CUT_OFF_NOTICE);
+            let mut events = pending_usage;
+            events.push(Event::ModelStepCompleted {
+                step,
+                text: text.clone(),
+                calls: Vec::new(),
+                reasoning: None,
+            });
+            events.push(Event::Final { text });
+            self.emit(ctx, events).await?;
+            return Ok(Some(Exit::Done));
+        }
         if let Some(message) = failure {
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
@@ -613,6 +638,9 @@ where
                     continue;
                 }
             }
+            if self.refuse_uncertain_repeat(ctx, call, &spec).await? {
+                continue;
+            }
             if let (None, Verdict::NeedsApproval { approval, summary }) = (decision, verdict) {
                 if self
                     .flush(ctx, &calls, &mut wave, cancel, run_started)
@@ -670,6 +698,22 @@ where
         Ok(None)
     }
 
+    /// Refusal does not claim or dispatch a second effect. Reads remain safe
+    /// to retry; an existing call ID still resolves through its effect ledger.
+    async fn refuse_uncertain_repeat(
+        &self,
+        ctx: &mut Context,
+        call: &ProposedCall,
+        spec: &ToolSpec,
+    ) -> Result<bool, Fenced> {
+        if spec.read_only || !ctx.has_uncertain_call(call) {
+            return Ok(false);
+        }
+        self.finish(ctx, call, ToolResult::error(UNCERTAIN_REPEAT))
+            .await?;
+        Ok(true)
+    }
+
     /// One call to a `Client`-executor tool: approval (if the host's
     /// allowlist marked it a mutation), then `ClientToolRequested`, mirroring
     /// how the main `dispatch` loop handles `NeedsApproval` and `User`.
@@ -701,7 +745,11 @@ where
                     .await?;
                 return Ok(ClientToolOutcome::Continue);
             }
-        } else if spec.governance == GovernanceClass::Approval {
+        }
+        if self.refuse_uncertain_repeat(ctx, call, &spec).await? {
+            return Ok(ClientToolOutcome::Continue);
+        }
+        if decision.is_none() && spec.governance == GovernanceClass::Approval {
             if self.flush(ctx, calls, wave, cancel, run_started).await? {
                 return Ok(ClientToolOutcome::Break);
             }
@@ -1149,6 +1197,10 @@ fn search_spec() -> ToolSpec {
         executor: ExecutorKind::InProcess,
     }
 }
+
+/// Appended to an answer whose model stream failed after text was shown.
+pub const CUT_OFF_NOTICE: &str =
+    "\n\n_This answer was cut off before it finished. Ask me to continue from here._";
 
 fn call_id(turn: &TurnId, step: u32, index: usize) -> CallId {
     CallId(format!("{turn}-{step}-{index}"))

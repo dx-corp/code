@@ -51,6 +51,46 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.111] - 2026-09-30
+
+### Added
+
+- Make dex-journey, one-command user-journey harness with latency table (#11440). <!-- maestro-release-note:ba20ac34c88f -->
+- Serve Claude on Vertex AI as provider vertex-anthropic (#11427). <!-- maestro-release-note:c87946b49436 -->
+- Run Claude on Vertex through the Messages loop with effort and prompt caching (#11424). <!-- maestro-release-note:7c90abda6731 -->
+- Add protected bounded public conversation fuzz (#11417). <!-- maestro-release-note:7e35c8cf0f3a -->
+- Dispatch a Dex-approved call without parking for its own resume (#11373). <!-- maestro-release-note:fc4185e21ce8 -->
+
+### Changed
+
+- Delete the test-only process runner and proactive investigation worker (#11437). <!-- maestro-release-note:1bfb914c8b70 -->
+- Web e2e caller is a person; history stubs are not exposure (#11438). <!-- maestro-release-note:f4b5a528d48c -->
+- Remove retired computer.coding_* capabilities and dead coding-workspace CI (#11442). <!-- maestro-release-note:81f9dafc53e6 -->
+- Run desktop-lane main verdicts on arc-main-heavy (#11439). <!-- maestro-release-note:1eae29219ea2 -->
+- Path-scope the Merlin, World and Computer iOS workflows at the trigger (#11435). <!-- maestro-release-note:ebe960117675 -->
+- Make the parked-turn index probe discriminate (#11431). <!-- maestro-release-note:1908b4158ccb -->
+- Repair solution provenance and vocabulary (#11428). <!-- maestro-release-note:194a452e3d87 -->
+- Repair governed CRM solution metadata (#11416). <!-- maestro-release-note:08edb20b9fb1 -->
+- Tighten protected fuzz cancellation and receipt proof (#11420). <!-- maestro-release-note:e8102707dbec -->
+- Keep public mirror staging proof current (#11414). <!-- maestro-release-note:352bb9449360 -->
+- Restore Postgres runtime fixture coverage (#11412). <!-- maestro-release-note:5b08baa67284 -->
+- Exercise public web turn and receipt ownership in fuzz (#11409). <!-- maestro-release-note:dd8d7abb36ac -->
+
+### Fixed
+
+- Bound Rosetta release smoke with useful diagnostics. <!-- maestro-release-note:268ff18ab7d7 -->
+- Keep each turn's context in its own user message for Claude (#11447). <!-- maestro-release-note:050dfb654467 -->
+- Reach Claude on the Vertex us/eu multi-region endpoints (#11448). <!-- maestro-release-note:cb653a3dfc24 -->
+- Declare the GetOperatingReceipt codec once (#11436). <!-- maestro-release-note:2dd6bcc04a02 -->
+- Derive PartialEq for WorkloadProviderRef (#11441). <!-- maestro-release-note:6deac492a863 -->
+- Keep Dex final visible until message hydration (#11434). <!-- maestro-release-note:b0a2afb4c8f3 -->
+- Keep a cut-off answer instead of withdrawing it (#11433). <!-- maestro-release-note:ee9021b549fc -->
+- Recall team memory once per turn, not once per model step (#11432). <!-- maestro-release-note:5eac38b192dc -->
+- Resolve public owner receipt details before fuzz proof (#11426). <!-- maestro-release-note:ecaa036c2ed1 -->
+- Forward long Dex answers over Watch (#11430). <!-- maestro-release-note:80cdbe25383f -->
+- Read one-loop receipt details behind thread summaries (#11425). <!-- maestro-release-note:f61031ff6924 -->
+- Bound provider streams by silence, not total length (#11429). <!-- maestro-release-note:9fc240ebab36 -->
+
 ## [0.10.110] - 2026-09-29
 
 ### Added

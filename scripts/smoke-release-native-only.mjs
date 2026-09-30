@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { firstLaunchTimeoutMs, runNativeSmokeCommand } from "./smoke-release-process.mjs";
 
 // The agent only serves protocol versions it implements, so the smoke has to
 // announce the version this build speaks rather than a placeholder.
@@ -39,22 +40,13 @@ const env = {
 	TERM: "xterm-256color",
 };
 
-function run(args, input) {
-	const result = spawnSync(binary, args, {
-		encoding: "utf8",
-		env,
-		input,
-		timeout: 30_000,
-	});
-	if (result.status !== 0) {
-		throw new Error(`${args.join(" ")} failed:\n${result.stderr}\n${result.stdout}`);
-	}
-	return result.stdout;
-}
-
-if (!run(["--version"]).startsWith("deixic-code "))
+if (!runNativeSmokeCommand(binary, ["--version"], {
+	env,
+	timeoutMs: firstLaunchTimeoutMs(process.platform, process.env.RELEASE_PLATFORM),
+}).startsWith("deixic-code "))
 	throw new Error("version smoke failed");
-if (!run(["--help"]).includes("Usage:")) throw new Error("help smoke failed");
+if (!runNativeSmokeCommand(binary, ["--help"], { env }).includes("Usage:"))
+	throw new Error("help smoke failed");
 const headlessInput = `${JSON.stringify({ type: "hello", protocol_version: protocolVersion, client_info: { name: "native-smoke", version: "1" }, role: "controller" })}\n${JSON.stringify({ type: "shutdown" })}\n`;
 const headlessResult = spawnSync(binary, ["--headless"], {
 	encoding: "utf8",
