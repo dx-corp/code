@@ -2,8 +2,8 @@
 //! `MAESTRO_DEX_LOOP=1`.
 //!
 //! `products/maestro/packages/dex-host-rs` (`maestro_dex_host`) had no
-//! consumer before this: `tests/turn.rs` proved the kernel's park/approve/
-//! resume semantics against a scripted model, but nothing in Maestro's own
+//! consumer before this: `tests/turn.rs` proved the kernel's headless
+//! (no approval step) semantics against a scripted model, but nothing in Maestro's own
 //! binaries ever ran a real local turn through it. This module is that
 //! consumer, wired into `print_mode.rs`'s non-interactive single-shot entry
 //! point -- itself already documented as "auto-approves tools" -- so the

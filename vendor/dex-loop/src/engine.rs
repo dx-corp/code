@@ -6,8 +6,18 @@
 //! `ToolStarted` → effect → `ToolFinished`. The turn ends when a step
 //! proposes no calls. No call ever parks for a human: a `NeedsApproval`
 //! verdict is granted at once and recorded as `AutoApproved`.
+//!
+//! One exception to "after the commit point": a read-only call whose
+//! arguments validate and whose policy allows it starts while the model is
+//! still streaming (`ToolStarted` before `ModelStepCompleted`, the same
+//! way Codex starts a call when its output item closes). A read has no
+//! effect to wait for, so an attempt that never commits simply finishes
+//! those calls as not run; a committed step adopts their results in place
+//! of running them again.
 
-use std::pin::pin;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::{Pin, pin};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
@@ -18,8 +28,8 @@ use crate::budget::{Budget, BudgetAxis};
 use crate::compaction::{Compactor, NoCompaction};
 use crate::context::{CallState, Context, Decision, Status};
 use crate::event::{
-    AUTO_APPROVER, ApprovalId, CallId, ErrorCode, Event, Outcome, PrincipalId, ProposedCall,
-    ToolName, ToolResult, TurnId,
+    AUTO_APPROVER, ApprovalId, CallId, Cursor, ErrorCode, Event, Outcome, PrincipalId,
+    ProposedCall, ToolName, ToolResult, TurnId,
 };
 use crate::ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
@@ -47,6 +57,10 @@ const CLIENT_TIMED_OUT_READ: &str =
     "not completed: the client did not report a result in time; it is safe to try again";
 const CLIENT_TIMED_OUT_MUTATION: &str =
     "outcome unknown: the client did not report a result in time; check before trying again";
+/// A read started while the model streamed, whose attempt never committed
+/// (the stream failed or was cut): it is finished so its `ToolStarted` does
+/// not dangle; the next attempt proposes and runs it afresh.
+const NOT_RUN_ATTEMPT_ABANDONED: &str = "not run: the model attempt was abandoned";
 
 /// How long a call waits for `Event::ClientToolResult` before the engine
 /// gives up on it. Matches `dex_tools::Timeouts::default().client`; a host
@@ -105,8 +119,8 @@ struct ClientCall<'a> {
     decision: Option<Decision>,
 }
 
-/// One result of racing the model stream against `cancel` and the wall
-/// budget in `model_step`.
+/// One result of racing the model stream against `cancel`, the wall budget
+/// and the reads started during the stream in `model_step`.
 enum StreamStep {
     Chunk(Result<ModelChunk, ModelError>),
     /// The stream ended on its own (a truncated or otherwise finite stream).
@@ -115,6 +129,39 @@ enum StreamStep {
     /// `budget.wall` elapsed while waiting for the next chunk: the stream
     /// itself never errored or ended, so nothing else would have caught this.
     WallExceeded,
+    /// A read started during the stream returned.
+    Prefetched(usize, ToolResult),
+}
+
+/// One read-only call running ahead of its step's commit point, by index
+/// in the step's calls.
+type PrefetchFuture<'e> = Pin<Box<dyn Future<Output = (usize, ToolResult)> + Send + 'e>>;
+
+/// Reads started while the model streamed (see the module doc). Lives in
+/// `Engine::run` for one step: filled by `model_step`, drained by
+/// `dispatch`, and dropped whole when the attempt does not commit.
+struct Prefetch<'e> {
+    /// Still running. Each carries its own deadline, the one a wave would
+    /// have given it.
+    pending: FuturesUnordered<PrefetchFuture<'e>>,
+    /// Returned before the step committed.
+    done: HashMap<usize, ToolResult>,
+    /// Indices whose `ToolStarted` is already on the log.
+    started: HashSet<usize>,
+    /// The `ToolStarted` rows appended mid-stream. The model stream borrows
+    /// `ctx` until it is dropped, so they are observed then, in log order.
+    unobserved: Vec<(Cursor, Event)>,
+}
+
+impl Prefetch<'_> {
+    fn new() -> Self {
+        Self {
+            pending: FuturesUnordered::new(),
+            done: HashMap::new(),
+            started: HashSet::new(),
+            unobserved: Vec::new(),
+        }
+    }
 }
 
 /// The agent loop. Holds the host's ports and no state of its own, so any
@@ -208,8 +255,13 @@ where
     ///
     /// The host appends `Interrupt` and then cancels `cancel`. `Err(Fenced)`
     /// means a write was refused and nothing more was appended.
-    pub async fn run(&self, ctx: &mut Context, cancel: &CancellationToken) -> Result<Exit, Fenced> {
+    pub async fn run<'e>(
+        &'e self,
+        ctx: &mut Context,
+        cancel: &'e CancellationToken,
+    ) -> Result<Exit, Fenced> {
         let started = Instant::now();
+        let mut prefetch = Prefetch::new();
         loop {
             self.read_control(ctx).await?;
             match ctx.status() {
@@ -219,15 +271,30 @@ where
                 Status::Running => {}
             }
             if let Some(step) = ctx.open_attempt() {
-                // A crash mid-stream: the attempt's text never committed.
-                self.emit(ctx, vec![Event::ModelAttemptAbandoned { step }])
-                    .await?;
+                // A crash mid-stream: the attempt's text never committed, and
+                // neither did the reads it had started; close those so no
+                // `ToolStarted` stays open.
+                let mut events: Vec<Event> = ctx
+                    .pre_started_calls()
+                    .iter()
+                    .map(|call| {
+                        let result = ToolResult::error(NOT_RUN_ATTEMPT_ABANDONED);
+                        Event::ToolFinished {
+                            call: call.clone(),
+                            outcome: result.outcome,
+                            output: result.output,
+                            receipt: result.receipt,
+                        }
+                    })
+                    .collect();
+                events.push(Event::ModelAttemptAbandoned { step });
+                self.emit(ctx, events).await?;
             }
             if ctx.interrupt_requested() || cancel.is_cancelled() {
                 return self.interrupt(ctx).await;
             }
             if ctx.open_step().is_some() {
-                if let Some(exit) = self.dispatch(ctx, cancel, started).await? {
+                if let Some(exit) = self.dispatch(ctx, cancel, started, &mut prefetch).await? {
                     return Ok(exit);
                 }
                 continue;
@@ -257,7 +324,9 @@ where
                 )
                 .await?;
             }
-            if let Some(exit) = self.model_step(ctx, cancel, started).await? {
+            // A step never inherits another step's reads.
+            prefetch = Prefetch::new();
+            if let Some(exit) = self.model_step(ctx, cancel, started, &mut prefetch).await? {
                 return Ok(exit);
             }
         }
@@ -275,11 +344,12 @@ where
     /// (including a stream that never completes: `budget.wall` bounds the
     /// whole `Engine::run` call, streaming included, not just the time
     /// between steps).
-    async fn model_step(
-        &self,
+    async fn model_step<'e>(
+        &'e self,
         ctx: &mut Context,
-        cancel: &CancellationToken,
+        cancel: &'e CancellationToken,
         started: Instant,
+        prefetch: &mut Prefetch<'e>,
     ) -> Result<Option<Exit>, Fenced> {
         let step = ctx.step().saturating_add(1);
         self.emit(
@@ -298,6 +368,7 @@ where
         };
 
         let mut filter = self.sanitizer.filter();
+        let mut thinking = Thinking::new(self.sanitizer.filter());
         let mut text = String::new();
         let mut calls = Vec::new();
         let mut failure = None;
@@ -313,9 +384,13 @@ where
         // (the model sends it only after a clean terminal). A second chunk
         // replaces the first: one step has one.
         let mut reasoning = None;
+        // The route and model that served this attempt, kept for every
+        // `ModelStepCompleted` below, including a cut-off or cancelled one.
+        let mut served = None;
         {
             // The answer-only call offers nothing, not even `tools.search`.
-            let owned = if self.budget.answer_only(step.saturating_sub(1)) {
+            let answer_only = self.budget.answer_only(step.saturating_sub(1));
+            let owned = if answer_only {
                 Vec::new()
             } else {
                 self.offered(ctx)
@@ -329,6 +404,10 @@ where
             // not only against `cancel`.
             loop {
                 let remaining = self.budget.wall.saturating_sub(started.elapsed());
+                // `FuturesUnordered::next` on an empty set resolves at once
+                // with `None`; the guard keeps it out of the race until a
+                // read is actually running.
+                let has_pending = !prefetch.pending.is_empty();
                 let outcome = tokio::select! {
                     biased;
                     () = cancel.cancelled() => StreamStep::Cancelled,
@@ -337,9 +416,25 @@ where
                         Some(chunk) => StreamStep::Chunk(chunk),
                         None => StreamStep::Ended,
                     },
+                    done = prefetch.pending.next(), if has_pending => match done {
+                        Some((index, result)) => StreamStep::Prefetched(index, result),
+                        None => continue,
+                    },
                 };
                 match outcome {
+                    StreamStep::Chunk(Ok(ModelChunk::Thinking(delta))) => {
+                        if let Some(summary) = thinking.push(&delta, !text.is_empty()) {
+                            self.log
+                                .append(&[Event::ThinkingDelta { text: summary }])
+                                .await?;
+                        }
+                    }
                     StreamStep::Chunk(Ok(ModelChunk::Text(delta))) => {
+                        if let Some(summary) = thinking.flush() {
+                            self.log
+                                .append(&[Event::ThinkingDelta { text: summary }])
+                                .await?;
+                        }
                         let safe = filter.push(&delta);
                         if !safe.is_empty() {
                             text.push_str(&safe);
@@ -347,14 +442,28 @@ where
                         }
                     }
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
-                        let id = call_id(&turn, step, calls.len());
-                        calls.push(ProposedCall::new(id, name, args, principal.clone()));
+                        let index = calls.len();
+                        let id = call_id(&turn, step, index);
+                        let call = ProposedCall::new(id, name, args, principal.clone());
+                        // The answer-only call offers no tools, so nothing may
+                        // start on it.
+                        if !answer_only {
+                            self.prefetch(ctx, &call, index, cancel, started, prefetch)
+                                .await?;
+                        }
+                        calls.push(call);
+                    }
+                    StreamStep::Prefetched(index, result) => {
+                        prefetch.done.insert(index, result);
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Usage(usage))) => {
                         pending_usage.push(Event::Usage(usage));
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Reasoning(state))) => {
                         reasoning = Some(state);
+                    }
+                    StreamStep::Chunk(Ok(ModelChunk::Served(by))) => {
+                        served = Some(by);
                     }
                     StreamStep::Chunk(Err(error)) => {
                         failure = Some(error.message);
@@ -368,6 +477,11 @@ where
                 }
             }
             if failure.is_none() && !wall_exceeded {
+                if let Some(summary) = thinking.flush() {
+                    self.log
+                        .append(&[Event::ThinkingDelta { text: summary }])
+                        .await?;
+                }
                 let tail = filter.finish();
                 if !tail.is_empty() {
                     text.push_str(&tail);
@@ -376,6 +490,15 @@ where
             }
         }
 
+        for (cursor, event) in std::mem::take(&mut prefetch.unobserved) {
+            ctx.observe(cursor, &event);
+        }
+        // Every path below that does not commit `calls` first closes the
+        // reads that already started, so no `ToolStarted` dangles.
+        let committing = failure.is_none() && !wall_exceeded && !cancel.is_cancelled();
+        if !committing {
+            pending_usage.splice(0..0, Self::abandon_prefetch(&calls, prefetch));
+        }
         if wall_exceeded {
             let message = self.budget_message(ctx, BudgetAxis::Wall);
             let mut events = pending_usage;
@@ -406,6 +529,7 @@ where
                 text: text.clone(),
                 calls: Vec::new(),
                 reasoning: None,
+                served: served.clone(),
             });
             events.push(Event::Final { text });
             self.emit(ctx, events).await?;
@@ -430,13 +554,15 @@ where
                 text,
                 calls: Vec::new(),
                 reasoning: None,
+                served: served.clone(),
             });
             self.emit(ctx, events).await?;
             return self.interrupt(ctx).await.map(Some);
         }
         if !calls.is_empty() && self.budget.answer_only(step.saturating_sub(1)) {
             // Asked for a tool on the call that offered none. Nothing can run
-            // it, so the turn ends here instead of looping.
+            // it, so the turn ends here instead of looping. (Nothing was
+            // prefetched: the answer-only call offers no tools.)
             let message = self.budget_message(ctx, BudgetAxis::Steps);
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
@@ -457,6 +583,7 @@ where
                 text: text.clone(),
                 calls: Vec::new(),
                 reasoning,
+                served,
             });
             if !continues {
                 events.push(Event::Final { text });
@@ -470,19 +597,93 @@ where
             text,
             calls,
             reasoning,
+            served,
         });
         self.emit(ctx, events).await?;
         Ok(None)
     }
 
+    /// Starts `call` now, ahead of its step's commit, when it is a read the
+    /// model was offered, its arguments fit the tool's schema, its policy
+    /// allows it, and it runs on the host (not a person, not a client
+    /// session). Anything else waits for `dispatch`, which re-derives the
+    /// same verdicts and finishes an invalid or denied call there.
+    async fn prefetch<'e>(
+        &'e self,
+        ctx: &Context,
+        call: &ProposedCall,
+        index: usize,
+        cancel: &'e CancellationToken,
+        run_started: Instant,
+        prefetch: &mut Prefetch<'e>,
+    ) -> Result<(), Fenced> {
+        // Only an unbroken run of reads from the first call on starts early.
+        // `dispatch` keeps the model's order around effects, so a read that
+        // follows a mutation (or any call held back) must not observe the
+        // world before that call has run.
+        if prefetch.started.len() != index || call.tool.as_str() == TOOLS_SEARCH {
+            return Ok(());
+        }
+        let Some(spec) = self.offered_spec(ctx, &call.tool) else {
+            return Ok(());
+        };
+        let eligible = spec.read_only
+            && !matches!(spec.executor, ExecutorKind::User | ExecutorKind::Client)
+            && validate_args(&spec, &call.args).is_ok()
+            && !ctx.has_uncertain_call(call);
+        if !eligible || self.tools.policy(ctx, call).await != Verdict::Allow {
+            return Ok(());
+        }
+        // Appended without `ctx.observe`: the stream still borrows `ctx`.
+        let event = started(call, &spec);
+        let cursors = self.log.append(std::slice::from_ref(&event)).await?;
+        let [cursor] = cursors[..] else {
+            return Err(Fenced::new(format!(
+                "log returned {} cursors for 1 event",
+                cursors.len()
+            )));
+        };
+        prefetch.unobserved.push((cursor, event));
+        prefetch.started.insert(index);
+        let deadline = self.call_deadline(run_started);
+        let thread = ctx.thread().clone();
+        let call = call.clone();
+        prefetch.pending.push(Box::pin(async move {
+            let run = self.tools.run(&thread, &call, cancel);
+            let result = match tokio::time::timeout(deadline, run).await {
+                Ok(result) => result,
+                Err(_elapsed) => ToolResult::error(DEADLINE_READ),
+            };
+            (index, result)
+        }));
+        Ok(())
+    }
+
+    /// The `ToolFinished` rows for reads that started under an attempt
+    /// that will not commit, in call order; the reads themselves are
+    /// dropped (a read has no effect to wait for). Leaves `prefetch` empty.
+    fn abandon_prefetch(calls: &[ProposedCall], prefetch: &mut Prefetch<'_>) -> Vec<Event> {
+        let events = calls
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| prefetch.started.contains(index))
+            .map(|(_, call)| finished(call, ToolResult::error(NOT_RUN_ATTEMPT_ABANDONED)))
+            .collect();
+        *prefetch = Prefetch::new();
+        events
+    }
+
     /// Dispatches the open step's calls in the model's order. Allowed
     /// read-only calls collect into a wave that runs in parallel; anything
     /// else runs the pending wave first, so effects keep the model's order.
-    async fn dispatch(
-        &self,
+    /// Reads that already started during the stream (`prefetch`) are
+    /// adopted by the wave instead of running again.
+    async fn dispatch<'e>(
+        &'e self,
         ctx: &mut Context,
-        cancel: &CancellationToken,
+        cancel: &'e CancellationToken,
         run_started: Instant,
+        prefetch: &mut Prefetch<'e>,
     ) -> Result<Option<Exit>, Fenced> {
         let Some(step) = ctx.open_step() else {
             return Ok(None);
@@ -502,7 +703,7 @@ where
                 None | Some(CallState::Done(_)) => continue,
                 Some(CallState::Asked { answer: None }) => {
                     if self
-                        .flush(ctx, &calls, &mut wave, cancel, run_started)
+                        .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                         .await?
                     {
                         break;
@@ -524,7 +725,7 @@ where
                         continue;
                     }
                     if self
-                        .flush(ctx, &calls, &mut wave, cancel, run_started)
+                        .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                         .await?
                     {
                         break;
@@ -547,7 +748,7 @@ where
                     // under the same approval id, so the thread resumes
                     // instead of waiting forever.
                     if self
-                        .flush(ctx, &calls, &mut wave, cancel, run_started)
+                        .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                         .await?
                     {
                         break;
@@ -573,12 +774,12 @@ where
                         Some(spec) if spec.read_only => wave.push(index),
                         Some(_) => {
                             if self
-                                .flush(ctx, &calls, &mut wave, cancel, run_started)
+                                .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                                 .await?
                             {
                                 break;
                             }
-                            self.run_mutation(ctx, call, run_started).await?;
+                            self.run_mutation(ctx, call, cancel, run_started).await?;
                         }
                         // The tool is no longer offered (deploy, grant
                         // revoke), but this call already started: it may
@@ -601,6 +802,13 @@ where
                 self.finish(ctx, call, unknown_tool(&call.tool)).await?;
                 continue;
             };
+            // Arguments that do not fit the tool's schema never reach an
+            // executor: the model sees why and can call again. (A call the
+            // stream already started passed this check before it ran.)
+            if let Err(reason) = validate_args(&spec, &call.args) {
+                self.finish(ctx, call, ToolResult::error(reason)).await?;
+                continue;
+            }
             // Client-executor tools are not in `self.tools`'s catalog and
             // carry their own governance (set by the host's allowlist when
             // it resolved the client's declaration), so they skip
@@ -615,6 +823,7 @@ where
                         &mut wave,
                         cancel,
                         run_started,
+                        prefetch,
                         ClientCall {
                             proposal: call,
                             decision,
@@ -657,7 +866,7 @@ where
             // effect; the pending wave runs first so effects keep order.
             if let (None, Verdict::NeedsApproval { approval, summary }) = (decision, verdict) {
                 if self
-                    .flush(ctx, &calls, &mut wave, cancel, run_started)
+                    .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                     .await?
                 {
                     break;
@@ -667,7 +876,7 @@ where
 
             if spec.executor == ExecutorKind::User {
                 if self
-                    .flush(ctx, &calls, &mut wave, cancel, run_started)
+                    .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                     .await?
                 {
                     break;
@@ -691,15 +900,15 @@ where
                 wave.push(index);
             } else {
                 if self
-                    .flush(ctx, &calls, &mut wave, cancel, run_started)
+                    .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
                     .await?
                 {
                     break;
                 }
-                self.run_mutation(ctx, call, run_started).await?;
+                self.run_mutation(ctx, call, cancel, run_started).await?;
             }
         }
-        self.run_wave(ctx, &calls, wave, cancel, run_started)
+        self.run_wave(ctx, &calls, wave, cancel, run_started, prefetch)
             .await?;
         if cancel.is_cancelled() {
             return self.interrupt(ctx).await.map(Some);
@@ -726,13 +935,15 @@ where
     /// One call to a `Client`-executor tool: approval (if the host's
     /// allowlist marked it a mutation), then `ClientToolRequested`, mirroring
     /// how the main `dispatch` loop handles `NeedsApproval` and `User`.
-    async fn dispatch_client_tool(
-        &self,
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_client_tool<'e>(
+        &'e self,
         ctx: &mut Context,
         calls: &[ProposedCall],
         wave: &mut Vec<usize>,
-        cancel: &CancellationToken,
+        cancel: &'e CancellationToken,
         run_started: Instant,
+        prefetch: &mut Prefetch<'e>,
         client_call: ClientCall<'_>,
     ) -> Result<ClientToolOutcome, Fenced> {
         let ClientCall {
@@ -759,14 +970,20 @@ where
             return Ok(ClientToolOutcome::Continue);
         }
         if decision.is_none() && spec.governance == GovernanceClass::Approval {
-            if self.flush(ctx, calls, wave, cancel, run_started).await? {
+            if self
+                .flush(ctx, calls, wave, cancel, run_started, prefetch)
+                .await?
+            {
                 return Ok(ClientToolOutcome::Break);
             }
             let approval = ApprovalId::new(format!("client-{}", call.id));
             let summary = format!("Run {} in your browser", spec.label);
             self.auto_approve(ctx, call, approval, summary).await?;
         }
-        if self.flush(ctx, calls, wave, cancel, run_started).await? {
+        if self
+            .flush(ctx, calls, wave, cancel, run_started, prefetch)
+            .await?
+        {
             return Ok(ClientToolOutcome::Break);
         }
         let deadline_ms = now_ms().saturating_add(self.client_timeout_millis());
@@ -791,35 +1008,47 @@ where
     /// Runs the pending wave before a call that must not overlap it. Returns
     /// true when an interrupt arrived meanwhile: the next effect must not
     /// start.
-    async fn flush(
-        &self,
+    async fn flush<'e>(
+        &'e self,
         ctx: &mut Context,
         calls: &[ProposedCall],
         wave: &mut Vec<usize>,
-        cancel: &CancellationToken,
+        cancel: &'e CancellationToken,
         run_started: Instant,
+        prefetch: &mut Prefetch<'e>,
     ) -> Result<bool, Fenced> {
-        self.run_wave(ctx, calls, std::mem::take(wave), cancel, run_started)
-            .await?;
+        self.run_wave(
+            ctx,
+            calls,
+            std::mem::take(wave),
+            cancel,
+            run_started,
+            prefetch,
+        )
+        .await?;
         Ok(cancel.is_cancelled())
     }
 
     /// Runs read-only calls concurrently. Each `ToolFinished` is appended as
     /// its call returns; history receives the results in call order when the
-    /// step closes.
-    async fn run_wave(
-        &self,
+    /// step closes. A call that already started during the stream keeps its
+    /// `ToolStarted` and its run: a finished result is adopted at once and a
+    /// pending one joins the wave.
+    async fn run_wave<'e>(
+        &'e self,
         ctx: &mut Context,
         calls: &[ProposedCall],
         wave: Vec<usize>,
-        cancel: &CancellationToken,
+        cancel: &'e CancellationToken,
         run_started: Instant,
+        prefetch: &mut Prefetch<'e>,
     ) -> Result<(), Fenced> {
         if wave.is_empty() || cancel.is_cancelled() {
             return Ok(());
         }
         let starts: Vec<Event> = wave
             .iter()
+            .filter(|index| !prefetch.started.contains(index))
             .filter_map(|&index| {
                 let call = &calls[index];
                 let spec = self.offered_spec(ctx, &call.tool)?;
@@ -828,29 +1057,48 @@ where
             .collect();
         self.emit(ctx, starts).await?;
         let thread = ctx.thread().clone();
-        let thread = &thread;
         // One deadline for the wave: its reads run concurrently, so each
         // gets the full time. A read that overruns is dropped and finished
         // `Failed`; a read has no effect to wait for, so retrying is safe.
         let deadline = self.call_deadline(run_started);
-        let mut running: FuturesUnordered<_> = wave
-            .iter()
-            .map(|&index| {
-                let call = &calls[index];
-                async move {
-                    let run = self.tools.run(thread, call, cancel);
-                    let result = match tokio::time::timeout(deadline, run).await {
-                        Ok(result) => result,
-                        Err(_elapsed) => ToolResult::error(DEADLINE_READ),
-                    };
-                    (call, result)
-                }
-            })
-            .collect();
+        let mut running: FuturesUnordered<PrefetchFuture<'e>> = FuturesUnordered::new();
+        for &index in &wave {
+            if let Some(result) = prefetch.done.remove(&index) {
+                self.finish(ctx, &calls[index], result).await?;
+                continue;
+            }
+            if prefetch.started.contains(&index) {
+                // Still running from the stream; it arrives through
+                // `prefetch.pending` below.
+                continue;
+            }
+            let call = calls[index].clone();
+            let thread = thread.clone();
+            running.push(Box::pin(async move {
+                let run = self.tools.run(&thread, &call, cancel);
+                let result = match tokio::time::timeout(deadline, run).await {
+                    Ok(result) => result,
+                    Err(_elapsed) => ToolResult::error(DEADLINE_READ),
+                };
+                (index, result)
+            }));
+        }
+        for future in std::mem::take(&mut prefetch.pending) {
+            running.push(future);
+        }
         // On `Fenced` the remaining reads are dropped: a stale owner must not
         // append, and the new owner runs them again.
-        while let Some((call, result)) = running.next().await {
-            self.finish(ctx, call, result).await?;
+        while let Some((index, result)) = running.next().await {
+            let still_open = ctx
+                .open_step()
+                .and_then(|step| step.states.get(index))
+                .is_some_and(|state| !matches!(state, CallState::Done(_)));
+            // A prefetched read whose call `dispatch` already finished
+            // (policy denied it on re-check) has nothing left to report.
+            if !still_open || !(wave.contains(&index) || prefetch.started.contains(&index)) {
+                continue;
+            }
+            self.finish(ctx, &calls[index], result).await?;
         }
         Ok(())
     }
@@ -859,11 +1107,14 @@ where
     /// its recorded outcome is adopted instead, with `Running` settled to
     /// `Unknown` first — nothing ever revisits a `Running` report, so
     /// showing it as final would leave the model unable to tell whether to
-    /// retry. Interrupt does not cancel a mutation that has started.
+    /// retry. Interrupt reaches a running mutation through `cancel`, but the
+    /// engine still awaits the run and records its result: the tool decides
+    /// what cancel means, and the mutation's future is never dropped.
     async fn run_mutation(
         &self,
         ctx: &mut Context,
         call: &ProposedCall,
+        cancel: &CancellationToken,
         run_started: Instant,
     ) -> Result<(), Fenced> {
         let Some(spec) = self.offered_spec(ctx, &call.tool) else {
@@ -881,12 +1132,12 @@ where
             }
             Claim::Granted => {
                 self.emit(ctx, vec![started(call, &spec)]).await?;
-                let never = CancellationToken::new();
                 // A mutation that overruns its deadline is dropped, not
                 // cancelled: the effect may still land. `Unknown` is recorded
                 // under the claim, so a later resume of this call adopts it
-                // instead of dispatching the mutation a second time.
-                let run = self.tools.run(ctx.thread(), call, &never);
+                // instead of dispatching the mutation a second time. An
+                // interrupt only fires `cancel`; the run is still awaited.
+                let run = self.tools.run(ctx.thread(), call, cancel);
                 let result = match tokio::time::timeout(self.call_deadline(run_started), run).await
                 {
                     Ok(result) => result,
@@ -1188,6 +1439,60 @@ fn search_spec() -> ToolSpec {
     }
 }
 
+/// Most thinking summary one attempt shows; the rest is dropped.
+const MAX_THINKING_BYTES: usize = 16 * 1024;
+/// Held thinking is written once it reaches this size (the first piece is
+/// written at once, so progress appears as soon as the model starts).
+const THINKING_FLUSH_BYTES: usize = 240;
+
+/// One attempt's thinking summary on its way to the log: sanitized like
+/// answer text, written in bounded pieces, and never after the answer began.
+struct Thinking<F> {
+    filter: F,
+    held: String,
+    written: usize,
+}
+
+impl<F: DeltaFilter> Thinking<F> {
+    fn new(filter: F) -> Self {
+        Self {
+            filter,
+            held: String::new(),
+            written: 0,
+        }
+    }
+
+    /// Takes a thinking delta; returns a piece to write now, if any.
+    fn push(&mut self, delta: &str, answering: bool) -> Option<String> {
+        if answering || self.written + self.held.len() >= MAX_THINKING_BYTES {
+            return None;
+        }
+        self.held.push_str(&self.filter.push(delta));
+        if self.written == 0 || self.held.len() >= THINKING_FLUSH_BYTES {
+            return self.flush();
+        }
+        None
+    }
+
+    /// Whatever is held, bounded, once.
+    fn flush(&mut self) -> Option<String> {
+        if self.held.is_empty() {
+            return None;
+        }
+        let room = MAX_THINKING_BYTES.saturating_sub(self.written);
+        let mut piece = std::mem::take(&mut self.held);
+        if piece.len() > room {
+            let mut end = room;
+            while !piece.is_char_boundary(end) {
+                end -= 1;
+            }
+            piece.truncate(end);
+        }
+        self.written += piece.len();
+        (!piece.is_empty()).then_some(piece)
+    }
+}
+
 /// Appended to an answer whose model stream failed after text was shown.
 pub const CUT_OFF_NOTICE: &str =
     "\n\n_This answer was cut off before it finished. Ask me to continue from here._";
@@ -1212,6 +1517,23 @@ fn non_empty_str<'a>(call: &'a ProposedCall, key: &str) -> Option<&'a str> {
         .get(key)
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
+}
+
+/// `args` against `spec.schema`. A schema that is absent, not an object, or
+/// does not compile validates nothing (the executor still checks what it
+/// needs); a schema violation names the first error so the model can call
+/// again with arguments that fit.
+fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
+    if !spec.schema.is_object() {
+        return Ok(());
+    }
+    let Ok(validator) = jsonschema::validator_for(&spec.schema) else {
+        return Ok(());
+    };
+    match validator.iter_errors(args).next() {
+        None => Ok(()),
+        Some(error) => Err(format!("invalid arguments: {error}")),
+    }
 }
 
 fn unknown_tool(name: &ToolName) -> ToolResult {

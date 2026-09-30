@@ -58,8 +58,8 @@ async fn a_read_that_overruns_the_deadline_is_finished_failed_and_the_turn_conti
         log.shapes_after(1),
         strings(&[
             "step:1",
-            "completed::[t1-1-0]",
             "started:t1-1-0",
+            "completed::[t1-1-0]",
             "finished:t1-1-0:err",
             "step:2",
             "delta:done",
@@ -170,8 +170,8 @@ async fn a_call_never_outlives_the_wall_budget() {
         log.shapes_after(1),
         strings(&[
             "step:1",
-            "completed::[t1-1-0]",
             "started:t1-1-0",
+            "completed::[t1-1-0]",
             "finished:t1-1-0:err",
             "error:budget_exhausted:wall budget exhausted: 100ms",
         ])
@@ -199,8 +199,8 @@ async fn a_call_that_finishes_in_time_is_unaffected() {
         log.shapes_after(1),
         strings(&[
             "step:1",
-            "completed::[t1-1-0]",
             "started:t1-1-0",
+            "completed::[t1-1-0]",
             "finished:t1-1-0:ok",
             "step:2",
             "delta:done",

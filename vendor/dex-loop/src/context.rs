@@ -7,8 +7,8 @@
 
 use crate::event::{
     ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor, Event, MessageId,
-    Outcome, Output, PrincipalId, ProposedCall, ProviderReasoning, ThreadId, ToolName, ToolResult,
-    TurnId, Usage,
+    Outcome, Output, PrincipalId, ProposedCall, ProviderReasoning, ServedBy, ThreadId, ToolName,
+    ToolResult, TurnId, Usage,
 };
 
 const NOT_RUN_NEW_TURN: &str = "not run: a new turn started first";
@@ -30,6 +30,8 @@ pub enum Message {
         /// The step's provider continuation state, as the `Model` port
         /// wrote it; `None` for steps logged without one.
         reasoning: Option<ProviderReasoning>,
+        /// The provider and model that served the step, when known.
+        served: Option<ServedBy>,
     },
     Tool {
         call: CallId,
@@ -149,6 +151,16 @@ pub struct Context {
     /// Unknown call outcomes in this turn, derived from the durable log.
     /// Kept outside model history so compaction cannot permit a fresh retry.
     uncertain_calls: Vec<ProposedCall>,
+    /// Calls whose `ToolStarted` landed before their step's
+    /// `ModelStepCompleted`: reads the engine started while the model was
+    /// still streaming. They begin the step as `Started`, so a warm engine
+    /// adopts their results and a rehydrated one runs them again, the same
+    /// as any other read that started before a restart.
+    pre_started: Vec<CallId>,
+    /// Cursor of the latest `Compaction` event itself (not the cursor it
+    /// covers to). Assistant entries at or before it were produced before
+    /// the summary existed.
+    last_compaction: Option<Cursor>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -189,6 +201,8 @@ impl Context {
             authorized_principal: None,
             uncertain_calls: Vec::new(),
             pending_turns: Vec::new(),
+            pre_started: Vec::new(),
+            last_compaction: None,
         }
     }
 
@@ -241,6 +255,15 @@ impl Context {
         &self.history
     }
 
+    /// The cursor of the latest `Compaction` event, if history was compacted.
+    /// A history entry with `cursor <= last_compaction_cursor()` was produced
+    /// before that compaction; the model never saw it under the summary that
+    /// now precedes it, so provider continuation state bound to the old
+    /// prefix (signed thinking) cannot be replayed for it.
+    pub fn last_compaction_cursor(&self) -> Option<Cursor> {
+        self.last_compaction
+    }
+
     /// Model calls started in the current turn.
     pub fn step(&self) -> u32 {
         self.step
@@ -283,13 +306,6 @@ impl Context {
         self.control = self.control.max(floor);
     }
 
-    /// Puts the control cursor back after the engine appended a control event
-    /// of its own, so a control event from another writer that landed just
-    /// before it is still read.
-    pub(crate) fn rewind_control(&mut self, to: Cursor) {
-        self.control = to;
-    }
-
     pub(crate) fn status(&self) -> Status {
         self.status
     }
@@ -314,6 +330,12 @@ impl Context {
                 && prior.args_digest == call.args_digest
                 && prior.principal == call.principal
         })
+    }
+
+    /// Reads a cut attempt started ahead of its step's commit and never
+    /// finished, in log order.
+    pub(crate) fn pre_started_calls(&self) -> &[CallId] {
+        &self.pre_started
     }
 
     /// The step of a model attempt that started but never completed.
@@ -439,12 +461,13 @@ impl Context {
                 self.flush_steers(cursor, *control_through);
             }
             // Text reaches history through `ModelStepCompleted`.
-            Event::TextDelta { .. } | Event::ToolProgress { .. } => {}
+            Event::TextDelta { .. } | Event::ThinkingDelta { .. } | Event::ToolProgress { .. } => {}
             Event::Usage(usage) => self.usage += *usage,
             Event::ModelStepCompleted {
                 text,
                 calls,
                 reasoning,
+                served,
                 ..
             } => {
                 self.attempt = None;
@@ -454,21 +477,39 @@ impl Context {
                         text: text.clone(),
                         calls: calls.clone(),
                         reasoning: reasoning.clone(),
+                        served: served.clone(),
                     },
                 );
                 if !calls.is_empty() {
+                    let pre_started = std::mem::take(&mut self.pre_started);
                     self.open_step = Some(OpenStep {
                         calls: calls.clone(),
-                        states: vec![CallState::Todo; calls.len()],
+                        states: calls
+                            .iter()
+                            .map(|call| {
+                                if pre_started.contains(&call.id) {
+                                    CallState::Started
+                                } else {
+                                    CallState::Todo
+                                }
+                            })
+                            .collect(),
                     });
                 }
+                self.pre_started.clear();
             }
-            Event::ModelAttemptAbandoned { .. } => self.attempt = None,
+            Event::ModelAttemptAbandoned { .. } => {
+                self.attempt = None;
+                self.pre_started.clear();
+            }
             Event::ToolStarted { call, .. } => {
-                if let Some(state) = self.state_mut(call)
-                    && !matches!(state, CallState::Done(_))
-                {
-                    *state = CallState::Started;
+                if let Some(state) = self.state_mut(call) {
+                    if !matches!(state, CallState::Done(_)) {
+                        *state = CallState::Started;
+                    }
+                } else if self.open_step.is_none() && !self.pre_started.contains(call) {
+                    // Started ahead of its step's commit point.
+                    self.pre_started.push(call.clone());
                 }
             }
             Event::ToolsExposed { tools, .. } => {
@@ -485,6 +526,8 @@ impl Context {
                 receipt,
             } => {
                 self.uncertain_calls.retain(|prior| &prior.id != call);
+                // A pre-committed read finished by an abandoned attempt.
+                self.pre_started.retain(|started| started != call);
                 if *outcome == Outcome::Unknown
                     && let Some(proposal) = self
                         .open_step
@@ -547,6 +590,7 @@ impl Context {
                 covers_to_cursor,
                 summary,
             } => {
+                self.last_compaction = Some(cursor);
                 self.history
                     .retain(|entry| entry.cursor > *covers_to_cursor);
                 self.history.insert(
@@ -606,6 +650,7 @@ impl Context {
         self.interrupt_requested = false;
         self.exposed.clear();
         self.uncertain_calls.clear();
+        self.pre_started.clear();
         self.client_tools = client_tools;
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;
