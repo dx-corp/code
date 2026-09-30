@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
 use crate::event::{
-    ApprovalId, AttemptNext, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning,
-    ServedBy, StepTiming, ThreadId, ToolName, ToolResult, Usage,
+    ApprovalId, AttemptNext, CallId, Cursor, ErrorClass, Event, PrincipalId, ProposedCall,
+    ProviderReasoning, ServedBy, StepTiming, ThreadId, ToolName, ToolResult, Usage,
 };
 
 /// The log or the effect ledger refused a write. The engine stops at once and
@@ -94,6 +94,14 @@ pub enum ModelChunk {
 #[error("model call failed: {message}")]
 pub struct ModelError {
     pub message: String,
+    pub class: ErrorClass,
+}
+
+impl ModelError {
+    /// The adapter-supplied class; message text cannot change it.
+    pub fn class(&self) -> ErrorClass {
+        self.class
+    }
 }
 
 /// The model, streaming.

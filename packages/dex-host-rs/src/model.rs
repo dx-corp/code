@@ -177,6 +177,7 @@ impl ChunkTranslator {
                         Ok(value) => value,
                         Err(error) => {
                             return vec![Err(ModelError {
+                                class: dex_loop::ErrorClass::Protocol,
                                 message: format!(
                                     "provider returned invalid tool-call JSON for {name}: {error}"
                                 ),
@@ -202,8 +203,25 @@ impl ChunkTranslator {
                 // Not attributed here; see the module doc comment.
                 cost_micros: 0,
             }))],
-            StreamEvent::ProviderError { message, .. } | StreamEvent::Error { message } => {
-                vec![Err(ModelError { message })]
+            StreamEvent::ProviderError { kind, message } => {
+                use maestro_ai::ProviderStreamErrorKind;
+                let class = match kind {
+                    ProviderStreamErrorKind::TransientProtocol => dex_loop::ErrorClass::Truncated,
+                    ProviderStreamErrorKind::OutputTokenExhaustion
+                    | ProviderStreamErrorKind::IncompleteResponse => {
+                        dex_loop::ErrorClass::Incomplete
+                    }
+                    ProviderStreamErrorKind::ProviderDeclaredFailure => {
+                        dex_loop::ErrorClass::Unknown
+                    }
+                };
+                vec![Err(ModelError { class, message })]
+            }
+            StreamEvent::Error { message } => {
+                vec![Err(ModelError {
+                    class: dex_loop::ErrorClass::Unknown,
+                    message,
+                })]
             }
             _ => Vec::new(),
         }
@@ -234,6 +252,7 @@ impl dex_loop::Model for AiRsModel {
                 }
                 Err(error) => {
                     let _ = tx.send(Err(ModelError {
+                        class: dex_loop::ErrorClass::Unknown,
                         message: format!("{error:#}"),
                     }));
                 }
@@ -256,6 +275,42 @@ mod tests {
             workspace: "ws-1".into(),
             thread: "thread-1".into(),
         }
+    }
+
+    #[test]
+    fn failure_class_comes_from_the_provider_kind_not_display_words() {
+        use maestro_ai::ProviderStreamErrorKind;
+        for (kind, expected) in [
+            (
+                ProviderStreamErrorKind::TransientProtocol,
+                dex_loop::ErrorClass::Truncated,
+            ),
+            (
+                ProviderStreamErrorKind::OutputTokenExhaustion,
+                dex_loop::ErrorClass::Incomplete,
+            ),
+            (
+                ProviderStreamErrorKind::IncompleteResponse,
+                dex_loop::ErrorClass::Incomplete,
+            ),
+            (
+                ProviderStreamErrorKind::ProviderDeclaredFailure,
+                dex_loop::ErrorClass::Unknown,
+            ),
+        ] {
+            let errors = ChunkTranslator::default().translate(StreamEvent::ProviderError {
+                kind,
+                message: "budget auth 429 refusal".into(),
+            });
+            assert_eq!(errors[0].as_ref().unwrap_err().class, expected);
+        }
+        let errors = ChunkTranslator::default().translate(StreamEvent::Error {
+            message: "budget auth 429 refusal".into(),
+        });
+        assert_eq!(
+            errors[0].as_ref().unwrap_err().class,
+            dex_loop::ErrorClass::Unknown
+        );
     }
 
     #[test]
