@@ -65,6 +65,7 @@ fn kind_str(event: &Event) -> &'static str {
         Event::ClientToolResult { .. } => "client_tool_result",
         Event::StepStarted { .. } => "step_started",
         Event::TextDelta { .. } => "text_delta",
+        Event::ThinkingDelta { .. } => "thinking_delta",
         Event::Usage(_) => "usage",
         Event::ModelStepCompleted { .. } => "model_step_completed",
         Event::ModelAttemptAbandoned { .. } => "model_attempt_abandoned",

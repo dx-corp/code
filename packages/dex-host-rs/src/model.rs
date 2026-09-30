@@ -286,7 +286,7 @@ mod tests {
                     attachments: Vec::new(),
                     client_tools: Vec::new(),
                     authorized_tools: Vec::new(),
-                    approval_mode: dex_loop::ApprovalMode::Interactive,
+                    approval_mode: dex_loop::ApprovalMode::Headless,
                 },
             )],
         );

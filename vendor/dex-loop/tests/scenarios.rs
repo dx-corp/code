@@ -1034,6 +1034,41 @@ async fn a_stream_that_fails_after_text_keeps_the_answer_marked_cut_off() {
     );
 }
 
+// 8d4. Thinking summaries stream as progress before the answer: sanitized,
+// never part of the answer text, the committed step, or the history.
+#[tokio::test]
+async fn thinking_streams_as_progress_and_never_joins_the_answer() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![vec![
+        thinking("Checking "),
+        thinking(&"x".repeat(300)),
+        thinking("tail"),
+        text("Hello"),
+        thinking("after the answer began"),
+        usage(3, 2, 7),
+    ]]);
+    let tools = FakeTools::new(vec![]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "hi");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(
+        log.shapes_after(2),
+        strings(&[
+            "thinking:Checking ",
+            &format!("thinking:{}", "x".repeat(300)),
+            "thinking:tail",
+            "delta:Hello",
+            "usage:5",
+            "completed:Hello:[]",
+            "final:Hello",
+        ])
+    );
+    assert_eq!(log.rehydrate(), ctx);
+}
+
 // 8e. A `Started` call whose tool vanished from the offered catalog (deploy,
 // grant revoke) resolves through the ledger, never as "unknown tool": the
 // model must not be told to retry a call that may have already run under

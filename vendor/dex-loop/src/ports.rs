@@ -53,6 +53,9 @@ pub trait Log: Send + Sync {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModelChunk {
     Text(String),
+    /// A summary of the model's thinking, streamed while it thinks. Shown as
+    /// progress only: never answer text, never model history, not usage.
+    Thinking(String),
     /// The engine assigns the `CallId`; provider call ids are not used.
     ToolCall {
         name: ToolName,

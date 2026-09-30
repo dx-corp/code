@@ -5,8 +5,9 @@
 //!
 //! This is Maestro's `MAESTRO_DEX_LOOP=1` cutover step: a local turn now has
 //! a consumer of this crate's ports, not just `tests/turn.rs`'s own
-//! hand-driven approve/resume. Parked approvals are auto-approved and parked
-//! questions are auto-answered with [`UNATTENDED_ANSWER`] -- the same
+//! hand-driven approve/resume. Turns are headless (`ApprovalMode::Headless`,
+//! `Verdict::Allow` for every local tool), so there is no approval step at
+//! all, and a `Parked` exit is an error. Parked questions are auto-answered with [`UNATTENDED_ANSWER`] -- the same
 //! unattended-turn policy `print_mode.rs` (Maestro's existing non-interactive
 //! "auto-approves tools" entry point) and `cloud_cli.rs`'s attached REPL
 //! already use. This does not change trust posture: it matches the mode
@@ -47,7 +48,7 @@ pub struct LocalTurnOutcome {
 
 /// Runs `request` to completion against a fresh `LocalLog`/`LocalTools`/
 /// `LocalEffects` rooted at `state_root`/`workspace_root`, auto-approving
-/// every parked approval and auto-answering every parked question.
+/// auto-answering every parked question and failing on a parked approval.
 ///
 /// # Errors
 /// Returns an error if the log cannot be acquired (e.g. its lease is held by
@@ -70,7 +71,7 @@ pub async fn run_local_turn<M: Model>(
         attachments: Vec::new(),
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
-        approval_mode: ApprovalMode::Interactive,
+        approval_mode: ApprovalMode::Headless,
     }])
     .await
     .map_err(|_fenced| {
@@ -103,8 +104,8 @@ pub async fn run_local_turn<M: Model>(
 
 type LocalEngine<M> = dex_loop::Engine<LocalLog, M, LocalTools, LocalEffects, Lexicon>;
 
-/// Runs `engine` until it reaches a terminal `Exit`, auto-resolving every
-/// `Parked` (approval) and `Asked` (question) it hits along the way.
+/// Runs `engine` until it reaches a terminal `Exit`, auto-answering every
+/// `Asked` (question) and rejecting `Parked` (approval) it hits along the way.
 /// `AwaitingClientTool` has no local consumer yet -- client-side tools are
 /// not part of this crate's two-tool slice (`tools.rs`) -- so it is reported
 /// as an error instead of hanging forever.
@@ -129,34 +130,15 @@ async fn drive_to_completion<M: Model>(
                      consumer has no client session to answer it"
                 );
             }
+            // Headless turns never wait on a human: `LocalTools::policy`
+            // returns `Allow`, and `ApprovalMode::Headless` makes the engine
+            // grant any `NeedsApproval` itself. Reaching `Parked` is a bug,
+            // so fail loudly instead of parking or auto-deciding here.
             Exit::Parked(approval) => {
-                let entries = read_log(log).await?;
-                let pending = entries.iter().find_map(|(_, event)| match event {
-                    Event::ApprovalRequested {
-                        call,
-                        approval: pending_approval,
-                        args_digest,
-                        ..
-                    } if *pending_approval == approval => Some((call.clone(), args_digest.clone())),
-                    _ => None,
-                });
-                let Some((call, args_digest)) = pending else {
-                    anyhow::bail!("no ApprovalRequested event found for {approval}");
-                };
-                log.append(&[Event::ApprovalDecided {
-                    call,
-                    approval,
-                    args_digest,
-                    approved: true,
-                    principal: principal.clone(),
-                }])
-                .await
-                .map_err(|_fenced| {
-                    anyhow::anyhow!(
-                        "the local dex-loop log's lease was superseded while auto-approving"
-                    )
-                })?;
-                ctx = rehydrate(thread.clone(), &read_log(log).await?);
+                anyhow::bail!(
+                    "headless turn parked on approval {approval}; Maestro turns run with no \
+                     approval step, so this must not happen"
+                );
             }
             // `LocalTools`' two-tool catalog (`tools.rs`) has no
             // `ExecutorKind::User` tool today, so the engine cannot actually
@@ -258,7 +240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drives_an_approval_and_a_question_to_completion_unattended() {
+    async fn drives_a_mutation_to_completion_with_no_approval() {
         let state_root = TempDir::new().expect("state tempdir");
         let workspace = TempDir::new().expect("workspace tempdir");
         std::fs::write(workspace.path().join("notes.txt"), "shopping list").expect("seed file");
@@ -268,7 +250,7 @@ mod tests {
                 name: ToolName::new(READ_FILE),
                 args: serde_json::json!({"path": "notes.txt"}),
             })],
-            // A mutation the consumer must auto-approve before it can run.
+            // A mutation: runs at once, with no approval step.
             vec![Ok(ModelChunk::ToolCall {
                 name: ToolName::new(WRITE_FILE),
                 args: serde_json::json!({"path": "out.txt", "content": "hello"}),
@@ -296,6 +278,17 @@ mod tests {
             std::fs::read_to_string(workspace.path().join("out.txt")).expect("read written file"),
             "hello"
         );
+        let log = LocalLog::acquire(state_root.path().join("log"), &thread())
+            .await
+            .expect("reopen log");
+        let events = read_log(&log).await.expect("read log");
+        assert!(
+            !events.iter().any(|(_, event)| matches!(
+                event,
+                Event::ApprovalRequested { .. } | Event::ApprovalDecided { .. }
+            )),
+            "a headless Maestro turn must not request or decide an approval"
+        );
     }
 
     #[tokio::test]
@@ -322,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_denied_write_reports_failure_through_the_tool_result() {
-        // `run_local_turn` always auto-*approves*; this proves the turn
+        // `run_local_turn` never asks for approval; this proves the turn
         // still reaches `Exit::Done` (not stuck) when the mutation itself
         // fails for a reason unrelated to approval, e.g. a path outside the
         // workspace root.

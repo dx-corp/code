@@ -1,9 +1,10 @@
 //! Runs one full `dex_loop::Engine` turn against `maestro_dex_host`'s local
 //! ports and a scripted fake model: a read tool that runs immediately, a
-//! mutation that parks for approval, an approval, and a final answer.
+//! mutation that runs straight through (headless: no approval step), and a
+//! final answer.
 //!
-//! This proves the kernel's park/approve/resume semantics run correctly
-//! against a purely local host — no database, no HTTP — before any of
+//! This proves a headless turn completes with no approval request against a
+//! purely local host — no database, no HTTP — before any of
 //! Maestro's real turn logic is touched. See
 //! `docs/design/maestro-on-dex-loop.md`.
 
@@ -11,9 +12,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use dex_loop::{
-    ApprovalId, Budget, CallId, CancellationToken, Context, Engine, Event, Exit, Lexicon, Log,
-    Model, ModelChunk, ModelError, Outcome, PrincipalId, ThreadId, ToolName, ToolSpec, TurnId,
-    args_digest,
+    Budget, CancellationToken, Context, Engine, Event, Exit, Lexicon, Log, Model, ModelChunk,
+    ModelError, Outcome, PrincipalId, ThreadId, ToolName, ToolSpec, TurnId,
 };
 use futures_util::Stream;
 use futures_util::stream;
@@ -73,7 +73,7 @@ fn alice() -> PrincipalId {
 }
 
 #[tokio::test]
-async fn read_then_approved_write_then_done() {
+async fn read_then_write_then_done_with_no_approval() {
     let state_root = TempDir::new().expect("state tempdir");
     let workspace = TempDir::new().expect("workspace tempdir");
     std::fs::write(workspace.path().join("notes.txt"), "shopping list").expect("seed file");
@@ -89,7 +89,7 @@ async fn read_then_approved_write_then_done() {
         attachments: Vec::new(),
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
-        approval_mode: dex_loop::ApprovalMode::Interactive,
+        approval_mode: dex_loop::ApprovalMode::Headless,
     }])
     .await
     .expect("append user message");
@@ -123,52 +123,8 @@ async fn read_then_approved_write_then_done() {
     let entries = log.read_all().await.expect("read for rehydrate");
     let mut ctx = dex_loop::rehydrate(thread(), &entries);
 
-    let exit = engine.run(&mut ctx, &cancel).await.expect("first run");
-    // The read call ran with no approval; the write call parked on one.
-    let expected_write_call = CallId::new("t1-2-0");
-    let expected_approval = ApprovalId::new(format!("approve-{expected_write_call}"));
-    assert_eq!(exit, Exit::Parked(expected_approval.clone()));
-
-    // The mutation has not run yet: no file, no approval requested for the
-    // read call.
-    assert!(!workspace.path().join("out.txt").exists());
-    let events: Vec<Event> = log
-        .read_all()
-        .await
-        .expect("read log")
-        .into_iter()
-        .map(|(_, event)| event)
-        .collect();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            Event::ToolFinished {
-                outcome: Outcome::Succeeded,
-                ..
-            }
-        )),
-        "the read call must have finished before the write call parked"
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested { call, .. } if call.as_str() != expected_write_call.as_str())),
-        "only the mutation should have requested approval"
-    );
-
-    log.append(&[Event::ApprovalDecided {
-        call: expected_write_call.clone(),
-        approval: expected_approval,
-        args_digest: args_digest(&write_args),
-        approved: true,
-        principal: alice(),
-    }])
-    .await
-    .expect("append approval decision");
-
-    let entries = log.read_all().await.expect("read for resume");
-    let mut ctx = dex_loop::rehydrate(thread(), &entries);
-    let exit = engine.run(&mut ctx, &cancel).await.expect("second run");
+    // One run: the mutation goes straight through, nothing parks.
+    let exit = engine.run(&mut ctx, &cancel).await.expect("run");
     assert_eq!(exit, Exit::Done);
 
     assert_eq!(
@@ -182,5 +138,25 @@ async fn read_then_approved_write_then_done() {
         .into_iter()
         .map(|(_, event)| event)
         .collect();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::ApprovalRequested { .. } | Event::ApprovalDecided { .. }
+        )),
+        "a headless turn must not request or decide any approval"
+    );
+    let finished = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::ToolFinished {
+                    outcome: Outcome::Succeeded,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(finished, 2, "the read and the write both ran to completion");
     assert!(matches!(events.last(), Some(Event::Final { text }) if text == "done"));
 }

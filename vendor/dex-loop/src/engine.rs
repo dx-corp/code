@@ -298,6 +298,7 @@ where
         };
 
         let mut filter = self.sanitizer.filter();
+        let mut thinking = Thinking::new(self.sanitizer.filter());
         let mut text = String::new();
         let mut calls = Vec::new();
         let mut failure = None;
@@ -339,7 +340,19 @@ where
                     },
                 };
                 match outcome {
+                    StreamStep::Chunk(Ok(ModelChunk::Thinking(delta))) => {
+                        if let Some(summary) = thinking.push(&delta, !text.is_empty()) {
+                            self.log
+                                .append(&[Event::ThinkingDelta { text: summary }])
+                                .await?;
+                        }
+                    }
                     StreamStep::Chunk(Ok(ModelChunk::Text(delta))) => {
+                        if let Some(summary) = thinking.flush() {
+                            self.log
+                                .append(&[Event::ThinkingDelta { text: summary }])
+                                .await?;
+                        }
                         let safe = filter.push(&delta);
                         if !safe.is_empty() {
                             text.push_str(&safe);
@@ -368,6 +381,11 @@ where
                 }
             }
             if failure.is_none() && !wall_exceeded {
+                if let Some(summary) = thinking.flush() {
+                    self.log
+                        .append(&[Event::ThinkingDelta { text: summary }])
+                        .await?;
+                }
                 let tail = filter.finish();
                 if !tail.is_empty() {
                     text.push_str(&tail);
@@ -1185,6 +1203,60 @@ fn search_spec() -> ToolSpec {
         core: true,
         governance: GovernanceClass::Plain,
         executor: ExecutorKind::InProcess,
+    }
+}
+
+/// Most thinking summary one attempt shows; the rest is dropped.
+const MAX_THINKING_BYTES: usize = 16 * 1024;
+/// Held thinking is written once it reaches this size (the first piece is
+/// written at once, so progress appears as soon as the model starts).
+const THINKING_FLUSH_BYTES: usize = 240;
+
+/// One attempt's thinking summary on its way to the log: sanitized like
+/// answer text, written in bounded pieces, and never after the answer began.
+struct Thinking<F> {
+    filter: F,
+    held: String,
+    written: usize,
+}
+
+impl<F: DeltaFilter> Thinking<F> {
+    fn new(filter: F) -> Self {
+        Self {
+            filter,
+            held: String::new(),
+            written: 0,
+        }
+    }
+
+    /// Takes a thinking delta; returns a piece to write now, if any.
+    fn push(&mut self, delta: &str, answering: bool) -> Option<String> {
+        if answering || self.written + self.held.len() >= MAX_THINKING_BYTES {
+            return None;
+        }
+        self.held.push_str(&self.filter.push(delta));
+        if self.written == 0 || self.held.len() >= THINKING_FLUSH_BYTES {
+            return self.flush();
+        }
+        None
+    }
+
+    /// Whatever is held, bounded, once.
+    fn flush(&mut self) -> Option<String> {
+        if self.held.is_empty() {
+            return None;
+        }
+        let room = MAX_THINKING_BYTES.saturating_sub(self.written);
+        let mut piece = std::mem::take(&mut self.held);
+        if piece.len() > room {
+            let mut end = room;
+            while !piece.is_char_boundary(end) {
+                end -= 1;
+            }
+            piece.truncate(end);
+        }
+        self.written += piece.len();
+        (!piece.is_empty()).then_some(piece)
     }
 }
 

@@ -283,13 +283,6 @@ impl Context {
         self.control = self.control.max(floor);
     }
 
-    /// Puts the control cursor back after the engine appended a control event
-    /// of its own, so a control event from another writer that landed just
-    /// before it is still read.
-    pub(crate) fn rewind_control(&mut self, to: Cursor) {
-        self.control = to;
-    }
-
     pub(crate) fn status(&self) -> Status {
         self.status
     }
@@ -439,7 +432,7 @@ impl Context {
                 self.flush_steers(cursor, *control_through);
             }
             // Text reaches history through `ModelStepCompleted`.
-            Event::TextDelta { .. } | Event::ToolProgress { .. } => {}
+            Event::TextDelta { .. } | Event::ThinkingDelta { .. } | Event::ToolProgress { .. } => {}
             Event::Usage(usage) => self.usage += *usage,
             Event::ModelStepCompleted {
                 text,

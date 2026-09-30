@@ -425,6 +425,13 @@ pub enum Event {
     TextDelta {
         text: String,
     },
+    /// Customer-safe summary of the model's thinking in the current attempt
+    /// (through the `Sanitizer`), for surfaces to show as live progress until
+    /// the answer starts. Never part of the answer or of model history; the
+    /// engine bounds how much one attempt emits.
+    ThinkingDelta {
+        text: String,
+    },
     Usage(Usage),
     /// The commit point of a model attempt: its full text and every proposed
     /// call with full arguments, appended before any policy check or

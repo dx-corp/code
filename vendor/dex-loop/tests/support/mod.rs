@@ -264,6 +264,10 @@ pub fn text(text: &str) -> Result<ModelChunk, ModelError> {
     Ok(ModelChunk::Text(text.into()))
 }
 
+pub fn thinking(text: &str) -> Result<ModelChunk, ModelError> {
+    Ok(ModelChunk::Thinking(text.into()))
+}
+
 pub fn call(name: &str, args: serde_json::Value) -> Result<ModelChunk, ModelError> {
     Ok(ModelChunk::ToolCall {
         name: ToolName::new(name),
@@ -734,6 +738,7 @@ pub fn shape(event: &Event) -> String {
         Event::Answer { call, text, .. } => format!("answer:{call}:{text}"),
         Event::StepStarted { step, .. } => format!("step:{step}"),
         Event::TextDelta { text } => format!("delta:{text}"),
+        Event::ThinkingDelta { text } => format!("thinking:{text}"),
         Event::Usage(usage) => format!("usage:{}", usage.tokens()),
         Event::ModelStepCompleted { text, calls, .. } => {
             format!("completed:{text}:[{}]", ids(calls))

@@ -2,7 +2,8 @@
 //!
 //! Two tools, standing in for `local-host-rs`'s much larger registry
 //! (`packages/local-host-rs/src/tools/`): one read (`fs.read_file`) and one
-//! mutation that needs approval (`fs.write_file`). A real cutover ports the
+//! mutation in the `Approval` governance class (`fs.write_file`), which the
+//! headless host allows without a prompt. A real cutover ports the
 //! rest of that registry the same way — each tool becomes a `ToolSpec` plus
 //! a `run` arm, and `NativeHost::requires_approval`'s per-call decision
 //! becomes this module's `policy` — not a rewrite of the tools themselves.
@@ -11,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dex_loop::{
-    ApprovalId, CancellationToken, Context, ExecutorKind, GovernanceClass, PrincipalId,
-    ProposedCall, ThreadId, ToolName, ToolResult, ToolSpec, Tools, Verdict,
+    CancellationToken, Context, ExecutorKind, GovernanceClass, PrincipalId, ProposedCall, ThreadId,
+    ToolName, ToolResult, ToolSpec, Tools, Verdict,
 };
 use serde_json::Value;
 
@@ -134,13 +135,6 @@ async fn write_file(root: &Path, args: &Value) -> ToolResult {
     }
 }
 
-fn approval_summary(call: &ProposedCall) -> String {
-    match call.args.get("path").and_then(Value::as_str) {
-        Some(path) => format!("Write to {path}"),
-        None => "Write to a workspace file".to_owned(),
-    }
-}
-
 /// The `Tools` port over the workspace filesystem at `root`.
 #[derive(Clone)]
 pub struct LocalTools {
@@ -175,13 +169,13 @@ impl Tools for LocalTools {
     }
 
     async fn policy(&self, _ctx: &Context, call: &ProposedCall) -> Verdict {
-        match self.spec(&call.tool).map(|spec| spec.governance) {
-            Some(GovernanceClass::Approval) => Verdict::NeedsApproval {
-                approval: ApprovalId::new(format!("approve-{}", call.id)),
-                summary: approval_summary(call),
-            },
-            _ => Verdict::Allow,
-        }
+        // Maestro turns are headless: no human approves a tool call, so this
+        // host never returns `NeedsApproval`. An `Approval`-class tool (the
+        // mutation `fs.write_file`) is allowed outright; its
+        // `ToolStarted`/`ToolFinished` pair in the log is the audit record.
+        // A hard deny would be `Verdict::Deny`; no local tool has one today.
+        let _ = call;
+        Verdict::Allow
     }
 
     async fn run(
@@ -275,7 +269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_file_requires_approval_and_read_file_does_not() {
+    async fn every_tool_is_allowed_because_turns_are_headless() {
         let tools = LocalTools::new(".");
         let read_verdict = tools
             .policy(
@@ -290,7 +284,7 @@ mod tests {
                 &call(WRITE_FILE, serde_json::json!({"path": "a", "content": "x"})),
             )
             .await;
-        assert!(matches!(write_verdict, Verdict::NeedsApproval { .. }));
+        assert_eq!(write_verdict, Verdict::Allow);
     }
 
     /// `Tools::policy` here does not read `ctx`, so an empty rehydrated
