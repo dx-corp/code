@@ -171,11 +171,19 @@ pub struct Usage {
     /// The part of `input_tokens` served from the prompt cache. Zero on rows
     /// written before the field existed, and for providers that do not
     /// report it.
-    #[serde(default)]
+    #[serde(default, alias = "cache_read_tokens", skip_serializing_if = "is_zero")]
     pub cache_read_input_tokens: u64,
     /// The part of `input_tokens` written to the prompt cache. Same default.
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "cache_creation_tokens",
+        skip_serializing_if = "is_zero"
+    )]
     pub cache_creation_input_tokens: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Usage {
@@ -359,6 +367,100 @@ impl ErrorCode {
         match self {
             ErrorCode::BudgetExhausted => "budget_exhausted",
             ErrorCode::ModelFailed => "model_failed",
+        }
+    }
+}
+
+/// A content-free failure class supplied by the typed model adapter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorClass {
+    /// The turn hit its step, token, cost or wall budget.
+    BudgetExhausted,
+    /// The stream ended before the response completed.
+    Truncated,
+    /// The provider ended the response early (for example the output token
+    /// limit).
+    Incomplete,
+    /// The model proposed a tool call whose arguments were not a JSON object.
+    MalformedToolCall,
+    /// The response held neither text nor tool calls.
+    EmptyCompletion,
+    /// The gateway could not be reached or the connection broke.
+    Transport,
+    /// The provider or gateway throttled the request.
+    RateLimited,
+    /// The provider or gateway reported itself unavailable or overloaded.
+    Unavailable,
+    /// The provider or a safety filter refused to answer.
+    Refusal,
+    /// The service token for the gateway could not be minted.
+    Auth,
+    /// The wire broke the SSE or Responses event contract.
+    Protocol,
+    /// Stored history could not be loaded for the request.
+    Resolve,
+    /// The host could not prepare the request.
+    Host,
+    /// Any other gateway or provider rejection.
+    Rejected,
+    /// An error the classifier does not recognise. Old and new codes land
+    /// here rather than failing.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl ErrorClass {
+    /// The stable label stored in `dex_turn_outcomes.error_class`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorClass::BudgetExhausted => "budget_exhausted",
+            ErrorClass::Truncated => "truncated",
+            ErrorClass::Incomplete => "incomplete",
+            ErrorClass::MalformedToolCall => "malformed_tool_call",
+            ErrorClass::EmptyCompletion => "empty_completion",
+            ErrorClass::Transport => "transport",
+            ErrorClass::RateLimited => "rate_limited",
+            ErrorClass::Unavailable => "unavailable",
+            ErrorClass::Refusal => "refusal",
+            ErrorClass::Auth => "auth",
+            ErrorClass::Protocol => "protocol",
+            ErrorClass::Resolve => "resolve",
+            ErrorClass::Host => "host",
+            ErrorClass::Rejected => "rejected",
+            ErrorClass::Unknown => "unknown",
+        }
+    }
+
+    /// Explicit wire-code boundary; human-readable details are never classified.
+    pub fn of_gateway_code(code: &str) -> Self {
+        match code {
+            "rate_limit_error"
+            | "rate_limit_exceeded"
+            | "resource_exhausted"
+            | "quota_exceeded"
+            | "too_many_requests" => Self::RateLimited,
+            "refusal"
+            | "content_filter"
+            | "content_filter_error"
+            | "safety"
+            | "policy_violation" => Self::Refusal,
+            "upstream_unavailable"
+            | "overloaded_error"
+            | "unavailable"
+            | "api_error"
+            | "internal_error"
+            | "server_error"
+            | "timeout" => Self::Unavailable,
+            "authentication_error" | "unauthorized" => Self::Auth,
+            "invalid_request"
+            | "invalid_request_error"
+            | "bad_request"
+            | "permission_error"
+            | "forbidden"
+            | "not_found" => Self::Rejected,
+            _ => Self::Unknown,
         }
     }
 }
@@ -628,6 +730,9 @@ pub enum Event {
     Error {
         code: ErrorCode,
         message: String,
+        /// Typed adapter classification; old rows and old readers remain compatible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        class: Option<ErrorClass>,
     },
     Interrupted,
 }
@@ -866,6 +971,7 @@ mod tests {
                 receipt: None,
             },
             Event::Error {
+                class: None,
                 code: ErrorCode::BudgetExhausted,
                 message: "steps".into(),
             },
@@ -1107,6 +1213,55 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Event>(value).expect("decode"),
             usage
+        );
+    }
+    #[test]
+    fn usage_rows_written_before_the_cache_split_still_decode() {
+        let old: Usage =
+            serde_json::from_str(r#"{"input_tokens":5,"output_tokens":2,"cost_micros":9}"#)
+                .expect("old row decodes");
+        assert_eq!(
+            old,
+            Usage {
+                input_tokens: 5,
+                output_tokens: 2,
+                cost_micros: 9,
+                ..Usage::default()
+            }
+        );
+        // A zero split is not written, so unsplit providers keep their shape.
+        let json = serde_json::to_value(old).expect("encodes");
+        assert_eq!(
+            json,
+            serde_json::json!({"input_tokens":5,"output_tokens":2,"cost_micros":9})
+        );
+        let split = Usage {
+            cache_read_input_tokens: 3,
+            ..old
+        };
+        let back: Usage =
+            serde_json::from_value(serde_json::to_value(split).expect("encodes")).expect("decodes");
+        assert_eq!(back, split);
+    }
+
+    #[test]
+    fn old_error_rows_do_not_classify_human_readable_prose() {
+        let old = serde_json::json!({"type":"error", "code":"model_failed", "message":"rate_limit_error: arbitrary prose"});
+        assert!(matches!(
+            serde_json::from_value::<Event>(old).unwrap(),
+            Event::Error { class: None, .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&ErrorCode::ModelFailed).unwrap(),
+            r#""model_failed""#
+        );
+        assert_eq!(
+            ErrorClass::of_gateway_code("not_a_rate_limit_error"),
+            ErrorClass::Unknown
+        );
+        assert_eq!(
+            ErrorClass::of_gateway_code("rate_limit_error"),
+            ErrorClass::RateLimited
         );
     }
 }

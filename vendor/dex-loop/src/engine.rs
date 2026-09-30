@@ -23,7 +23,6 @@ use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
-use futures_util::stream::FuturesUnordered;
 use tokio_util::sync::CancellationToken;
 
 use crate::budget::{Budget, BudgetAxis};
@@ -46,6 +45,7 @@ const NOT_RUN_INTERRUPTED: &str = "not run: the turn was interrupted";
 const READ_INTERRUPTED: &str = "not completed: the read was interrupted; it is safe to try again";
 const UNKNOWN_INTERRUPTED: &str =
     "outcome unknown: the turn was interrupted before the result was recorded";
+const NOT_RUN_WALL: &str = "not executed: the time limit was reached before this call started";
 /// A call that already started (its tool vanished from the catalog, or the
 /// ledger still shows it running) must never be told "unknown tool" or shown
 /// a `Running` outcome that nothing will update: both invite the model to
@@ -144,7 +144,7 @@ type PrefetchFuture<'e> = Pin<Box<dyn Future<Output = (usize, ToolResult)> + Sen
 struct Reads<'e> {
     /// Still running. Each carries its own deadline, the one a wave would
     /// have given it.
-    pending: FuturesUnordered<PrefetchFuture<'e>>,
+    pending: HashMap<usize, PrefetchFuture<'e>>,
     /// Returned before the step committed.
     done: HashMap<usize, ToolResult>,
     completion_order: VecDeque<usize>,
@@ -170,7 +170,7 @@ struct ReadsHandle<'e>(Arc<Mutex<Reads<'e>>>);
 impl<'e> ReadsHandle<'e> {
     fn new() -> Self {
         Self(Arc::new(Mutex::new(Reads {
-            pending: FuturesUnordered::new(),
+            pending: HashMap::new(),
             done: HashMap::new(),
             completion_order: VecDeque::new(),
         })))
@@ -181,8 +181,14 @@ impl<'e> ReadsHandle<'e> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn push(&self, read: PrefetchFuture<'e>) {
-        self.lock().pending.push(read);
+    fn push(&self, index: usize, read: PrefetchFuture<'e>) {
+        self.lock().pending.insert(index, read);
+    }
+
+    fn discard(&self, index: usize) {
+        let mut reads = self.lock();
+        reads.pending.remove(&index);
+        reads.done.remove(&index);
     }
 
     fn has_pending(&self) -> bool {
@@ -193,28 +199,52 @@ impl<'e> ReadsHandle<'e> {
         self.lock().done.remove(&index)
     }
 
-    fn take_pending(&self) -> FuturesUnordered<PrefetchFuture<'e>> {
-        std::mem::take(&mut self.lock().pending)
+    fn take_pending(&self, wave: &[usize]) -> Vec<(usize, PrefetchFuture<'e>)> {
+        let mut reads = self.lock();
+        wave.iter()
+            .filter_map(|index| reads.pending.remove(index).map(|future| (*index, future)))
+            .collect()
     }
 
     /// The next read to return, if any is running. Cancel-safe: dropping it
     /// loses nothing, the read stays in the set.
     async fn next_done(&self) -> Option<(usize, ToolResult)> {
-        std::future::poll_fn(|cx| self.lock().pending.poll_next_unpin(cx)).await
+        std::future::poll_fn(|cx| {
+            let mut reads = self.lock();
+            let ready =
+                reads
+                    .pending
+                    .values_mut()
+                    .find_map(|future| match future.as_mut().poll(cx) {
+                        Poll::Ready(result) => Some(result),
+                        Poll::Pending => None,
+                    });
+            if let Some((index, result)) = ready {
+                reads.pending.remove(&index);
+                return Poll::Ready(Some((index, result)));
+            }
+            if reads.pending.is_empty() {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
     }
 
-    /// Drain peers completed during a log append before polling remaining reads.
+    /// Completed results first, in completion order, so peers that finished
+    /// during a log append are drained before polling the reads still running.
+    /// A wave consumes each completed result once.
     async fn next_completed(&self) -> Option<(usize, ToolResult)> {
-        std::future::poll_fn(|cx| {
+        {
             let mut reads = self.lock();
             while let Some(index) = reads.completion_order.pop_front() {
                 if let Some(result) = reads.done.remove(&index) {
-                    return Poll::Ready(Some((index, result)));
+                    return Some((index, result));
                 }
             }
-            reads.pending.poll_next_unpin(cx)
-        })
-        .await
+        }
+        self.next_done().await
     }
 
     /// Awaits `work` while polling the running reads, so a read suspended in
@@ -227,7 +257,16 @@ impl<'e> ReadsHandle<'e> {
                 return Poll::Ready(output);
             }
             let mut reads = self.lock();
-            while let Poll::Ready(Some((index, result))) = reads.pending.poll_next_unpin(cx) {
+            let ready: Vec<_> = reads
+                .pending
+                .values_mut()
+                .filter_map(|future| match future.as_mut().poll(cx) {
+                    Poll::Ready(result) => Some(result),
+                    Poll::Pending => None,
+                })
+                .collect();
+            for (index, result) in ready {
+                reads.pending.remove(&index);
                 reads.record_done(index, result);
             }
             Poll::Pending
@@ -388,11 +427,7 @@ where
                 return self.interrupt(ctx, &prefetch).await;
             }
             if ctx.open_step().is_some() {
-                let reads = prefetch.reads.clone();
-                if let Some(exit) = reads
-                    .drive(self.dispatch(ctx, cancel, started, &mut prefetch))
-                    .await?
-                {
+                if let Some(exit) = self.dispatch(ctx, cancel, started, &mut prefetch).await? {
                     return Ok(exit);
                 }
                 continue;
@@ -405,6 +440,7 @@ where
                 self.emit(
                     ctx,
                     vec![Event::Error {
+                        class: None,
                         code: ErrorCode::BudgetExhausted,
                         message,
                     }],
@@ -503,21 +539,20 @@ where
             // not only against `cancel`.
             loop {
                 let remaining = self.budget.wall.saturating_sub(started.elapsed());
-                // `FuturesUnordered::next` on an empty set resolves at once
-                // with `None`; the guard keeps it out of the race until a
-                // read is actually running.
+                // Only pending reads participate in the stream race;
+                // completed results remain available for authorized adoption.
                 let has_pending = prefetch.reads.has_pending();
                 let outcome = tokio::select! {
                     biased;
                     () = cancel.cancelled() => StreamStep::Cancelled,
                     () = tokio::time::sleep(remaining) => StreamStep::WallExceeded,
-                    item = stream.next() => match item {
-                        Some(chunk) => StreamStep::Chunk(chunk),
-                        None => StreamStep::Ended,
-                    },
                     done = prefetch.reads.next_done(), if has_pending => match done {
                         Some((index, result)) => StreamStep::Prefetched(index, result),
                         None => continue,
+                    },
+                    item = stream.next() => match item {
+                        Some(chunk) => StreamStep::Chunk(chunk),
+                        None => StreamStep::Ended,
                     },
                 };
                 match outcome {
@@ -583,7 +618,7 @@ where
                         prefetch.reads.drive(self.log.append(&event)).await?;
                     }
                     StreamStep::Chunk(Err(error)) => {
-                        failure = Some(error.message);
+                        failure = Some(error);
                         break;
                     }
                     StreamStep::Ended | StreamStep::Cancelled => break,
@@ -620,6 +655,7 @@ where
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
             events.push(Event::Error {
+                class: Some(crate::ErrorClass::BudgetExhausted),
                 code: ErrorCode::BudgetExhausted,
                 message,
             });
@@ -652,12 +688,13 @@ where
             self.emit(ctx, events).await?;
             return Ok(Some(Exit::Done));
         }
-        if let Some(message) = failure {
+        if let Some(error) = failure {
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
             events.push(Event::Error {
+                class: Some(error.class()),
                 code: ErrorCode::ModelFailed,
-                message,
+                message: error.message,
             });
             self.emit(ctx, events).await?;
             return Ok(Some(Exit::Failed));
@@ -685,6 +722,7 @@ where
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
             events.push(Event::Error {
+                class: Some(crate::ErrorClass::BudgetExhausted),
                 code: ErrorCode::BudgetExhausted,
                 message,
             });
@@ -750,10 +788,24 @@ where
             return Ok(());
         };
         let eligible = spec.read_only
+            && !ctx.client_tools().iter().any(|tool| tool.name == call.tool)
             && !matches!(spec.executor, ExecutorKind::User | ExecutorKind::Client)
             && validate_args(&spec, &call.args).is_ok()
             && !ctx.has_uncertain_call(call);
-        if !eligible || self.tools.policy(ctx, call).await != Verdict::Allow {
+        if !eligible {
+            return Ok(());
+        }
+        let deadline = tokio::time::Instant::now() + self.call_deadline(run_started);
+        let verdict = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Ok(()),
+            () = tokio::time::sleep_until(deadline) => return Ok(()),
+            verdict = self.tools.policy(ctx, call) => verdict,
+        };
+        if verdict != Verdict::Allow
+            || cancel.is_cancelled()
+            || tokio::time::Instant::now() >= deadline
+        {
             return Ok(());
         }
         // Appended without `ctx.observe`: the stream still borrows `ctx`.
@@ -770,17 +822,22 @@ where
         };
         prefetch.unobserved.push((cursor, event));
         prefetch.started.insert(index);
-        let deadline = self.call_deadline(run_started);
         let thread = ctx.thread().clone();
         let call = call.clone();
-        prefetch.reads.push(Box::pin(async move {
-            let run = self.tools.run(&thread, &call, cancel);
-            let result = match tokio::time::timeout(deadline, run).await {
-                Ok(result) => result,
-                Err(_elapsed) => ToolResult::error(DEADLINE_READ),
-            };
-            (index, result)
-        }));
+        prefetch.reads.push(
+            index,
+            Box::pin(async move {
+                if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
+                    return (index, ToolResult::error(DEADLINE_READ));
+                }
+                let run = self.tools.run(&thread, &call, cancel);
+                let result = match tokio::time::timeout_at(deadline, run).await {
+                    Ok(result) => result,
+                    Err(_elapsed) => ToolResult::error(DEADLINE_READ),
+                };
+                (index, result)
+            }),
+        );
         Ok(())
     }
 
@@ -819,6 +876,9 @@ where
             // Interrupt stops at the next effect boundary.
             if cancel.is_cancelled() {
                 break;
+            }
+            if let Some(exit) = self.stop_expired_dispatch(ctx, run_started).await? {
+                return Ok(Some(exit));
             }
             let state = ctx
                 .open_step()
@@ -888,15 +948,12 @@ where
                     ..
                 }) => Some(decision),
                 Some(CallState::Started) => {
-                    // Started before a restart and never finished. Reads run
-                    // again; mutations resolve through the ledger, which
-                    // never dispatches a claimed call a second time.
                     if call.tool.as_str() == TOOLS_SEARCH {
                         self.search_tools(ctx, call).await?;
                         continue;
                     }
                     match self.offered_spec(ctx, &call.tool) {
-                        Some(spec) if spec.read_only => wave.push(index),
+                        Some(spec) if spec.read_only => None,
                         Some(_) => {
                             if self
                                 .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
@@ -905,16 +962,14 @@ where
                                 break;
                             }
                             self.run_mutation(ctx, call, cancel, run_started).await?;
+                            continue;
                         }
-                        // The tool is no longer offered (deploy, grant
-                        // revoke), but this call already started: it may
-                        // have run. Resolve through the ledger instead of
-                        // telling the model to retry with a different tool,
-                        // which would dispatch a new call id for the same
-                        // mutation.
-                        None => self.resolve_started(ctx, call).await?,
+                        None => {
+                            prefetch.reads.discard(index);
+                            self.resolve_started(ctx, call).await?;
+                            continue;
+                        }
                     }
-                    continue;
                 }
                 Some(CallState::Todo) => None,
             };
@@ -931,6 +986,7 @@ where
             // executor: the model sees why and can call again. (A call the
             // stream already started passed this check before it ran.)
             if let Err(reason) = validate_args(&spec, &call.args) {
+                prefetch.reads.discard(index);
                 self.finish(ctx, call, ToolResult::error(reason)).await?;
                 continue;
             }
@@ -963,8 +1019,20 @@ where
             }
             // Current policy first, even for a decided call: a revoked
             // grant or changed policy denies it.
-            let verdict = match self.tools.policy(ctx, call).await {
+            let remaining = self.budget.wall.saturating_sub(run_started.elapsed());
+            let current_policy = tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(remaining) => {
+                    prefetch.reads.discard(index);
+                    self.finish(ctx, call, ToolResult::error(DEADLINE_READ)).await?;
+                    break;
+                }
+                verdict = self.tools.policy(ctx, call) => verdict,
+            };
+            let verdict = match current_policy {
                 Verdict::Deny(reason) => {
+                    prefetch.reads.discard(index);
                     self.finish(ctx, call, ToolResult::error(format!("denied: {reason}")))
                         .await?;
                     continue;
@@ -1059,7 +1127,73 @@ where
         if cancel.is_cancelled() {
             return self.interrupt(ctx, prefetch).await.map(Some);
         }
-        Ok(None)
+        self.stop_expired_dispatch(ctx, run_started).await
+    }
+
+    /// Seal the open step after its wall budget: never dispatch a fresh call
+    /// through a zero-duration timeout, which polls its inner future first.
+    /// Previously started effects still resolve through their durable owner.
+    async fn stop_expired_dispatch(
+        &self,
+        ctx: &mut Context,
+        run_started: Instant,
+    ) -> Result<Option<Exit>, Fenced> {
+        if run_started.elapsed() < self.budget.wall {
+            return Ok(None);
+        }
+        let pending: Vec<_> = ctx
+            .open_step()
+            .map(|step| {
+                step.calls
+                    .iter()
+                    .cloned()
+                    .zip(step.states.iter().cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (call, state) in pending {
+            match state {
+                CallState::Done(_) => {}
+                CallState::Started
+                    if self
+                        .offered_spec(ctx, &call.tool)
+                        .is_some_and(|spec| spec.read_only) =>
+                {
+                    self.finish(ctx, &call, ToolResult::error(DEADLINE_READ))
+                        .await?;
+                }
+                CallState::Started => self.resolve_started(ctx, &call).await?,
+                CallState::AwaitingClient {
+                    result: Some(result),
+                    ..
+                } => {
+                    self.finish_client_result(ctx, &call, result).await?;
+                }
+                CallState::AwaitingClient { result: None, .. } => {
+                    self.timeout_client_call(ctx, &call).await?;
+                }
+                CallState::Asked {
+                    answer: Some(answer),
+                } => {
+                    self.finish(ctx, &call, ToolResult::text(answer)).await?;
+                }
+                _ => {
+                    self.finish(ctx, &call, ToolResult::error(NOT_RUN_WALL))
+                        .await?
+                }
+            }
+        }
+        let message = self.budget_message(ctx, BudgetAxis::Wall);
+        self.emit(
+            ctx,
+            vec![Event::Error {
+                code: ErrorCode::BudgetExhausted,
+                message,
+                class: Some(crate::ErrorClass::BudgetExhausted),
+            }],
+        )
+        .await?;
+        Ok(Some(Exit::Failed))
     }
 
     /// Refusal does not claim or dispatch a second effect. Reads remain safe
@@ -1172,7 +1306,7 @@ where
             prefetch,
         )
         .await?;
-        Ok(cancel.is_cancelled())
+        Ok(cancel.is_cancelled() || run_started.elapsed() >= self.budget.wall)
     }
 
     /// Runs read-only calls concurrently. Each `ToolFinished` is appended as
@@ -1189,7 +1323,7 @@ where
         run_started: Instant,
         prefetch: &mut Prefetch<'e>,
     ) -> Result<(), Fenced> {
-        if wave.is_empty() || cancel.is_cancelled() {
+        if wave.is_empty() || cancel.is_cancelled() || run_started.elapsed() >= self.budget.wall {
             return Ok(());
         }
         let starts: Vec<Event> = wave
@@ -1201,36 +1335,44 @@ where
                 Some(started(call, &spec))
             })
             .collect();
+        let deadline = tokio::time::Instant::now() + self.call_deadline(run_started);
         self.emit(ctx, starts).await?;
         let thread = ctx.thread().clone();
         // One deadline for the wave: its reads run concurrently, so each
         // gets the full time. A read that overruns is dropped and finished
         // `Failed`; a read has no effect to wait for, so retrying is safe.
-        let deadline = self.call_deadline(run_started);
         let running = ReadsHandle::new();
         for &index in &wave {
             if let Some(result) = prefetch.reads.take_done(index) {
-                self.finish(ctx, &calls[index], result).await?;
+                running
+                    .drive(self.finish(ctx, &calls[index], result))
+                    .await?;
                 continue;
             }
             if prefetch.started.contains(&index) {
                 // Still running from the stream; it arrives through
-                // `prefetch.pending` below.
+                // the indexed pending wave below.
                 continue;
             }
             let call = calls[index].clone();
             let thread = thread.clone();
-            running.push(Box::pin(async move {
-                let run = self.tools.run(&thread, &call, cancel);
-                let result = match tokio::time::timeout(deadline, run).await {
-                    Ok(result) => result,
-                    Err(_elapsed) => ToolResult::error(DEADLINE_READ),
-                };
-                (index, result)
-            }));
+            running.push(
+                index,
+                Box::pin(async move {
+                    if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
+                        return (index, ToolResult::error(DEADLINE_READ));
+                    }
+                    let run = self.tools.run(&thread, &call, cancel);
+                    let result = match tokio::time::timeout_at(deadline, run).await {
+                        Ok(result) => result,
+                        Err(_elapsed) => ToolResult::error(DEADLINE_READ),
+                    };
+                    (index, result)
+                }),
+            );
         }
-        for future in prefetch.reads.take_pending() {
-            running.push(future);
+        for (index, future) in prefetch.reads.take_pending(&wave) {
+            running.push(index, future);
         }
         // On `Fenced` the remaining reads are dropped: a stale owner must not
         // append, and the new owner runs them again.
@@ -1241,7 +1383,7 @@ where
                 .is_some_and(|state| !matches!(state, CallState::Done(_)));
             // A prefetched read whose call `dispatch` already finished
             // (policy denied it on re-check) has nothing left to report.
-            if !still_open || !(wave.contains(&index) || prefetch.started.contains(&index)) {
+            if !still_open || !wave.contains(&index) {
                 continue;
             }
             running
@@ -1273,23 +1415,59 @@ where
             // never as "unknown tool".
             return self.resolve_started(ctx, call).await;
         };
+        let already_started = ctx.open_step().is_some_and(|step| {
+            step.calls
+                .iter()
+                .zip(&step.states)
+                .any(|(proposal, state)| {
+                    proposal.id == call.id && matches!(state, CallState::Started)
+                })
+        });
+        if self.call_deadline(run_started).is_zero() {
+            return if already_started {
+                self.resolve_started(ctx, call).await
+            } else {
+                self.finish(ctx, call, ToolResult::error(NOT_RUN_WALL))
+                    .await
+            };
+        }
         match self.effects.claim(call).await? {
             Claim::Existing(result) => {
                 let result = self.settle_claim(&call.id, result).await?;
                 self.finish(ctx, call, result).await
             }
             Claim::Granted => {
+                // Claim persistence can consume the remaining wall. A fresh
+                // claim is known not executed; a historical Started call may
+                // already have taken effect and must remain Unknown.
+                if self.call_deadline(run_started).is_zero() {
+                    let result = if already_started {
+                        ToolResult::unknown(UNKNOWN_NO_RETRY)
+                    } else {
+                        ToolResult::error(NOT_RUN_WALL)
+                    };
+                    self.effects.record(&call.id, &result).await?;
+                    return self.finish(ctx, call, result).await;
+                }
                 self.emit(ctx, vec![started(call, &spec)]).await?;
                 // A mutation that overruns its deadline is dropped, not
                 // cancelled: the effect may still land. `Unknown` is recorded
                 // under the claim, so a later resume of this call adopts it
-                // instead of dispatching the mutation a second time. An
-                // interrupt only fires `cancel`; the run is still awaited.
-                let run = self.tools.run(ctx.thread(), call, cancel);
-                let result = match tokio::time::timeout(self.call_deadline(run_started), run).await
-                {
-                    Ok(result) => result,
-                    Err(_elapsed) => ToolResult::unknown(DEADLINE_MUTATION),
+                // instead of dispatching the mutation a second time. Interrupts
+                // reach cancellable process tools; settlement is still awaited.
+                let deadline = self.call_deadline(run_started);
+                let result = if deadline.is_zero() {
+                    if already_started {
+                        ToolResult::unknown(UNKNOWN_NO_RETRY)
+                    } else {
+                        ToolResult::error(NOT_RUN_WALL)
+                    }
+                } else {
+                    let run = self.tools.run(ctx.thread(), call, cancel);
+                    match tokio::time::timeout(deadline, run).await {
+                        Ok(result) => result,
+                        Err(_elapsed) => ToolResult::unknown(DEADLINE_MUTATION),
+                    }
                 };
                 self.effects.record(&call.id, &result).await?;
                 self.finish(ctx, call, result).await
@@ -1711,17 +1889,10 @@ fn non_empty_str<'a>(call: &'a ProposedCall, key: &str) -> Option<&'a str> {
         .filter(|value| !value.trim().is_empty())
 }
 
-/// `args` against `spec.schema`. A schema that is absent, not an object, or
-/// does not compile validates nothing (the executor still checks what it
-/// needs); a schema violation names the first error so the model can call
-/// again with arguments that fit.
+/// Validate boolean and object JSON schemas; malformed schemas fail closed.
 fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
-    if !spec.schema.is_object() {
-        return Ok(());
-    }
-    let Ok(validator) = jsonschema::validator_for(&spec.schema) else {
-        return Ok(());
-    };
+    let validator = jsonschema::validator_for(&spec.schema)
+        .map_err(|error| format!("invalid tool schema: {error}"))?;
     match validator.iter_errors(args).next() {
         None => Ok(()),
         Some(error) => Err(format!("invalid arguments: {error}")),

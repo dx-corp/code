@@ -53,6 +53,7 @@ impl Model for ScriptedModel {
             .pop_front()
             .unwrap_or_else(|| {
                 vec![Err(ModelError {
+                    class: dex_loop::ErrorClass::Unknown,
                     message: "no script left".into(),
                 })]
             });

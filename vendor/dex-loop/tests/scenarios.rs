@@ -257,13 +257,14 @@ async fn an_approval_class_call_is_granted_at_once_recorded_and_runs_in_order() 
         tools.run_of(&call_id("t1", 1, 1)).args,
         json!({"key": "w", "to": "ops@example.com"})
     );
-    // Policy ran once per call: nothing resumed, so nothing re-checked.
+    // Policy ran once per call, plus once more for the read prefetched while
+    // the model streamed: adoption re-checks it under current authority.
     let checks: Vec<String> = tools
         .policy_checks()
         .into_iter()
         .map(|(call, _)| call)
         .collect();
-    assert_eq!(checks, strings(&["t1-1-0", "t1-1-1", "t1-1-2"]));
+    assert_eq!(checks, strings(&["t1-1-0", "t1-1-0", "t1-1-1", "t1-1-2"]));
     assert_eq!(
         view(&model.seen()[1])[2..],
         strings(&[
@@ -495,8 +496,10 @@ async fn steer_from_another_principal_is_checked_under_that_principal() {
             "user:check prod",
             "step:1",
             "started:t1-1-0",
-            "completed::[t1-1-0]",
+            // The read is prefetched while the model streams, so the steer it
+            // triggers lands before the model step completes.
             "steer:also update staging",
+            "completed::[t1-1-0]",
             "finished:t1-1-0:ok",
             "step:2",
             "completed::[t1-2-0]",
@@ -519,6 +522,8 @@ async fn steer_from_another_principal_is_checked_under_that_principal() {
     assert_eq!(
         tools.policy_checks(),
         vec![
+            // Prefetched while streaming, then re-checked at adoption.
+            ("t1-1-0".to_owned(), "alice".to_owned()),
             ("t1-1-0".to_owned(), "alice".to_owned()),
             ("t1-2-0".to_owned(), "bob".to_owned()),
         ]
@@ -1002,6 +1007,7 @@ async fn usage_reported_before_a_failed_attempt_still_lands_with_the_abandon() {
         FakeModel::new(vec![vec![
             usage(10, 5, 100),
             Err(ModelError {
+                class: dex_loop::ErrorClass::Unknown,
                 message: "boom".into(),
             }),
         ]]),
@@ -1027,6 +1033,7 @@ async fn a_stream_that_fails_after_text_keeps_the_answer_marked_cut_off() {
             text("nearly done"),
             usage(10, 5, 100),
             Err(ModelError {
+                class: dex_loop::ErrorClass::Unknown,
                 message: "provider_stream_timeout: provider stream timed out".into(),
             }),
         ]]),

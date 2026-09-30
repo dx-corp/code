@@ -317,6 +317,7 @@ async fn a_failed_stream_closes_the_reads_it_started_and_records_no_result() {
     let model = FakeModel::new(vec![vec![
         call("search", json!({"key": "a"})),
         Err(ModelError {
+            class: dex_loop::ErrorClass::Unknown,
             message: "connection reset".into(),
         }),
     ]])
@@ -354,6 +355,7 @@ async fn a_new_turn_after_a_failed_stream_starts_its_own_calls_once() {
         vec![
             call("search", json!({"key": "a"})),
             Err(ModelError {
+                class: dex_loop::ErrorClass::Unknown,
                 message: "connection reset".into(),
             }),
         ],

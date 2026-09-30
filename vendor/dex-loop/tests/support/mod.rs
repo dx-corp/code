@@ -331,6 +331,7 @@ impl Model for FakeModel {
             .push(tools.iter().map(|spec| spec.name.to_string()).collect());
         let script = state.scripts.pop_front().unwrap_or_else(|| {
             vec![Err(ModelError {
+                class: dex_loop::ErrorClass::Unknown,
                 message: "no script left".into(),
             })]
         });
@@ -785,7 +786,7 @@ pub fn shape(event: &Event) -> String {
         } => format!("client_tool_result:{call}:{}", outcome(*result)),
         Event::Compaction { summary, .. } => format!("compaction:{summary}"),
         Event::Final { text } => format!("final:{text}"),
-        Event::Error { code, message } => format!("error:{}:{message}", code.as_str()),
+        Event::Error { code, message, .. } => format!("error:{}:{message}", code.as_str()),
         Event::Interrupted => "interrupted".into(),
     }
 }

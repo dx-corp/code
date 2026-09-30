@@ -449,6 +449,7 @@ impl Model for SimModel {
             StepScript::Abandoned => vec![
                 Ok(ModelChunk::Text("about to fail".into())),
                 Err(ModelError {
+                    class: dex_loop::ErrorClass::Unknown,
                     message: format!("upstream reset ({key})"),
                 }),
             ],
