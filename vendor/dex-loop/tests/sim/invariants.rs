@@ -69,6 +69,7 @@ fn kind_str(event: &Event) -> &'static str {
         Event::Usage(_) => "usage",
         Event::ModelStepCompleted { .. } => "model_step_completed",
         Event::ModelAttemptAbandoned { .. } => "model_attempt_abandoned",
+        Event::ModelAttemptFailed { .. } => "model_attempt_failed",
         Event::ToolStarted { .. } => "tool_started",
         Event::ToolProgress { .. } => "tool_progress",
         Event::ToolsExposed { .. } => "tools_exposed",

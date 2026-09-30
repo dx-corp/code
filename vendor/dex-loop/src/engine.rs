@@ -43,6 +43,7 @@ use crate::sanitize::{DeltaFilter, Sanitizer};
 pub const TOOLS_SEARCH: &str = "tools.search";
 
 const NOT_RUN_INTERRUPTED: &str = "not run: the turn was interrupted";
+const READ_INTERRUPTED: &str = "not completed: the read was interrupted; it is safe to try again";
 const UNKNOWN_INTERRUPTED: &str =
     "outcome unknown: the turn was interrupted before the result was recorded";
 /// A call that already started (its tool vanished from the catalog, or the
@@ -384,7 +385,7 @@ where
                 self.emit(ctx, events).await?;
             }
             if ctx.interrupt_requested() || cancel.is_cancelled() {
-                return self.interrupt(ctx).await;
+                return self.interrupt(ctx, &prefetch).await;
             }
             if ctx.open_step().is_some() {
                 let reads = prefetch.reads.clone();
@@ -564,6 +565,23 @@ where
                     StreamStep::Chunk(Ok(ModelChunk::Timing(t))) => {
                         timing = Some(t);
                     }
+                    StreamStep::Chunk(Ok(ModelChunk::AttemptFailed {
+                        provider,
+                        model,
+                        code,
+                        elapsed_ms,
+                        then,
+                    })) => {
+                        let event = [Event::ModelAttemptFailed {
+                            step,
+                            provider,
+                            model,
+                            code,
+                            elapsed_ms,
+                            then,
+                        }];
+                        prefetch.reads.drive(self.log.append(&event)).await?;
+                    }
                     StreamStep::Chunk(Err(error)) => {
                         failure = Some(error.message);
                         break;
@@ -657,7 +675,7 @@ where
                 timing: timing.take(),
             });
             self.emit(ctx, events).await?;
-            return self.interrupt(ctx).await.map(Some);
+            return self.interrupt(ctx, prefetch).await.map(Some);
         }
         if !calls.is_empty() && self.budget.answer_only(step.saturating_sub(1)) {
             // Asked for a tool on the call that offered none. Nothing can run
@@ -1039,7 +1057,7 @@ where
         self.run_wave(ctx, &calls, wave, cancel, run_started, prefetch)
             .await?;
         if cancel.is_cancelled() {
-            return self.interrupt(ctx).await.map(Some);
+            return self.interrupt(ctx, prefetch).await.map(Some);
         }
         Ok(None)
     }
@@ -1352,15 +1370,21 @@ where
     }
 
     /// Every call without a result gets one, then `Interrupted`.
-    async fn interrupt(&self, ctx: &mut Context) -> Result<Exit, Fenced> {
+    async fn interrupt(&self, ctx: &mut Context, prefetch: &Prefetch<'_>) -> Result<Exit, Fenced> {
         let mut events: Vec<Event> = ctx
             .open_step()
             .map(|step| {
                 step.calls
                     .iter()
                     .zip(&step.states)
-                    .filter_map(|(call, state)| match state {
+                    .enumerate()
+                    .filter_map(|(index, (call, state))| match state {
                         CallState::Done(_) => None,
+                        // Only this attempt's admitted local reads enter prefetch.
+                        // Do not reinterpret an older started call using a changed catalog.
+                        CallState::Started if prefetch.started.contains(&index) => {
+                            Some(finished(call, ToolResult::error(READ_INTERRUPTED)))
+                        }
                         CallState::Started => {
                             Some(finished(call, ToolResult::unknown(UNKNOWN_INTERRUPTED)))
                         }
@@ -1370,7 +1394,7 @@ where
             })
             .unwrap_or_default();
         events.push(Event::Interrupted);
-        self.emit(ctx, events).await?;
+        prefetch.reads.drive(self.emit(ctx, events)).await?;
         Ok(Exit::Interrupted)
     }
 

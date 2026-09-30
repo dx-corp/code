@@ -467,7 +467,10 @@ impl Context {
                 self.flush_steers(cursor, *control_through);
             }
             // Text reaches history through `ModelStepCompleted`.
-            Event::TextDelta { .. } | Event::ThinkingDelta { .. } | Event::ToolProgress { .. } => {}
+            Event::TextDelta { .. }
+            | Event::ThinkingDelta { .. }
+            | Event::ModelAttemptFailed { .. }
+            | Event::ToolProgress { .. } => {}
             Event::Usage(usage) => self.usage += *usage,
             Event::ModelStepCompleted {
                 text,

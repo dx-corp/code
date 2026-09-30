@@ -149,6 +149,18 @@ pub struct ServedBy {
     pub model: String,
 }
 
+/// What the model port did after one attempt failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptNext {
+    /// Tried the same route again.
+    Retry,
+    /// Moved to the next route.
+    Failover,
+    /// Gave up; the step fails.
+    Abandon,
+}
+
 /// Model spend reported by one model response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
@@ -510,6 +522,18 @@ pub enum Event {
     ModelAttemptAbandoned {
         step: u32,
     },
+    /// A model attempt on one route ended without a `ModelStepCompleted`.
+    /// Debug data for staff: never model history, never rendered. Carries
+    /// only the route's configured provider/model, dex-model's fixed error
+    /// code and timing; never the error message.
+    ModelAttemptFailed {
+        step: u32,
+        provider: String,
+        model: String,
+        code: String,
+        elapsed_ms: u64,
+        then: AttemptNext,
+    },
 
     ToolStarted {
         call: CallId,
@@ -683,6 +707,32 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_attempt_failed_round_trips_as_snake_case_json() {
+        let event = Event::ModelAttemptFailed {
+            step: 2,
+            provider: "vertex-ai".into(),
+            model: "gemini-3.6-flash".into(),
+            code: "provider_unavailable".into(),
+            elapsed_ms: 1500,
+            then: AttemptNext::Failover,
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "model_attempt_failed");
+        assert_eq!(json["then"], "failover");
+        assert_eq!(
+            serde_json::from_value::<Event>(json).expect("decode"),
+            event
+        );
+        assert!(!event.is_control());
+        for (then, name) in [
+            (AttemptNext::Retry, "retry"),
+            (AttemptNext::Abandon, "abandon"),
+        ] {
+            assert_eq!(serde_json::to_value(then).expect("serialize"), name);
+        }
+    }
 
     #[test]
     fn auto_approval_receipts_decode_losslessly_and_never_become_control_events() {

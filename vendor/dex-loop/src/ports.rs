@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
 use crate::event::{
-    ApprovalId, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning, ServedBy,
-    StepTiming, ThreadId, ToolName, ToolResult, Usage,
+    ApprovalId, AttemptNext, CallId, Cursor, Event, PrincipalId, ProposedCall, ProviderReasoning,
+    ServedBy, StepTiming, ThreadId, ToolName, ToolResult, Usage,
 };
 
 /// The log or the effect ledger refused a write. The engine stops at once and
@@ -75,6 +75,18 @@ pub enum ModelChunk {
     /// Where the step's time went. Sent at most once, after a clean
     /// terminal; the engine stores it on `ModelStepCompleted`.
     Timing(StepTiming),
+    /// A model attempt on one route failed. May be sent any number of times
+    /// before the first other chunk of the step (a final `Abandon` may follow
+    /// output already streamed); the engine appends it to the log at once
+    /// and never stores it on the step. `code` is the port's fixed error
+    /// vocabulary, never the error message.
+    AttemptFailed {
+        provider: String,
+        model: String,
+        code: String,
+        elapsed_ms: u64,
+        then: AttemptNext,
+    },
 }
 
 /// The model call failed after the `Model` port's own retries.
