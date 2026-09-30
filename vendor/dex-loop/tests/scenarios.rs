@@ -1286,9 +1286,9 @@ async fn unknown_and_denied_calls_are_visible_to_the_model() {
     assert_eq!(
         view(&model.seen()[1])[2..],
         strings(&[
-            "tool:t1-1-0:err:unknown tool: no_such_tool; use tools.search to find tools",
+            "tool:t1-1-0:err:unknown tool: no_such_tool; use tools_search to find tools",
             "tool:t1-1-1:err:denied: destructive calls are off",
-            "tool:t1-1-2:err:unknown tool: crm.lookup; use tools.search to find tools",
+            "tool:t1-1-2:err:unknown tool: crm.lookup; use tools_search to find tools",
             "tool:t1-1-3:ok:out/t1-1-3",
         ])
     );
@@ -1589,7 +1589,7 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
     assert_eq!(tools.run_ids(), strings(&["t1-2-0"]));
     assert_eq!(
         view(&model.seen()[1])[2..],
-        strings(&["tool:t1-1-0:ok:crm.lookup: Label for crm.lookup"])
+        strings(&["tool:t1-1-0:ok:crm_lookup: Label for crm.lookup"])
     );
     assert_eq!(log.rehydrate(), ctx);
 }

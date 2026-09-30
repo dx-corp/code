@@ -306,6 +306,12 @@ impl Context {
         self.control = self.control.max(floor);
     }
 
+    /// Whether a turn is running (or a queued one just began). A host that
+    /// finished a turn checks this before doing work between turns.
+    pub fn turn_running(&self) -> bool {
+        self.status == Status::Running
+    }
+
     pub(crate) fn status(&self) -> Status {
         self.status
     }

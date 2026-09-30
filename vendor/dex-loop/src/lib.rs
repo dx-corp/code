@@ -40,7 +40,7 @@ pub use event::{
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
-    ToolSpec, Tools, Verdict,
+    ToolSpec, Tools, Verdict, model_tool_name,
 };
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};

@@ -291,6 +291,7 @@ mod tests {
             )],
         );
         let spec = ToolSpec {
+            description: String::new(),
             name: ToolName::new("fs.read_file"),
             label: "Read a file".into(),
             schema: serde_json::json!({"type": "object"}),

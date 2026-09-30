@@ -127,12 +127,25 @@ pub enum ExecutorKind {
     Client,
 }
 
+/// How model-visible text names a tool: registry names use dots
+/// (`dex.read`), and providers reject dots in function names, so the model
+/// sees `dex_read`. `dex-model` declares tools under this same name whenever
+/// it is a valid function name, so prose and declarations agree.
+pub fn model_tool_name(name: &str) -> String {
+    name.replace('.', "_")
+}
+
 /// One registry entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub name: ToolName,
     /// The only tool text a surface may show.
     pub label: String,
+    /// What the model is told the tool does. Never shown on a surface (`label`
+    /// is). Empty means the model falls back to the schema description, then
+    /// the label. `Registry` fills it from `Entry::description`.
+    #[serde(default)]
+    pub description: String,
     pub schema: serde_json::Value,
     /// Read-only calls that policy allows run together in one parallel wave,
     /// and may run again after a restart. Every other call is a mutation and

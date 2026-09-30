@@ -35,7 +35,7 @@ use crate::event::{
 };
 use crate::ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
-    ToolSpec, Tools, Verdict,
+    ToolSpec, Tools, Verdict, model_tool_name,
 };
 use crate::sanitize::{DeltaFilter, Sanitizer};
 
@@ -1281,7 +1281,7 @@ where
         } else {
             matches
                 .iter()
-                .map(|spec| format!("{}: {}", spec.name, spec.label))
+                .map(|spec| format!("{}: {}", model_tool_name(spec.name.as_str()), spec.label))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -1500,6 +1500,10 @@ where
 
 fn search_spec() -> ToolSpec {
     ToolSpec {
+        description: "Find tools this conversation does not have yet. Say what you need to do; \
+                      matching tools are added to your tools from the next step, and the \
+                      result lists their names."
+            .into(),
         name: ToolName::new(TOOLS_SEARCH),
         label: "Finding the right tools".into(),
         schema: serde_json::json!({
@@ -1613,7 +1617,8 @@ fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String
 
 fn unknown_tool(name: &ToolName) -> ToolResult {
     ToolResult::error(format!(
-        "unknown tool: {name}; use {TOOLS_SEARCH} to find tools"
+        "unknown tool: {name}; use {} to find tools",
+        model_tool_name(TOOLS_SEARCH),
     ))
 }
 
