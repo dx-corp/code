@@ -19,8 +19,8 @@
 use std::path::Path;
 
 use dex_loop::{
-    ApprovalMode, Budget, CancellationToken, Event, Exit, Lexicon, Log as _, Model, PrincipalId,
-    ThreadId, TurnId, rehydrate,
+    ApprovalMode, Budget, CancellationToken, ConfirmationDecision, Event, Exit, Lexicon, Log as _,
+    Model, PrincipalId, ThreadId, TurnId, rehydrate,
 };
 
 use crate::{LocalEffects, LocalLog, LocalTools};
@@ -150,6 +150,9 @@ async fn drive_to_completion<M: Model>(
                     call,
                     principal: principal.clone(),
                     text: UNATTENDED_ANSWER.to_owned(),
+                    // An unattended assumption is text, never human action consent.
+                    confirmation_decision: ConfirmationDecision::Unspecified,
+                    args_digest: String::new(),
                 }])
                 .await
                 .map_err(|_fenced| {
@@ -238,6 +241,117 @@ mod tests {
             workspace: "ws-1".into(),
             thread: "thread-1".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn unattended_question_answer_never_grants_typed_action_consent() {
+        use dex_loop::{ActionConfirmation, CallId, ProposedCall};
+
+        let state_root = TempDir::new().expect("state tempdir");
+        let workspace = TempDir::new().expect("workspace tempdir");
+        let principal = PrincipalId::new("alice");
+        let question_call = CallId::new("question-1");
+        let action = ProposedCall::new(
+            CallId::new("send-1"),
+            ToolName::new("mail.send"),
+            serde_json::json!({"recipient":"someone@example.com"}),
+            principal.clone(),
+        );
+        let question = ProposedCall::new(
+            question_call.clone(),
+            ToolName::new("person.ask"),
+            serde_json::json!({"text":"Send the message?"}),
+            principal.clone(),
+        );
+        let log = LocalLog::acquire(state_root.path().join("log"), &thread())
+            .await
+            .expect("acquire log");
+        // Resume a persisted question from an earlier host. The current local
+        // two-tool catalog cannot ask yet; the driver still owns this exit.
+        log.append(&[
+            Event::UserMessage {
+                turn: TurnId::new("t1"),
+                message_id: None,
+                principal: principal.clone(),
+                text: "Work unattended".into(),
+                attachments: vec![],
+                client_tools: vec![],
+                authorized_tools: vec![],
+                approval_mode: ApprovalMode::Headless,
+            },
+            Event::StepStarted {
+                step: 1,
+                control_through: dex_loop::Cursor::START,
+            },
+            Event::ModelStepCompleted {
+                step: 1,
+                text: String::new(),
+                calls: vec![question],
+                reasoning: None,
+                served: None,
+                timing: None,
+            },
+            Event::Question {
+                call: question_call.clone(),
+                text: "Send the message?".into(),
+                confirmation: Some(ActionConfirmation {
+                    proposal_call_id: action.id.clone(),
+                    tool: action.tool.clone(),
+                    args_digest: dex_loop::args_digest(&action.args),
+                    principal_id: principal.clone(),
+                }),
+            },
+        ])
+        .await
+        .expect("persist parked question");
+        let engine = dex_loop::Engine::new(
+            log.clone(),
+            ScriptedModel::new(vec![vec![Ok(ModelChunk::Text("done".into()))]]),
+            LocalTools::new(workspace.path()),
+            LocalEffects::open(state_root.path().join("effects.json"))
+                .await
+                .expect("open ledger"),
+            Lexicon::default(),
+            Budget::default(),
+        );
+        assert_eq!(
+            drive_to_completion(
+                &engine,
+                &log,
+                &thread(),
+                &principal,
+                &CancellationToken::new()
+            )
+            .await
+            .expect("resume unattended question"),
+            Exit::Done
+        );
+        let events = read_log(&log).await.expect("read answered question");
+        let answers: Vec<_> = events
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Answer {
+                    call,
+                    principal,
+                    text,
+                    confirmation_decision,
+                    args_digest,
+                } => Some((call, principal, text, confirmation_decision, args_digest)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers.len(), 1);
+        let (call, actor, text, decision, digest) = answers[0];
+        assert_eq!(call, &question_call);
+        assert_eq!(actor, &principal);
+        assert_eq!(text, UNATTENDED_ANSWER);
+        assert_eq!(*decision, ConfirmationDecision::Unspecified);
+        assert!(digest.is_empty());
+        let replayed = rehydrate(thread(), &events);
+        let mut attempted_action = action;
+        attempted_action.args["confirmation"] = serde_json::json!(attempted_action.id.as_str());
+        assert!(!replayed.confirmed_action(&attempted_action));
+        assert!(matches!(events.last(), Some((_, Event::Final { text })) if text == "done"));
     }
 
     #[tokio::test]

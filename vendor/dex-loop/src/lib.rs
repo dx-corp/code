@@ -29,14 +29,17 @@ mod rehydrate;
 mod sanitize;
 
 pub use budget::{Budget, BudgetAxis};
-pub use compaction::{Compaction, Compactor, Cut, NoCompaction, Summarize, Threshold, plan_cut};
-pub use context::{Context, Entry, Message};
+pub use compaction::{
+    Compaction, CompactionPlan, Compactor, NoCompaction, Summarize, Summary, Threshold,
+};
+pub use context::{AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message};
 pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
 pub use event::{
-    AUTO_APPROVER, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId, ClientToolSpec,
-    Cursor, ErrorClass, ErrorCode, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output,
-    OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming,
-    ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
+    AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,
+    ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass, ErrorCode, Event,
+    HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId, ProposedCall,
+    ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName, ToolResult, TurnId,
+    Usage, args_digest,
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,

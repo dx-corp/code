@@ -6,13 +6,17 @@
 //! the same context, whether the actor stayed warm or restarted.
 
 use crate::event::{
-    ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec, Cursor, Event, MessageId,
-    Outcome, Output, PrincipalId, ProposedCall, ProviderReasoning, ServedBy, ThreadId, ToolName,
-    ToolResult, TurnId, Usage,
+    ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec,
+    ConfirmationDecision, Cursor, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output,
+    PrincipalId, ProposedCall, ProviderReasoning, ServedBy, ThreadId, ToolName, ToolResult, TurnId,
+    Usage,
 };
 
 const NOT_RUN_NEW_TURN: &str = "not run: a new turn started first";
 const UNKNOWN_NEW_TURN: &str = "outcome unknown: a new turn started before the result was recorded";
+const MAX_ACTION_RECORDS: usize = 128;
+// A public question permits 4096 characters, each at most four UTF-8 bytes.
+const MAX_ACTION_ARGUMENT_BYTES: usize = 16 * 1024;
 
 /// One message in the model's view of the thread.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,8 +52,16 @@ impl Message {
     pub fn size(&self) -> usize {
         match self {
             Message::User { text, .. } | Message::Summary { text } => text.len(),
-            Message::Assistant { text, calls, .. } => {
+            Message::Assistant {
+                text,
+                calls,
+                reasoning,
+                ..
+            } => {
                 text.len()
+                    + reasoning
+                        .as_ref()
+                        .map_or(0, |state| state.payload.to_string().len())
                     + calls
                         .iter()
                         .map(|call| call.tool.as_str().len() + call.args.to_string().len())
@@ -57,7 +69,10 @@ impl Message {
             }
             Message::Tool { output, .. } => match output {
                 Output::Text(text) => text.len(),
-                Output::Ref(reference) => reference.as_str().len(),
+                // A reference may render a preview as well as metadata. Dex's
+                // host caps a preview at 16 KiB; count that conservative
+                // allowance so tool-heavy histories compact before rendering.
+                Output::Ref(reference) => reference.as_str().len().saturating_add(16 * 1024),
             },
         }
     }
@@ -121,6 +136,21 @@ pub(crate) struct OpenStep {
     pub(crate) states: Vec<CallState>,
 }
 
+/// Maximum document references retained across accepted messages. The current
+/// message remains exact so the document owner can reject invalid admissions.
+pub const MAX_CONTEXT_ATTACHMENTS: usize = 20;
+
+/// Typed provenance derived only from accepted user messages, independent of
+/// summaries. These coordinates select evidence; the document owner still
+/// verifies message admission, principal access and immutable versions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentInput {
+    pub turn: TurnId,
+    pub message_id: Option<MessageId>,
+    pub principal: PrincipalId,
+    pub attachments: Vec<ArtifactRef>,
+}
+
 /// Everything the engine knows about a thread.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
@@ -129,6 +159,9 @@ pub struct Context {
     acting: Option<PrincipalId>,
     status: Status,
     history: Vec<Entry>,
+    // Newest input first (even when it has no uploads), then bounded earlier
+    // attachment batches. Compaction never manufactures or edits provenance.
+    attachment_inputs: Vec<AttachmentInput>,
     step: u32,
     usage: Usage,
     cursor: Cursor,
@@ -151,6 +184,10 @@ pub struct Context {
     /// Unknown call outcomes in this turn, derived from the durable log.
     /// Kept outside model history so compaction cannot permit a fresh retry.
     uncertain_calls: Vec<ProposedCall>,
+    // Derived only from exact Question/Answer rows, retained outside summaries.
+    action_confirmations: Vec<(CallId, ActionConfirmation, ConfirmationDecision, bool)>,
+    // Exact owner policy previews survive model-history cuts. Expired refs fail closed.
+    action_previews: Vec<ProposedCall>,
     /// Calls whose `ToolStarted` landed before their step's
     /// `ModelStepCompleted`: reads the engine started while the model was
     /// still streaming. They begin the step as `Started`, so a warm engine
@@ -186,6 +223,7 @@ impl Context {
             acting: None,
             status: Status::Idle,
             history: Vec::new(),
+            attachment_inputs: Vec::new(),
             step: 0,
             usage: Usage::default(),
             cursor: Cursor::START,
@@ -200,10 +238,17 @@ impl Context {
             approval_mode: ApprovalMode::Interactive,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
+            action_confirmations: Vec::new(),
+            action_previews: Vec::new(),
             pending_turns: Vec::new(),
             pre_started: Vec::new(),
             last_compaction: None,
         }
+    }
+
+    /// Assistant entries created before this event cannot reuse signed thinking.
+    pub fn last_compaction_cursor(&self) -> Option<Cursor> {
+        self.last_compaction
     }
 
     pub fn thread(&self) -> &ThreadId {
@@ -255,13 +300,78 @@ impl Context {
         &self.history
     }
 
-    /// The cursor of the latest `Compaction` event, if history was compacted.
-    /// A history entry with `cursor <= last_compaction_cursor()` was produced
-    /// before that compaction; the model never saw it under the summary that
-    /// now precedes it, so provider continuation state bound to the old
-    /// prefix (signed thinking) cannot be replayed for it.
-    pub fn last_compaction_cursor(&self) -> Option<Cursor> {
-        self.last_compaction
+    pub fn proposed_call(&self, id: &CallId) -> Option<&ProposedCall> {
+        self.action_preview(id).or_else(|| {
+            self.history
+                .iter()
+                .rev()
+                .filter_map(|entry| match &entry.message {
+                    Message::Assistant { calls, .. } => Some(calls),
+                    _ => None,
+                })
+                .flatten()
+                .find(|call| &call.id == id)
+        })
+    }
+
+    /// Render owner-produced preview details, rather than model-authored consent prose.
+    pub fn action_question_text(&self, proposal: &CallId, action: &str) -> Option<String> {
+        let mut arguments = self.action_preview(proposal)?.args.clone();
+        if let Some(arguments) = arguments.as_object_mut() {
+            arguments.remove("confirmation");
+        }
+        let details = serde_json::to_string_pretty(&arguments).ok()?;
+        let text = format!("Confirm this action?\n{action}\n\n{details}");
+        // The public question contract must show the complete preview.
+        (text.chars().count() <= 4096).then_some(text)
+    }
+
+    pub fn is_unexecuted_preview(&self, call: &CallId) -> bool {
+        self.action_preview(call).is_some()
+    }
+
+    /// An exact failed policy preview before dispatch, retained separately from summaries.
+    pub fn action_preview(&self, call: &CallId) -> Option<&ProposedCall> {
+        self.action_previews
+            .iter()
+            .find(|proposal| &proposal.id == call)
+    }
+
+    pub fn confirmation_question_exists(&self, proposal: &CallId) -> bool {
+        self.action_confirmations
+            .iter()
+            .any(|(_, binding, _, _)| &binding.proposal_call_id == proposal)
+    }
+
+    /// A typed affirmative choice for this exact action, unused by any dispatch.
+    pub fn confirmed_action(&self, call: &ProposedCall) -> bool {
+        let Some(id) = call
+            .args
+            .get("confirmation")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return false;
+        };
+        let mut args = call.args.clone();
+        if let Some(args) = args.as_object_mut() {
+            args.remove("confirmation");
+        }
+        let digest = crate::args_digest(&args);
+        self.action_confirmations
+            .iter()
+            .any(|(_, binding, decision, used)| {
+                !used
+                    && *decision == ConfirmationDecision::Confirm
+                    && binding.proposal_call_id.as_str() == id
+                    && binding.tool == call.tool
+                    && binding.principal_id == call.principal
+                    && binding.args_digest == digest
+            })
+    }
+
+    /// Newest accepted/applied input and bounded older attachment provenance.
+    pub fn attachment_inputs(&self) -> &[AttachmentInput] {
+        &self.attachment_inputs
     }
 
     /// Model calls started in the current turn.
@@ -420,12 +530,17 @@ impl Context {
                 approval,
                 args_digest,
                 approved,
-                ..
+                principal,
             } => {
+                // Older engines wrote synthetic approvals in headless mode.
+                // Retain those rows as history, but they cannot authorize an
+                // unstarted parked call after an upgrade. Later ToolStarted /
+                // ToolFinished rows still reconstruct effects already run.
                 if let Some(CallState::Parked {
                     approval: parked,
                     decision,
                 }) = self.state_mut(call)
+                    && principal.as_str() != HEADLESS_AUTO_APPROVER
                     && parked == approval
                     && decision.is_none()
                 {
@@ -435,7 +550,27 @@ impl Context {
                     });
                 }
             }
-            Event::Answer { call, text, .. } => {
+            Event::Answer {
+                call,
+                principal,
+                text,
+                confirmation_decision,
+                args_digest,
+            } => {
+                for (question, binding, decision, used) in &mut self.action_confirmations {
+                    if question == call
+                        && &binding.principal_id == principal
+                        && binding.args_digest == *args_digest
+                        && *decision == ConfirmationDecision::Unspecified
+                        && !*used
+                    {
+                        *decision = *confirmation_decision;
+                        // A normal answer closes the question without granting consent.
+                        if *confirmation_decision == ConfirmationDecision::Unspecified {
+                            *used = true;
+                        }
+                    }
+                }
                 if let Some(CallState::Asked { answer }) = self.state_mut(call)
                     && answer.is_none()
                 {
@@ -512,6 +647,19 @@ impl Context {
                 self.pre_started.clear();
             }
             Event::ToolStarted { call, .. } => {
+                if let Some(proposal) = self.proposed_call(call).cloned()
+                    && self.confirmed_action(&proposal)
+                {
+                    let id = proposal
+                        .args
+                        .get("confirmation")
+                        .and_then(serde_json::Value::as_str);
+                    for (_, binding, _, used) in &mut self.action_confirmations {
+                        if Some(binding.proposal_call_id.as_str()) == id {
+                            *used = true;
+                        }
+                    }
+                }
                 if let Some(state) = self.state_mut(call) {
                     if !matches!(state, CallState::Done(_)) {
                         *state = CallState::Started;
@@ -534,6 +682,50 @@ impl Context {
                 output,
                 receipt,
             } => {
+                // A confirmation preview is an owner policy refusal before the
+                // dispatch boundary. External error prose cannot manufacture one.
+                let unstarted = self.open_step.as_ref().and_then(|step| {
+                    step.calls
+                        .iter()
+                        .zip(&step.states)
+                        .find(|(proposal, state)| {
+                            &proposal.id == call && matches!(state, CallState::Todo)
+                        })
+                        .map(|(proposal, _)| proposal.clone())
+                });
+                if let Some(proposal) = unstarted
+                    && *outcome == Outcome::Failed
+                    && let Output::Text(text) = output
+                    && let Ok(document) = serde_json::from_str::<serde_json::Value>(text)
+                    && document.get("status").and_then(serde_json::Value::as_str)
+                        == Some("needs_confirmation")
+                {
+                    let mut args = proposal.args.clone();
+                    if let Some(args) = args.as_object_mut() {
+                        args.remove("confirmation");
+                    }
+                    if document
+                        .get("args_digest")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(crate::args_digest(&args).as_str())
+                        && serde_json::to_string_pretty(&args)
+                            .is_ok_and(|text| text.len() <= MAX_ACTION_ARGUMENT_BYTES)
+                        && self.action_preview(call).is_none()
+                    {
+                        self.action_previews.push(ProposedCall::new(
+                            proposal.id,
+                            proposal.tool,
+                            args,
+                            proposal.principal,
+                        ));
+                        if self.action_previews.len() > MAX_ACTION_RECORDS {
+                            let expired = self.action_previews.remove(0);
+                            self.action_confirmations.retain(|(_, binding, _, _)| {
+                                binding.proposal_call_id != expired.id
+                            });
+                        }
+                    }
+                }
                 self.uncertain_calls.retain(|prior| &prior.id != call);
                 // A pre-committed read finished by an abandoned attempt.
                 self.pre_started.retain(|started| started != call);
@@ -580,7 +772,27 @@ impl Context {
                     };
                 }
             }
-            Event::Question { call, .. } => {
+            Event::Question {
+                call, confirmation, ..
+            } => {
+                if let Some(binding) = confirmation
+                    && !self
+                        .action_confirmations
+                        .iter()
+                        .any(|(question, _, _, _)| question == call)
+                {
+                    self.action_confirmations.push((
+                        call.clone(),
+                        binding.clone(),
+                        ConfirmationDecision::Unspecified,
+                        false,
+                    ));
+                    if self.action_confirmations.len() > MAX_ACTION_RECORDS {
+                        let (_, expired, _, _) = self.action_confirmations.remove(0);
+                        self.action_previews
+                            .retain(|proposal| proposal.id != expired.proposal_call_id);
+                    }
+                }
                 if let Some(state) = self.state_mut(call) {
                     *state = CallState::Asked { answer: None };
                 }
@@ -600,10 +812,19 @@ impl Context {
                 summary,
             } => {
                 self.last_compaction = Some(cursor);
-                self.history
-                    .retain(|entry| entry.cursor > *covers_to_cursor);
+                // Input and applied steers of the current turn retain their
+                // exact text, principal, and attachments across compaction.
+                // Covered inputs precede the new summary, keeping history
+                // cursors non-decreasing even after repeated compaction.
+                self.history.retain(|entry| {
+                    entry.cursor > *covers_to_cursor
+                        || matches!(&entry.message, Message::User { turn, .. } if self.status == Status::Running && Some(turn) == self.turn.as_ref())
+                });
+                let position = self
+                    .history
+                    .partition_point(|entry| entry.cursor <= *covers_to_cursor);
                 self.history.insert(
-                    0,
+                    position,
                     Entry {
                         cursor: *covers_to_cursor,
                         message: Message::Summary {
@@ -688,6 +909,38 @@ impl Context {
     }
 
     fn push(&mut self, cursor: Cursor, message: Message) {
+        if let Message::User {
+            turn,
+            message_id,
+            principal,
+            attachments,
+            ..
+        } = &message
+        {
+            let current = AttachmentInput {
+                turn: turn.clone(),
+                message_id: message_id.clone(),
+                principal: principal.clone(),
+                attachments: attachments.clone(),
+            };
+            let mut seen: std::collections::BTreeSet<_> = attachments.iter().cloned().collect();
+            let mut budget = MAX_CONTEXT_ATTACHMENTS.saturating_sub(attachments.len());
+            let mut retained = vec![current];
+            for mut previous in std::mem::take(&mut self.attachment_inputs) {
+                if budget == 0 {
+                    break;
+                }
+                previous
+                    .attachments
+                    .retain(|reference| seen.insert(reference.clone()));
+                previous.attachments.truncate(budget);
+                if !previous.attachments.is_empty() {
+                    budget -= previous.attachments.len();
+                    retained.push(previous);
+                }
+            }
+            self.attachment_inputs = retained;
+        }
         self.history.push(Entry { cursor, message });
     }
 

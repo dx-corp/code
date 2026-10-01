@@ -8,7 +8,8 @@ use dex_loop::{
     ApprovalId, Budget, CallId, CancellationToken, Claim, ClientToolSpec, Context, Cursor, Effects,
     Engine, Entry, Event, ExecutorKind, Fenced, GovernanceClass, Lexicon, Log, Message, Model,
     ModelChunk, ModelError, NoCompaction, Outcome, Output, OutputRef, PrincipalId, ProposedCall,
-    Summarize, ThreadId, ToolName, ToolResult, ToolSpec, Tools, TurnId, Usage, Verdict, rehydrate,
+    Summarize, Summary, ThreadId, ToolName, ToolResult, ToolSpec, Tools, TurnId, Usage, Verdict,
+    rehydrate,
 };
 use futures_util::{Stream, StreamExt, stream};
 use tokio::sync::Barrier;
@@ -715,8 +716,11 @@ impl Effects for FakeEffects {
 pub struct FakeSummarizer;
 
 impl Summarize for FakeSummarizer {
-    async fn summarize(&self, entries: &[Entry]) -> Option<String> {
-        Some(format!("summary of {} entries", entries.len()))
+    async fn summarize(&self, _ctx: &Context, entries: &[Entry]) -> Summary {
+        Summary {
+            text: Some(format!("summary of {} entries", entries.len())),
+            usage: Usage::default(),
+        }
     }
 }
 
@@ -777,7 +781,7 @@ pub fn shape(event: &Event) -> String {
         } => format!("finished:{call}:{}", outcome(*result)),
         Event::ApprovalRequested { call, .. } => format!("approval:{call}"),
         Event::AutoApproved { call, .. } => format!("auto_approved:{call}"),
-        Event::Question { call, text } => format!("question:{call}:{text}"),
+        Event::Question { call, text, .. } => format!("question:{call}:{text}"),
         Event::ClientToolRequested { call, tool, .. } => format!("client_tool:{call}:{tool}"),
         Event::ClientToolResult {
             call,

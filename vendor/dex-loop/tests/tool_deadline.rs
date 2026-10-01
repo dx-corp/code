@@ -210,6 +210,14 @@ async fn a_call_never_outlives_the_wall_budget() {
             "error:budget_exhausted:wall budget exhausted: 100ms",
         ])
     );
+    assert!(log.events().iter().any(|event| matches!(
+        event,
+        Event::Error {
+            class: Some(dex_loop::ErrorClass::BudgetExhausted),
+            code: ErrorCode::BudgetExhausted,
+            ..
+        }
+    )));
     assert_eq!(model.seen().len(), 1, "no model step after the wall budget");
 }
 
@@ -510,9 +518,16 @@ async fn a_call_that_finishes_in_time_is_unaffected() {
 async fn compaction_time_consumes_the_tool_calls_remaining_wall_budget() {
     struct SlowSummary;
     impl dex_loop::Summarize for SlowSummary {
-        async fn summarize(&self, _entries: &[dex_loop::Entry]) -> Option<String> {
+        async fn summarize(
+            &self,
+            _ctx: &dex_loop::Context,
+            _entries: &[dex_loop::Entry],
+        ) -> dex_loop::Summary {
             tokio::time::sleep(Duration::from_millis(40)).await;
-            Some("historical summary".into())
+            dex_loop::Summary {
+                text: Some("historical summary".into()),
+                ..dex_loop::Summary::default()
+            }
         }
     }
     let log = FakeLog::default();
