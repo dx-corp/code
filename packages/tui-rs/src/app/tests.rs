@@ -6449,9 +6449,49 @@ async fn interactive_resume_restores_exact_provider_history() {
     assert_session_restore_provider_history(true).await;
 }
 
+struct RestoreEnv(Vec<(String, Option<std::ffi::OsString>)>);
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
 async fn assert_session_restore_provider_history(interactive: bool) {
     use crate::agent::{NativeAgent, NativeAgentConfig};
+    let _env_lock = crate::config::test_process_env_lock_async().await;
     let temp = tempfile::tempdir().unwrap();
+    let names = crate::credential_mode::TEST_IDENTITY_ENV_VARS
+        .iter()
+        .copied()
+        .chain([
+            "MAESTRO_HOME",
+            "MAESTRO_OAUTH_STORAGE_MODE",
+            "MAESTRO_DISABLE_KEYCHAIN",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+        ]);
+    let restore = RestoreEnv(
+        names
+            .map(|name| (name.to_string(), std::env::var_os(name)))
+            .collect(),
+    );
+    for (name, _) in &restore.0 {
+        std::env::remove_var(name);
+    }
+    let _restore = restore;
+    // Resuming also resolves Identity credentials; an injected provider client
+    // does not isolate that owner or the host's native credential store.
+    std::env::set_var("MAESTRO_HOME", temp.path());
+    std::env::set_var("MAESTRO_OAUTH_STORAGE_MODE", "file");
+    std::env::set_var("MAESTRO_DISABLE_KEYCHAIN", "1");
+    crate::credential_mode::install_test_identity_env();
+    std::env::set_var("OPENAI_API_KEY", "fixture");
+    std::env::set_var("OPENAI_BASE_URL", "http://127.0.0.1:1/v1");
     let mut app = new_test_app();
     app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
     app.current_model = "gpt-6-astra".into();
@@ -6520,17 +6560,6 @@ async fn resumed_continuation_survives_the_next_compaction() {
     use crate::agent::{NativeAgent, NativeAgentConfig};
     let temp = tempfile::tempdir().unwrap();
     let _env_lock = crate::config::test_process_env_lock_async().await;
-    struct RestoreEnv(Vec<(String, Option<std::ffi::OsString>)>);
-    impl Drop for RestoreEnv {
-        fn drop(&mut self) {
-            for (name, value) in &self.0 {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
     let names = crate::credential_mode::TEST_IDENTITY_ENV_VARS
         .iter()
         .copied()

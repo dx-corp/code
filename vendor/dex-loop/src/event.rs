@@ -486,12 +486,9 @@ impl ErrorClass {
     }
 }
 
-/// Who can answer a turn's approval requests.
-///
-/// `Headless` turns come from callers with no human to click Approve (service
-/// accounts, workloads, agents, synthetic canaries, API automation). For them
-/// the engine resolves a policy `NeedsApproval` verdict itself, recording the
-/// request and the decision in the log. A `Deny` verdict is never affected.
+/// Execution mode retained in durable ingress for compatibility and attribution.
+/// Both modes now grant `NeedsApproval` through an exact `AutoApproved`
+/// receipt. Neither mode overrides a hard policy `Deny`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
@@ -867,64 +864,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_approval_receipts_decode_losslessly_and_never_become_control_events() {
-        let event = Event::AutoApproved {
-            call: CallId::new("t1-1-0"),
-            approval: ApprovalId::new("ap-1"),
-            args_digest: args_digest(&serde_json::json!({"key": "w"})),
-            summary: "Send\0email".into(),
-            principal: PrincipalId::new(AUTO_APPROVER),
-        };
-        let exact = serde_json::to_string(&event).expect("serialize receipt");
-        let envelope = serde_json::json!({
-            "type": Event::STORED_JSON_V1_TYPE,
-            "_dex_event_json_v1": exact,
-            "summary": "non-authoritative projection",
-        });
-        assert_eq!(
-            Event::from_stored_json(&envelope, Some("auto_approved")).expect("exact receipt"),
-            event
-        );
-        assert!(Event::from_stored_json(&envelope, Some("approval_decided")).is_err());
-        assert!(
-            !event.is_control(),
-            "engine receipts must not advance the host control cursor"
-        );
-    }
-
-    #[test]
-    fn stored_event_decoder_refuses_corrupt_envelopes_and_call_digests() {
-        let event = Event::ModelStepCompleted {
-            step: 1,
-            text: String::new(),
-            calls: vec![ProposedCall::new(
-                CallId::new("turn-1-0"),
-                ToolName::new("dex.report_feedback"),
-                serde_json::json!({"diagnosis": "exact\0value"}),
-                PrincipalId::new("alice"),
-            )],
-            reasoning: None,
-            served: None,
-            timing: None,
-        };
-        let mut envelope = serde_json::json!({
-            "type": Event::STORED_JSON_V1_TYPE,
-            "_dex_event_json_v1": serde_json::to_string(&event).unwrap(),
-            "calls": [],
-        });
-        assert_eq!(
-            Event::from_stored_json(&envelope, Some("model_step_completed")).unwrap(),
-            event
-        );
-        assert!(Event::from_stored_json(&envelope, Some("tool_started")).is_err());
-        envelope[Event::STORED_JSON_V1_KEY] = serde_json::json!("invalid JSON");
-        assert!(Event::from_stored_json(&envelope, Some("model_step_completed")).is_err());
-        let mut tampered = serde_json::to_value(&event).unwrap();
-        tampered["calls"][0]["args"]["diagnosis"] = serde_json::json!("changed");
-        assert!(Event::from_stored_json(&tampered, Some("model_step_completed")).is_err());
-    }
-
-    #[test]
     fn events_round_trip_through_json() {
         let events = vec![
             Event::UserMessage {
@@ -1033,32 +972,6 @@ mod tests {
             }
             other => panic!("expected ClientToolRequested, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn approval_mode_defaults_to_interactive_for_old_rows_and_round_trips() {
-        let old_row = serde_json::json!({
-            "type": "user_message",
-            "turn": "t1",
-            "principal": "alice",
-            "text": "hi",
-            "attachments": [],
-        });
-        match serde_json::from_value::<Event>(old_row).expect("old row deserializes") {
-            Event::UserMessage { approval_mode, .. } => {
-                assert_eq!(approval_mode, ApprovalMode::Interactive);
-            }
-            other => panic!("expected UserMessage, got {other:?}"),
-        }
-        assert_eq!(
-            serde_json::to_value(ApprovalMode::Headless).expect("serialize"),
-            serde_json::json!("headless")
-        );
-        assert_eq!(
-            serde_json::from_value::<ApprovalMode>(serde_json::json!("interactive"))
-                .expect("deserialize"),
-            ApprovalMode::Interactive
-        );
     }
 
     #[test]

@@ -28,11 +28,14 @@ mod ports;
 mod rehydrate;
 mod sanitize;
 
-pub use budget::{Budget, BudgetAxis};
+pub use budget::{Budget, BudgetAxis, RemainingBudget};
 pub use compaction::{
     Compaction, CompactionPlan, Compactor, NoCompaction, Summarize, Summary, Threshold,
 };
-pub use context::{AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message};
+pub use context::{
+    AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message, TOOL_EVIDENCE_LIMIT,
+    ToolEvidence,
+};
 pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,

@@ -20,9 +20,10 @@ use std::future::Future;
 use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::budget::{Budget, BudgetAxis};
@@ -382,6 +383,18 @@ where
             .min(self.budget.wall.saturating_sub(run_started.elapsed()))
     }
 
+    /// Anchor both the remaining wall time and the timer to one clock sample.
+    /// Sampling the timer before a later elapsed-time read can expire early
+    /// if the task is descheduled between those reads.
+    fn call_expires_at(&self, run_started: Instant) -> Instant {
+        let now = Instant::now();
+        let remaining_wall = self
+            .budget
+            .wall
+            .saturating_sub(now.saturating_duration_since(run_started));
+        now + self.tool_call_deadline.min(remaining_wall)
+    }
+
     /// Runs the current turn from wherever `ctx` stands until it finishes,
     /// parks, or is interrupted. `ctx` is usually fresh from `rehydrate`; the
     /// same call resumes after a restart, an approval, or an answer.
@@ -563,7 +576,12 @@ where
                 self.offered(ctx)
             };
             let offered: Vec<&ToolSpec> = owned.iter().collect();
-            let mut stream = pin!(self.model.stream(ctx, &offered));
+            let model_ctx = ctx.for_model(self.budget.remaining(
+                step.saturating_sub(1),
+                ctx.usage(),
+                started.elapsed(),
+            ));
+            let mut stream = pin!(self.model.stream(&model_ctx, &offered));
             // Dropping the stream on cancel is safe: a model call has no
             // effects to wait for. A stream that never yields another chunk
             // and is never cancelled would otherwise hang here forever, past
@@ -827,11 +845,12 @@ where
             && !ctx.client_tools().iter().any(|tool| tool.name == call.tool)
             && !matches!(spec.executor, ExecutorKind::User | ExecutorKind::Client)
             && validate_args(&spec, &call.args).is_ok()
-            && !ctx.has_uncertain_call(call);
+            && !ctx.has_uncertain_call(call)
+            && !ctx.has_stalled_call(call);
         if !eligible {
             return Ok(());
         }
-        let deadline = tokio::time::Instant::now() + self.call_deadline(run_started);
+        let deadline = self.call_expires_at(run_started);
         let verdict = tokio::select! {
             biased;
             () = cancel.cancelled() => return Ok(()),
@@ -920,6 +939,7 @@ where
                 .open_step()
                 .and_then(|step| step.states.get(index))
                 .cloned();
+            let already_started = matches!(&state, Some(CallState::Started));
             let decision = match state {
                 None | Some(CallState::Done(_)) => continue,
                 Some(CallState::Asked { answer: None }) => {
@@ -1010,6 +1030,15 @@ where
                 Some(CallState::Todo) => None,
             };
 
+            // A historical Started mutation must settle through the ledger
+            // above. This guard applies only before a fresh call can run.
+            if !already_started && ctx.has_stalled_call(call) {
+                prefetch.reads.discard(index);
+                self.finish(ctx, call, ToolResult::error(
+                    "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
+                )).await?;
+                continue;
+            }
             if call.tool.as_str() == TOOLS_SEARCH {
                 self.search_tools(ctx, call).await?;
                 continue;
@@ -1405,7 +1434,7 @@ where
                 Some(started(call, &spec))
             })
             .collect();
-        let deadline = tokio::time::Instant::now() + self.call_deadline(run_started);
+        let deadline = self.call_expires_at(run_started);
         self.emit(ctx, starts).await?;
         let thread = ctx.thread().clone();
         // One deadline for the wave: its reads run concurrently, so each
@@ -1533,8 +1562,8 @@ where
                 // under the claim, so a later resume of this call adopts it
                 // instead of dispatching the mutation a second time. Interrupts
                 // reach cancellable process tools; settlement is still awaited.
-                let deadline = self.call_deadline(run_started);
-                let result = if deadline.is_zero() {
+                let deadline = self.call_expires_at(run_started);
+                let result = if Instant::now() >= deadline {
                     if already_started {
                         ToolResult::unknown(UNKNOWN_NO_RETRY)
                     } else {
@@ -1542,7 +1571,7 @@ where
                     }
                 } else {
                     let run = self.tools.run(ctx.thread(), call, cancel);
-                    match tokio::time::timeout(deadline, run).await {
+                    match tokio::time::timeout_at(deadline, run).await {
                         Ok(result) => result,
                         Err(_elapsed) => ToolResult::unknown(DEADLINE_MUTATION),
                     }

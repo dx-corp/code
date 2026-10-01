@@ -236,6 +236,9 @@ async fn send_with_response_open_timeout(
 
 #[path = "openai/managed_gateway.rs"]
 mod managed_gateway;
+#[cfg(test)]
+#[path = "openai/response_open_timeout_tests.rs"]
+mod response_open_timeout_tests;
 use managed_gateway::{
     managed_gateway_error_retry_after, managed_gateway_receipt, managed_provider_tools_evidence,
 };
@@ -6897,74 +6900,6 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
         );
         assert_eq!(response.status(), reqwest::StatusCode::GATEWAY_TIMEOUT);
         server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn managed_gateway_response_open_timeout_stops_stalled_headers() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock gateway");
-        let address = listener.local_addr().expect("mock gateway address");
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept gateway request");
-            let mut request = [0_u8; 4096];
-            let _ = stream.read(&mut request).expect("read gateway request");
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-        });
-
-        let request = reqwest::Client::new().get(format!("http://{address}/responses"));
-        let error = send_with_response_open_timeout(
-            request,
-            Some(std::time::Duration::from_millis(25)),
-            "managed gateway",
-        )
-        .await
-        .expect_err("stalled response opening must time out");
-
-        assert!(
-            error
-                .to_string()
-                .contains("managed gateway response headers timed out"),
-            "unexpected error: {error:#}"
-        );
-    }
-
-    #[tokio::test]
-    async fn managed_gateway_response_open_timeout_does_not_cover_stream_body() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock gateway");
-        let address = listener.local_addr().expect("mock gateway address");
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept gateway request");
-            let mut request = [0_u8; 4096];
-            let _ = stream.read(&mut request).expect("read gateway request");
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n")
-                .expect("write response headers");
-            stream.flush().expect("flush response headers");
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            stream.write_all(b"hello").expect("write delayed body");
-        });
-
-        let request = reqwest::Client::new().get(format!("http://{address}/responses"));
-        let response = send_with_response_open_timeout(
-            request,
-            Some(std::time::Duration::from_millis(50)),
-            "managed gateway",
-        )
-        .await
-        .expect("response headers should arrive within the open timeout");
-        let body = response
-            .text()
-            .await
-            .expect("body may continue past the response-open timeout");
-
-        assert_eq!(body, "hello");
     }
 
     #[test]

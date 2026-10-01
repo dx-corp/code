@@ -12,6 +12,56 @@ use maestro_local_host::embedding::{
 };
 use maestro_local_host::state::ApprovalMode;
 
+#[test]
+fn test_support_dependency_cannot_open_native_credentials() {
+    const CHILD: &str = "MAESTRO_TEST_NATIVE_CREDENTIAL_BOUNDARY";
+    if std::env::var_os(CHILD).is_some() {
+        // This integration binary links local-host without cfg(test), just as
+        // TUI tests do. Force the real public storage path without the runtime
+        // disable flag so the compiled test-support boundary must reject it.
+        let error = match maestro_local_host::init_cli::load_evalops_snapshot() {
+            Err(error) => error,
+            Ok(_) => panic!("test-support dependency opened native credential storage"),
+        };
+        assert!(format!("{error:#}").contains("disabled in unit tests and test-support builds"));
+        return;
+    }
+    let home = tempfile::tempdir().expect("isolated credential home");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "test_support_dependency_cannot_open_native_credentials",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("MAESTRO_HOME", home.path())
+        .env("MAESTRO_OAUTH_STORAGE_MODE", "keychain")
+        .env_remove("MAESTRO_DISABLE_KEYCHAIN")
+        .spawn()
+        .expect("spawn isolated credential boundary fixture");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .expect("wait for credential boundary fixture")
+        {
+            assert!(
+                status.success(),
+                "credential boundary fixture failed: {status}"
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            child
+                .kill()
+                .expect("stop stalled credential boundary fixture");
+            child.wait().expect("reap credential boundary fixture");
+            panic!("credential boundary fixture did not reject native storage promptly");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 async fn next_event_matching(
     session: &mut EmbeddedAgentSession,
     predicate: impl Fn(&FromAgent) -> bool,

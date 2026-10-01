@@ -497,8 +497,6 @@ async fn steer_from_another_principal_is_checked_under_that_principal() {
             "user:check prod",
             "step:1",
             "started:t1-1-0",
-            // The read is prefetched while the model streams, so the steer it
-            // triggers lands before the model step completes.
             "steer:also update staging",
             "completed::[t1-1-0]",
             "finished:t1-1-0:ok",
@@ -1944,6 +1942,7 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
         .search_result("crm", &["crm.lookup"]);
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn("t1", "find acme in the crm");
+    assert!(ctx.exposed_tools().is_empty(), "hidden before discovery");
 
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
@@ -1967,6 +1966,7 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
             "final:found acme",
         ])
     );
+    assert_eq!(ctx.exposed_tools(), &[ToolName::new("crm.lookup")]);
     let offered = model.offered();
     assert_eq!(offered[0], strings(&["tools.search", "search"]));
     assert_eq!(
@@ -1999,11 +1999,17 @@ async fn exposed_tools_are_appended_in_exposure_order() {
     .search_result("crm", &["crm.zed", "crm.alpha"]);
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn("t1", "find acme in the crm");
+    assert!(ctx.exposed_tools().is_empty(), "hidden before discovery");
 
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
         Ok(Exit::Done)
     );
+    assert_eq!(
+        ctx.exposed_tools(),
+        &[ToolName::new("crm.zed"), ToolName::new("crm.alpha")]
+    );
+    assert_eq!(log.rehydrate().exposed_tools(), ctx.exposed_tools());
     let offered = model.offered();
     assert_eq!(offered[0], strings(&["tools.search", "search"]));
     assert_eq!(
