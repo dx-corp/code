@@ -448,15 +448,47 @@ where
                 .await?;
                 return Ok(Exit::Failed);
             }
-            if let Some(plan) = self.compactor.plan(ctx).await {
+            let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
+            let plan = tokio::select! {
+                _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
+                result = tokio::time::timeout(remaining_wall, self.compactor.plan(ctx)) => result,
+            };
+            if let Ok(plan) = plan {
+                let mut events = Vec::new();
+                if plan.usage != Default::default() {
+                    events.push(Event::Usage(plan.usage));
+                }
+                if let Some(compaction) = plan.compaction {
+                    events.push(Event::Compaction {
+                        covers_to_cursor: compaction.covers_to,
+                        summary: compaction.summary,
+                    });
+                }
+                if !events.is_empty() {
+                    self.emit(ctx, events).await?;
+                }
+            }
+            // Summarization is an inference call charged to this same turn.
+            // Control changes during it must also win before an ordinary call.
+            self.read_control(ctx).await?;
+            if ctx.interrupt_requested() || cancel.is_cancelled() {
+                return self.interrupt(ctx, &prefetch).await;
+            }
+            if let Some(axis) = self
+                .budget
+                .exhausted(ctx.step(), ctx.usage(), started.elapsed())
+            {
+                let message = self.budget_message(ctx, axis);
                 self.emit(
                     ctx,
-                    vec![Event::Compaction {
-                        covers_to_cursor: plan.covers_to,
-                        summary: plan.summary,
+                    vec![Event::Error {
+                        class: Some(crate::ErrorClass::BudgetExhausted),
+                        code: ErrorCode::BudgetExhausted,
+                        message,
                     }],
                 )
                 .await?;
+                return Ok(Exit::Failed);
             }
             // A step never inherits another step's reads.
             prefetch = Prefetch::new();
@@ -675,6 +707,8 @@ where
             }
             self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
             text.push_str(CUT_OFF_NOTICE);
+            self.read_control(ctx).await?;
+            let continues = ctx.has_queued_steers() && !ctx.interrupt_requested();
             let mut events = pending_usage;
             events.push(Event::ModelStepCompleted {
                 step,
@@ -684,9 +718,11 @@ where
                 served: served.clone(),
                 timing: timing.take(),
             });
-            events.push(Event::Final { text });
+            if !continues {
+                events.push(Event::Final { text });
+            }
             self.emit(ctx, events).await?;
-            return Ok(Some(Exit::Done));
+            return Ok((!continues).then_some(Exit::Done));
         }
         if let Some(error) = failure {
             let mut events = pending_usage;
@@ -1104,7 +1140,41 @@ where
                     ctx,
                     vec![Event::Question {
                         call: call.id.clone(),
-                        text: question.to_owned(),
+                        text: call
+                            .args
+                            .get("confirmation")
+                            .and_then(|value| value.get("proposal_call_id"))
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|id| {
+                                ctx.action_preview(&CallId::new(id)).and_then(|proposal| {
+                                    self.tools
+                                        .catalog()
+                                        .iter()
+                                        .find(|spec| spec.name == proposal.tool)
+                                        .and_then(|spec| {
+                                            ctx.action_question_text(&proposal.id, &spec.label)
+                                        })
+                                })
+                            })
+                            .unwrap_or_else(|| question.to_owned()),
+                        confirmation: call
+                            .args
+                            .get("confirmation")
+                            .and_then(|value| value.get("proposal_call_id"))
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|id| ctx.action_preview(&crate::CallId::new(id)))
+                            .map(|proposal| {
+                                let mut args = proposal.args.clone();
+                                if let Some(args) = args.as_object_mut() {
+                                    args.remove("confirmation");
+                                }
+                                crate::ActionConfirmation {
+                                    proposal_call_id: proposal.id.clone(),
+                                    tool: proposal.tool.clone(),
+                                    args_digest: crate::args_digest(&args),
+                                    principal_id: proposal.principal.clone(),
+                                }
+                            }),
                     }],
                 )
                 .await?;
@@ -1187,9 +1257,9 @@ where
         self.emit(
             ctx,
             vec![Event::Error {
+                class: Some(crate::ErrorClass::BudgetExhausted),
                 code: ErrorCode::BudgetExhausted,
                 message,
-                class: Some(crate::ErrorClass::BudgetExhausted),
             }],
         )
         .await?;
@@ -1437,6 +1507,14 @@ where
                 self.finish(ctx, call, result).await
             }
             Claim::Granted => {
+                // A durable Started row proves the dispatch boundary was crossed.
+                // A missing ledger is lost evidence, never a fresh permission to run.
+                if already_started {
+                    let result = ToolResult::unknown(UNKNOWN_NO_RETRY);
+                    self.effects.record(&call.id, &result).await?;
+                    return self.finish(ctx, call, result).await;
+                }
+
                 // Claim persistence can consume the remaining wall. A fresh
                 // claim is known not executed; a historical Started call may
                 // already have taken effect and must remain Unknown.

@@ -83,6 +83,24 @@ string_id!(
     ArtifactRef
 );
 
+/// Owner-bound action details attached to a chat question. No prose grants authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionConfirmation {
+    pub proposal_call_id: CallId,
+    pub tool: ToolName,
+    pub args_digest: String,
+    pub principal_id: PrincipalId,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationDecision {
+    #[default]
+    Unspecified,
+    Confirm,
+    Decline,
+}
+
 /// The tenant scope of one thread. Every log read and write carries all three.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThreadId {
@@ -371,6 +389,9 @@ impl ErrorCode {
     }
 }
 
+/// Execution mode retained in durable ingress for compatibility and attribution.
+/// Both modes now grant `NeedsApproval` through an exact `AutoApproved`
+/// receipt. Neither mode overrides a hard policy `Deny`.
 /// A content-free failure class supplied by the typed model adapter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -474,10 +495,10 @@ impl ErrorClass {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
-    /// A human decides: the turn parks on `ApprovalRequested`.
+    /// Interactive caller; approval-class calls receive a durable auto-approval.
     #[default]
     Interactive,
-    /// No human: policy approves what would otherwise ask.
+    /// Unattended caller; approval-class calls receive the same durable receipt.
     Headless,
 }
 
@@ -562,6 +583,10 @@ pub enum Event {
         call: CallId,
         principal: PrincipalId,
         text: String,
+        #[serde(default)]
+        confirmation_decision: ConfirmationDecision,
+        #[serde(default)]
+        args_digest: String,
     },
     /// Control: a client session's outcome for one `ClientToolRequested`
     /// call. Only `Outcome::Succeeded` or `Outcome::Failed` are accepted
@@ -686,6 +711,8 @@ pub enum Event {
     Question {
         call: CallId,
         text: String,
+        #[serde(default)]
+        confirmation: Option<ActionConfirmation>,
     },
     /// The turn is parked until a `ClientToolResult` for this call arrives.
     /// The only event that carries tool arguments to a surface; the host

@@ -457,6 +457,8 @@ pub async fn run_actions(seed: u64, actions: &[Action]) -> Vec<Violation> {
                         call: call.clone(),
                         principal: principal(p),
                         text: payload.text(seed),
+                        confirmation_decision: dex_loop::ConfirmationDecision::Unspecified,
+                        args_digest: String::new(),
                     });
                 }
             }

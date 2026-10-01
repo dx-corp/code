@@ -257,6 +257,8 @@ async fn an_approval_class_call_is_granted_at_once_recorded_and_runs_in_order() 
         tools.run_of(&call_id("t1", 1, 1)).args,
         json!({"key": "w", "to": "ops@example.com"})
     );
+    // The leading read is checked before prefetch and again before adoption.
+    // Mutations are checked once; execution remains exactly once per call.
     // Policy ran once per call, plus once more for the read prefetched while
     // the model streamed: adoption re-checks it under current authority.
     let checks: Vec<String> = tools
@@ -337,7 +339,6 @@ async fn a_receipt_survives_a_crash_and_the_call_runs_once_after_rehydrate() {
 #[tokio::test]
 async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
     let log = FakeLog::default();
-    // Step 1 is already committed in the log; the only model call is step 2.
     let model = FakeModel::new(vec![vec![text("sent")]]);
     let tools = FakeTools::new(vec![read_tool("search"), write_tool("send_email")])
         .verdict("send_email", approval("ap-1"));
@@ -1132,6 +1133,35 @@ async fn started_call_with_vanished_tool_settles_unknown_and_is_not_redispatched
     );
 }
 
+#[tokio::test]
+async fn started_mutation_with_missing_ledger_never_dispatches_again() {
+    let log = FakeLog::default();
+    let write = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("deploy"),
+        json!({}),
+        alice(),
+    );
+    crashed_after_start(&log, &write);
+    let effects = FakeEffects::default();
+    let model = FakeModel::new(vec![vec![text("check the external result")]]);
+    let tools = FakeTools::new(vec![write_tool("deploy")]);
+    let engine = engine_with(&log, &model, &tools, &effects, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(
+        tools.runs().is_empty(),
+        "a missing ledger does not authorize repeating a Started mutation"
+    );
+    assert_eq!(
+        effects.recorded(&write.id).unwrap().unwrap().outcome,
+        dex_loop::Outcome::Unknown
+    );
+}
+
 // 8f. `CallId` is unique only within its thread (a turn id is
 // caller-chosen); two threads that pick the same turn id get the same raw
 // call id string. `Tools::run` still receives the call's thread separately,
@@ -1303,10 +1333,8 @@ async fn unknown_and_denied_calls_are_visible_to_the_model() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// 10b. No human approves a Dex call (#11467): a `NeedsApproval` verdict is
-// granted at once on every turn, headless or interactive, and the log keeps
-// one `AutoApproved` receipt attributed to `AUTO_APPROVER`. A `Deny` verdict
-// stays denied.
+// 10b. Auto-approved calls retain exact durable authority and replay once;
+// current policy hard denials remain denied.
 fn headless_tools() -> FakeTools {
     FakeTools::new(vec![write_tool("send_email"), write_tool("delete_all")])
         .verdict("send_email", approval("ap-1"))
@@ -1359,7 +1387,7 @@ fn assert_auto_approved_and_sent(log: &FakeLog, tools: &FakeTools) {
 }
 
 #[tokio::test]
-async fn headless_turn_auto_approves_an_ask_gated_tool_and_records_the_audit_pair() {
+async fn headless_turn_auto_approves_with_one_exact_durable_receipt() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![call("send_email", json!({"key": "w"}))],
@@ -1368,17 +1396,262 @@ async fn headless_turn_auto_approves_an_ask_gated_tool_and_records_the_audit_pai
     let tools = headless_tools();
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn_with_approval_mode("t1", "email them", ApprovalMode::Headless);
+    let cancel = CancellationToken::new();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(tools.run_of(&call_id("t1", 1, 0)).args, json!({"key": "w"}));
+    assert_eq!(
+        log.shapes_after(1),
+        strings(&[
+            "step:1",
+            "completed::[t1-1-0]",
+            "auto_approved:t1-1-0",
+            "started:t1-1-0",
+            "finished:t1-1-0:ok",
+            "step:2",
+            "delta:sent",
+            "completed:sent:[]",
+            "final:sent"
+        ])
+    );
+    assert!(log.events().iter().any(|event| matches!(event, Event::AutoApproved { call, approval, args_digest, principal, .. }
+        if *call == call_id("t1", 1, 0) && approval.as_str() == "ap-1" && *args_digest == dex_loop::args_digest(&json!({"key": "w"})) && principal.as_str() == dex_loop::AUTO_APPROVER)));
+    let completed = log.entries();
+    let mut ctx = log.rehydrate();
     assert_eq!(ctx.approval_mode(), ApprovalMode::Headless);
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(log.entries(), completed);
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn upgraded_headless_turn_records_a_current_receipt_before_a_legacy_pending_effect() {
+    let log = FakeLog::default();
+    let proposed = legacy_synthetic_approval_log(&log);
+    let before = log.entries();
+    let model = FakeModel::new(vec![vec![text("sent")]]);
+    let tools = headless_tools();
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    let cancel = CancellationToken::new();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(
+        &log.entries()[..before.len()],
+        before.as_slice(),
+        "original audit history retained"
+    );
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(tools.run_of(&proposed.id).args, proposed.args);
+    let events = log.events();
+    let receipt = events.iter().position(|event| matches!(event, Event::AutoApproved { call, args_digest, .. } if *call == proposed.id && *args_digest == proposed.args_digest)).expect("current receipt");
+    let started = events
+        .iter()
+        .position(|event| matches!(event, Event::ToolStarted { call, .. } if *call == proposed.id))
+        .expect("effect started");
+    assert!(receipt < started);
+    assert_eq!(ctx, log.rehydrate());
+    let completed = log.entries();
+    let mut ctx = log.rehydrate();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(log.entries(), completed);
+}
+
+#[tokio::test]
+async fn a_replayed_auto_approval_with_another_argument_digest_never_dispatches() {
+    let log = FakeLog::default();
+    let proposed = legacy_synthetic_approval_log(&log);
+    log.host_append(Event::AutoApproved {
+        call: proposed.id.clone(),
+        approval: ApprovalId::new("ap-1"),
+        args_digest: dex_loop::args_digest(&json!({"key": "other"})),
+        summary: "Send email".into(),
+        principal: PrincipalId::new(dex_loop::AUTO_APPROVER),
+    });
+    let model = FakeModel::new(vec![vec![text("refused")]]);
+    let tools = headless_tools();
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(tools.runs().is_empty());
+    assert_eq!(
+        view(&model.seen()[0])[2..],
+        strings(&["tool:t1-1-0:err:denied: the approval does not match this call's arguments"])
+    );
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn a_durable_auto_approval_never_overrides_a_current_policy_deny() {
+    let log = FakeLog::default();
+    let proposed = legacy_synthetic_approval_log(&log);
+    log.host_append(Event::AutoApproved {
+        call: proposed.id.clone(),
+        approval: ApprovalId::new("ap-1"),
+        args_digest: proposed.args_digest.clone(),
+        summary: "Send email".into(),
+        principal: PrincipalId::new(dex_loop::AUTO_APPROVER),
+    });
+    let model = FakeModel::new(vec![vec![text("refused")]]);
+    let tools = FakeTools::new(vec![write_tool("send_email")])
+        .verdict("send_email", Verdict::Deny("the grant was revoked".into()));
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(
+        tools.runs().is_empty(),
+        "a receipt cannot override revocation"
+    );
+    assert_eq!(
+        tools.policy_checks().len(),
+        1,
+        "replay checks current policy"
+    );
+    assert!(
+        !log.events()
+            .iter()
+            .any(|event| matches!(event, Event::ToolStarted { .. }))
+    );
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event, Event::AutoApproved { .. }))
+            .count(),
+        1,
+        "adopt the existing audit record"
+    );
+    assert_eq!(
+        view(&model.seen()[0])[2..],
+        strings(&["tool:t1-1-0:err:denied: the grant was revoked"])
+    );
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn upgraded_headless_turn_preserves_an_effect_completed_under_legacy_approval() {
+    let log = FakeLog::default();
+    let proposed = legacy_synthetic_approval_log(&log);
+    log.host_append(Event::ToolStarted {
+        call: proposed.id.clone(),
+        tool: proposed.tool.clone(),
+        label: "Send email".into(),
+        principal: proposed.principal.clone(),
+    });
+    log.host_append(Event::ToolFinished {
+        call: proposed.id.clone(),
+        outcome: dex_loop::Outcome::Succeeded,
+        output: dex_loop::Output::Text("legacy send receipt".into()),
+        receipt: None,
+    });
+    let before = log.entries();
+    let model = FakeModel::new(vec![vec![text("sent")]]);
+    let tools = headless_tools();
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    let cancel = CancellationToken::new();
+
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert!(
+        tools.run_ids().is_empty(),
+        "completed effects must not rerun"
+    );
+    assert_eq!(model.calls(), 1);
+    assert_eq!(
+        view(&model.seen()[0]),
+        strings(&[
+            "user:email them",
+            "assistant::[t1-1-0]",
+            "tool:t1-1-0:ok:legacy send receipt",
+        ])
+    );
+    assert_eq!(&log.entries()[..before.len()], before.as_slice());
+    assert!(!log.events()[before.len()..].iter().any(|event| matches!(
+        event,
+        Event::ApprovalRequested { .. }
+            | Event::ApprovalDecided { .. }
+            | Event::ToolStarted { .. }
+            | Event::ToolFinished { .. }
+    )));
+    assert_eq!(log.rehydrate(), ctx);
+
+    let completed = log.entries();
+    let mut ctx = log.rehydrate();
+    assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
+    assert_eq!(log.entries(), completed);
+    assert_eq!(model.calls(), 1);
+}
+
+// Rows an old headless engine could persist before crashing prior to dispatch.
+fn legacy_synthetic_approval_log(log: &FakeLog) -> ProposedCall {
+    log.start_turn_with_approval_mode("t1", "email them", ApprovalMode::Headless);
+    let proposed = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("send_email"),
+        json!({"key": "w"}),
+        alice(),
+    );
+    for event in [
+        Event::StepStarted {
+            step: 1,
+            control_through: dex_loop::Cursor(1),
+        },
+        Event::ModelStepCompleted {
+            timing: None,
+            step: 1,
+            text: String::new(),
+            calls: vec![proposed.clone()],
+            reasoning: None,
+            served: None,
+        },
+        Event::ApprovalRequested {
+            call: proposed.id.clone(),
+            approval: ApprovalId::new("ap-1"),
+            args_digest: proposed.args_digest.clone(),
+            summary: "Approve ap-1".into(),
+        },
+        Event::ApprovalDecided {
+            call: proposed.id.clone(),
+            approval: ApprovalId::new("ap-1"),
+            args_digest: proposed.args_digest.clone(),
+            approved: true,
+            principal: dex_loop::PrincipalId::new(dex_loop::HEADLESS_AUTO_APPROVER),
+        },
+    ] {
+        log.host_append(event);
+    }
+    proposed
+}
+
+#[tokio::test]
+async fn headless_turn_executes_a_policy_allowed_mutation_without_approval() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("send_email", json!({"key": "w"}))],
+        vec![text("sent")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("send_email")]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn_with_approval_mode("t1", "email them", ApprovalMode::Headless);
 
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
         Ok(Exit::Done)
     );
-    assert_auto_approved_and_sent(&log, &tools);
-    // Resumes keep the mode: it is on the logged UserMessage.
-    let rehydrated = log.rehydrate();
-    assert_eq!(rehydrated.approval_mode(), ApprovalMode::Headless);
-    assert_eq!(rehydrated, ctx);
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert!(!log.events().iter().any(|event| matches!(
+        event,
+        Event::ApprovalRequested { .. }
+            | Event::ApprovalDecided { .. }
+            | Event::AutoApproved { .. }
+    )));
+    assert_eq!(log.rehydrate(), ctx);
 }
 
 /// A `NeedsConfirmation` verdict parks nothing and runs nothing: its preview
@@ -1493,7 +1766,9 @@ async fn headless_turn_keeps_a_hard_deny_denied() {
     assert!(
         !log.events().iter().any(|event| matches!(
             event,
-            Event::ApprovalRequested { .. } | Event::ApprovalDecided { .. }
+            Event::ApprovalRequested { .. }
+                | Event::ApprovalDecided { .. }
+                | Event::AutoApproved { .. }
         )),
         "a denied call is never offered for approval"
     );
@@ -1504,7 +1779,7 @@ async fn headless_turn_keeps_a_hard_deny_denied() {
 }
 
 #[tokio::test]
-async fn interactive_turn_auto_approves_the_same_ask_gated_tool() {
+async fn interactive_turn_retains_current_auto_approval_semantics() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![call("send_email", json!({"key": "w"}))],
@@ -1513,17 +1788,24 @@ async fn interactive_turn_auto_approves_the_same_ask_gated_tool() {
     let tools = headless_tools();
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn_with_approval_mode("t1", "email them", ApprovalMode::Interactive);
-
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
         Ok(Exit::Done)
     );
+    assert_eq!(tools.run_ids(), strings(&["t1-1-0"]));
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event, Event::AutoApproved { .. }))
+            .count(),
+        1
+    );
     assert_auto_approved_and_sent(&log, &tools);
-    assert_eq!(log.rehydrate(), ctx);
+    assert_eq!(ctx, log.rehydrate());
 }
 
 #[tokio::test]
-async fn headless_turn_auto_approves_a_mutating_client_tool() {
+async fn headless_turn_records_auto_approval_before_requesting_a_mutating_client_tool() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![vec![call(
         "browser.click",
@@ -1532,10 +1814,10 @@ async fn headless_turn_auto_approves_a_mutating_client_tool() {
     let tools = FakeTools::new(vec![client_executed_tool("browser.click", false)]);
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn_with_approval_mode("t1", "click buy", ApprovalMode::Headless);
-
+    let call = call_id("t1", 1, 0);
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
-        Ok(Exit::AwaitingClientTool(call_id("t1", 1, 0)))
+        Ok(Exit::AwaitingClientTool(call.clone()))
     );
     assert_eq!(
         log.shapes_after(1),
@@ -1543,9 +1825,13 @@ async fn headless_turn_auto_approves_a_mutating_client_tool() {
             "step:1",
             "completed::[t1-1-0]",
             "auto_approved:t1-1-0",
-            "client_tool:t1-1-0:browser.click",
+            "client_tool:t1-1-0:browser.click"
         ])
     );
+    assert!(log.events().iter().any(|event| matches!(event, Event::AutoApproved { call: approved_call, approval, args_digest, principal, .. }
+        if *approved_call == call && approval.as_str() == format!("client-{call}") && *args_digest == dex_loop::args_digest(&json!({"selector": "#buy"})) && principal.as_str() == dex_loop::AUTO_APPROVER)));
+    assert!(tools.runs().is_empty());
+    assert_eq!(ctx, log.rehydrate());
 }
 
 // 11. Compaction is an event, applied before the model call, and rehydration
@@ -1747,6 +2033,8 @@ async fn question_parks_and_answer_resumes() {
         call: call_id("t1", 1, 0),
         principal: alice(),
         text: "eu".into(),
+        confirmation_decision: dex_loop::ConfirmationDecision::Unspecified,
+        args_digest: String::new(),
     });
     assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
     assert_eq!(
@@ -1828,39 +2116,56 @@ async fn client_tool_is_requested_and_result_resumes() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// A mutating client tool gets its `AutoApproved` receipt before it is
-// requested from the client; nothing parks for a person.
+// A mutating client tool requires a receipt matching its exact arguments;
+// a mismatched receipt never reaches the client.
 #[tokio::test]
-async fn a_mutating_client_tool_is_auto_approved_before_it_is_requested() {
+async fn a_mutating_client_tool_rejects_a_mismatched_durable_approval_receipt() {
     let log = FakeLog::default();
-    let model = FakeModel::new(vec![vec![call(
-        "browser.click",
+    let proposed = ProposedCall::new(
+        call_id("t1", 1, 0),
+        ToolName::new("browser.click"),
         json!({"selector": "#buy"}),
-    )]]);
+        alice(),
+    );
+    log.start_turn("t1", "click buy");
+    log.host_append(Event::StepStarted {
+        step: 1,
+        control_through: Cursor(1),
+    });
+    log.host_append(Event::ModelStepCompleted {
+        timing: None,
+        step: 1,
+        text: String::new(),
+        calls: vec![proposed.clone()],
+        reasoning: None,
+        served: None,
+    });
+    log.host_append(Event::AutoApproved {
+        call: proposed.id.clone(),
+        approval: ApprovalId::new(format!("client-{}", proposed.id)),
+        args_digest: dex_loop::args_digest(&json!({"selector": "#other"})),
+        summary: "Click".into(),
+        principal: PrincipalId::new(dex_loop::AUTO_APPROVER),
+    });
+    let model = FakeModel::new(vec![vec![text("refused")]]);
     let tools = FakeTools::new(vec![client_executed_tool("browser.click", false)]);
     let engine = engine(&log, &model, &tools, budget());
-    let mut ctx = log.start_turn("t1", "click buy");
-    let cancel = CancellationToken::new();
-
-    let call = call_id("t1", 1, 0);
+    let mut ctx = log.rehydrate();
     assert_eq!(
-        engine.run(&mut ctx, &cancel).await,
-        Ok(Exit::AwaitingClientTool(call))
-    );
-    assert_eq!(
-        log.shapes_after(1),
-        strings(&[
-            "step:1",
-            "completed::[t1-1-0]",
-            "auto_approved:t1-1-0",
-            "client_tool:t1-1-0:browser.click",
-        ])
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
     );
     assert!(
-        tools.runs().is_empty(),
-        "the client, not Tools::run, executes it"
+        !log.events()
+            .iter()
+            .any(|event| matches!(event, Event::ClientToolRequested { .. }))
     );
-    assert_eq!(log.rehydrate(), ctx);
+    assert!(tools.runs().is_empty());
+    assert_eq!(
+        view(&model.seen()[0])[2..],
+        strings(&["tool:t1-1-0:err:denied: the approval does not match this call's arguments"])
+    );
+    assert_eq!(ctx, log.rehydrate());
 }
 
 // A model failure abandons the attempt and ends the turn with model_failed.
@@ -1996,11 +2301,10 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
     );
 }
 
-// Provider reasoning is committed with its step and survives a crash: after
-// a fresh engine rehydrates the log and resumes the step, the next model call
-// sees it on the assistant message.
+// Provider reasoning survives a crash after the durable auto-approval receipt.
+
 #[tokio::test]
-async fn reasoning_is_committed_with_its_step_and_returned_after_a_crash() {
+async fn reasoning_is_committed_with_its_step_and_returned_after_receipt_and_crash() {
     let reasoning = dex_loop::ProviderReasoning {
         format: "google.gemini.v1".into(),
         model: "gemini-3.6-flash".into(),
@@ -2021,13 +2325,20 @@ async fn reasoning_is_committed_with_its_step_and_returned_after_a_crash() {
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn("t1", "email them");
     let cancel = CancellationToken::new();
-    // user, step, completed, auto_approved land; the `ToolStarted` write is
-    // refused, which is the crash.
-    log.fence_after(3);
+    log.fence_after(4);
     assert!(matches!(
         engine.run(&mut ctx, &cancel).await,
         Err(Fenced { .. })
     ));
+    assert!(tools.runs().is_empty(), "crash before effect dispatch");
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event, Event::AutoApproved { .. }))
+            .count(),
+        1,
+        "durable receipt precedes the crash"
+    );
     let committed: Vec<_> = log
         .events()
         .into_iter()
@@ -2038,9 +2349,9 @@ async fn reasoning_is_committed_with_its_step_and_returned_after_a_crash() {
         .collect();
     assert_eq!(committed, vec![Some(reasoning.clone())]);
 
-    // -- crash: a fresh engine and context from the log --
-    log.fence_after(usize::MAX);
+    // -- crash: a fresh engine and context adopt the durable receipt --
     let engine = support::engine(&log, &model, &tools, budget());
+    log.fence_after(usize::MAX);
     let mut ctx = log.rehydrate();
     assert_eq!(engine.run(&mut ctx, &cancel).await, Ok(Exit::Done));
 
@@ -2055,6 +2366,136 @@ async fn reasoning_is_committed_with_its_step_and_returned_after_a_crash() {
     assert_eq!(returned, vec![Some(reasoning)]);
     assert_eq!(log.rehydrate(), ctx);
 }
+
+#[tokio::test]
+async fn compaction_usage_is_durable_and_stops_an_exhausted_turn_before_dispatch() {
+    struct ChargedSummary {
+        commit: bool,
+    }
+    impl dex_loop::Summarize for ChargedSummary {
+        async fn summarize(
+            &self,
+            _ctx: &dex_loop::Context,
+            _entries: &[dex_loop::Entry],
+        ) -> dex_loop::Summary {
+            dex_loop::Summary {
+                text: self.commit.then(|| "historical summary".into()),
+                usage: dex_loop::Usage {
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    input_tokens: 100,
+                    output_tokens: 0,
+                    cost_micros: 1,
+                },
+            }
+        }
+    }
+    for commit in [false, true] {
+        let log = FakeLog::default();
+        log.start_turn("old", "old input is lengthy enough to compact");
+        log.host_append(Event::Final {
+            text: "old done".into(),
+        });
+        let mut ctx = log.start_turn("current", "continue");
+        let model = FakeModel::new(vec![vec![text("should never run")]]);
+        let tools = FakeTools::new(vec![]);
+        let engine = Engine::new(
+            log.clone(),
+            model.clone(),
+            tools,
+            FakeEffects::default(),
+            Lexicon::default(),
+            Budget {
+                max_tokens: 100,
+                ..budget()
+            },
+        )
+        .with_compactor(Threshold::new(1, 1, ChargedSummary { commit }));
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(Exit::Failed)
+        );
+        assert_eq!(model.calls(), 0);
+        assert_eq!(ctx.usage().tokens(), 100);
+        let events = log.events();
+        let usage_index = events
+            .iter()
+            .position(|event| matches!(event, Event::Usage(_)))
+            .expect("usage recorded");
+        let error_index = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    Event::Error {
+                        code: dex_loop::ErrorCode::BudgetExhausted,
+                        ..
+                    }
+                )
+            })
+            .expect("budget exhausted");
+        assert!(usage_index < error_index);
+        if commit {
+            let compact_index = events
+                .iter()
+                .position(|event| matches!(event, Event::Compaction { .. }))
+                .expect("summary");
+            assert!(usage_index < compact_index);
+        } else {
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !matches!(event, Event::Compaction { .. }))
+            );
+        }
+        assert_eq!(ctx, log.rehydrate());
+    }
+}
+
+#[tokio::test]
+async fn summary_calls_obey_the_same_wall_budget_as_normal_model_calls() {
+    struct Slow;
+    impl dex_loop::Summarize for Slow {
+        async fn summarize(
+            &self,
+            _ctx: &dex_loop::Context,
+            _entries: &[dex_loop::Entry],
+        ) -> dex_loop::Summary {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            dex_loop::Summary::default()
+        }
+    }
+    let log = FakeLog::default();
+    log.start_turn("old", "old history");
+    log.host_append(Event::Final {
+        text: "old done".into(),
+    });
+    let mut ctx = log.start_turn("current", "continue");
+    let model = FakeModel::default();
+    let engine = Engine::new(
+        log.clone(),
+        model.clone(),
+        FakeTools::new(vec![]),
+        FakeEffects::default(),
+        Lexicon::default(),
+        Budget {
+            wall: Duration::from_millis(10),
+            ..budget()
+        },
+    )
+    .with_compactor(Threshold::new(1, 1, Slow));
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Failed)
+    );
+    assert_eq!(model.calls(), 0);
+    assert!(
+        log.events()
+            .iter()
+            .all(|event| !matches!(event, Event::Compaction { .. }))
+    );
+}
+
 #[tokio::test]
 async fn fresh_call_ids_cannot_repeat_an_unknown_mutation() {
     let log = FakeLog::default();
@@ -2264,6 +2705,52 @@ async fn uncertain_mutations_keep_their_principal_identity() {
     assert_eq!(tools.runs().len(), 1);
     assert_eq!(tools.policy_checks()[0].1, "bob");
     assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn a_steer_during_a_cut_answer_continues_the_turn() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![
+            text("partial answer"),
+            Err(ModelError {
+                class: dex_loop::ErrorClass::Unknown,
+                message: "stream failed".into(),
+            }),
+        ],
+        vec![text("corrected answer")],
+    ])
+    .with_chunk_delay(Duration::from_millis(100));
+    let tools = FakeTools::new(vec![]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "question");
+    let cancel = CancellationToken::new();
+    let host = async {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while log.text_writes().is_empty() {
+            assert!(Instant::now() < deadline, "first visible text");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        log.host_append(Event::Steer {
+            principal: alice(),
+            text: "correct that answer".into(),
+        });
+    };
+    let (exit, ()) = tokio::join!(engine.run(&mut ctx, &cancel), host);
+    assert_eq!(exit, Ok(Exit::Done));
+    assert_eq!(model.calls(), 2, "the durable steer must reach the model");
+    assert_eq!(
+        view(&model.seen()[1]),
+        strings(&[
+            "user:question",
+            &format!("assistant:partial answer{CUT_OFF_NOTICE}:[]"),
+            "user:correct that answer",
+        ])
+    );
+    assert!(
+        matches!(log.events().last(), Some(Event::Final { text }) if text == "corrected answer")
+    );
+    assert_eq!(log.rehydrate(), ctx);
 }
 
 // Failed route attempts are debug rows: the engine appends each one at once,

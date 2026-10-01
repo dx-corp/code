@@ -63,8 +63,7 @@ pub enum ModelChunk {
     },
     Usage(Usage),
     /// The step's opaque provider continuation state. At most one per step,
-    /// sent only after a clean terminal (the same commit rule as `ToolCall`
-    /// and `Usage`), after the last `ToolCall` and before `Usage`. The engine
+    /// sent only after a clean terminal (the same commit rule as `Usage`), after the last `ToolCall` and before `Usage`. The engine
     /// stores it on `ModelStepCompleted`; history returns it on
     /// `Message::Assistant`.
     Reasoning(ProviderReasoning),
