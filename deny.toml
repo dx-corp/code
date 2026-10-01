@@ -53,6 +53,12 @@ allow = [
     "CC0-1.0",
 ]
 confidence-threshold = 0.8
+# Maestro's dex-loop -> jsonschema -> referencing -> fluent-uri edge uses
+# the same MIT-0 crate already accepted by rust/deny.toml and Connectors.
+# Keep this product allowance limited to the existing locked version.
+exceptions = [
+    { crate = "borrow-or-share@=0.2.4", allow = ["MIT-0"] },
+]
 
 [licenses.private]
 ignore = true
