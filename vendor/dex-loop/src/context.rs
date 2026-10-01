@@ -136,6 +136,28 @@ pub(crate) struct OpenStep {
     pub(crate) states: Vec<CallState>,
 }
 
+/// The most recent consecutive failed operation, derived from tool events.
+#[derive(Clone, Debug, PartialEq)]
+struct FailedCall {
+    principal: PrincipalId,
+    tool: ToolName,
+    args: serde_json::Value,
+    count: u32,
+}
+
+/// The latest owner tool completions retained independently of model history.
+/// Proposals and results are paired only by the typed event fold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolEvidence {
+    pub cursor: Cursor,
+    pub call: ProposedCall,
+    pub result: ToolResult,
+}
+
+/// Evidence retention is bounded. Evicted results no longer authorize follow-up
+/// verification; callers must run the tool again to establish fresh evidence.
+pub const TOOL_EVIDENCE_LIMIT: usize = 128;
+
 /// Maximum document references retained across accepted messages. The current
 /// message remains exact so the document owner can reject invalid admissions.
 pub const MAX_CONTEXT_ATTACHMENTS: usize = 20;
@@ -159,6 +181,7 @@ pub struct Context {
     acting: Option<PrincipalId>,
     status: Status,
     history: Vec<Entry>,
+    tool_evidence: Vec<ToolEvidence>,
     // Newest input first (even when it has no uploads), then bounded earlier
     // attachment batches. Compaction never manufactures or edits provenance.
     attachment_inputs: Vec<AttachmentInput>,
@@ -198,6 +221,11 @@ pub struct Context {
     /// covers to). Assistant entries at or before it were produced before
     /// the summary existed.
     last_compaction: Option<Cursor>,
+    /// Derived from tool events, outside compactable history. This tracks a
+    /// consecutive failure, not a permanent blacklist or an automatic retry.
+    failed_call: Option<FailedCall>,
+    /// Set only on the model-attempt copy, never on durable thread context.
+    remaining_budget: Option<crate::RemainingBudget>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -223,6 +251,7 @@ impl Context {
             acting: None,
             status: Status::Idle,
             history: Vec::new(),
+            tool_evidence: Vec::new(),
             attachment_inputs: Vec::new(),
             step: 0,
             usage: Usage::default(),
@@ -243,7 +272,15 @@ impl Context {
             pending_turns: Vec::new(),
             pre_started: Vec::new(),
             last_compaction: None,
+            failed_call: None,
+            remaining_budget: None,
         }
+    }
+
+    /// Owner results survive summaries; model-authored summary text is never
+    /// folded into this evidence. The records remain in event cursor order.
+    pub fn tool_evidence(&self) -> &[ToolEvidence] {
+        &self.tool_evidence
     }
 
     /// Assistant entries created before this event cannot reuse signed thinking.
@@ -293,6 +330,34 @@ impl Context {
     /// Who can answer this turn's approvals, as logged on its `UserMessage`.
     pub fn approval_mode(&self) -> ApprovalMode {
         self.approval_mode
+    }
+
+    /// Advisory capacity, refreshed before every model stream. It does not
+    /// grant permission or change the engine's caps.
+    pub fn remaining_budget(&self) -> Option<crate::RemainingBudget> {
+        self.remaining_budget
+    }
+
+    pub(crate) fn for_model(&self, remaining: crate::RemainingBudget) -> Self {
+        let mut ctx = self.clone();
+        ctx.remaining_budget = Some(remaining);
+        ctx
+    }
+
+    /// A fresh identical failed call needs new information or a new approach.
+    pub fn recovery_guidance(&self) -> Option<String> {
+        self.failed_call.as_ref().filter(|failure| failure.count >= 3).map(|failure| {
+            format!("The same call to {} failed {} consecutive times without progress. Do not repeat the identical call. Inspect the failure, change the inputs or approach, use another available capability, or report the concrete blocker. A successful intervening call or new user input resets this guard. Never retry a mutation with an unknown outcome.", failure.tool, failure.count)
+        })
+    }
+
+    pub(crate) fn has_stalled_call(&self, call: &ProposedCall) -> bool {
+        self.failed_call.as_ref().is_some_and(|failure| {
+            failure.count >= 3
+                && failure.principal == call.principal
+                && failure.tool == call.tool
+                && failure.args == call.args
+        })
     }
 
     /// The model's view of the thread.
@@ -682,6 +747,29 @@ impl Context {
                 output,
                 receipt,
             } => {
+                if let Some(proposal) = self
+                    .open_step
+                    .as_ref()
+                    .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
+                    .cloned()
+                    && !self
+                        .tool_evidence
+                        .iter()
+                        .any(|record| record.call.id == *call)
+                {
+                    self.tool_evidence.push(ToolEvidence {
+                        cursor,
+                        call: proposal,
+                        result: ToolResult {
+                            outcome: *outcome,
+                            output: output.clone(),
+                            receipt: receipt.clone(),
+                        },
+                    });
+                    if self.tool_evidence.len() > TOOL_EVIDENCE_LIMIT {
+                        self.tool_evidence.remove(0);
+                    }
+                }
                 // A confirmation preview is an owner policy refusal before the
                 // dispatch boundary. External error prose cannot manufacture one.
                 let unstarted = self.open_step.as_ref().and_then(|step| {
@@ -736,6 +824,31 @@ impl Context {
                         .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
                 {
                     self.uncertain_calls.push(proposal.clone());
+                }
+                if let Some(proposal) = self
+                    .open_step
+                    .as_ref()
+                    .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
+                {
+                    if *outcome == Outcome::Failed {
+                        let count = self
+                            .failed_call
+                            .as_ref()
+                            .filter(|failure| {
+                                failure.principal == proposal.principal
+                                    && failure.tool == proposal.tool
+                                    && failure.args == proposal.args
+                            })
+                            .map_or(1, |failure| failure.count.saturating_add(1));
+                        self.failed_call = Some(FailedCall {
+                            principal: proposal.principal.clone(),
+                            tool: proposal.tool.clone(),
+                            args: proposal.args.clone(),
+                            count,
+                        });
+                    } else {
+                        self.failed_call = None;
+                    }
                 }
                 if let Some(state) = self.state_mut(call) {
                     *state = CallState::Done(ToolResult {
@@ -880,6 +993,7 @@ impl Context {
         self.interrupt_requested = false;
         self.exposed.clear();
         self.uncertain_calls.clear();
+        self.failed_call = None;
         self.pre_started.clear();
         self.client_tools = client_tools;
         self.authorized_tools = authorized_tools;
@@ -971,6 +1085,7 @@ impl Context {
             .turn
             .clone()
             .unwrap_or_else(|| TurnId::new(String::new()));
+        self.failed_call = None;
         for (_, principal, text) in ready {
             self.acting = Some(principal.clone());
             self.push(

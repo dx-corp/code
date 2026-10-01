@@ -168,10 +168,9 @@ async fn a_mutation_that_overruns_the_deadline_is_recorded_unknown() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// Real time, not paused: the loop's between-steps wall check reads a
-// `std::time::Instant`, which tokio's paused clock does not advance. 100ms
-// of real time is the whole cost; the stuck call is dropped, never awaited.
-#[tokio::test(flavor = "current_thread")]
+// The tool timer and between-step wall check must share the same clock.
+// Advancing virtual time must exhaust the wall before another model step.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_call_never_outlives_the_wall_budget() {
     // The per-call deadline is generous; the wall budget is not. The call is
     // cut at the wall, its result appended, and the turn ends on the wall

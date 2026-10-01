@@ -1,14 +1,17 @@
 //! Native credential access shared by OAuth, connections, and MCP.
 //!
-//! Unit tests cannot open the developer's credential store. Process-based
-//! fixtures use MAESTRO_DISABLE_KEYCHAIN=1 to enforce the same boundary.
+//! Unit tests and opt-in test-support dependency builds cannot open the
+//! developer's credential store. Other process-based fixtures use
+//! MAESTRO_DISABLE_KEYCHAIN=1 to enforce the same boundary.
 use anyhow::{Result, bail};
 
 pub(crate) fn entry(service: &str, account: &str) -> Result<keyring::Entry> {
     let disabled = std::env::var("MAESTRO_DISABLE_KEYCHAIN").ok();
-    open_with_policy(cfg!(test), disabled.as_deref(), || {
-        keyring::Entry::new(service, account).map_err(Into::into)
-    })
+    open_with_policy(
+        cfg!(any(test, feature = "test-support")),
+        disabled.as_deref(),
+        || keyring::Entry::new(service, account).map_err(Into::into),
+    )
 }
 
 fn open_with_policy<T>(
@@ -17,7 +20,9 @@ fn open_with_policy<T>(
     open: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
     if unit_test {
-        bail!("native credential access is disabled in unit tests; inject a test secret backend");
+        bail!(
+            "native credential access is disabled in unit tests and test-support builds; inject a test secret backend"
+        );
     }
     if disabled == Some("1") {
         bail!("native credential access is disabled by MAESTRO_DISABLE_KEYCHAIN=1");

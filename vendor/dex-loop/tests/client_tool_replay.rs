@@ -387,3 +387,56 @@ async fn interrupting_a_turn_parked_on_a_client_tool_ends_it_promptly() {
     );
     assert_eq!(log.rehydrate(), ctx);
 }
+
+#[tokio::test]
+async fn configured_client_timeout_survives_compaction_and_is_persisted_for_restart() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![vec![call("browser.read_tab", json!({}))]]);
+    let tools = FakeTools::new(vec![client_executed_tool("browser.read_tab", true)]);
+    let configured = Duration::from_secs(20);
+    let engine = engine(&log, &model, &tools, budget())
+        .with_client_timeout(configured)
+        .with_compactor(dex_loop::Threshold::new(usize::MAX, 1, FakeSummarizer));
+    let mut ctx = log.start_turn_with_client_tools(
+        "t1",
+        "read the tab",
+        vec![client_tool("browser.read_tab", true)],
+    );
+    let before = now_ms();
+    let exit = engine.run(&mut ctx, &CancellationToken::new()).await;
+    let after = now_ms();
+    assert_eq!(exit, Ok(Exit::AwaitingClientTool(call_id("t1", 1, 0))));
+    let deadline = log
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ClientToolRequested { deadline_ms, .. } => Some(deadline_ms),
+            _ => None,
+        })
+        .expect("client request has a durable deadline");
+    assert!(
+        deadline >= before + 20_000 && deadline <= after + 20_000,
+        "configured wait must replace the 120-second default: {deadline}, {before}, {after}"
+    );
+    let restarted_model = FakeModel::new(vec![]);
+    let restarted = support::engine(&log, &restarted_model, &tools, budget());
+    let mut replay = log.rehydrate();
+    assert_eq!(
+        restarted.run(&mut replay, &CancellationToken::new()).await,
+        Ok(Exit::AwaitingClientTool(call_id("t1", 1, 0)))
+    );
+    let replay_deadlines: Vec<_> = log
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ClientToolRequested { deadline_ms, .. } => Some(deadline_ms),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        replay_deadlines,
+        vec![deadline],
+        "restart cannot extend the configured wait"
+    );
+    assert_eq!(replay, log.rehydrate());
+}

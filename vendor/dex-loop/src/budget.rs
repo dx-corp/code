@@ -34,6 +34,26 @@ impl Default for Budget {
     }
 }
 
+/// Capacity for the current model attempt. Advisory only: the engine still
+/// enforces every limit. Unlimited policy axes are represented by `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemainingBudget {
+    pub tool_steps: u32,
+    pub tokens: Option<u64>,
+    pub cost_micros: Option<u64>,
+    pub wall_ms: u64,
+    pub answer_only: bool,
+}
+
+impl RemainingBudget {
+    pub fn guidance(&self) -> String {
+        format!(
+            "Turn capacity for this attempt: tool steps remaining (including this attempt)={}, tokens remaining={:?}, cost micros remaining={:?}, time remaining={} ms, answer_only={}. None means no policy cap. Reserve capacity for a truthful final answer. Prioritize the user's remaining work; distinguish verified completion, partial progress, and blockers. When answer_only=true, use no tools and report only established results.",
+            self.tool_steps, self.tokens, self.cost_micros, self.wall_ms, self.answer_only,
+        )
+    }
+}
+
 /// The limit a turn ran out of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BudgetAxis {
@@ -55,6 +75,24 @@ impl fmt::Display for BudgetAxis {
 }
 
 impl Budget {
+    pub fn remaining(
+        &self,
+        completed_steps: u32,
+        usage: Usage,
+        elapsed: Duration,
+    ) -> RemainingBudget {
+        RemainingBudget {
+            tool_steps: self.max_steps.saturating_sub(completed_steps),
+            tokens: (self.max_tokens != u64::MAX)
+                .then(|| self.max_tokens.saturating_sub(usage.tokens())),
+            cost_micros: (self.max_cost_micros != u64::MAX)
+                .then(|| self.max_cost_micros.saturating_sub(usage.cost_micros)),
+            wall_ms: u64::try_from(self.wall.saturating_sub(elapsed).as_millis())
+                .unwrap_or(u64::MAX),
+            answer_only: self.answer_only(completed_steps),
+        }
+    }
+
     /// Whether the next model call is the answer-only call: `steps` calls
     /// have already been made and the tool-offering allowance is spent.
     pub fn answer_only(&self, steps: u32) -> bool {
