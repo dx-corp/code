@@ -286,6 +286,7 @@ mod tests {
         Event::UserMessage {
             turn: TurnId::new("t1"),
             message_id: None,
+            model_binding: None,
             principal: PrincipalId::new("alice"),
             text: text.into(),
             attachments: Vec::new(),

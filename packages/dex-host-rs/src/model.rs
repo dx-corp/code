@@ -361,6 +361,7 @@ mod tests {
                 dex_loop::Event::UserMessage {
                     turn: dex_loop::TurnId::new("t1"),
                     message_id: None,
+                    model_binding: None,
                     principal: PrincipalId::new("alice"),
                     text: "read a.txt".into(),
                     attachments: Vec::new(),

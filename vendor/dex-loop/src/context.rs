@@ -197,6 +197,7 @@ pub struct Context {
     client_tools: Vec<ClientToolSpec>,
     authorized_tools: Vec<ToolName>,
     approval_mode: ApprovalMode,
+    model_binding: Option<crate::ManagedInferenceProviderBinding>,
     /// `UserMessage`s for a later turn that arrived (by log cursor) while an
     /// earlier turn was still running. FIFO: applied one at a time, each when
     /// the turn ahead of it reaches a terminal status, so the still-running
@@ -240,6 +241,7 @@ struct PendingTurn {
     client_tools: Vec<ClientToolSpec>,
     authorized_tools: Vec<ToolName>,
     approval_mode: ApprovalMode,
+    model_binding: Option<crate::ManagedInferenceProviderBinding>,
 }
 
 impl Context {
@@ -265,6 +267,7 @@ impl Context {
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
             approval_mode: ApprovalMode::Interactive,
+            model_binding: None,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
             action_confirmations: Vec::new(),
@@ -330,6 +333,11 @@ impl Context {
     /// Who can answer this turn's approvals, as logged on its `UserMessage`.
     pub fn approval_mode(&self) -> ApprovalMode {
         self.approval_mode
+    }
+
+    /// The current turn's exact host-resolved provider coordinates.
+    pub fn model_binding(&self) -> Option<&crate::ManagedInferenceProviderBinding> {
+        self.model_binding.as_ref()
     }
 
     /// Advisory capacity, refreshed before every model stream. It does not
@@ -540,6 +548,7 @@ impl Context {
                 client_tools,
                 authorized_tools,
                 approval_mode,
+                model_binding,
             } => {
                 let next = PendingTurn {
                     turn: turn.clone(),
@@ -550,6 +559,7 @@ impl Context {
                     client_tools: client_tools.clone(),
                     authorized_tools: authorized_tools.clone(),
                     approval_mode: *approval_mode,
+                    model_binding: model_binding.clone(),
                 };
                 if self.status == Status::Running {
                     // This message's cursor landed while the current turn was
@@ -983,6 +993,7 @@ impl Context {
             client_tools,
             authorized_tools,
             approval_mode,
+            model_binding,
         } = next;
         self.turn = Some(turn.clone());
         self.acting = Some(principal.clone());
@@ -998,6 +1009,7 @@ impl Context {
         self.client_tools = client_tools;
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;
+        self.model_binding = model_binding;
         self.authorized_principal = Some(principal.clone());
         self.push(
             cursor,

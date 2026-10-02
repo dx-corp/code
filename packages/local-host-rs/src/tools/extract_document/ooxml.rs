@@ -67,6 +67,20 @@ fn local_name(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 
+fn tag_end(src: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, byte) in src.bytes().enumerate() {
+        match quote {
+            Some(delimiter) if byte == delimiter => quote = None,
+            Some(_) => {}
+            None if matches!(byte, b'\'' | b'"') => quote = Some(byte),
+            None if byte == b'>' => return Some(index),
+            None => {}
+        }
+    }
+    None
+}
+
 impl<'a> Iterator for XmlEvents<'a> {
     type Item = XmlEvent<'a>;
 
@@ -91,7 +105,7 @@ impl<'a> Iterator for XmlEvents<'a> {
                 self.pos += 9 + len + 3.min(body.len() - len);
                 return Some(XmlEvent::Text(&body[..len]));
             }
-            let Some(close) = rest.find('>') else {
+            let Some(close) = tag_end(rest) else {
                 self.pos = self.src.len();
                 return None;
             };
@@ -1428,6 +1442,63 @@ pub(super) mod tests {
         }
         assert_eq!(column_index("B12"), Some(1));
         assert_eq!(column_index("12"), None);
+    }
+
+    #[test]
+    fn xml_tag_end_preserves_quoted_angles_and_following_attributes() {
+        for xml in [
+            r#"<sheet name="Q1 > 2026" r:id="rId2"/>"#,
+            r"<sheet name='Q1 > 2026' r:id='rId2'/>",
+            r#"<sheet name="Q1 &gt; 2026" r:id="rId2"/>"#,
+        ] {
+            let mut events = xml_events(xml);
+            let Some(XmlEvent::Start {
+                name,
+                attrs,
+                self_closing,
+            }) = events.next()
+            else {
+                panic!("sheet start expected: {xml}");
+            };
+            assert_eq!(name, "sheet");
+            assert!(self_closing);
+            assert_eq!(attr(attrs, "name").as_deref(), Some("Q1 > 2026"));
+            assert_eq!(attr(attrs, "r:id").as_deref(), Some("rId2"));
+            assert!(events.next().is_none());
+        }
+        assert!(tag_end(r#"<sheet name="unterminated >"#).is_none());
+    }
+
+    #[test]
+    fn xlsx_preserves_quoted_angles_sheet_binding_order_and_hidden_state() {
+        let bytes = build_zip(&[
+            (
+                "xl/workbook.xml",
+                r#"<workbook xmlns:r="urn:test"><sheets><sheet name="Q1 > 2026" sheetId="1" state="hidden" r:id="rId2"/><sheet name="Overview" sheetId="2" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<worksheet><sheetData><row><c r="A1"><v>111</v></c></row></sheetData></worksheet>"#,
+            ),
+            (
+                "xl/worksheets/sheet2.xml",
+                r#"<worksheet><sheetData><row><c r="A1"><v>222</v></c></row></sheetData></worksheet>"#,
+            ),
+        ]);
+        let extracted = xlsx_to_markdown(&bytes).expect("workbook extraction");
+        let (first, second) = extracted
+            .text
+            .split_once("## Sheet: Overview")
+            .expect("second sheet");
+        assert!(first.starts_with("## Sheet: Q1 > 2026 (hidden)"));
+        assert!(first.contains("222"));
+        assert!(!first.contains("111"));
+        assert!(second.contains("111"));
+        assert_eq!(extracted.sections.expect("sheet accounting").count, 2);
     }
 
     #[test]

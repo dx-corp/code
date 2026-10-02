@@ -747,6 +747,17 @@ fn wait_for_process_exit(pid: i32) -> bool {
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn verifier_leader_exit_drains_background_descendant_pipes() {
+    #[cfg(target_os = "linux")]
+    {
+        // Earlier tool execution makes this process own orphaned descendants.
+        // Reproduce that production context before starting the verifier.
+        // SAFETY: this process-wide ownership flag takes integer arguments.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "the verifier fixture must own its orphaned descendants"
+        );
+    }
     let fixture = RepoFixture::new("verifier-descendant");
     let initial_head = git_revision(&fixture.repo, "HEAD");
     let pid_file = fixture._root.path().join("verifier-descendant.pid");

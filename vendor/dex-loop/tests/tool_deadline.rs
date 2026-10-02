@@ -393,7 +393,9 @@ async fn exhausted_wall_still_adopts_an_already_started_mutations_ledger_result(
     assert_eq!(ctx, log.rehydrate());
 }
 
-#[tokio::test(flavor = "current_thread")]
+// Exercise expiry inside claim/start persistence, rather than host scheduling
+// exhausting the wall before the engine can claim the mutation.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn mutation_claim_or_start_persistence_consuming_wall_never_polls_the_effect() {
     struct SlowClaim {
         effects: FakeEffects,

@@ -11,8 +11,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::future::Future;
 use std::io;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
@@ -20,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(unix)]
+use maestro_local_host::tools::{ProcessGroupGuard, set_new_process_group};
 use maestro_swarm::{
     RecoveryDecision, SwarmConfig, SwarmExecutor, SwarmPlan, SwarmRecoveryHooks, SwarmSnapshot,
     SwarmStatus, SwarmTask, SwarmTaskContext, SwarmTaskOutcome, TaskResult,
@@ -1657,7 +1657,8 @@ async fn run_verification(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    configure_process_group(&mut command);
+    #[cfg(unix)]
+    set_new_process_group(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -1674,7 +1675,8 @@ async fn run_verification(
             });
         }
     };
-    let process_group_id = child.id();
+    #[cfg(unix)]
+    let mut process_group = ProcessGroupGuard::new(child.id());
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let stdout_task = tokio::spawn(read_bounded(stdout, MAX_VERIFIER_OUTPUT_BYTES));
@@ -1684,7 +1686,8 @@ async fn run_verification(
         biased;
         () = cancellation.cancelled() => {
             cancelled = true;
-            kill_process_group(process_group_id).await;
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.wait().await;
             None
         }
@@ -1703,11 +1706,13 @@ async fn run_verification(
             // the group is terminated; the bounded wait still guarantees
             // that inherited pipes cannot hold acceptance open.
             tokio::time::sleep(Duration::from_millis(20)).await;
-            kill_process_group(process_group_id).await;
+            #[cfg(unix)]
+            process_group.terminate();
             (status?.code(), false)
         }
         Some(Err(_)) => {
-            kill_process_group(process_group_id).await;
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.wait().await;
             (None, true)
         }
@@ -1777,24 +1782,6 @@ where
         }
     }
     Ok(output)
-}
-
-fn configure_process_group(command: &mut TokioCommand) {
-    #[cfg(unix)]
-    {
-        command.as_std_mut().process_group(0);
-    }
-}
-
-async fn kill_process_group(process_group_id: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(process_group_id) = process_group_id.and_then(|id| i32::try_from(id).ok()) {
-        // The child is placed in a fresh process group before spawn. Killing
-        // the negative PID also terminates explicit verifier descendants.
-        unsafe {
-            libc::kill(-process_group_id, libc::SIGKILL);
-        }
-    }
 }
 
 fn verifier_worktree(cwd: &Path, revision: &str) -> Result<Option<PathBuf>> {

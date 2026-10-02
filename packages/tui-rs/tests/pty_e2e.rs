@@ -855,10 +855,153 @@ fn save_continuity_frame(session: &PtySession, name: &str) {
     }
 }
 
+trait ContinuitySubmissionTransport {
+    fn current_frame(&self) -> Option<String>;
+    fn send_submission(&mut self);
+    fn now(&self) -> Instant;
+    fn wait_for_frame(&mut self);
+    fn failure_text(&self) -> String;
+}
+
+impl ContinuitySubmissionTransport for PtySession {
+    fn current_frame(&self) -> Option<String> {
+        self.output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .completed_current_text()
+    }
+
+    fn send_submission(&mut self) {
+        self.send_bytes(b"\r");
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn wait_for_frame(&mut self) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    fn failure_text(&self) -> String {
+        self.screen_text()
+    }
+}
+
+fn await_continuity_submission(
+    session: &mut impl ContinuitySubmissionTransport,
+    input_marker: &str,
+    result: &str,
+) {
+    let deadline = session.now() + TURN_TIMEOUT;
+    session.send_submission();
+    let mut resend_at = session.now() + Duration::from_secs(1);
+    let mut input_consumed = false;
+    loop {
+        if let Some(frame) = session.current_frame() {
+            if frame.contains(result) {
+                return;
+            }
+            // Enter submits input but also approves a tool. After submission
+            // consumes input in a completed paint, never press Enter again.
+            input_consumed |= !frame.contains(input_marker);
+            if !input_consumed && session.now() >= resend_at {
+                session.send_submission();
+                resend_at = session.now() + Duration::from_secs(1);
+            }
+        }
+        assert!(
+            session.now() < deadline,
+            "current terminal frame never contained {result:?}: {}",
+            session.failure_text()
+        );
+        session.wait_for_frame();
+    }
+}
+
 fn submit_continuity_prompt(session: &mut PtySession, prompt: &str, result: &str) {
     let input = format!("\x15{prompt}");
-    send_continuity_bytes_until(session, input.as_bytes(), &format!("> {prompt}"));
-    send_continuity_bytes_until(session, b"\r", result);
+    let input_marker = format!("> {prompt}");
+    send_continuity_bytes_until(session, input.as_bytes(), &input_marker);
+    await_continuity_submission(session, &input_marker, result);
+}
+
+#[test]
+fn continuity_submission_retries_only_unconsumed_input_and_waits_for_current_result() {
+    struct DelayedApproval {
+        capture: TerminalCapture,
+        started: Instant,
+        elapsed: Duration,
+        sent: Vec<(Duration, u8)>,
+    }
+
+    impl ContinuitySubmissionTransport for DelayedApproval {
+        fn current_frame(&self) -> Option<String> {
+            self.capture.completed_current_text()
+        }
+
+        fn send_submission(&mut self) {
+            self.sent.push((self.elapsed, b'\r'));
+        }
+
+        fn now(&self) -> Instant {
+            self.started + self.elapsed
+        }
+
+        fn wait_for_frame(&mut self) {
+            self.elapsed += Duration::from_millis(50);
+            if self.elapsed == Duration::from_millis(500) {
+                self.capture.process(b"\x1b[?2026h\x1b[2J\x1b[H");
+            }
+            if self.elapsed == Duration::from_millis(750) {
+                self.capture.process(b"> submit guarded tool\x1b[?2026l");
+            }
+            if self.elapsed == Duration::from_millis(1500) {
+                self.capture.process(b"\x1b[2J\x1b[HWaiting for model");
+            }
+            if self.elapsed == Duration::from_secs(3) {
+                self.capture
+                    .process(b"\x1b[2J\x1b[H> submit guarded tool\r\nWaiting for approval");
+            }
+            if self.elapsed == Duration::from_secs(4) {
+                self.capture
+                    .process(b"\x1b[2J\x1b[HAction Approval Required");
+            }
+        }
+
+        fn failure_text(&self) -> String {
+            self.capture.text()
+        }
+    }
+
+    let mut capture = TerminalCapture::new(4, 80);
+    // Both an older dialog and the consumed prompt remain in capture history;
+    // neither may cause completion or an extra key in the current frame.
+    capture.process(b"Action Approval Required\x1b[2J\x1b[H> submit guarded tool");
+    let mut session = DelayedApproval {
+        capture,
+        started: Instant::now(),
+        elapsed: Duration::ZERO,
+        sent: Vec::new(),
+    };
+    await_continuity_submission(
+        &mut session,
+        "> submit guarded tool",
+        "Action Approval Required",
+    );
+    assert_eq!(
+        session.sent,
+        [(Duration::ZERO, b'\r'), (Duration::from_secs(1), b'\r')],
+        "retry a dropped Enter only while input remains; never approve the delayed tool"
+    );
+    assert_eq!(session.elapsed, Duration::from_secs(4));
+    assert!(session.capture.text().contains("> submit guarded tool"));
+    assert!(
+        session
+            .current_frame()
+            .unwrap()
+            .contains("Action Approval Required")
+    );
 }
 
 fn close_continuity_dialog(session: &mut PtySession, key: &[u8], title: &str) {

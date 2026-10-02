@@ -272,6 +272,7 @@ mod tests {
             attachments: vec![ArtifactRef::new("doc@v1")],
             client_tools: vec![],
             authorized_tools: vec![],
+            model_binding: None,
             approval_mode: ApprovalMode::Interactive,
         }
     }
@@ -694,6 +695,7 @@ mod cut_tests {
             attachments: Vec::new(),
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
+            model_binding: None,
             approval_mode: ApprovalMode::Interactive,
         }
     }

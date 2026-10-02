@@ -66,6 +66,7 @@ pub async fn run_local_turn<M: Model>(
     log.append(&[Event::UserMessage {
         turn: request.turn,
         message_id: None,
+        model_binding: None,
         principal: request.principal.clone(),
         text: request.text,
         attachments: Vec::new(),
@@ -272,6 +273,7 @@ mod tests {
             Event::UserMessage {
                 turn: TurnId::new("t1"),
                 message_id: None,
+                model_binding: None,
                 principal: principal.clone(),
                 text: "Work unattended".into(),
                 attachments: vec![],

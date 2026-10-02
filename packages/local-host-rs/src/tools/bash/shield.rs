@@ -880,8 +880,37 @@ mod tests {
         );
     }
 
+    /// The process environment without the repository, index and config
+    /// overrides `check` refuses, restored on drop. A CI runner or sandbox may
+    /// inject `GIT_CONFIG_*` (for example proxy settings); the end-to-end bash
+    /// test reads the real process environment, so it must not inherit them.
+    struct AmbientGitOverrides(Vec<(String, std::ffi::OsString)>);
+
+    impl AmbientGitOverrides {
+        fn remove() -> Self {
+            let removed: Vec<_> = std::env::vars_os()
+                .filter_map(|(name, value)| Some((name.into_string().ok()?, value)))
+                .filter(|(name, _)| name.starts_with("GIT_"))
+                .collect();
+            for (name, _) in &removed {
+                std::env::remove_var(name);
+            }
+            Self(removed)
+        }
+    }
+
+    impl Drop for AmbientGitOverrides {
+        fn drop(&mut self) {
+            for (name, value) in self.0.drain(..) {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn bash_tool_blocks_before_creating_the_commit() {
+        let _lock = crate::config::test_process_env_lock_async().await;
+        let _ambient = AmbientGitOverrides::remove();
         let root = repo();
         stage(root.path(), &token());
         let tool = super::super::BashTool::new(root.path().display().to_string());
