@@ -664,6 +664,13 @@ pub enum Event {
         then: AttemptNext,
     },
 
+    /// Internal script journal. Nested calls retain exact principal, arguments
+    /// and parent identity without becoming provider history. Written before
+    /// any nested policy check or dispatch; normal tool rows carry outcomes.
+    CodeModeCallsProposed {
+        parent: CallId,
+        calls: Vec<ProposedCall>,
+    },
     ToolStarted {
         call: CallId,
         tool: ToolName,
@@ -825,7 +832,8 @@ impl Event {
                 "event type does not match its stored row kind",
             ));
         }
-        if let Self::ModelStepCompleted { calls, .. } = &event
+        if let Self::ModelStepCompleted { calls, .. } | Self::CodeModeCallsProposed { calls, .. } =
+            &event
             && calls
                 .iter()
                 .any(|call| call.args_digest != args_digest(&call.args))

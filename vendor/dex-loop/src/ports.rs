@@ -248,6 +248,29 @@ pub trait Tools: Send + Sync {
         cancel: &CancellationToken,
     ) -> impl Future<Output = ToolResult> + Send;
 
+    /// Resolve one already-journaled owner result for bounded script data
+    /// processing. This never dispatches the tool again. Hosts with owned
+    /// output storage must verify exact thread/principal/call evidence and
+    /// read the immutable ref through that owner. Unresolved refs fail closed.
+    fn resolve_codemode_result(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        result: &ToolResult,
+        max_bytes: usize,
+    ) -> impl Future<Output = Result<ToolResult, String>> + Send {
+        let _ = (ctx, call);
+        std::future::ready(match &result.output {
+            crate::Output::Text(text) if text.len() <= max_bytes => Ok(result.clone()),
+            crate::Output::Text(_) => Err(
+                "tool result exceeds the script data limit; request a smaller page directly".into(),
+            ),
+            crate::Output::Ref(_) => Err(
+                "stored tool output is unavailable for script processing; read it directly".into(),
+            ),
+        })
+    }
+
     /// Finishes a call an `ExecutorKind::Client` session already reported an
     /// outcome for. The engine never dispatches these through `run` (the
     /// client, not this port, already ran the call); it calls this instead,

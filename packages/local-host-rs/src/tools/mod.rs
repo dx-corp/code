@@ -133,6 +133,6 @@ pub use inline::{
 pub use process_registry::{
     cleanup_all as cleanup_background_processes, count as background_process_count,
 };
-pub(crate) use registry::ToolExecutionOptions;
 pub use registry::{McpLifecycleState, McpServerStatus, ToolExecutor, ToolRegistry};
+pub(crate) use registry::{ToolExecutionOptions, emit_typed_tool_end};
 pub use web_fetch::WebFetchTool;

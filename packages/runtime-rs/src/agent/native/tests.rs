@@ -90,6 +90,7 @@ pub(super) struct RuntimeTestHost {
     post_tool_context: Option<String>,
     permission_hook: Option<NativeHookResult>,
     pre_tool_hook: Option<NativeHookResult>,
+    pre_tool_hook_tool: Option<String>,
     eval_hook: Option<NativeHookResult>,
     pre_message_models: Arc<Mutex<Vec<Option<String>>>>,
     projected_tool_outputs: Arc<Mutex<Vec<String>>>,
@@ -97,6 +98,7 @@ pub(super) struct RuntimeTestHost {
     eval_hook_outputs: Arc<Mutex<Vec<String>>>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     completed_tool_executions: Arc<AtomicUsize>,
+    read_only_waves: Arc<Mutex<Vec<Vec<String>>>>,
     tool_operation_records: Option<Arc<Mutex<Vec<maestro_runtime_contracts::ToolOperationRecord>>>>,
     replay_safe_tools: HashSet<String>,
     tool_definitions: Arc<Vec<ToolDefinition>>,
@@ -148,6 +150,7 @@ impl RuntimeTestHost {
             post_tool_context: None,
             permission_hook: None,
             pre_tool_hook: None,
+            pre_tool_hook_tool: None,
             eval_hook: None,
             pre_message_models: Arc::new(Mutex::new(Vec::new())),
             projected_tool_outputs: Arc::new(Mutex::new(Vec::new())),
@@ -155,6 +158,7 @@ impl RuntimeTestHost {
             eval_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             checkpoint_barrier: None,
             completed_tool_executions: Arc::new(AtomicUsize::new(0)),
+            read_only_waves: Arc::new(Mutex::new(Vec::new())),
             tool_operation_records: None,
             replay_safe_tools: HashSet::new(),
             tool_definitions: Arc::new(tool_definitions),
@@ -440,6 +444,10 @@ impl NativeExecutionHost for RuntimeTestHost {
         _cancel: Option<CancellationToken>,
     ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
         Box::pin(async move {
+            self.read_only_waves
+                .lock()
+                .unwrap()
+                .push(calls.iter().map(|call| call.call_id.clone()).collect());
             let executions = calls
                 .iter()
                 .map(|call| {
@@ -483,11 +491,21 @@ impl NativeExecutionHost for RuntimeTestHost {
 
     fn hook_pre_tool_use<'a>(
         &'a self,
-        _name: &'a str,
+        name: &'a str,
         _call_id: &'a str,
         _args: &'a Value,
     ) -> NativeHostFuture<'a, NativeHookResult> {
-        Box::pin(async { self.pre_tool_hook.clone().unwrap_or_else(Self::hook_result) })
+        Box::pin(async move {
+            if self
+                .pre_tool_hook_tool
+                .as_ref()
+                .is_some_and(|tool| tool != name)
+            {
+                Self::hook_result()
+            } else {
+                self.pre_tool_hook.clone().unwrap_or_else(Self::hook_result)
+            }
+        })
     }
 
     fn hook_post_tool_use<'a>(
@@ -9141,3 +9159,6 @@ pub(super) mod session_scenarios;
 
 #[path = "experiment_schema_policy_tests.rs"]
 mod experiment_schema_policy_tests;
+
+#[path = "tests/codemode.rs"]
+mod codemode;

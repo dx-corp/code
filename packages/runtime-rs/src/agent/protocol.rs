@@ -354,7 +354,13 @@ impl ToolExecution {
                 format!("Tool execution cancelled during {phase:?}")
             }
             ToolOutcome::Indeterminate { reason } => {
-                format!("Indeterminate remote outcome: {reason}. Reconcile before retrying.")
+                let content =
+                    format!("Indeterminate remote outcome: {reason}. Reconcile before retrying.");
+                if self.receipt.tool_name.eq_ignore_ascii_case("codemode") {
+                    maybe_wrap(&content)
+                } else {
+                    content
+                }
             }
         }
     }
@@ -394,7 +400,10 @@ impl ToolExecution {
 /// LSP-backed `vscode_*`/`jetbrains_*` tools (local workspace
 /// introspection). Wrapping those would flood every turn with envelopes the
 /// model quickly learns to skip past, defeating the control.
+// A script may project third-party tool data or errors; composition cannot
+// upgrade that provenance to trusted agent instructions.
 const UNTRUSTED_TOOL_NAMES: &[&str] = &[
+    "codemode",
     "web_fetch",
     "webfetch",
     "extract_document",

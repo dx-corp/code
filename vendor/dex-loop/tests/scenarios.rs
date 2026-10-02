@@ -1971,10 +1971,10 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
     );
     assert_eq!(ctx.exposed_tools(), &[ToolName::new("crm.lookup")]);
     let offered = model.offered();
-    assert_eq!(offered[0], strings(&["tools.search", "search"]));
+    assert_eq!(offered[0], strings(&["tools.search", "codemode", "search"]));
     assert_eq!(
         offered[1],
-        strings(&["tools.search", "search", "crm.lookup"])
+        strings(&["tools.search", "codemode", "search", "crm.lookup"])
     );
     assert_eq!(tools.run_ids(), strings(&["t1-2-0"]));
     assert_eq!(
@@ -2014,10 +2014,10 @@ async fn exposed_tools_are_appended_in_exposure_order() {
     );
     assert_eq!(log.rehydrate().exposed_tools(), ctx.exposed_tools());
     let offered = model.offered();
-    assert_eq!(offered[0], strings(&["tools.search", "search"]));
+    assert_eq!(offered[0], strings(&["tools.search", "codemode", "search"]));
     assert_eq!(
         offered[1],
-        strings(&["tools.search", "search", "crm.zed", "crm.alpha"])
+        strings(&["tools.search", "codemode", "search", "crm.zed", "crm.alpha"])
     );
 }
 

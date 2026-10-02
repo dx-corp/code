@@ -661,6 +661,67 @@ async fn runner_rejects_external_results_for_host_tools_and_revalidates_host_app
 }
 
 #[tokio::test]
+async fn codemode_composes_real_host_tools_and_projects_only_script_output() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    fs::write(workspace.path().join("input.txt"), "private input data").expect("input fixture");
+    let mut session = ScriptedEmbeddingBuilder::new(vec![
+        scripted_tool_use(
+            "host-script",
+            "codemode",
+            serde_json::json!({"code": "const input = await tools.read({file_path:'input.txt'}); await tools.bash({command:'printf governed > result.txt'}); const result = await tools.read({file_path:'result.txt'}); text(String(input).includes('private input data') && String(result).includes('governed') ? 'projected result' : 'incorrect composition');"}),
+        ),
+        ScriptedResponse::text("Composition completed."),
+    ])
+    .working_directory(workspace.path())
+    .approval_mode(ApprovalMode::Yolo)
+    .start()
+    .expect("scripted embedding starts");
+    session
+        .agent()
+        .prompt("Compose local tools.")
+        .await
+        .expect("prompt queued");
+    let events = events_through_completion(&mut session).await;
+    session.shutdown().await;
+
+    for id in [
+        "host-script",
+        "host-script/0",
+        "host-script/1",
+        "host-script/2",
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(
+                    |event| matches!(event, FromAgent::ToolEnd { call_id, .. } if call_id == id)
+                )
+                .count(),
+            1,
+            "duplicate or missing terminal event for {id}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(event,
+            FromAgent::ToolEnd { call_id, success: true, receipt: Some(_), .. } if call_id == id)),
+            "missing successful native execution receipt for {id}: {events:?}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("result.txt")).expect("native effect"),
+        "governed"
+    );
+    let output = events
+        .iter()
+        .find_map(|event| match event {
+            FromAgent::ToolOutput { call_id, content } if call_id == "host-script" => Some(content),
+            _ => None,
+        })
+        .expect("script output");
+    assert_eq!(output, "projected result");
+    assert!(!output.contains("private input data"));
+}
+
+#[tokio::test]
 async fn runner_rejects_pending_tools_from_another_runner_even_when_call_ids_match() {
     let workspace_a = tempfile::tempdir().expect("first workspace");
     let workspace_b = tempfile::tempdir().expect("second workspace");

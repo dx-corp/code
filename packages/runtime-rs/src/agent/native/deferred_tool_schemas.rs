@@ -33,6 +33,9 @@ impl ToolProfile {
             return true;
         }
         let name = name.to_ascii_lowercase();
+        if name == agent_codemode::TOOL_NAME {
+            return true;
+        }
         let names: &[&str] = match self {
             Self::Minimal => &[
                 "read",

@@ -409,9 +409,11 @@ impl Model for SimModel {
         let read = tools
             .iter()
             .find(|spec| spec.read_only && spec.name.as_str() != "tools.search");
-        let mutation = tools
-            .iter()
-            .find(|spec| !spec.read_only && spec.executor != dex_loop::ExecutorKind::Client);
+        let mutation = tools.iter().find(|spec| {
+            !spec.read_only
+                && spec.name.as_str() != dex_loop::CODEMODE
+                && spec.executor != dex_loop::ExecutorKind::Client
+        });
         let client = tools
             .iter()
             .find(|spec| spec.executor == dex_loop::ExecutorKind::Client);

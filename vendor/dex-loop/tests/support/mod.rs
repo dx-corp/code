@@ -649,6 +649,24 @@ impl Tools for FakeTools {
         result
     }
 
+    async fn resolve_codemode_result(
+        &self,
+        _ctx: &Context,
+        _call: &ProposedCall,
+        result: &ToolResult,
+        _max_bytes: usize,
+    ) -> Result<ToolResult, String> {
+        Ok(match &result.output {
+            Output::Text(_) => result.clone(),
+            Output::Ref(reference) => ToolResult {
+                output: Output::Text(
+                    serde_json::json!({"output_ref":reference.as_str()}).to_string(),
+                ),
+                ..result.clone()
+            },
+        })
+    }
+
     /// Marks that this call's result was wrapped, and rewrites a text output
     /// so a test can tell a wrapped result from the client's raw one.
     async fn wrap_client_result(
@@ -765,6 +783,9 @@ pub fn shape(event: &Event) -> String {
             step, code, then, ..
         } => {
             format!("attempt_failed:{step}:{code}:{then:?}")
+        }
+        Event::CodeModeCallsProposed { parent, calls } => {
+            format!("script:{parent}:[{}]", ids(calls))
         }
         Event::ToolStarted { call, .. } => format!("started:{call}"),
         Event::ToolProgress { call, label } => format!("progress:{call}:{label}"),

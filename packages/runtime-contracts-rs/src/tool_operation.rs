@@ -68,6 +68,10 @@ pub struct ToolOperationRecord {
     pub call_id: String,
     pub tool_name: String,
     pub admitted_arguments: Value,
+    /// Runtime-bound script owner of context projection. Child outcomes remain
+    /// in the journal and must never be projected directly during recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_owner_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     pub replay_policy: ToolReplayPolicy,
@@ -93,6 +97,7 @@ impl ToolOperationRecord {
             call_id: call_id.into(),
             tool_name: tool_name.into(),
             admitted_arguments,
+            projection_owner_call_id: None,
             idempotency_key,
             replay_policy,
             phase: ToolOperationPhase::Planned,
@@ -103,6 +108,21 @@ impl ToolOperationRecord {
         };
         record.validate()?;
         Ok(record)
+    }
+
+    /// Bind a script child before the first durable admission entry.
+    pub fn with_projection_owner(
+        mut self,
+        parent_call_id: impl Into<String>,
+    ) -> Result<Self, ToolOperationError> {
+        if self.phase != ToolOperationPhase::Planned {
+            return Err(ToolOperationError::InvalidRecord(
+                "projection owner must be bound before effect admission".into(),
+            ));
+        }
+        self.projection_owner_call_id = Some(parent_call_id.into());
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn effect_pending(mut self, timestamp_ms: u64) -> Result<Self, ToolOperationError> {
@@ -204,6 +224,15 @@ impl ToolOperationRecord {
                 "idempotencyKey must not be empty when present".into(),
             ));
         }
+        if self
+            .projection_owner_call_id
+            .as_ref()
+            .is_some_and(|parent| parent.trim().is_empty() || parent == &self.call_id)
+        {
+            return Err(ToolOperationError::InvalidRecord(
+                "projection owner must identify a distinct, nonempty parent call".into(),
+            ));
+        }
         if self.updated_at_ms < self.planned_at_ms {
             return Err(ToolOperationError::TimestampRegression {
                 call_id: self.call_id.clone(),
@@ -293,6 +322,18 @@ impl ToolOperationLedger {
     pub fn apply(&mut self, record: ToolOperationRecord) -> Result<(), ToolOperationError> {
         record.validate()?;
         let Some(current) = self.latest.get(&record.call_id) else {
+            if let Some(parent_id) = &record.projection_owner_call_id {
+                if !self
+                    .latest
+                    .get(parent_id)
+                    .is_some_and(|parent| parent.tool_name.eq_ignore_ascii_case("codemode"))
+                {
+                    return Err(ToolOperationError::InvalidRecord(
+                        "script projection owner must already be admitted as codemode".into(),
+                    ));
+                }
+            }
+
             if record.phase != ToolOperationPhase::Planned {
                 return Err(ToolOperationError::InvalidTransition {
                     call_id: record.call_id,
@@ -308,6 +349,7 @@ impl ToolOperationLedger {
         }
         if current.tool_name != record.tool_name
             || current.admitted_arguments != record.admitted_arguments
+            || current.projection_owner_call_id != record.projection_owner_call_id
             || current.idempotency_key != record.idempotency_key
             || current.replay_policy != record.replay_policy
             || current.planned_at_ms != record.planned_at_ms
@@ -607,5 +649,69 @@ mod tests {
             ledger.apply(changed),
             Err(ToolOperationError::OutcomeChanged { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod script_projection_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn codemode_projection_owner_is_backward_compatible_and_immutable() {
+        let parent = ToolOperationRecord::planned(
+            "script",
+            "codemode",
+            json!({"code":"text('ok')"}),
+            None,
+            ToolReplayPolicy::Never,
+            1,
+        )
+        .unwrap();
+        let child = ToolOperationRecord::planned(
+            "arbitrary-child-id",
+            "read",
+            json!({}),
+            None,
+            ToolReplayPolicy::Safe,
+            2,
+        )
+        .unwrap()
+        .with_projection_owner("script")
+        .unwrap();
+        let mut ledger = ToolOperationLedger::default();
+        assert!(
+            ledger.apply(child.clone()).is_err(),
+            "a caller-selected ID cannot stand in for an admitted script owner"
+        );
+        ledger.apply(parent.clone()).unwrap();
+        ledger.apply(child.clone()).unwrap();
+        let mut changed = child.clone().effect_pending(3).unwrap();
+        changed.projection_owner_call_id = None;
+        assert!(matches!(
+            ledger.apply(changed),
+            Err(ToolOperationError::IdentityChanged { .. })
+        ));
+        let mut legacy_json = serde_json::to_value(&parent).unwrap();
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("projectionOwnerCallId");
+        let decoded: ToolOperationRecord = serde_json::from_value(legacy_json).unwrap();
+        assert!(decoded.projection_owner_call_id.is_none());
+        assert!(child.clone().with_projection_owner("").is_err());
+        assert!(
+            child
+                .clone()
+                .with_projection_owner("arbitrary-child-id")
+                .is_err()
+        );
+        assert!(
+            child
+                .effect_pending(4)
+                .unwrap()
+                .with_projection_owner("another")
+                .is_err()
+        );
     }
 }

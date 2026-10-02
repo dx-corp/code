@@ -1515,6 +1515,7 @@ impl ToolExecutor {
             approved_inline_env,
             hooks,
             emit_tool_events,
+            emit_terminal_event: _,
         } = execution_context;
         if code_decision
             .as_ref()

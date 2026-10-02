@@ -38,16 +38,21 @@ impl NativeAgentRunner {
         let mut recovered = Vec::new();
         let mut complete_after_projection = Vec::new();
         for record in records {
+            // Projection ownership was bound by the runtime before dispatch
+            // and is immutable in the ledger. IDs and tool args cannot claim it.
+            let projects_into_conversation = record.projection_owner_call_id.is_none();
             match (record.phase, record.replay_policy) {
                 (maestro_runtime_contracts::ToolOperationPhase::OutcomeReady, _) => {
                     let Some(outcome) = record.outcome.as_ref() else {
                         continue;
                     };
-                    recovered.push(ContentBlock::ToolResult {
-                        tool_use_id: record.call_id.clone(),
-                        content: outcome.content.clone(),
-                        is_error: Some(outcome.is_error),
-                    });
+                    if projects_into_conversation {
+                        recovered.push(ContentBlock::ToolResult {
+                            tool_use_id: record.call_id.clone(),
+                            content: outcome.content.clone(),
+                            is_error: Some(outcome.is_error),
+                        });
+                    }
                     complete_after_projection.push(record.call_id);
                 }
                 (
@@ -81,11 +86,13 @@ impl NativeAgentRunner {
                         ));
                         continue;
                     }
-                    recovered.push(ContentBlock::ToolResult {
-                        tool_use_id: call_id.clone(),
-                        content: message,
-                        is_error: Some(true),
-                    });
+                    if projects_into_conversation {
+                        recovered.push(ContentBlock::ToolResult {
+                            tool_use_id: call_id.clone(),
+                            content: message,
+                            is_error: Some(true),
+                        });
+                    }
                     complete_after_projection.push(call_id);
                 }
                 (
@@ -116,7 +123,9 @@ impl NativeAgentRunner {
                             Some(execution),
                         )
                         .await;
-                    recovered.push(block);
+                    if projects_into_conversation {
+                        recovered.push(block);
+                    }
                 }
                 (
                     maestro_runtime_contracts::ToolOperationPhase::Planned
@@ -125,14 +134,13 @@ impl NativeAgentRunner {
                 ) => {}
             }
         }
-        if recovered.is_empty() {
-            return;
+        if !recovered.is_empty() {
+            self.messages_mut().push(Message {
+                role: Role::User,
+                content: MessageContent::Blocks(recovered),
+            });
+            self.emit_conversation_snapshot();
         }
-        self.messages_mut().push(Message {
-            role: Role::User,
-            content: MessageContent::Blocks(recovered),
-        });
-        self.emit_conversation_snapshot();
         for call_id in complete_after_projection {
             self.complete_tool_operation(&call_id).await;
         }

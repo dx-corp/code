@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["examples/hooks/wasm-plugin", "vendor/*", "vendor/dex-loop"]
 members = [
+    "packages/codemode-rs",
     "packages/maestro-rs",
     "packages/runtime-rs",
     "packages/runtime-contracts-rs",
@@ -29,6 +30,7 @@ members = [
 ]
 
 [workspace.dependencies]
+agent-codemode = { path = "packages/codemode-rs" }
 textwrap = "0.16"
 anyhow = "1"
 http = "1.4"

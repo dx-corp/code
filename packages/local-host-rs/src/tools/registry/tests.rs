@@ -2842,6 +2842,7 @@ async fn explore_runs_nested_tool_hooks_for_each_operation() {
                 cancel: tokio_util::sync::CancellationToken::new(),
                 approved_inline_env: None,
                 hooks: Some(&mut hooks),
+                emit_terminal_event: true,
             },
         )
         .await;

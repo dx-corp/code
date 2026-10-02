@@ -182,6 +182,8 @@ pub struct Context {
     status: Status,
     history: Vec<Entry>,
     tool_evidence: Vec<ToolEvidence>,
+    /// Script proposals are evidence, never assistant/provider messages.
+    nested_calls: Vec<ProposedCall>,
     // Newest input first (even when it has no uploads), then bounded earlier
     // attachment batches. Compaction never manufactures or edits provenance.
     attachment_inputs: Vec<AttachmentInput>,
@@ -254,6 +256,7 @@ impl Context {
             status: Status::Idle,
             history: Vec::new(),
             tool_evidence: Vec::new(),
+            nested_calls: Vec::new(),
             attachment_inputs: Vec::new(),
             step: 0,
             usage: Usage::default(),
@@ -374,17 +377,22 @@ impl Context {
     }
 
     pub fn proposed_call(&self, id: &CallId) -> Option<&ProposedCall> {
-        self.action_preview(id).or_else(|| {
-            self.history
-                .iter()
-                .rev()
-                .filter_map(|entry| match &entry.message {
-                    Message::Assistant { calls, .. } => Some(calls),
-                    _ => None,
-                })
-                .flatten()
-                .find(|call| &call.id == id)
-        })
+        self.nested_calls
+            .iter()
+            .rev()
+            .find(|call| &call.id == id)
+            .or_else(|| self.action_preview(id))
+            .or_else(|| {
+                self.history
+                    .iter()
+                    .rev()
+                    .filter_map(|entry| match &entry.message {
+                        Message::Assistant { calls, .. } => Some(calls),
+                        _ => None,
+                    })
+                    .flatten()
+                    .find(|call| &call.id == id)
+            })
     }
 
     /// Render owner-produced preview details, rather than model-authored consent prose.
@@ -721,7 +729,36 @@ impl Context {
                 self.attempt = None;
                 self.pre_started.clear();
             }
+            Event::CodeModeCallsProposed { parent, calls } => {
+                // Only an accepted engine wrapper can parent script proposals.
+                if let Some(wrapper) = self.proposed_call(parent).cloned()
+                    && wrapper.tool.as_str() == agent_codemode::TOOL_NAME
+                {
+                    for call in calls {
+                        if call.principal == wrapper.principal
+                            && call
+                                .id
+                                .as_str()
+                                .starts_with(&format!("{}:codemode:", parent.as_str()))
+                            && self.proposed_call(&call.id).is_none()
+                        {
+                            self.nested_calls.push(call.clone());
+                        }
+                    }
+                }
+            }
             Event::ToolStarted { call, .. } => {
+                // A crash after a nested dispatch must block a fresh script
+                // from repeating it, even when the outer ledger is unknown.
+                if let Some(proposal) = self
+                    .nested_calls
+                    .iter()
+                    .find(|proposal| &proposal.id == call)
+                    .cloned()
+                    && !self.uncertain_calls.iter().any(|prior| &prior.id == call)
+                {
+                    self.uncertain_calls.push(proposal);
+                }
                 if let Some(proposal) = self.proposed_call(call).cloned()
                     && self.confirmed_action(&proposal)
                 {
@@ -757,11 +794,7 @@ impl Context {
                 output,
                 receipt,
             } => {
-                if let Some(proposal) = self
-                    .open_step
-                    .as_ref()
-                    .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
-                    .cloned()
+                if let Some(proposal) = self.proposed_call(call).cloned()
                     && !self
                         .tool_evidence
                         .iter()
@@ -828,17 +861,16 @@ impl Context {
                 // A pre-committed read finished by an abandoned attempt.
                 self.pre_started.retain(|started| started != call);
                 if *outcome == Outcome::Unknown
-                    && let Some(proposal) = self
-                        .open_step
-                        .as_ref()
-                        .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
+                    && let Some(proposal) = self.proposed_call(call).cloned()
                 {
-                    self.uncertain_calls.push(proposal.clone());
+                    self.uncertain_calls.push(proposal);
                 }
-                if let Some(proposal) = self
-                    .open_step
-                    .as_ref()
-                    .and_then(|step| step.calls.iter().find(|proposal| &proposal.id == call))
+                if let Some(proposal) = self.proposed_call(call).cloned()
+                    // A wrapper's projected summary is not progress on a failed
+                    // owner operation. Actual child completions update this
+                    // guard, including across successive scripts.
+                    && (proposal.tool.as_str() != agent_codemode::TOOL_NAME
+                        || !self.nested_calls.iter().any(|nested| nested.id.as_str().starts_with(&format!("{}:codemode:", call.as_str()))))
                 {
                     if *outcome == Outcome::Failed {
                         let count = self
@@ -868,6 +900,23 @@ impl Context {
                     });
                 }
                 self.close_step_if_resolved(cursor);
+                if self
+                    .proposed_call(call)
+                    .is_some_and(|proposal| proposal.tool.as_str() == agent_codemode::TOOL_NAME)
+                {
+                    // Finished script proposals have the same retention as
+                    // owner evidence. Incomplete/unknown operations remain
+                    // exact for this turn's repeat guard.
+                    self.nested_calls.retain(|proposal| {
+                        self.uncertain_calls
+                            .iter()
+                            .any(|prior| prior.id == proposal.id)
+                            || self
+                                .tool_evidence
+                                .iter()
+                                .any(|evidence| evidence.call.id == proposal.id)
+                    });
+                }
             }
             Event::ApprovalRequested { call, approval, .. } => {
                 if let Some(state) = self.state_mut(call) {
@@ -1004,6 +1053,11 @@ impl Context {
         self.interrupt_requested = false;
         self.exposed.clear();
         self.uncertain_calls.clear();
+        self.nested_calls.retain(|proposal| {
+            self.tool_evidence
+                .iter()
+                .any(|evidence| evidence.call.id == proposal.id)
+        });
         self.failed_call = None;
         self.pre_started.clear();
         self.client_tools = client_tools;
