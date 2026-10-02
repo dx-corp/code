@@ -11,6 +11,7 @@ fn message(turn: &str, principal: &str, tools: &[&str]) -> Event {
         attachments: vec![],
         client_tools: vec![],
         authorized_tools: tools.iter().map(|name| ToolName::new(*name)).collect(),
+        model_binding: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }
 }

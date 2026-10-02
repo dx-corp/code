@@ -98,6 +98,8 @@ pub mod orb_delegation;
 pub(crate) mod orb_execution;
 pub mod process_registry;
 pub(crate) mod process_utils;
+#[cfg(unix)]
+pub use process_utils::{ProcessGroupGuard, set_new_process_group};
 mod registry;
 mod shell_env;
 mod status;

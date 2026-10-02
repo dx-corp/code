@@ -203,6 +203,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
             attachments: vec![],
             client_tools: vec![],
             authorized_tools: vec![],
+            model_binding: None,
             approval_mode: ApprovalMode::Interactive,
         },
         Event::ModelStepCompleted {

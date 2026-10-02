@@ -35,6 +35,11 @@ impl TerminalCapture {
         screen_rows(self.parser.screen()).join("\n")
     }
 
+    /// Defer decisions while a synchronized paint is split across PTY reads.
+    pub(super) fn completed_current_text(&self) -> Option<String> {
+        (!self.parser.callbacks().sync_in_progress).then(|| self.current_text())
+    }
+
     /// Formatted current frame for image evidence, preserving actual cell colors.
     pub(super) fn current_formatted(&self) -> Vec<u8> {
         self.parser.screen().contents_formatted()
@@ -66,6 +71,7 @@ impl TerminalCapture {
 #[derive(Default)]
 struct ScreenHistory {
     snapshots: VecDeque<String>,
+    sync_in_progress: bool,
 }
 
 impl ScreenHistory {
@@ -92,8 +98,15 @@ impl vt100::Callbacks for ScreenHistory {
         // Preserve completed synchronized frames even when a subsequent
         // redraw or screen clear arrives in the same read. vt100 delegates
         // the unsupported DEC synchronized-output mode to this callback.
-        if first == Some(b'?') && command == 'l' && params.contains(&&[2026][..]) {
-            self.record(screen_rows(screen).join("\n"));
+        if first == Some(b'?') && params.contains(&&[2026][..]) {
+            match command {
+                'h' => self.sync_in_progress = true,
+                'l' => {
+                    self.sync_in_progress = false;
+                    self.record(screen_rows(screen).join("\n"));
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -157,6 +170,28 @@ mod tests {
         assert!(capture.text().contains("Approval Required"));
         assert!(capture.text().contains("done"));
         assert!(!capture.parser.screen().contents().contains("Approval"));
+    }
+
+    #[test]
+    fn defers_current_frame_decisions_until_split_synchronized_paint_completes() {
+        let mut capture = TerminalCapture::new(2, 40);
+        capture.process(b"\x1b[?2026h> guarded prompt\x1b[?2026l");
+        assert!(
+            capture
+                .completed_current_text()
+                .unwrap()
+                .contains("> guarded prompt")
+        );
+        capture.process(b"\x1b[?2026h\x1b[2J\x1b[H");
+        assert!(!capture.current_text().contains("> guarded prompt"));
+        assert_eq!(capture.completed_current_text(), None);
+        capture.process(b"> guarded prompt\x1b[?2026l");
+        assert!(
+            capture
+                .completed_current_text()
+                .unwrap()
+                .contains("> guarded prompt")
+        );
     }
 
     #[test]

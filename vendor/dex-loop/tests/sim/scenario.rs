@@ -357,6 +357,7 @@ pub async fn run_actions(seed: u64, actions: &[Action]) -> Vec<Violation> {
                         attachments: Vec::new(),
                         client_tools: Vec::new(),
                         authorized_tools: Vec::new(),
+                        model_binding: None,
                         approval_mode: dex_loop::ApprovalMode::Interactive,
                     });
                 }

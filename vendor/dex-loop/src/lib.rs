@@ -44,6 +44,7 @@ pub use event::{
     ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName, ToolResult, TurnId,
     Usage, args_digest,
 };
+pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
     ToolSpec, Tools, Verdict, model_tool_name,

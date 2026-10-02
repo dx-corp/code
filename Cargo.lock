@@ -2025,6 +2025,7 @@ dependencies = [
  "futures-util",
  "hex",
  "jsonschema",
+ "managed-inference-contract",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4373,6 +4374,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "managed-inference-contract"
+version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

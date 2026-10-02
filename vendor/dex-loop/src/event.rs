@@ -554,6 +554,11 @@ pub enum Event {
         /// they were written under.
         #[serde(default)]
         approval_mode: ApprovalMode,
+        /// Exact provider coordinates resolved by the authenticated host.
+        /// Older turns retain the deployment default. This carries references,
+        /// never credential values, and grants no Gateway authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_binding: Option<crate::ManagedInferenceProviderBinding>,
     },
     /// Control: becomes a user message from `principal` before the next model
     /// call. Calls the model then proposes act under `principal`.
@@ -838,6 +843,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn accepted_model_binding_survives_event_round_trip() {
+        let input = serde_json::json!({
+            "type": "user_message", "turn": "turn-1", "principal": "user-1",
+            "text": "hello", "attachments": [],
+            "model_binding": {
+                "provider": "vertex-ai", "model": "gemini-selected",
+                "provider_environment": "production", "credential_name": "gemini-ref",
+                "team_id": "team-1"
+            }
+        });
+        let event: Event = serde_json::from_value(input.clone()).expect("accepted message");
+        let replay = serde_json::to_value(event).expect("durable event");
+        assert_eq!(replay["model_binding"], input["model_binding"]);
+    }
+
+    #[test]
     fn model_attempt_failed_round_trips_as_snake_case_json() {
         let event = Event::ModelAttemptFailed {
             step: 2,
@@ -873,6 +894,7 @@ mod tests {
                 text: "hi".into(),
                 attachments: vec![ArtifactRef::new("a1")],
                 authorized_tools: Vec::new(),
+                model_binding: None,
                 approval_mode: ApprovalMode::Interactive,
                 client_tools: vec![ClientToolSpec {
                     name: ToolName::new("browser.read_tab"),
@@ -984,6 +1006,7 @@ mod tests {
             attachments: vec![],
             client_tools: vec![],
             authorized_tools: Vec::new(),
+            model_binding: None,
             approval_mode: ApprovalMode::Interactive,
         };
         let json = serde_json::to_string(&event).expect("serialize");
@@ -1012,6 +1035,7 @@ mod tests {
                 attachments: vec![],
                 client_tools: vec![],
                 authorized_tools: Vec::new(),
+                model_binding: None,
                 approval_mode: ApprovalMode::Interactive,
             }
         );
