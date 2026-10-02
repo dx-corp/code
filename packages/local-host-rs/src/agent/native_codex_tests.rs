@@ -29,6 +29,20 @@ fn fixture_event_kind(event: &FromAgent) -> &'static str {
     }
 }
 
+fn codex_fixture_startup_failure(
+    boundary: &str,
+    elapsed: tokio::time::error::Elapsed,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<FromAgent>,
+) -> ! {
+    let mut startup_errors = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let FromAgent::Error { message, .. } | FromAgent::ProviderError { message, .. } = event {
+            startup_errors.push(message);
+        }
+    }
+    panic!("{boundary}: {elapsed}; startup errors: {startup_errors:?}");
+}
+
 fn configure_codex_fixture_identity() {
     crate::credential_mode::install_test_identity_env();
 }
@@ -906,7 +920,13 @@ async fn codex_cancel_lifecycle_fixture() {
         }
     })
     .await
-    .expect("fixture peer should accept the turn during startup");
+    .unwrap_or_else(|elapsed| {
+        codex_fixture_startup_failure(
+            "fixture peer should accept the turn during startup",
+            elapsed,
+            &mut events,
+        )
+    });
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             match events.recv().await {
@@ -1607,6 +1627,9 @@ send({{method:'turn/completed',params:{{turnId:'turn-usage'}}}});}},10)}}
 
 #[test]
 fn codex_cancel_after_turn_acceptance_emits_one_terminal_lifecycle_event() {
+    if crate::config::test_reexec_for_process_isolation() {
+        return;
+    }
     let root = tempfile::tempdir().expect("fixture root");
     let current = std::env::current_exe().expect("current test binary");
     let script = root.path().join("app-server.js");
@@ -1646,6 +1669,15 @@ else if(x.method==='turn/interrupt'){
             .env("MAESTRO_CODEX_CANCEL_SCENARIO", scenario)
             .env("MAESTRO_CODEX_CANCEL_LOG", &log)
             .env("MAESTRO_HOME", dir.join("maestro-home"))
+            // This standalone child owns its policy fixture. Module-local
+            // managed-policy writers do not share the process snapshot lock.
+            .env_remove("MAESTRO_MANAGED_POLICY_PATH")
+            .env_remove("MAESTRO_MANAGED_POLICY_STATE_PATH")
+            .env_remove("MAESTRO_MANAGED_POLICY_PUBLIC_KEY")
+            .env_remove("MAESTRO_MANAGED_POLICY_KEY_ID")
+            .env_remove("MAESTRO_MANAGED_POLICY_AUDIT_PATH")
+            .env_remove("MAESTRO_ENTERPRISE_POLICY_PATH")
+            .env_remove("MAESTRO_POLICY_PATH")
             .env("MAESTRO_CODEX_APP_SERVER_COMMAND", "node")
             .env("OPENAI_CODEX_TOKEN", "fixture-token")
             .env("RUST_BACKTRACE", "1")
@@ -1789,7 +1821,13 @@ async fn codex_pre_turn_failure_fixture() {
                 }
             })
             .await
-            .expect("turn/start observation barrier");
+            .unwrap_or_else(|elapsed| {
+                codex_fixture_startup_failure(
+                    "turn/start observation barrier",
+                    elapsed,
+                    &mut events,
+                )
+            });
             agent.cancel();
         }
         let (snapshot, errors, statuses) = receive_codex_fixture_snapshot(&mut events).await;
@@ -1843,6 +1881,9 @@ async fn codex_pre_turn_failure_fixture() {
 
 #[test]
 fn codex_pre_turn_failures_preserve_retry_prompt_and_discard_terminal_give_up() {
+    if crate::config::test_reexec_for_process_isolation() {
+        return;
+    }
     let root = tempfile::tempdir().expect("fixture root");
     let maestro_home = root.path().join("maestro-home");
     let codex_home = root.path().join("codex-home");
