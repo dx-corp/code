@@ -15,6 +15,8 @@
 //! those calls as not run; a committed step adopts their results in place
 //! of running them again.
 
+mod codemode;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::{Pin, pin};
@@ -41,6 +43,8 @@ use crate::sanitize::{DeltaFilter, Sanitizer};
 
 /// The engine-owned discovery tool. Always offered to the model.
 pub const TOOLS_SEARCH: &str = "tools.search";
+/// The engine-owned bounded script tool.
+pub const CODEMODE: &str = agent_codemode::TOOL_NAME;
 
 const NOT_RUN_INTERRUPTED: &str = "not run: the turn was interrupted";
 const READ_INTERRUPTED: &str = "not completed: the read was interrupted; it is safe to try again";
@@ -1093,7 +1097,13 @@ where
                     self.finish(ctx, call, ToolResult::error(DEADLINE_READ)).await?;
                     break;
                 }
-                verdict = self.tools.policy(ctx, call) => verdict,
+                verdict = async {
+                    if call.tool.as_str() == agent_codemode::TOOL_NAME {
+                        Verdict::Allow
+                    } else {
+                        self.tools.policy(ctx, call).await
+                    }
+                } => verdict,
             };
             let verdict = match current_policy {
                 Verdict::Deny(reason) => {
@@ -1569,6 +1579,8 @@ where
                     } else {
                         ToolResult::error(NOT_RUN_WALL)
                     }
+                } else if call.tool.as_str() == agent_codemode::TOOL_NAME {
+                    self.run_codemode(ctx, call, cancel, run_started).await?
                 } else {
                     let run = self.tools.run(ctx.thread(), call, cancel);
                     match tokio::time::timeout_at(deadline, run).await {
@@ -1695,11 +1707,16 @@ where
         // exposure only appends: the prefix the provider cached last step is
         // unchanged and only the new tail is uncached.
         let mut offered: Vec<ToolSpec> = std::iter::once(self.search.clone())
+            .chain(std::iter::once(codemode::spec()))
             .chain(
                 self.tools
                     .catalog()
                     .iter()
-                    .filter(|spec| spec.core)
+                    .filter(|spec| {
+                        spec.core
+                            && spec.name.as_str() != CODEMODE
+                            && spec.name.as_str() != TOOLS_SEARCH
+                    })
                     .cloned(),
             )
             .collect();
@@ -1716,6 +1733,9 @@ where
 
     /// A tool the model was offered. Calls to anything else are unknown.
     fn offered_spec(&self, ctx: &Context, name: &ToolName) -> Option<ToolSpec> {
+        if name.as_str() == agent_codemode::TOOL_NAME {
+            return Some(codemode::spec());
+        }
         if name == &self.search.name {
             return Some(self.search.clone());
         }

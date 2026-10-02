@@ -116,6 +116,15 @@ pub(super) fn tool_requires_approval(
     args: &serde_json::Value,
     denials: &DenialMemory,
 ) -> ApprovalDecision {
+    // Codemode itself only evaluates an isolated script; every effect is a
+    // separately admitted nested call. Safe mode still approves the wrapper.
+    if tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
+        return if approval_mode == ApprovalMode::Safe {
+            ApprovalDecision::Required
+        } else {
+            ApprovalDecision::NotRequired
+        };
+    }
     if tool_executor.has_code_authority()
         && approval_mode != ApprovalMode::Safe
         && !is_external_tool
@@ -566,7 +575,7 @@ pub(super) fn deferred_firewall_verdict(
     annotations: Option<&super::super::native_host::NativeToolAnnotations>,
     is_external_tool: bool,
 ) -> NativeFirewallVerdict {
-    if is_external_tool {
+    if is_external_tool || tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
         NativeFirewallVerdict::Allow
     } else {
         host.firewall_verdict(tool_name, args, workflow_snapshot, annotations, false)

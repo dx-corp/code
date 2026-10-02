@@ -436,6 +436,7 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
 mod attachments;
 mod builtin_read;
 mod cancellation;
+mod codemode;
 mod codex;
 mod commands;
 mod context;
@@ -452,6 +453,7 @@ mod read_only_tools;
 mod side_questions;
 #[cfg(test)]
 mod token_efficiency_tests;
+mod tool_batch;
 mod tool_execution;
 mod tool_responses;
 mod tool_results;
@@ -807,7 +809,9 @@ fn validate_tools_with_host(
     if let Some(allowed_tools) = allowed_tools {
         for name in allowed_tools {
             let normalized = name.to_ascii_lowercase();
-            if !host.has_native_tool(&normalized) || host.is_reserved_tool(name) {
+            if normalized != agent_codemode::TOOL_NAME
+                && (!host.has_native_tool(&normalized) || host.is_reserved_tool(name))
+            {
                 return Err(anyhow::anyhow!("Unknown allowed tool `{name}`"));
             }
         }
@@ -823,7 +827,11 @@ fn validate_tools_with_host(
         if name.is_empty() {
             return Err(anyhow::anyhow!("External tool name must not be empty"));
         }
-        if native_names.contains(&name) || host.is_mcp_tool(&name) || host.is_reserved_tool(&name) {
+        if name == agent_codemode::TOOL_NAME
+            || native_names.contains(&name)
+            || host.is_mcp_tool(&name)
+            || host.is_reserved_tool(&name)
+        {
             return Err(anyhow::anyhow!(
                 "External tool name `{name}` collides with a host, MCP, or reserved tool"
             ));
@@ -1418,6 +1426,7 @@ impl NativeAgent {
             })
             .map(|td| (td.tool.name.clone(), td))
             .collect();
+        codemode::register(&mut tools, allowed_tools);
         let external_tools = external_tool_definitions
             .iter()
             .map(|definition| definition.tool.name.to_lowercase())
@@ -1519,6 +1528,12 @@ impl NativeAgent {
             codex_session: None,
             codex_history_restore_prefix_len: None,
             codex_active_turn_id: None,
+            codemode_tool_budget: TurnStepBudget::new(DEFAULT_MAX_TURN_STEPS),
+            codemode_cancel: None,
+            codemode_parent_call_id: None,
+            codemode_journaled: HashSet::new(),
+            codemode_cancelled_calls: HashSet::new(),
+            codemode_indeterminate: false,
             codex_current_prompt_started: false,
             managed_run_id: managed_run_id.clone(),
             next_managed_turn_id: 0,
@@ -2429,6 +2444,13 @@ struct NativeAgentRunner {
     /// at startup and remains constant.
     tools: HashMap<String, ToolDefinition>,
     codex_active_turn_id: Option<String>,
+    /// Identical scripted proposals share a guard for the whole user turn.
+    codemode_tool_budget: TurnStepBudget,
+    codemode_cancel: Option<CancellationToken>,
+    codemode_parent_call_id: Option<String>,
+    codemode_journaled: HashSet<String>,
+    codemode_cancelled_calls: HashSet<String>,
+    codemode_indeterminate: bool,
 
     /// Cached model-facing tool schemas. The registry is immutable for the
     /// lifetime of a runner; only goal visibility and the IDE-tools flag can
@@ -4254,6 +4276,7 @@ impl NativeAgentRunner {
                 )
             })
             .collect::<HashMap<_, _>>();
+        codemode::register(&mut tools, Some(allowed_tools));
         let external_tools = external_tool_definitions
             .iter()
             .map(|definition| definition.tool.name.to_ascii_lowercase())
@@ -4343,7 +4366,16 @@ impl NativeAgentRunner {
             .active_cancellation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::mem::take(&mut active.operation_interrupted)
+        let interrupted = std::mem::take(&mut active.operation_interrupted);
+        if interrupted {
+            // A cancelled child cannot be caught by script code and followed
+            // by another effect. Leave the queued Cancel command for the outer
+            // turn to consume so it still emits TurnInterrupted exactly once.
+            if let Some(cancel) = &self.codemode_cancel {
+                cancel.cancel();
+            }
+        }
+        interrupted
     }
 
     fn finish_tool_batch(&self) -> bool {

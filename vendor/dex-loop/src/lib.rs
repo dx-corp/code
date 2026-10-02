@@ -36,7 +36,9 @@ pub use context::{
     AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message, TOOL_EVIDENCE_LIMIT,
     ToolEvidence,
 };
-pub use engine::{CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH};
+pub use engine::{
+    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_SEARCH,
+};
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,
     ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass, ErrorCode, Event,

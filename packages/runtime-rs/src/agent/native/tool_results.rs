@@ -11,15 +11,21 @@ pub(super) fn tool_operation_now_ms() -> u64 {
 }
 
 impl NativeAgentRunner {
-    async fn begin_tool_operation(
+    pub(super) async fn begin_tool_operation(
         &self,
         call_id: &str,
         tool_name: &str,
         admitted_arguments: &Value,
     ) -> Result<maestro_runtime_contracts::ToolOperationRecord, String> {
-        let admission = self
-            .tool_executor
-            .tool_operation_admission(tool_name, admitted_arguments);
+        let admission = if tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
+            super::super::native_host::NativeToolOperationAdmission {
+                replay_policy: maestro_runtime_contracts::ToolReplayPolicy::Never,
+                idempotency_key: None,
+            }
+        } else {
+            self.tool_executor
+                .tool_operation_admission(tool_name, admitted_arguments)
+        };
         let planned = maestro_runtime_contracts::ToolOperationRecord::planned(
             call_id,
             tool_name,
@@ -29,6 +35,12 @@ impl NativeAgentRunner {
             tool_operation_now_ms(),
         )
         .map_err(|error| error.to_string())?;
+        let planned = match &self.codemode_parent_call_id {
+            Some(parent) => planned
+                .with_projection_owner(parent)
+                .map_err(|error| error.to_string())?,
+            None => planned,
+        };
         self.hooks
             .hook_record_tool_operation(&planned)
             .await
@@ -44,14 +56,20 @@ impl NativeAgentRunner {
     }
 
     pub(super) async fn record_tool_operation_outcome(
-        &self,
+        &mut self,
         pending: maestro_runtime_contracts::ToolOperationRecord,
         execution: &ToolExecution,
     ) {
         // The outcome journal is durable and is written before model projection.
+        let script_child = pending.projection_owner_call_id.is_some();
         let outcome = maestro_runtime_contracts::ToolOperationOutcome::new(
-            self.credential_vault
-                .vault_in_text(&execution.model_content()),
+            self.credential_vault.vault_in_text(
+                &if self.codemode_cancel.is_some() || script_child {
+                    execution.raw_content()
+                } else {
+                    execution.model_content()
+                },
+            ),
             execution.is_error(),
             Some(execution.receipt.clone()),
         );
@@ -65,6 +83,15 @@ impl NativeAgentRunner {
                 return;
             }
         };
+        if self.codemode_cancel.is_some()
+            && matches!(execution.outcome, ToolOutcome::Indeterminate { .. })
+        {
+            self.codemode_indeterminate = true;
+        }
+        if self.codemode_cancel.is_some() {
+            self.codemode_journaled
+                .insert(execution.receipt.call_id.clone());
+        }
         if let Err(error) = self.hooks.hook_record_tool_operation(&ready).await {
             self.tool_executor.report_diagnostic(format!(
                 "tool operation outcome persistence failed for {}: {error}",
@@ -113,6 +140,19 @@ impl NativeAgentRunner {
         let tool_name = pending.tool_name.clone();
         let args = tool_args_for_execution(&pending.admitted_arguments);
         let started = Instant::now();
+        if tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
+            let execution = ToolExecution::from_legacy(
+                &call_id,
+                &tool_name,
+                ExecutionSource::Native,
+                ToolResult::failure(
+                    "Interrupted codemode scripts cannot be replayed; inspect the existing nested receipts before continuing.",
+                ),
+            );
+            self.record_tool_operation_outcome(pending, &execution)
+                .await;
+            return execution;
+        }
         let cancel = self.shutdown_token.child_token();
         let terminal_drain_required =
             native_tool_requires_terminal_drain(&self.tool_executor, &tool_name, &args);
@@ -449,7 +489,18 @@ impl NativeAgentRunner {
             return execution;
         }
 
-        let cancel = self.shutdown_token.child_token();
+        if tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
+            let execution = Box::pin(self.execute_codemode(args, call_id)).await;
+            self.record_tool_operation_outcome(operation, &execution)
+                .await;
+            return execution;
+        }
+
+        let cancel = self
+            .codemode_cancel
+            .as_ref()
+            .unwrap_or(&self.shutdown_token)
+            .child_token();
         let terminal_drain_required =
             native_tool_requires_terminal_drain(&self.tool_executor, tool_name, args);
         self.set_active_tool_cancel_token(Some(cancel.clone()), terminal_drain_required);
@@ -587,6 +638,21 @@ impl NativeAgentRunner {
             }
         });
 
+        if self.codemode_cancel.is_some()
+            && (!approved
+                || self
+                    .external_tools
+                    .contains(&tool_name.to_ascii_lowercase()))
+        {
+            match self
+                .begin_tool_operation(&call_id, &tool_name, &safe_args)
+                .await
+            {
+                Ok(operation) => self.record_tool_operation_outcome(operation, &result).await,
+                Err(error) => self.tool_executor.report_diagnostic(error),
+            }
+        }
+
         // Model-facing bound. The renderer clamp in `tool_output` never
         // covered this path, so a single large tool result went into
         // conversation history verbatim. Spill above 40 KB, sanitize control
@@ -599,10 +665,22 @@ impl NativeAgentRunner {
             session_id.as_deref(),
             self.owns_persistent_tool_spills,
         );
-        let safe_content = self.credential_vault.vault_in_text(&result.model_content());
-        let content =
+        let safe_content =
+            self.credential_vault
+                .vault_in_text(&if self.codemode_cancel.is_some() {
+                    result.raw_content()
+                } else {
+                    result.model_content()
+                });
+        let content = if self.codemode_cancel.is_some() {
+            super::super::native_host::NativeToolOutput {
+                content: safe_content,
+                saved_path: None,
+            }
+        } else {
             self.tool_executor
-                .clamp_tool_output(&safe_content, &tool_name, spill_dir.as_deref());
+                .clamp_tool_output(&safe_content, &tool_name, spill_dir.as_deref())
+        };
         let is_error = result.is_error();
 
         // Bash bounds its own model projection before the outer clamp runs.
@@ -786,6 +864,9 @@ impl NativeAgentRunner {
         );
         self.tool_response_coordinator
             .discard_cancelled(&cancelled_ids);
+        if self.codemode_cancel.is_some() {
+            self.codemode_cancelled_calls.extend(cancelled_ids);
+        }
         true
     }
     pub(super) async fn drain_read_only_tool_calls(
@@ -806,7 +887,11 @@ impl NativeAgentRunner {
                 .map_err(anyhow::Error::msg)?;
             operations.insert(call.call_id.clone(), operation);
         }
-        let cancel_token = CancellationToken::new();
+        let cancel_token = self
+            .codemode_cancel
+            .as_ref()
+            .unwrap_or(&self.shutdown_token)
+            .child_token();
         self.set_active_tool_cancel_token(Some(cancel_token.clone()), false);
         // These calls run concurrently in one batch, so the batch is the only
         // interval this path can measure. Each call is reported with the batch
@@ -837,7 +922,13 @@ impl NativeAgentRunner {
             if let Some(operation) = operations.remove(&call.call_id) {
                 self.record_tool_operation_outcome(operation, &result).await;
             }
-            let content = self.credential_vault.vault_in_text(&result.model_content());
+            let content = self
+                .credential_vault
+                .vault_in_text(&if self.codemode_cancel.is_some() {
+                    result.raw_content()
+                } else {
+                    result.model_content()
+                });
             let is_error = result.is_error();
 
             // Hooks receive the tool body before the model-facing envelope;

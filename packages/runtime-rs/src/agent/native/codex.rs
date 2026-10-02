@@ -769,11 +769,22 @@ impl NativeAgentRunner {
                 // plaintext. Policy, approval events, hooks, and execution
                 // must all see the same vaulted arguments.
                 let args = codex_tool_args_for_admission(&args, &self.credential_vault);
+                let missing = self.missing_required_tool_args(&registry_name, &args);
+                if !missing.is_empty() {
+                    let error = format!(
+                        "Missing required fields for tool '{registry_name}': {}",
+                        missing.join(", ")
+                    );
+                    self.record_codex_tool_result(&call_id, error.clone(), true);
+                    request.respond(tool_call_error_result(error));
+                    return Ok(());
+                }
 
                 let is_external_tool = self.external_tools.contains(&tool_key);
                 let annotations = self.tool_executor.tool_annotations(&tool_key);
                 let workflow_snapshot = self.workflow_state.snapshot();
-                let firewall_verdict = if is_external_tool {
+                let firewall_verdict = if is_external_tool || tool_key == agent_codemode::TOOL_NAME
+                {
                     NativeFirewallVerdict::Allow
                 } else {
                     self.tool_executor.firewall_verdict(

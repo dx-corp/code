@@ -1,0 +1,29 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+CODEMODE_SRCS = glob(["src/**/*.rs"])
+CODEMODE_DEPS = [
+    "@crates//rquickjs",
+    "@crates//serde",
+    "@crates//serde_json",
+    "@crates//tokio",
+    "@crates//tokio-util",
+]
+
+rust_library(
+    name = "agent_codemode",
+    crate_name = "agent_codemode",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    srcs = CODEMODE_SRCS,
+    visibility = ["//visibility:public"],
+    deps = CODEMODE_DEPS,
+)
+
+rust_test(
+    name = "tests",
+    crate_name = "agent_codemode_tests",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    srcs = CODEMODE_SRCS,
+    deps = CODEMODE_DEPS,
+)

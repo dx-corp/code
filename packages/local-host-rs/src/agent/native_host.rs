@@ -7,8 +7,12 @@
 //! `ToolExecutor` and one `IntegratedHookSystem` for the whole actor.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use maestro_runtime::agent::{
     FromAgent, InlineToolApprovalContext, NativeCodexAuth, NativeCodingCompletion,
@@ -21,6 +25,7 @@ use maestro_runtime::agent::{
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::hooks::{
     HookEventType, HookResult, IntegratedHookSystem, context::render_hook_context,
@@ -30,6 +35,65 @@ use crate::safety::{ActionFirewall, FirewallContext, FirewallVerdict};
 use crate::tools::{BatchConfig, BatchExecutor, BatchToolCall, ToolExecutor};
 
 type ModelResolver = dyn Fn(&str, bool) -> Result<NativeResolvedClient, String> + Send + Sync;
+
+/// Cancellation belongs to the caller until the native owner completes. Check
+/// completion inside the task, so dropping an unpolled ready join cannot cancel
+/// a successfully launched background operation.
+struct NativeToolTaskGuard {
+    cancel: CancellationToken,
+    completed: Arc<AtomicBool>,
+}
+
+impl Drop for NativeToolTaskGuard {
+    fn drop(&mut self) {
+        if !self.completed.load(Ordering::Acquire) {
+            self.cancel.cancel();
+        }
+    }
+}
+
+fn run_native_tool_task(
+    name: String,
+    call_id: String,
+    event_tx: Option<mpsc::UnboundedSender<FromAgent>>,
+    cancel: CancellationToken,
+    policy: Option<maestro_runtime::ManagedPolicyMetadata>,
+    future: impl Future<Output = ToolExecution> + Send + 'static,
+) -> NativeHostFuture<'static, ToolExecution> {
+    Box::pin(async move {
+        let completed = Arc::new(AtomicBool::new(false));
+        let _guard = NativeToolTaskGuard {
+            cancel,
+            completed: Arc::clone(&completed),
+        };
+        let terminal_tx = event_tx.clone();
+        let terminal_id = call_id.clone();
+        // Spawn never polls synchronously: the actor's composition frames have
+        // unwound before the concrete native dispatcher is polled. Await this
+        // task, including cancellation cleanup, before admitting a next effect.
+        let task = tokio::spawn(
+            async move {
+                let execution = future.await;
+                completed.store(true, Ordering::Release);
+                crate::tools::emit_typed_tool_end(terminal_tx.as_ref(), &terminal_id, &execution);
+                execution
+            }
+            .in_current_span(),
+        );
+        match task.await {
+            Ok(execution) => execution,
+            Err(error) => {
+                let execution = ToolExecution::from_legacy(
+                    &call_id, &name, maestro_runtime::agent::ExecutionSource::Native,
+                    maestro_runtime::agent::ToolResult::failure(format!("Native tool task did not return its execution receipt: {error}. Reconcile the operation before retrying."))
+                        .with_details(serde_json::json!({"remoteOutcome":"unknown","requiresReconciliation":true,"retryable":false})),
+                ).with_managed_policy(policy);
+                crate::tools::emit_typed_tool_end(event_tx.as_ref(), &call_id, &execution);
+                execution
+            }
+        }
+    })
+}
 
 fn tool_replay_policy(
     annotations: Option<&NativeToolAnnotations>,
@@ -392,23 +456,31 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         let cancel = options.cancel;
         let approved_inline_env = options.approved_inline_env.cloned();
         let receipt_policy = self.managed_policy_metadata();
-        Box::pin(async move {
-            let mut hook_guard = hooks.lock().await;
-            let execution = executor
-                .execute_with_receipt_cancellable_inline_env(
-                    &name,
-                    &args,
-                    event_tx.as_ref(),
-                    &call_id,
-                    crate::tools::ToolExecutionOptions {
-                        cancel,
-                        approved_inline_env: approved_inline_env.as_ref(),
-                        hooks: Some(&mut *hook_guard),
-                    },
-                )
-                .await;
-            execution.with_managed_policy(receipt_policy)
-        })
+        run_native_tool_task(
+            name.clone(),
+            call_id.clone(),
+            event_tx.clone(),
+            cancel.clone(),
+            receipt_policy.clone(),
+            async move {
+                let mut hook_guard = hooks.lock().await;
+                let execution = executor
+                    .execute_with_receipt_cancellable_inline_env(
+                        &name,
+                        &args,
+                        event_tx.as_ref(),
+                        &call_id,
+                        crate::tools::ToolExecutionOptions {
+                            cancel,
+                            approved_inline_env: approved_inline_env.as_ref(),
+                            hooks: Some(&mut *hook_guard),
+                            emit_terminal_event: false,
+                        },
+                    )
+                    .await;
+                execution.with_managed_policy(receipt_policy)
+            },
+        )
     }
 
     fn execute_read_only_wave<'a>(
@@ -1056,6 +1128,189 @@ mod tests {
             }),
             recording,
         )
+    }
+
+    async fn poll_task_once(task: &mut NativeHostFuture<'_, ToolExecution>) {
+        std::future::poll_fn(|cx| {
+            assert!(task.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+
+    fn only_terminal_receipt(
+        rx: &mut mpsc::UnboundedReceiver<FromAgent>,
+    ) -> maestro_runtime::agent::ExecutionReceipt {
+        let mut receipts = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let FromAgent::ToolEnd {
+                receipt: Some(receipt),
+                ..
+            } = event
+            {
+                receipts.push(receipt);
+            }
+        }
+        assert_eq!(
+            receipts.len(),
+            1,
+            "each owned execution must emit one terminal receipt"
+        );
+        receipts.pop().unwrap()
+    }
+
+    #[tokio::test]
+    async fn native_tool_task_drop_cancels_pending_execution_and_keeps_cleanup_running() {
+        let cancel = CancellationToken::new();
+        let child_cancel = cancel.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        let mut task = run_native_tool_task(
+            "bash".into(),
+            "dropped".into(),
+            Some(tx),
+            cancel.clone(),
+            None,
+            async move {
+                child_cancel.cancelled().await;
+                let _ = cleaned_tx.send(());
+                ToolExecution::cancelled(
+                    "dropped",
+                    "bash",
+                    maestro_runtime::agent::ExecutionSource::Native,
+                    maestro_runtime::agent::ExecutionPhase::Running,
+                )
+            },
+        );
+        poll_task_once(&mut task).await;
+        drop(task);
+        assert!(cancel.is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(5), cleaned_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            only_terminal_receipt(&mut rx).status,
+            maestro_runtime_contracts::ExecutionStatus::Cancelled {
+                phase: maestro_runtime::agent::ExecutionPhase::Running,
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_tool_task_completed_before_parent_poll_preserves_background_continuation() {
+        let cancel = CancellationToken::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let mut task = run_native_tool_task(
+            "bash".into(),
+            "completed".into(),
+            Some(tx),
+            cancel.clone(),
+            None,
+            async move {
+                start_rx.await.unwrap();
+                ToolExecution::from_legacy(
+                    "completed",
+                    "bash",
+                    maestro_runtime::agent::ExecutionSource::Native,
+                    maestro_runtime::agent::ToolResult::success("background accepted"),
+                )
+            },
+        );
+        poll_task_once(&mut task).await;
+        start_tx.send(()).unwrap();
+        // Observe the owner's successful terminal event on another worker,
+        // then drop the parent without polling its ready join. Publication
+        // must imply completion before the guard can cancel the token.
+        let receipt = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let FromAgent::ToolEnd {
+                    receipt: Some(receipt),
+                    ..
+                } = rx.recv().await.unwrap()
+                {
+                    break receipt;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(task);
+        assert!(
+            !cancel.is_cancelled(),
+            "completed background work lost its token"
+        );
+        assert_eq!(
+            receipt.status,
+            maestro_runtime_contracts::ExecutionStatus::Succeeded
+        );
+        assert!(rx.try_recv().is_err(), "terminal event was duplicated");
+    }
+
+    #[tokio::test]
+    async fn native_tool_task_cancellation_awaits_terminal_cleanup() {
+        let cancel = CancellationToken::new();
+        let child_cancel = cancel.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let mut task = run_native_tool_task(
+            "bash".into(),
+            "drained".into(),
+            Some(tx),
+            cancel.clone(),
+            None,
+            async move {
+                child_cancel.cancelled().await;
+                finish_rx.await.unwrap();
+                ToolExecution::cancelled(
+                    "drained",
+                    "bash",
+                    maestro_runtime::agent::ExecutionSource::Native,
+                    maestro_runtime::agent::ExecutionPhase::Running,
+                )
+            },
+        );
+        poll_task_once(&mut task).await;
+        cancel.cancel();
+        tokio::task::yield_now().await;
+        poll_task_once(&mut task).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "terminal event preceded native cleanup"
+        );
+        finish_tx.send(()).unwrap();
+        let execution = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(only_terminal_receipt(&mut rx)).unwrap(),
+            serde_json::to_value(execution.receipt).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn native_tool_task_join_failure_emits_one_indeterminate_receipt() {
+        let cancel = CancellationToken::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let execution = run_native_tool_task(
+            "bash".into(),
+            "unknown".into(),
+            Some(tx),
+            cancel.clone(),
+            None,
+            async move { panic!("native task failed before returning its receipt") },
+        )
+        .await;
+        assert_eq!(
+            execution.receipt.status,
+            maestro_runtime_contracts::ExecutionStatus::Indeterminate
+        );
+        assert_eq!(
+            serde_json::to_value(only_terminal_receipt(&mut rx)).unwrap(),
+            serde_json::to_value(execution.receipt).unwrap()
+        );
+        assert!(cancel.is_cancelled());
     }
 
     #[test]

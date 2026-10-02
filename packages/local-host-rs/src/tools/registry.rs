@@ -877,12 +877,15 @@ struct ToolExecutionContext<'a> {
     /// Receipt callers suppress the dispatcher lifecycle events; new execute_impl
     /// arms must use lifecycle_event_tx so ToolEnd remains singular.
     emit_tool_events: bool,
+    emit_terminal_event: bool,
 }
 
 pub(crate) struct ToolExecutionOptions<'a> {
     pub(crate) cancel: CancellationToken,
     pub(crate) approved_inline_env: Option<&'a HashMap<String, String>>,
     pub(crate) hooks: Option<&'a mut crate::hooks::IntegratedHookSystem>,
+    /// The owned host task emits the receipt after execution or a join failure.
+    pub(crate) emit_terminal_event: bool,
 }
 
 impl ToolExecutor {
@@ -1229,6 +1232,7 @@ impl ToolExecutor {
                 approved_inline_env: None,
                 hooks: None,
                 emit_tool_events: false,
+                emit_terminal_event: true,
             },
         )
         .await
@@ -2470,6 +2474,7 @@ impl ToolExecutor {
                 approved_inline_env: None,
                 hooks: None,
                 emit_tool_events: true,
+                emit_terminal_event: true,
             },
         )
         .await
@@ -2794,6 +2799,7 @@ impl ToolExecutor {
                 approved_inline_env: options.approved_inline_env,
                 hooks: options.hooks,
                 emit_tool_events: false,
+                emit_terminal_event: options.emit_terminal_event,
             },
         )
         .await
@@ -2820,6 +2826,7 @@ impl ToolExecutor {
                 approved_inline_env: None,
                 hooks: None,
                 emit_tool_events: false,
+                emit_terminal_event: true,
             },
         )
         .await
@@ -2834,6 +2841,7 @@ impl ToolExecutor {
         generation: u64,
         execution_context: ToolExecutionContext<'_>,
     ) -> ToolExecution {
+        let emit_terminal_event = execution_context.emit_terminal_event;
         let code_decision = match self
             .authorize_code_call(
                 tool_name,
@@ -2854,7 +2862,9 @@ impl ToolExecutor {
                     },
                 )
                 .with_managed_policy(crate::safety::managed_policy_metadata());
-                emit_typed_tool_end(event_tx, call_id, &execution);
+                if emit_terminal_event {
+                    emit_typed_tool_end(event_tx, call_id, &execution);
+                }
                 return execution;
             }
         };
@@ -2864,7 +2874,9 @@ impl ToolExecutor {
             let execution =
                 ToolExecution::denied(call_id, tool_name, DenialReason::SandboxPolicy { message })
                     .with_managed_policy(crate::safety::managed_policy_metadata());
-            emit_typed_tool_end(event_tx, call_id, &execution);
+            if emit_terminal_event {
+                emit_typed_tool_end(event_tx, call_id, &execution);
+            }
             return execution;
         }
         if self.sandbox_policy.is_some() && self.get_inline_tool(tool_name).is_some() {
@@ -2876,7 +2888,9 @@ impl ToolExecutor {
                 },
             )
             .with_managed_policy(crate::safety::managed_policy_metadata());
-            emit_typed_tool_end(event_tx, call_id, &execution);
+            if emit_terminal_event {
+                emit_typed_tool_end(event_tx, call_id, &execution);
+            }
             return execution;
         }
         if let FirewallVerdict::Block { reason } = self.firewall_verdict(tool_name, args) {
@@ -2888,7 +2902,9 @@ impl ToolExecutor {
                 },
             )
             .with_managed_policy(crate::safety::managed_policy_metadata());
-            emit_typed_tool_end(event_tx, call_id, &execution);
+            if emit_terminal_event {
+                emit_typed_tool_end(event_tx, call_id, &execution);
+            }
             return execution;
         }
 
@@ -2932,12 +2948,14 @@ impl ToolExecutor {
         if used_cache {
             execution.receipt.details = crate::agent::ToolReceiptDetails::Cached;
         }
-        emit_typed_tool_end(event_tx, call_id, &execution);
+        if emit_terminal_event {
+            emit_typed_tool_end(event_tx, call_id, &execution);
+        }
         execution
     }
 }
 
-fn emit_typed_tool_end(
+pub(crate) fn emit_typed_tool_end(
     event_tx: Option<&mpsc::UnboundedSender<FromAgent>>,
     call_id: &str,
     execution: &ToolExecution,
