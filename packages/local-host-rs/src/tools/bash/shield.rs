@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use tokio::io::AsyncReadExt;
@@ -15,6 +15,7 @@ use crate::agent::credential_store::{publication_secret_kind, redact_credentials
 const MAX_OUTPUT: u64 = 8 * 1024 * 1024;
 const MAX_COMMITS: usize = 256;
 const MAX_FINDINGS: usize = 20;
+const PARSER_CPU_BUDGET: Duration = Duration::from_millis(50);
 const HELP: &str = "Maestro Shield could not safely scan this Git operation. Run staging separately, then use a single literal git commit or git push command.";
 
 struct Publication {
@@ -23,10 +24,83 @@ struct Publication {
     args: Vec<String>,
 }
 
+// Parsing is synchronous: thread CPU time excludes descheduling without
+// charging other threads or weakening the original 50 ms computation limit.
+#[cfg(unix)]
+fn thread_cpu_time() -> Result<Duration> {
+    let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime initializes the pointed-to timespec on success.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: the successful call above initialized time.
+    let time = unsafe { time.assume_init() };
+    let seconds = u64::try_from(time.tv_sec).context("invalid thread CPU clock seconds")?;
+    let nanos = u32::try_from(time.tv_nsec).context("invalid thread CPU clock nanoseconds")?;
+    if nanos >= 1_000_000_000 {
+        bail!("invalid thread CPU clock nanoseconds");
+    }
+    Ok(Duration::new(seconds, nanos))
+}
+
+#[cfg(windows)]
+fn thread_cpu_time() -> Result<Duration> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: the current-thread pseudo-handle is valid for GetThreadTimes;
+    // all four output pointers refer to initialized writable FILETIME values.
+    if unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    let total = ticks(kernel)
+        .checked_add(ticks(user))
+        .context("thread CPU clock overflow")?;
+    Ok(Duration::new(
+        total / 10_000_000,
+        ((total % 10_000_000) * 100) as u32,
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn thread_cpu_time() -> Result<Duration> {
+    bail!("thread CPU clock is unavailable");
+}
+
 /// Detect literal publication commands with the same Bash grammar used by
 /// command approval. A compound publication must be split so staging or a
 /// directory change cannot invalidate the scan before the command executes.
 fn publication(command: &str, cwd: &Path) -> Result<Option<Publication>> {
+    let bytes = command.as_bytes();
+    publication_with_reader(
+        command,
+        cwd,
+        |offset, _| bytes.get(offset..).unwrap_or_default(),
+        thread_cpu_time,
+    )
+}
+
+fn publication_with_reader<'a>(
+    command: &'a str,
+    cwd: &Path,
+    mut read: impl FnMut(usize, tree_sitter::Point) -> &'a [u8],
+    mut cpu_time: impl FnMut() -> Result<Duration>,
+) -> Result<Option<Publication>> {
     if command.len() > 64 * 1024 {
         bail!("{HELP}");
     }
@@ -34,23 +108,37 @@ fn publication(command: &str, cwd: &Path) -> Result<Option<Publication>> {
     parser
         .set_language(&tree_sitter_bash::LANGUAGE.into())
         .context(HELP)?;
-    let started_at = Instant::now();
-    let timeout = Duration::from_millis(50);
-    let mut cancel_after_timeout = |_: &tree_sitter::ParseState| {
-        if started_at.elapsed() >= timeout {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
+    let started_at = cpu_time().context(HELP)?;
+    let mut budget_error = None;
+    let mut check_budget = || -> Result<()> {
+        let elapsed = cpu_time()?
+            .checked_sub(started_at)
+            .context("thread CPU clock moved backwards")?;
+        if elapsed >= PARSER_CPU_BUDGET {
+            bail!("Shield parser CPU budget exhausted");
         }
+        Ok(())
     };
-    let bytes = command.as_bytes();
-    let tree = parser
-        .parse_with_options(
-            &mut |offset, _| bytes.get(offset..).unwrap_or_default(),
+    let tree = {
+        let mut cancel_after_budget = |_: &tree_sitter::ParseState| match check_budget() {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(error) => {
+                budget_error = Some(error);
+                ControlFlow::Break(())
+            }
+        };
+        parser.parse_with_options(
+            &mut read,
             None,
-            Some(ParseOptions::new().progress_callback(&mut cancel_after_timeout)),
+            Some(ParseOptions::new().progress_callback(&mut cancel_after_budget)),
         )
-        .context(HELP)?;
+    };
+    if let Some(error) = budget_error {
+        return Err(error.context(HELP));
+    }
+    let tree = tree.context(HELP)?;
+    // Short parses may finish without invoking the progress callback.
+    check_budget().context(HELP)?;
     let root = tree.root_node();
     let mut stack = vec![root];
     let mut candidate = None;
@@ -685,6 +773,121 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(parsed.cwd, Path::new("root/a directory"));
+    }
+
+    #[test]
+    fn parser_pause_does_not_reject_background_lifecycle_command() {
+        let command = "printf '%s\\n' \"$$\" > '/tmp/background-parent.pid'; sleep 30 & child=$!; printf '%s\\n' \"$child\" > '/tmp/background-child.pid'; wait \"$child\"";
+        let mut paused = false;
+        let parsed = publication_with_reader(
+            command,
+            Path::new("."),
+            |offset, _| {
+                if !paused {
+                    paused = true;
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+                command.as_bytes().get(offset..).unwrap_or_default()
+            },
+            thread_cpu_time,
+        );
+        assert!(parsed.unwrap().is_none());
+    }
+
+    #[test]
+    fn parser_cpu_budget_exhaustion_fails_closed() {
+        // The longer command invokes progress; the literal push also checks
+        // the final clock even when parsing completes without a callback.
+        for command in [
+            "printf '%s\\n' \"$$\" > '/tmp/parent.pid'; sleep 30 & child=$!; wait \"$child\"",
+            "git push origin HEAD",
+        ] {
+            let mut started = false;
+            let error = publication_with_reader(
+                command,
+                Path::new("."),
+                |offset, _| command.as_bytes().get(offset..).unwrap_or_default(),
+                || {
+                    if started {
+                        Ok(Duration::from_millis(50))
+                    } else {
+                        started = true;
+                        Ok(Duration::ZERO)
+                    }
+                },
+            )
+            .err()
+            .expect("exhausted parser budget must refuse the command");
+            assert_eq!(error.to_string(), HELP);
+            assert!(format!("{error:#}").contains("parser CPU budget exhausted"));
+        }
+    }
+
+    #[test]
+    fn parser_cpu_clock_failures_do_not_approve_commands() {
+        for command in [
+            "echo x; echo y; echo z; echo w; echo v",
+            "git push origin HEAD",
+        ] {
+            for fail_at in [0, 1] {
+                let mut reads = 0;
+                let error = publication_with_reader(
+                    command,
+                    Path::new("."),
+                    |offset, _| command.as_bytes().get(offset..).unwrap_or_default(),
+                    || {
+                        let fail = reads >= fail_at;
+                        reads += 1;
+                        if fail {
+                            bail!("fixture clock unavailable");
+                        }
+                        Ok(Duration::from_millis(100))
+                    },
+                )
+                .err()
+                .expect("failed parser clock must refuse the command");
+                assert_eq!(error.to_string(), HELP);
+                assert!(format!("{error:#}").contains("fixture clock unavailable"));
+            }
+            let mut reads = 0;
+            let error = publication_with_reader(
+                command,
+                Path::new("."),
+                |offset, _| command.as_bytes().get(offset..).unwrap_or_default(),
+                || {
+                    reads += 1;
+                    Ok(if reads == 1 {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::ZERO
+                    })
+                },
+            )
+            .err()
+            .expect("backward parser clock must refuse the command");
+            assert!(format!("{error:#}").contains("clock moved backwards"));
+        }
+    }
+
+    #[test]
+    fn malformed_parser_work_exhausts_cpu_budget() {
+        let command = "a[0]=(".repeat(10_000);
+        let error = publication(&command, Path::new("."))
+            .err()
+            .expect("expensive malformed syntax must exhaust the parser budget");
+        assert_eq!(error.to_string(), HELP);
+        assert!(format!("{error:#}").contains("parser CPU budget exhausted"));
+    }
+
+    #[test]
+    fn parser_keeps_maximum_size_literal_commit_and_input_limit() {
+        let message = "x".repeat(65_520);
+        let command = format!("git commit -m '{message}'");
+        assert_eq!(command.len(), 65_536);
+        let parsed = publication(&command, Path::new(".")).unwrap().unwrap();
+        assert_eq!(parsed.operation, "commit");
+        assert_eq!(parsed.args, ["-m", &message]);
+        assert!(publication(&"x".repeat(65_537), Path::new(".")).is_err());
     }
 
     #[cfg(unix)]
