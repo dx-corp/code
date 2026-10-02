@@ -1075,13 +1075,26 @@ impl ToolRegistry {
             ToolDefinition {
                 tool: Tool::new(
                     "extract_document",
-                    "Download a document and extract its text (PDF, DOCX, XLSX, PPTX).",
+                    "Download a document and extract it as Markdown (PDF, DOCX, XLSX, PPTX, text). Keeps headings, lists, tables, PDF pages, slides, and sheets. Returns one page of text at a time; when more remains, the output ends with the offset to pass on the next call.",
                 )
                 .with_schema(serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string"},
-                        "maxChars": {"type": "number"}
+                        "url": {
+                            "type": "string",
+                            "description": "HTTP(S) URL of the document to download"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Character offset into the extracted Markdown to start from (default: 0). Pass the offset reported by the previous call to continue."
+                        },
+                        "maxChars": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1_000_000,
+                            "description": "Maximum characters to return in this call (default: 30000)"
+                        }
                     },
                     "required": ["url"]
                 })),

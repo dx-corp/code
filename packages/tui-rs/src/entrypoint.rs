@@ -2269,7 +2269,7 @@ mod tests {
             native_exec_model(Some("anthropic"), None)
                 .expect("anthropic default")
                 .as_deref(),
-            Some("anthropic/claude-sonnet-4-6")
+            Some("anthropic/claude-opus-5-5")
         );
         assert_eq!(
             native_exec_model(Some("evalops"), Some("gpt-4o-mini"))

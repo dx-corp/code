@@ -13,14 +13,16 @@
 //!
 //! - Automatic format detection based on file extension and MIME type
 //! - Content-Disposition header parsing for filename extraction
-//! - XML entity decoding for Office Open XML formats
+//! - Structure-preserving Markdown: DOCX headings, lists, and tables; PPTX
+//!   per-slide sections; XLSX per-sheet tables; PDF `## Page N` sections that
+//!   name pages without a text layer (see [`ooxml`] for the Office formats)
 //! - Size limits to prevent memory exhaustion (50MB max)
-//! - Optional character limit truncation
+//! - Character-offset paging (`offset`/`maxChars`) that reports the total
+//!   size and the next offset instead of silently truncating
 
-use std::cmp::Ordering;
 use std::env;
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::Path;
 use std::process::{self, Command, Stdio};
 use std::sync::Arc;
@@ -32,10 +34,11 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use zip::ZipArchive;
 
 use super::net_guard;
 use crate::agent::ToolResult;
+
+mod ooxml;
 
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -219,15 +222,85 @@ fn resume_markitdown_process(child: &std::process::Child) -> std::io::Result<()>
 #[derive(Debug, Deserialize)]
 struct ExtractDocumentArgs {
     url: String,
+    /// Character offset into the extracted Markdown to start returning from.
+    #[serde(default)]
+    offset: Option<usize>,
     #[serde(default, alias = "maxChars")]
+    max_chars: Option<usize>,
+}
+
+/// Characters returned per call when the caller does not set `maxChars`.
+/// Sized to stay below the model-facing tool-output spill threshold so a
+/// page arrives inline; callers continue with the reported next offset.
+const DEFAULT_PAGE_CHARS: usize = 30_000;
+/// Largest page a single call may request.
+const MAX_PAGE_CHARS: usize = 1_000_000;
+
+/// Which window of the extracted text a call returns.
+#[derive(Debug, Clone, Copy, Default)]
+struct PageRequest {
+    offset: usize,
     max_chars: Option<usize>,
 }
 
 struct DocumentExtraction {
     format: String,
     extractor: String,
+    /// Returned window, including any continuation header and footer.
     text: String,
-    truncated: bool,
+    /// Character offset of the first returned character.
+    offset: usize,
+    /// Characters of document content in this window.
+    returned_chars: usize,
+    /// Characters in the whole extracted document.
+    total_chars: usize,
+    /// Offset to pass on the next call, when more content remains.
+    next_offset: Option<usize>,
+    sections: Option<SectionSummary>,
+}
+
+/// A window of the extracted text, measured in characters.
+#[derive(Debug, PartialEq, Eq)]
+struct TextWindow<'a> {
+    text: &'a str,
+    end: usize,
+    total_chars: usize,
+}
+
+/// Select up to `max_chars` characters starting at `offset`. When more text
+/// remains, the window ends after the last line break in its final fifth so
+/// a page does not split a line or table row; offsets stay deterministic
+/// because the caller continues from the reported end.
+fn text_window(full: &str, offset: usize, max_chars: usize) -> Result<TextWindow<'_>, String> {
+    let total_chars = full.chars().count();
+    if offset > 0 && offset >= total_chars {
+        return Err(format!(
+            "offset {offset} is past the end of the extracted document ({total_chars} characters)."
+        ));
+    }
+    let start_byte = full
+        .char_indices()
+        .nth(offset)
+        .map_or(full.len(), |(index, _)| index);
+    let rest = &full[start_byte..];
+    let Some((window_end_byte, _)) = rest.char_indices().nth(max_chars) else {
+        return Ok(TextWindow {
+            text: rest,
+            end: total_chars,
+            total_chars,
+        });
+    };
+    let window = &rest[..window_end_byte];
+    let snapped = window
+        .rfind('\n')
+        .map(|newline| &window[..=newline])
+        .filter(|candidate| candidate.chars().count() >= max_chars - max_chars / 5);
+    let text = snapped.unwrap_or(window);
+    Ok(TextWindow {
+        text,
+        end: offset + text.chars().count(),
+        total_chars,
+    })
 }
 
 fn guess_filename_from_url(url: &reqwest::Url) -> String {
@@ -257,81 +330,84 @@ fn parse_content_disposition(header: Option<&str>) -> Option<String> {
     None
 }
 
-fn decode_xml_entities(input: &str) -> String {
-    input
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+/// Plain-text extraction result before paging, with optional per-section
+/// accounting (PDF pages, PPTX slides, XLSX sheets).
+struct Extracted {
+    text: String,
+    sections: Option<SectionSummary>,
 }
 
-fn strip_xml(input: &str) -> String {
-    static TAG_RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
-    let mut text = input.replace("<w:tab/>", "\t");
-    text = text.replace("<w:br/>", "\n");
-    text = text.replace("</w:p>", "\n");
-    let stripped = TAG_RE.replace_all(&text, "");
-    decode_xml_entities(&stripped)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SectionSummary {
+    /// `page`, `slide`, or `sheet`.
+    kind: &'static str,
+    count: usize,
+    /// One-based section numbers that produced no text.
+    without_text: Vec<usize>,
 }
 
-fn extract_zip_file(archive: &mut ZipArchive<Cursor<Vec<u8>>>, name: &str) -> Option<String> {
-    let mut file = archive.by_name(name).ok()?;
-    let mut contents = String::new();
-    use std::io::Read;
-    file.read_to_string(&mut contents).ok()?;
-    Some(contents)
-}
-
-fn extract_docx(bytes: &[u8]) -> Option<String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes.to_vec())).ok()?;
-    let xml = extract_zip_file(&mut archive, "word/document.xml")?;
-    Some(strip_xml(&xml))
-}
-
-fn extract_pptx(bytes: &[u8]) -> Option<String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes.to_vec())).ok()?;
-    let mut slide_names: Vec<String> = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
-        .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
-        .collect();
-    slide_names.sort_by(|a, b| {
-        let a_num = a
-            .rsplit("slide")
-            .next()
-            .and_then(|s| s.trim_end_matches(".xml").parse::<u32>().ok());
-        let b_num = b
-            .rsplit("slide")
-            .next()
-            .and_then(|s| s.trim_end_matches(".xml").parse::<u32>().ok());
-        match (a_num, b_num) {
-            (Some(a), Some(b)) => a.cmp(&b),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => a.cmp(b),
-        }
-    });
-    let mut outputs = Vec::new();
-    for name in slide_names {
-        if let Some(xml) = extract_zip_file(&mut archive, &name) {
-            let text = strip_xml(&xml);
-            if !text.trim().is_empty() {
-                outputs.push(text);
-            }
+impl Extracted {
+    fn plain(text: String) -> Self {
+        Self {
+            text,
+            sections: None,
         }
     }
-    if outputs.is_empty() {
-        None
-    } else {
-        Some(outputs.join("\n"))
-    }
 }
 
-fn extract_xlsx(bytes: &[u8]) -> Option<String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes.to_vec())).ok()?;
-    let xml = extract_zip_file(&mut archive, "xl/sharedStrings.xml")?;
-    Some(strip_xml(&xml))
+/// Note written in place of a PDF page that has no extractable text layer.
+/// Scanned pages need OCR, which this extractor does not perform.
+const PDF_PAGE_WITHOUT_TEXT_NOTE: &str = "_(No extractable text layer on this page. It may be a scanned image or a figure; OCR is not performed by this tool.)_";
+
+fn tidy_pdf_page_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = 0usize;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            blank_run += 1;
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if blank_run > 0 { "\n\n" } else { "\n" });
+        }
+        blank_run = 0;
+        out.push_str(line);
+    }
+    out
+}
+
+/// Render PDF text page by page as `## Page N` sections. Pages without a text
+/// layer are reported explicitly rather than silently omitted.
+fn pdf_pages_to_markdown(pages: &[String]) -> Option<Extracted> {
+    if pages.is_empty() {
+        return None;
+    }
+    let mut sections = Vec::with_capacity(pages.len());
+    let mut without_text = Vec::new();
+    for (index, page) in pages.iter().enumerate() {
+        let number = index + 1;
+        let body = tidy_pdf_page_text(page);
+        if body.is_empty() {
+            without_text.push(number);
+            sections.push(format!("## Page {number}\n\n{PDF_PAGE_WITHOUT_TEXT_NOTE}"));
+        } else {
+            sections.push(format!("## Page {number}\n\n{body}"));
+        }
+    }
+    Some(Extracted {
+        text: sections.join("\n\n"),
+        sections: Some(SectionSummary {
+            kind: "page",
+            count: pages.len(),
+            without_text,
+        }),
+    })
+}
+
+fn extract_pdf(bytes: &[u8]) -> Option<Extracted> {
+    let pages = pdf_extract::extract_text_from_mem_by_pages(bytes).ok()?;
+    pdf_pages_to_markdown(&pages)
 }
 
 fn extract_text_file(bytes: &[u8]) -> String {
@@ -376,20 +452,20 @@ fn detect_format(file_name: &str, mime: Option<&str>) -> Option<&'static str> {
     None
 }
 
-fn extract_from_format(format: &str, bytes: &[u8]) -> Option<String> {
+fn extract_from_format(format: &str, bytes: &[u8]) -> Option<Extracted> {
     match format {
         #[cfg(test)]
         "slow_native_test" => {
             NATIVE_TEST_EXTRACTION_ACTIVE.store(true, AtomicOrdering::Release);
             thread::sleep(Duration::from_secs(2));
             NATIVE_TEST_EXTRACTION_ACTIVE.store(false, AtomicOrdering::Release);
-            Some(String::new())
+            Some(Extracted::plain(String::new()))
         }
-        "pdf" => pdf_extract::extract_text_from_mem(bytes).ok(),
-        "docx" => extract_docx(bytes),
-        "pptx" => extract_pptx(bytes),
-        "xlsx" => extract_xlsx(bytes),
-        "text" => Some(extract_text_file(bytes)),
+        "pdf" => extract_pdf(bytes),
+        "docx" => ooxml::docx_to_markdown(bytes),
+        "pptx" => ooxml::pptx_to_markdown(bytes),
+        "xlsx" => ooxml::xlsx_to_markdown(bytes),
+        "text" => Some(Extracted::plain(extract_text_file(bytes))),
         _ => None,
     }
 }
@@ -783,7 +859,7 @@ fn extract_document_bytes_with_cancellation(
     file_name: &str,
     mime_type: Option<&str>,
     bytes: &[u8],
-    max_chars: Option<usize>,
+    page: PageRequest,
     cancelled: &AtomicBool,
     extraction_phase: &AtomicU8,
 ) -> Result<DocumentExtraction, String> {
@@ -794,6 +870,7 @@ fn extract_document_bytes_with_cancellation(
     let format_label = format.unwrap_or("unknown").to_string();
     let prefer_markitdown = markitdown_preferred() && !markitdown_disabled();
     let mut extractor = "native".to_string();
+    let mut sections = None;
     let mut extracted = if prefer_markitdown {
         match extract_with_markitdown(bytes, file_name, mime_type, cancelled, extraction_phase)? {
             Some(text) => {
@@ -807,8 +884,9 @@ fn extract_document_bytes_with_cancellation(
     };
 
     if extracted.is_empty() {
-        if let Some(format) = format {
-            extracted = extract_from_format(format, bytes).unwrap_or_default();
+        if let Some(native) = format.and_then(|format| extract_from_format(format, bytes)) {
+            extracted = native.text;
+            sections = native.sections;
         }
     }
 
@@ -821,6 +899,7 @@ fn extract_document_bytes_with_cancellation(
         {
             extracted = text;
             extractor = "markitdown".to_string();
+            sections = None;
         }
     }
 
@@ -831,19 +910,36 @@ fn extract_document_bytes_with_cancellation(
         return Err("Failed to extract document text.".to_string());
     }
 
-    let max_chars = max_chars.unwrap_or(1_000_000);
-    let truncated = extracted.chars().count() > max_chars;
-    let text = if truncated {
-        extracted.chars().take(max_chars).collect()
-    } else {
-        extracted
-    };
+    let max_chars = page
+        .max_chars
+        .unwrap_or(DEFAULT_PAGE_CHARS)
+        .clamp(1, MAX_PAGE_CHARS);
+    let window = text_window(&extracted, page.offset, max_chars)?;
+    let next_offset = (window.end < window.total_chars).then_some(window.end);
+    let mut text = String::with_capacity(window.text.len() + 256);
+    if page.offset > 0 {
+        text.push_str(&format!(
+            "[extract_document: continuing at character {} of {}.]\n\n",
+            page.offset, window.total_chars
+        ));
+    }
+    text.push_str(window.text);
+    if let Some(next) = next_offset {
+        text.push_str(&format!(
+            "\n\n[extract_document: returned characters {}-{} of {}. Call extract_document again with the same url and offset={} to continue.]",
+            page.offset, window.end, window.total_chars, next
+        ));
+    }
 
     Ok(DocumentExtraction {
         format: format_label,
         extractor,
         text,
-        truncated,
+        offset: page.offset,
+        returned_chars: window.end - page.offset,
+        total_chars: window.total_chars,
+        next_offset,
+        sections,
     })
 }
 
@@ -852,13 +948,13 @@ fn extract_document_bytes(
     file_name: &str,
     mime_type: Option<&str>,
     bytes: &[u8],
-    max_chars: Option<usize>,
+    page: PageRequest,
 ) -> Result<DocumentExtraction, String> {
     extract_document_bytes_with_cancellation(
         file_name,
         mime_type,
         bytes,
-        max_chars,
+        page,
         &AtomicBool::new(false),
         &AtomicU8::new(EXTRACTION_NATIVE),
     )
@@ -869,17 +965,16 @@ async fn extract_document_bytes_async(
     file_name: String,
     mime_type: Option<String>,
     bytes: Vec<u8>,
-    max_chars: Option<usize>,
+    page: PageRequest,
 ) -> Result<DocumentExtraction, String> {
-    extract_document_bytes_async_with_cancellation(file_name, mime_type, bytes, max_chars, None)
-        .await
+    extract_document_bytes_async_with_cancellation(file_name, mime_type, bytes, page, None).await
 }
 
 async fn extract_document_bytes_async_with_cancellation(
     file_name: String,
     mime_type: Option<String>,
     bytes: Vec<u8>,
-    max_chars: Option<usize>,
+    page: PageRequest,
     cancellation: Option<CancellationToken>,
 ) -> Result<DocumentExtraction, String> {
     let (cancel_on_drop, cancelled) = ExtractionCancellation::new();
@@ -891,7 +986,7 @@ async fn extract_document_bytes_async_with_cancellation(
             &file_name,
             mime_type.as_deref(),
             &bytes,
-            max_chars,
+            page,
             &cancelled,
             &worker_extraction_phase,
         );
@@ -1047,7 +1142,10 @@ pub async fn extract_document_with_cancellation(
         file_name.clone(),
         content_type.clone(),
         bytes,
-        parsed.max_chars,
+        PageRequest {
+            offset: parsed.offset.unwrap_or(0),
+            max_chars: parsed.max_chars,
+        },
         cancellation.clone(),
     )
     .await
@@ -1072,7 +1170,16 @@ pub async fn extract_document_with_cancellation(
         "format": extraction.format,
         "extractor": extraction.extractor,
         "sizeBytes": size_bytes,
-        "truncated": extraction.truncated
+        "offset": extraction.offset,
+        "returnedChars": extraction.returned_chars,
+        "totalChars": extraction.total_chars,
+        "nextOffset": extraction.next_offset,
+        "truncated": extraction.next_offset.is_some(),
+        "sections": extraction.sections.as_ref().map(|sections| serde_json::json!({
+            "kind": sections.kind,
+            "count": sections.count,
+            "withoutText": sections.without_text,
+        })),
     });
 
     ToolResult::success(extraction.text).with_details(details)
@@ -1199,18 +1306,18 @@ mod tests {
 
     #[test]
     fn test_decode_xml_entities_basic() {
-        assert_eq!(decode_xml_entities("&lt;div&gt;"), "<div>");
+        assert_eq!(ooxml::decode_entities("&lt;div&gt;"), "<div>");
     }
 
     #[test]
     fn test_decode_xml_entities_ampersand() {
-        assert_eq!(decode_xml_entities("A &amp; B"), "A & B");
+        assert_eq!(ooxml::decode_entities("A &amp; B"), "A & B");
     }
 
     #[test]
     fn test_decode_xml_entities_quotes() {
         assert_eq!(
-            decode_xml_entities("&quot;hello&quot; &apos;world&apos;"),
+            ooxml::decode_entities("&quot;hello&quot; &apos;world&apos;"),
             "\"hello\" 'world'"
         );
     }
@@ -1218,51 +1325,14 @@ mod tests {
     #[test]
     fn test_decode_xml_entities_mixed() {
         assert_eq!(
-            decode_xml_entities("x &lt; y &amp;&amp; y &gt; z"),
+            ooxml::decode_entities("x &lt; y &amp;&amp; y &gt; z"),
             "x < y && y > z"
         );
     }
 
     #[test]
     fn test_decode_xml_entities_none() {
-        assert_eq!(decode_xml_entities("plain text"), "plain text");
-    }
-
-    // ========================================================================
-    // strip_xml Tests
-    // ========================================================================
-
-    #[test]
-    fn test_strip_xml_simple_tags() {
-        assert_eq!(strip_xml("<p>Hello</p>"), "Hello");
-    }
-
-    #[test]
-    fn test_strip_xml_nested_tags() {
-        assert_eq!(strip_xml("<div><span>Text</span></div>"), "Text");
-    }
-
-    #[test]
-    fn test_strip_xml_paragraph_breaks() {
-        assert_eq!(
-            strip_xml("<w:p>Para1</w:p><w:p>Para2</w:p>"),
-            "Para1\nPara2\n"
-        );
-    }
-
-    #[test]
-    fn test_strip_xml_tabs() {
-        assert_eq!(strip_xml("A<w:tab/>B"), "A\tB");
-    }
-
-    #[test]
-    fn test_strip_xml_line_breaks() {
-        assert_eq!(strip_xml("Line1<w:br/>Line2"), "Line1\nLine2");
-    }
-
-    #[test]
-    fn test_strip_xml_with_entities() {
-        assert_eq!(strip_xml("<p>x &lt; y</p>"), "x < y");
+        assert_eq!(ooxml::decode_entities("plain text"), "plain text");
     }
 
     // ========================================================================
@@ -1367,7 +1437,7 @@ mod tests {
     #[test]
     fn test_extract_from_format_text() {
         let bytes = b"Hello from text file";
-        let result = extract_from_format("text", bytes);
+        let result = extract_from_format("text", bytes).map(|extracted| extracted.text);
         assert_eq!(result, Some("Hello from text file".to_string()));
     }
 
@@ -1376,6 +1446,291 @@ mod tests {
         let bytes = b"some data";
         let result = extract_from_format("unknown_format", bytes);
         assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // Structured extraction and paging Tests
+    // ========================================================================
+
+    /// Build a minimal single-font PDF. `None` pages have no content stream,
+    /// standing in for a scanned page with no text layer.
+    fn minimal_pdf(pages: &[Option<&str>]) -> Vec<u8> {
+        let font_id = 3;
+        let first_page_id = 4;
+        let mut objects: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            {
+                let kids = (0..pages.len())
+                    .map(|i| format!("{} 0 R", first_page_id + i * 2))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("<< /Type /Pages /Kids [{kids}] /Count {} >>", pages.len())
+            },
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+                .to_string(),
+        ];
+        for (index, page) in pages.iter().enumerate() {
+            let content_id = first_page_id + index * 2 + 1;
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>"
+            ));
+            let stream = page
+                .map(|text| format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET"))
+                .unwrap_or_default();
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{stream}\nendstream",
+                stream.len()
+            ));
+        }
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref_offset = pdf.len();
+        let mut xref = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        for offset in offsets {
+            xref.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        xref.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        pdf.extend_from_slice(xref.as_bytes());
+        pdf
+    }
+
+    #[test]
+    fn test_pdf_extraction_marks_pages_and_pages_without_text() {
+        let pdf = minimal_pdf(&[Some("Hello page one"), None, Some("Closing page")]);
+        let extracted = extract_from_format("pdf", &pdf).expect("pdf extracts");
+        let page_two = format!("## Page 2\n\n{PDF_PAGE_WITHOUT_TEXT_NOTE}");
+        assert!(
+            extracted.text.starts_with("## Page 1\n\n"),
+            "{}",
+            extracted.text
+        );
+        assert!(
+            extracted.text.contains("Hello page one"),
+            "{}",
+            extracted.text
+        );
+        assert!(extracted.text.contains(&page_two), "{}", extracted.text);
+        assert!(
+            extracted.text.contains("## Page 3\n\nClosing page"),
+            "{}",
+            extracted.text
+        );
+        assert_eq!(
+            extracted.sections,
+            Some(SectionSummary {
+                kind: "page",
+                count: 3,
+                without_text: vec![2],
+            })
+        );
+    }
+
+    #[test]
+    fn test_pdf_pages_to_markdown_tidies_blank_runs() {
+        let pages = vec![
+            "  \n\nFirst line\nSecond line\n\n\n\nAfter gap\n\n".to_string(),
+            "\u{c}\n  \n".to_string(),
+        ];
+        let extracted = pdf_pages_to_markdown(&pages).expect("pages render");
+        assert_eq!(
+            extracted.text,
+            format!(
+                "## Page 1\n\nFirst line\nSecond line\n\nAfter gap\n\n## Page 2\n\n{PDF_PAGE_WITHOUT_TEXT_NOTE}"
+            )
+        );
+        assert!(pdf_pages_to_markdown(&[]).is_none());
+    }
+
+    #[test]
+    fn test_office_formats_route_to_structured_markdown() {
+        let docx = extract_from_format("docx", &ooxml::tests::sample_docx()).expect("docx");
+        assert!(docx.text.starts_with("# Quarterly Report\n\n# Summary"));
+        assert!(docx.text.contains("| Name | Qty |\n| --- | --- |"));
+        let pptx = extract_from_format("pptx", &ooxml::tests::sample_pptx()).expect("pptx");
+        assert!(pptx.text.starts_with("## Slide 1: Launch Plan"));
+        let xlsx = extract_from_format("xlsx", &ooxml::tests::sample_xlsx(1, 1)).expect("xlsx");
+        assert!(
+            xlsx.text
+                .starts_with("## Sheet: Totals & Notes\n\n| Region |")
+        );
+    }
+
+    #[test]
+    fn test_text_window_returns_everything_when_it_fits() {
+        let window = text_window("abc\ndef", 0, 100).unwrap();
+        assert_eq!(
+            window,
+            TextWindow {
+                text: "abc\ndef",
+                end: 7,
+                total_chars: 7
+            }
+        );
+        let tail = text_window("abc\ndef", 4, 100).unwrap();
+        assert_eq!(tail.text, "def");
+        assert_eq!(tail.end, 7);
+    }
+
+    #[test]
+    fn test_text_window_accepts_empty_document_at_offset_zero() {
+        let window = text_window("", 0, 100).unwrap();
+        assert_eq!(
+            window,
+            TextWindow {
+                text: "",
+                end: 0,
+                total_chars: 0
+            }
+        );
+        assert!(text_window("", 1, 100).is_err());
+    }
+
+    #[test]
+    fn test_text_window_snaps_to_line_break_near_the_limit() {
+        let text = "0123456789\nabcdefghij\nKLMNOPQRST";
+        // Limit 25 lands mid-third-line; the last break (after char 22) is
+        // within the final fifth, so the window ends on the line boundary.
+        let window = text_window(text, 0, 25).unwrap();
+        assert_eq!(window.text, "0123456789\nabcdefghij\n");
+        assert_eq!(window.end, 22);
+        // A break far from the limit is not used; the window is cut exactly.
+        let exact = text_window(text, 0, 9).unwrap();
+        assert_eq!(exact.text, "012345678");
+        assert_eq!(exact.end, 9);
+    }
+
+    #[test]
+    fn test_text_window_counts_characters_not_bytes() {
+        let text = "日本語のテキスト";
+        let window = text_window(text, 2, 3).unwrap();
+        assert_eq!(window.text, "語のテ");
+        assert_eq!(window.end, 5);
+        assert_eq!(window.total_chars, 8);
+    }
+
+    #[test]
+    fn test_text_window_rejects_offset_past_end() {
+        let error = text_window("short", 5, 10).unwrap_err();
+        assert!(error.contains("offset 5 is past the end"), "{error}");
+        assert!(error.contains("5 characters"), "{error}");
+    }
+
+    #[test]
+    fn test_text_window_pages_reassemble_the_document() {
+        let text = (0..500)
+            .map(|i| format!("| row {i} | value {} |", i * 7))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut offset = 0;
+        let mut rebuilt = String::new();
+        let mut pages = 0;
+        loop {
+            let window = text_window(&text, offset, 1_000).unwrap();
+            assert!(window.text.chars().count() <= 1_000);
+            rebuilt.push_str(window.text);
+            pages += 1;
+            if window.end == window.total_chars {
+                break;
+            }
+            assert!(window.text.ends_with('\n'), "pages end on row boundaries");
+            offset = window.end;
+        }
+        assert_eq!(rebuilt, text);
+        assert!(pages > 1);
+    }
+
+    #[tokio::test]
+    async fn test_extract_document_bytes_pages_with_offset_and_reports_next_offset() {
+        let _env_lock = MARKITDOWN_ENV_LOCK.lock().await;
+        env::remove_var("MAESTRO_MARKITDOWN_PREFER");
+        let xlsx = ooxml::tests::sample_xlsx(200, 3);
+
+        let full = extract_document_bytes("data.xlsx", None, &xlsx, PageRequest::default())
+            .expect("full extraction");
+        assert_eq!(full.format, "xlsx");
+        assert_eq!(full.offset, 0);
+        assert!(full.next_offset.is_none());
+        assert_eq!(full.returned_chars, full.total_chars);
+        assert!(!full.text.contains("[extract_document:"));
+        assert_eq!(
+            full.sections.as_ref().map(|s| (s.kind, s.count)),
+            Some(("sheet", 2))
+        );
+
+        let first = extract_document_bytes(
+            "data.xlsx",
+            None,
+            &xlsx,
+            PageRequest {
+                offset: 0,
+                max_chars: Some(1_000),
+            },
+        )
+        .expect("first page");
+        let next = first.next_offset.expect("more content remains");
+        assert_eq!(first.total_chars, full.total_chars);
+        assert_eq!(first.returned_chars, next);
+        assert!(first.text.starts_with("## Sheet: Totals & Notes"));
+        assert!(
+            first.text.ends_with(&format!(
+                "[extract_document: returned characters 0-{next} of {}. Call extract_document again with the same url and offset={next} to continue.]",
+                full.total_chars
+            )),
+            "{}",
+            first.text
+        );
+
+        let second = extract_document_bytes(
+            "data.xlsx",
+            None,
+            &xlsx,
+            PageRequest {
+                offset: next,
+                max_chars: Some(1_000_000),
+            },
+        )
+        .expect("second page");
+        assert!(second.next_offset.is_none());
+        assert_eq!(second.offset, next);
+        assert!(second.text.starts_with(&format!(
+            "[extract_document: continuing at character {next} of {}.]\n\n",
+            full.total_chars
+        )));
+        assert!(
+            second
+                .text
+                .ends_with("## Sheet: Empty (hidden)\n\n_(Empty sheet.)_")
+        );
+
+        let past_end = extract_document_bytes(
+            "data.xlsx",
+            None,
+            &xlsx,
+            PageRequest {
+                offset: full.total_chars,
+                max_chars: None,
+            },
+        );
+        assert!(past_end.is_err());
+    }
+
+    #[test]
+    fn test_args_deserialize_offset() {
+        let args: ExtractDocumentArgs = serde_json::from_value(serde_json::json!({
+            "url": "https://example.com/doc.pdf",
+            "offset": 30000,
+            "maxChars": 5000
+        }))
+        .unwrap();
+        assert_eq!(args.offset, Some(30_000));
+        assert_eq!(args.max_chars, Some(5_000));
     }
 
     #[tokio::test]
@@ -1403,7 +1758,7 @@ mod tests {
             "brief.html",
             Some("text/html"),
             b"<html><body><h1>Ignored native HTML</h1></body></html>",
-            None,
+            PageRequest::default(),
         )
         .expect("MarkItDown extraction should succeed");
 
@@ -1448,7 +1803,7 @@ mod tests {
             "fixture.slow-native-test.html".to_string(),
             None,
             b"fixture".to_vec(),
-            None,
+            PageRequest::default(),
             Some(cancellation.clone()),
         ));
 
@@ -1537,7 +1892,7 @@ mod tests {
             "brief.html".to_string(),
             Some("text/html".to_string()),
             b"<html><body>blocking conversion</body></html>".to_vec(),
-            None,
+            PageRequest::default(),
         ));
 
         let pid = read_pid_file_when_ready(&pid_path).await;
@@ -1606,7 +1961,7 @@ mod tests {
             "brief.html".to_string(),
             Some("text/html".to_string()),
             b"<html><body>blocking conversion</body></html>".to_vec(),
-            None,
+            PageRequest::default(),
             Some(cancellation.clone()),
         ));
 

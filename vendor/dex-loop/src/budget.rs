@@ -41,7 +41,7 @@ pub struct RemainingBudget {
     pub tool_steps: u32,
     pub tokens: Option<u64>,
     pub cost_micros: Option<u64>,
-    pub wall_ms: u64,
+    wall_ms: u64,
     pub answer_only: bool,
 }
 
@@ -75,7 +75,7 @@ impl fmt::Display for BudgetAxis {
 }
 
 impl Budget {
-    pub fn remaining(
+    pub(crate) fn remaining(
         &self,
         completed_steps: u32,
         usage: Usage,
@@ -160,3 +160,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod remaining_contract;

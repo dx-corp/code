@@ -1,4 +1,4 @@
-use dex_loop::{
+use crate::{
     ApprovalMode, CallId, Cursor, Event, Message, Outcome, Output, PrincipalId, ProposedCall,
     TOOL_EVIDENCE_LIMIT, ThreadId, ToolName, TurnId, rehydrate,
 };
