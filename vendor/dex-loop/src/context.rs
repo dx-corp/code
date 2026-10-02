@@ -149,7 +149,7 @@ struct FailedCall {
 /// Proposals and results are paired only by the typed event fold.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolEvidence {
-    pub cursor: Cursor,
+    cursor: Cursor,
     pub call: ProposedCall,
     pub result: ToolResult,
 }
@@ -1146,3 +1146,6 @@ impl Context {
         self.close_step_if_resolved(cursor);
     }
 }
+
+#[cfg(test)]
+mod evidence_contract;

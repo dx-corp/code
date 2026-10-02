@@ -245,7 +245,7 @@ fn now_epoch_secs() -> u64 {
 #[must_use]
 pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
-        "anthropic" | "claude" => Some("claude-sonnet-4-6"),
+        "anthropic" | "claude" => Some("claude-opus-5-5"),
         "openai" => Some("gpt-5.6"),
         "openai-codex" | "codex" => Some("gpt-5.6"),
         "claude-code" => Some("sonnet"),
@@ -2065,6 +2065,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("{provider}/{default} must be in the bundled catalog"));
             assert_eq!(model.provider, provider);
         }
+        assert_eq!(
+            default_model_for_provider("anthropic"),
+            Some("claude-opus-5-5")
+        );
+        assert_eq!(
+            default_model_for_provider("claude"),
+            Some("claude-opus-5-5")
+        );
         assert_eq!(default_model_for_provider("openai"), Some("gpt-5.6"));
         assert_eq!(default_model_for_provider("openai-codex"), Some("gpt-5.6"));
         assert_eq!(default_model_for_provider("codex"), Some("gpt-5.6"));

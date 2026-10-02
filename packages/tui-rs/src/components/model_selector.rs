@@ -1601,9 +1601,10 @@ mod tests {
         }
     }
 
-    /// Provider defaults plus filler models. OpenAI's catalog default is also
-    /// a preferred discovery row; tests that pin slice order keep a non-default
-    /// OpenAI id here and add `gpt-5.6` only where that default is under test.
+    /// Provider defaults plus filler models. The OpenAI and Anthropic catalog
+    /// defaults are also preferred discovery rows; tests that pin slice order
+    /// keep non-default ids here and add `gpt-5.6` and `claude-opus-5-5` only
+    /// where those defaults are under test.
     fn slice_catalog() -> Vec<ModelInfo> {
         let mut models = vec![
             test_model("claude-sonnet-4-6", "anthropic"),
@@ -1622,6 +1623,7 @@ mod tests {
     fn focused_slice_shows_current_and_provider_defaults() {
         let mut models = slice_catalog();
         models.push(test_model("gpt-5.6", "openai"));
+        models.push(test_model("claude-opus-5-5", "anthropic"));
         let mut selector = ModelSelector::with_models(models);
         selector.set_current_model(Some("grok-4.5".to_owned()));
         selector.show();
@@ -1632,14 +1634,15 @@ mod tests {
             .map(|&idx| selector.models[idx].id.as_str())
             .collect();
         assert_eq!(
-            ids[0], "gpt-5.6",
-            "preferred openai default leads the slice"
+            ids[..2],
+            ["claude-opus-5-5", "gpt-5.6"],
+            "preferred provider defaults lead the slice in preference order"
         );
         assert!(
             ids.contains(&"grok-4.5"),
             "current model stays in the slice"
         );
-        for default in ["claude-sonnet-4-6", "gemini-2.5-pro", "gpt-5.6"] {
+        for default in ["claude-opus-5-5", "gemini-2.5-pro", "gpt-5.6"] {
             assert!(ids.contains(&default), "slice must include {default}");
         }
         assert!(
