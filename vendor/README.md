@@ -1,4 +1,31 @@
-# Zstandard source repairs
+# Reviewed source repairs
+
+## SMTP and MIME header repairs
+
+`lettre-0.11.23` and `email-encoding-0.4.2` are maintained source repairs for
+the Platform notification transport. `smtp-provenance.json` records their exact
+published archive checksums, original file hashes, matching patch hashes, and
+the consuming `rust` workspace. Other workspaces retain their existing source
+selection. Cargo consumes these directories; Bazel applies the identical
+patches to the checksum-pinned archives. Neither unmodified registry release
+receives an audit approval, exemption, or new trust import.
+
+The SMTP reader checks the existing 1,000-byte line and 100,000-byte response
+limits while reading, before appending bytes. Both synchronous and asynchronous
+paths preserve valid multiline responses and UTF-8 characters split across
+reads. Header names reject controls, spaces, non-ASCII bytes and colons in both
+constructors. RFC2231 parameter continuations return a formatting error if
+they cannot consume input; plain-path length arithmetic is checked.
+
+Run `python3 scripts/ci/test-vendored-smtp.py` with the normal shared Cargo
+target. It creates a temporary consumer workspace rather than a lockfile in
+vendored source, validates source provenance, and runs the library and encoding
+documentation tests without contacting an SMTP server. The regressions bound
+their readers/writers so the original defects fail safely without exhausting
+memory or running forever. Source review and remaining dependency audit
+limitations are recorded under `rust/supply-chain/reviews/`.
+
+## Zstandard source repairs
 
 These packages preserve the Zstandard format used by existing transcript spools
 and negotiated HTTP requests. They are locally maintained source, not an audit
