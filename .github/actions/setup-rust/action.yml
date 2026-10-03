@@ -122,6 +122,16 @@ runs:
           chmod +x "$cargo_home/bin/rustup"
         fi
 
+        # A copied rustup binary skips rustup-init, which normally creates env.
+        # Recreate that file after clearing our tool root: a runner login profile
+        # from an earlier install may still source this exact stable path.
+        cat > "$cargo_home/env" <<EOF
+        case ":\${PATH}:" in
+          *:"$cargo_home/bin":*) ;;
+          *) export PATH="$cargo_home/bin:\$PATH" ;;
+        esac
+        EOF
+
         echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
         echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
         echo "$cargo_home/bin" >> "$GITHUB_PATH"
