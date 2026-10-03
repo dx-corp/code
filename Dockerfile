@@ -5,16 +5,19 @@ FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 # Keep the local Dex host available in the published Maestro binary. Its
 # dex-loop dependency belongs to mono's separate Rust workspace; narrow that
-# workspace to this crate inside the image while retaining its shared versions
+# workspace to its local dependency closure while retaining its shared versions
 # and lint configuration.
 COPY --from=dex-loop-workspace /Cargo.toml /rust/Cargo.toml
 COPY --from=dex-loop-workspace /crates/dex-loop /rust/crates/dex-loop
-RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/dex-loop"]' /rust/Cargo.toml \
-    && sed -i '/^\[patch.crates-io\]/,/^\[workspace.package\]/c\[workspace.package]' /rust/Cargo.toml
+COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract
+RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/dex-loop", "crates/managed-inference-contract"]' /rust/Cargo.toml \
+    && sed -i '/^\[patch.crates-io\]/,/^\[workspace.package\]/c\[workspace.package]' /rust/Cargo.toml \
+    && sed -i 's#path = "../products/maestro/#path = "/app/#g' /rust/Cargo.toml
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
+COPY packages/codemode-rs ./packages/codemode-rs
 COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
 COPY packages/dex-host-rs ./packages/dex-host-rs
@@ -49,6 +52,7 @@ COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
 RUN cargo chef cook --release --locked -p maestro --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
+COPY packages/codemode-rs ./packages/codemode-rs
 COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
 COPY packages/dex-host-rs ./packages/dex-host-rs
