@@ -56,6 +56,8 @@ pub(super) struct SessionRecord {
     pub(super) log_group_id: Option<String>,
     #[serde(default)]
     pub(super) messages: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_turn_error: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -522,6 +524,7 @@ pub(super) fn create_session_record(title: Option<String>, owner: Option<String>
         tags: Vec::new(),
         log_group_id: None,
         messages: Vec::new(),
+        last_turn_error: None,
     }
 }
 
@@ -1888,6 +1891,9 @@ pub(super) fn session_summary_value(session: &SessionRecord) -> Value {
 
 pub(super) fn session_full_value(session: &SessionRecord) -> Value {
     let mut value = session_summary_value(session);
+    if let Some(error) = &session.last_turn_error {
+        value["lastTurnError"] = Value::String(error.clone());
+    }
     value["messages"] = Value::Array(
         session
             .messages

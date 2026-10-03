@@ -1562,6 +1562,17 @@ fn init_headless_tracing() -> Option<TelemetryGuard> {
     )))
 }
 
+fn headless_startup_error_message(error: &anyhow::Error) -> String {
+    if error
+        .chain()
+        .any(|cause| cause.to_string().contains("invalid_grant"))
+    {
+        "Your Deixic Identity session expired or was revoked. Run `maestro login`, then retry this conversation.".to_owned()
+    } else {
+        format!("Failed to start Deixic Code: {error:#}")
+    }
+}
+
 pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> {
     crate::safety::disconnected_policy().map_err(anyhow::Error::msg)?;
     let _telemetry = init_headless_tracing();
@@ -1585,7 +1596,16 @@ pub async fn run_headless_server(model_override: Option<String>) -> Result<i32> 
 
     // Provider construction resolves the exact model route and validates its
     // credential before `ensure_agent` emits the first Ready boundary.
-    state.ensure_agent()?;
+    if let Err(error) = state.ensure_agent() {
+        emit(&FromAgentMessage::Error {
+            request_id: None,
+            message: headless_startup_error_message(&error),
+            fatal: true,
+            terminal: true,
+            error_type: Some(HeadlessErrorType::Fatal),
+        })?;
+        return Err(error);
+    }
 
     // stdin reader on a blocking thread → channel
     let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
@@ -5351,6 +5371,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn startup_identity_failure_has_a_safe_recovery_action() {
+        let error = anyhow::anyhow!("invalid_grant: private diagnostic")
+            .context("Failed to create native agent for headless server");
+        let message = headless_startup_error_message(&error);
+        assert!(message.contains("maestro login"));
+        assert!(!message.contains("private diagnostic"));
+    }
+
     #[tokio::test]
     async fn managed_evalops_headless_route_requires_identity() {
         if std::env::var_os("MAESTRO_HEADLESS_MANAGED_IDENTITY_REQUIRED_FIXTURE").is_some() {
@@ -5384,6 +5413,19 @@ mod tests {
             output.status.success(),
             "fixture failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+        let event = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|event| event["type"] == "error")
+            .expect("fatal startup protocol event");
+        assert_eq!(event["fatal"], true);
+        assert_eq!(event["terminal"], true);
+        assert!(
+            event["message"]
+                .as_str()
+                .unwrap()
+                .contains(crate::credential_mode::IDENTITY_REQUIRED_MESSAGE)
         );
         assert!(
             String::from_utf8_lossy(&output.stderr)

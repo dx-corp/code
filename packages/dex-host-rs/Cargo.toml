@@ -18,6 +18,11 @@ dex-loop = { path = "../../vendor/dex-loop" }
 # `dex_loop::Model` -- default features off, matching every other consumer's
 # workspace alias, so this stays Bedrock-free.
 maestro-ai.workspace = true
+# `HostTools` (`src/host_tools.rs`) offers a Maestro execution host's tools to
+# the kernel and gates them with the native actor's own classification
+# (`maestro_runtime::agent::loop_policy`).
+maestro-runtime.workspace = true
+maestro-runtime-contracts.workspace = true
 
 anyhow.workspace = true
 fd-lock.workspace = true
@@ -29,5 +34,6 @@ tokio = { workspace = true, features = ["fs", "rt", "sync"] }
 tokio-stream.workspace = true
 
 [dev-dependencies]
+maestro-local-host.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

@@ -273,6 +273,7 @@ async fn handle_codex_app_server_chat_transport_scoped(
     let assistant_output = match assistant_output_result {
         Ok(output) => output,
         Err(error) => {
+            record_chat_error(state, session_id, error.clone()).await;
             send_codex_bridge_event(
                 stream,
                 transport,
@@ -405,6 +406,21 @@ pub(crate) async fn record_chat_user_message(
     )))
 }
 
+pub(crate) async fn record_chat_error(state: &AppState, session_id: Option<&str>, message: String) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    {
+        let mut store = state.sessions.lock().await;
+        let Some(session) = store.sessions.get_mut(session_id) else {
+            return;
+        };
+        session.last_turn_error = Some(message);
+        session.updated_at = now_rfc3339();
+    }
+    persist_session_store(state).await;
+}
+
 async fn record_chat_assistant_message(state: &AppState, session_id: Option<&str>, message: Value) {
     let Some(session_id) = session_id else {
         return;
@@ -478,6 +494,9 @@ async fn append_session_message(
         if let Some(title) = title_source.and_then(title_from_content) {
             session.title = title;
         }
+    }
+    if message.get("role").and_then(Value::as_str) == Some("user") {
+        session.last_turn_error = None;
     }
     session.messages.push(message);
     session.message_count = session.messages.len() as u64;
@@ -699,6 +718,7 @@ pub(crate) async fn handle_chat_endpoint(
     {
         Ok(session) => session.into_parts(),
         Err(error) => {
+            record_chat_error(&state, session_id.as_deref(), error.to_string()).await;
             send_sse(
                 &mut stream,
                 &serde_json::json!({ "type": "error", "message": error.to_string() }),
@@ -1215,6 +1235,7 @@ pub(crate) async fn handle_chat_endpoint(
                 } => {
                     let request_ended = fatal || terminal;
                     if request_ended {
+                        record_chat_error(&state, session_id.as_deref(), message.clone()).await;
                         let usage = last_usage.take();
                         if usage.is_some() {
                             record_usage_entry(
@@ -1376,6 +1397,7 @@ pub(crate) async fn handle_chat_endpoint(
                     break;
                 }
                 FromAgent::TurnInterrupted { reason, .. } => {
+                    record_chat_error(&state, session_id.as_deref(), reason.clone()).await;
                     send_sse(
                         &mut stream,
                         &serde_json::json!({ "type": "error", "message": reason }),
@@ -1386,6 +1408,7 @@ pub(crate) async fn handle_chat_endpoint(
                     break;
                 }
                 FromAgent::ProviderError { kind, message } => {
+                    record_chat_error(&state, session_id.as_deref(), message.clone()).await;
                     send_sse(
                         &mut stream,
                         &serde_json::json!({
@@ -1403,6 +1426,7 @@ pub(crate) async fn handle_chat_endpoint(
         }
 
         if !terminal_sent {
+            record_chat_error(&state, session_id.as_deref(), "Agent stream closed before response completed".to_owned()).await;
             send_sse(
                 &mut stream,
                 &serde_json::json!({
@@ -1677,6 +1701,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
     {
         Ok(session) => session.into_parts(),
         Err(error) => {
+            record_chat_error(&state, session_id.as_deref(), error.to_string()).await;
             send_ws_json(
                 &mut stream,
                 &serde_json::json!({ "type": "error", "message": error.to_string() }),
@@ -2171,6 +2196,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                 } => {
                     let request_ended = fatal || terminal;
                     if request_ended {
+                        record_chat_error(&state, session_id.as_deref(), message.clone()).await;
                         let usage = last_usage.take();
                         if usage.is_some() {
                             record_usage_entry(
@@ -2323,6 +2349,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                     break;
                 }
                 FromAgent::TurnInterrupted { reason, .. } => {
+                    record_chat_error(&state, session_id.as_deref(), reason.clone()).await;
                     send_ws_json(
                         &mut stream,
                         &serde_json::json!({ "type": "error", "message": reason }),
@@ -2333,6 +2360,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                     break;
                 }
                 FromAgent::ProviderError { kind, message } => {
+                    record_chat_error(&state, session_id.as_deref(), message.clone()).await;
                     send_ws_json(
                         &mut stream,
                         &serde_json::json!({
@@ -2350,6 +2378,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         }
 
         if !terminal_sent {
+            record_chat_error(&state, session_id.as_deref(), "Agent stream closed before response completed".to_owned()).await;
             send_ws_json(
                 &mut stream,
                 &serde_json::json!({

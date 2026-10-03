@@ -1,6 +1,12 @@
 use super::*;
 
 impl App {
+    fn report_agent_unavailable(&mut self) {
+        if self.state.error.is_none() {
+            self.state.error = Some("Deixic Code could not start. Run `maestro setup --live` to check sign-in and provider access, then restart.".to_owned());
+        }
+    }
+
     pub(super) async fn handle_side_question(&mut self, question: String) -> Result<bool> {
         if question.trim().is_empty() {
             return Ok(false);
@@ -14,12 +20,7 @@ impl App {
                 .await;
         }
         let Some(agent) = &self.native_agent else {
-            self.state.error = Some(
-                self.state
-                    .locale
-                    .translate("Agent not initialized")
-                    .to_string(),
-            );
+            self.report_agent_unavailable();
             return Ok(false);
         };
         self.state.busy = true;
@@ -157,12 +158,7 @@ impl App {
             self.auto_activate_skills_for_queued_prompt(&content, queue_id);
         }
         let Some(agent) = &self.native_agent else {
-            self.state.error = Some(
-                self.state
-                    .locale
-                    .translate("Agent not initialized")
-                    .to_string(),
-            );
+            self.report_agent_unavailable();
             return Ok(false);
         };
         if let Err(e) = agent
@@ -593,9 +589,14 @@ impl App {
 
     /// Submit a prompt to the agent
     pub(super) async fn submit_prompt(&mut self, content: String) -> Result<()> {
-        let _ = self
+        let retry = content.clone();
+        if !self
             .submit_prompt_with_kind(content, PromptKind::Prompt)
-            .await?;
+            .await?
+            && self.state.input().is_empty()
+        {
+            self.state.set_input(&retry);
+        }
         Ok(())
     }
 
@@ -655,6 +656,11 @@ impl App {
             return Ok(false);
         }
 
+        if self.native_agent.is_none() {
+            self.report_agent_unavailable();
+            return Ok(false);
+        }
+
         self.auto_activate_skills_for_prompt(&content);
 
         // Snapshot the worktree so `/rewind files` can restore what this turn changes.
@@ -698,12 +704,7 @@ impl App {
             }
             return Ok(true);
         }
-        self.state.error = Some(
-            self.state
-                .locale
-                .translate("Agent not initialized")
-                .to_string(),
-        );
+        self.report_agent_unavailable();
         self.state.busy = false;
         Ok(false)
     }

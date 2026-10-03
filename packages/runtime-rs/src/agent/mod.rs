@@ -54,6 +54,7 @@ pub use message_queue::{
 pub use model_dynamics::{
     BoostStatus, ModelChoice, ModelDynamicsConfig, TaskDifficulty, ThinkingLevel,
 };
+pub use native::loop_policy;
 pub use native::{
     ExternalToolSchemaPolicy, MaxTokensSource, NativeAgent, NativeAgentConfig,
     REQUEST_CONTEXT_SAFETY_TOKENS, RuntimeAuditSnapshot, ToolResponseConsumption,

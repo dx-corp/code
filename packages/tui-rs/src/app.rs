@@ -3094,7 +3094,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                     let mut message = self
                         .state
                         .locale
-                        .format("Failed to create agent: {0}", &[(e).to_string()]);
+                        .format("Failed to create agent: {0}", &[format!("{e:#}")]);
                     if crate::codex_auth::read_codex_auth().is_none()
                         && std::env::var_os("OPENAI_API_KEY").is_none()
                         && std::env::var_os("OPENAI_CODEX_TOKEN").is_none()

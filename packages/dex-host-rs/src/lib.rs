@@ -1,7 +1,10 @@
 //! A local `dex_loop` host: `Log`, `Tools` and `Effects` ports backed by the
 //! workspace filesystem, with no database and no HTTP server, plus a `Model`
 //! adapter over `maestro-ai` (`model.rs`) and a consumer that drives one
-//! turn to completion unattended (`turn.rs`, `run_local_turn`).
+//! turn to completion unattended (`turn.rs`, `run_local_turn`), and
+//! `HostTools` (`host_tools.rs`): the `Tools` port over a Maestro
+//! `NativeExecutionHost`, which offers Maestro's real tool registry to the
+//! kernel and gates it the way the native actor does.
 //!
 //! This is the first slice of "Maestro becomes another host with a local
 //! Log" (see `docs/design/maestro-on-dex-loop.md` at the repository root).
@@ -18,6 +21,7 @@
 //! boundary, the same shape `maestro-swarm` already uses.
 
 mod effects;
+mod host_tools;
 mod lease;
 mod log;
 mod model;
@@ -25,6 +29,7 @@ mod tools;
 mod turn;
 
 pub use effects::LocalEffects;
+pub use host_tools::{CONFIRMATION_FIELD, HEADLESS_GATED, HostTools, USER_ASK};
 pub use log::{LocalLog, LogError};
 pub use model::AiRsModel;
 pub use tools::{LocalTools, READ_FILE, WRITE_FILE};
