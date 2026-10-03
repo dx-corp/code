@@ -104,6 +104,9 @@ jobs:
           timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
           timeout --signal=TERM --kill-after=30s 45m npm run check
           node --test scripts/check-doc-paths.test.mjs scripts/version.test.mjs
+          if [[ -f scripts/setup-rust-env.test.mjs ]]; then
+            node --test scripts/setup-rust-env.test.mjs
+          fi
           if [[ -f scripts/measure-ci-build-latency.test.mjs ]]; then
             node --test scripts/measure-ci-build-latency.test.mjs
           fi
