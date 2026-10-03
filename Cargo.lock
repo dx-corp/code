@@ -6411,8 +6411,6 @@ dependencies = [
 [[package]]
 name = "rquickjs-core"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c6dbfedfbf458dc119c21ccd032c7527d185210b11a1ae796cd04106e6db280"
 dependencies = [
  "hashbrown 0.17.1",
  "rquickjs-sys",
