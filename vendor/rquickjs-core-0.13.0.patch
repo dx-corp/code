@@ -1,0 +1,703 @@
+diff --git a/src/context/ctx.rs b/src/context/ctx.rs
+--- a/src/context/ctx.rs
++++ b/src/context/ctx.rs
+@@ -100,7 +100,8 @@
+     }
+ }
+ 
+-unsafe impl Send for Ctx<'_> {}
++// A Ctx only borrows the runtime lock held by Context::with / AsyncContext::with.
++// Moving it to another thread would bypass that lock and allow concurrent engine access.
+ 
+ impl<'js> Ctx<'js> {
+     pub(crate) fn as_ptr(&self) -> *mut qjs::JSContext {
+@@ -729,4 +730,15 @@
+             ctx.remove_userdata::<MyUserData>().unwrap().unwrap();
+         })
+     }
++
++    #[test]
++    fn ctx_cannot_move_outside_the_runtime_lock_thread() {
++        trait AmbiguousIfSend<A> {
++            fn marker() {}
++        }
++        impl<T: ?Sized> AmbiguousIfSend<()> for T {}
++        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
++        // This becomes ambiguous, and fails to compile, if Ctx implements Send again.
++        let _ = <crate::Ctx<'static> as AmbiguousIfSend<_>>::marker;
++    }
+ }
+diff --git a/src/value/array_buffer.rs b/src/value/array_buffer.rs
+--- a/src/value/array_buffer.rs
++++ b/src/value/array_buffer.rs
+@@ -7,7 +7,7 @@
+ use core::{
+     ffi::c_void,
+     fmt,
+-    mem::{self, size_of, ManuallyDrop, MaybeUninit},
++    mem::{self, size_of, MaybeUninit},
+     ops::Deref,
+     ptr::NonNull,
+     result::Result as StdResult,
+@@ -26,9 +26,10 @@
+ ///
+ /// # Safety
+ ///
+-/// * `as_ptr()` must return a pointer that is valid for reads (and writes,
+-///   when used via [`ArrayBuffer::from_source`] / [`ArrayBuffer::from_source_shared`])
+-///   of `len()` bytes.
++/// * `as_ptr()` must return a pointer valid for reads of `len()` initialized bytes.
++/// * The bytes must remain stable without unsynchronized external writers while
++///   the engine can read them. Mutable constructors require additional exclusive
++///   ownership obligations from their caller.
+ /// * The returned pointer must remain valid until `self` is dropped, including
+ ///   across moves of `self`.
+ pub unsafe trait ArrayBufferSource {
+@@ -87,77 +88,26 @@
+ }
+ 
+ impl<'js> ArrayBuffer<'js> {
+-    /// Create array buffer from vector data
+-    pub fn new<T: Copy>(ctx: Ctx<'js>, src: impl Into<Vec<T>>) -> Result<Self> {
+-        let mut src = ManuallyDrop::new(src.into());
+-        let ptr = src.as_mut_ptr();
+-        let capacity = src.capacity();
+-        let size = src.len() * size_of::<T>();
+-
+-        // `opaque` stays fixed across `transfer()`, so mutable capacity lives behind it instead of in it.
+-        let capacity_cell = Box::into_raw(Box::new(capacity));
+-
+-        extern "C" fn realloc_raw<T: Copy>(
+-            _rt: *mut qjs::JSRuntime,
+-            opaque: *mut c_void,
+-            ptr: *mut c_void,
+-            size: qjs::size_t,
+-        ) -> *mut c_void {
+-            let capacity_cell = opaque as *mut usize;
+-            let capacity = unsafe { *capacity_cell };
+-            // `ManuallyDrop` so a failed or unsupported resize leaves the allocation untouched.
+-            let mut vec = ManuallyDrop::new(unsafe {
+-                Vec::from_raw_parts(ptr as *mut T, capacity, capacity)
+-            });
+-
+-            if size == FREE {
+-                unsafe {
+-                    ManuallyDrop::drop(&mut vec);
+-                    drop(Box::from_raw(capacity_cell));
+-                }
+-                return core::ptr::null_mut();
+-            }
+-
+-            let elem_size = size_of::<T>();
+-            if elem_size == 0 {
+-                return core::ptr::null_mut();
+-            }
+-            let new_len = (size as usize).div_ceil(elem_size);
+-
+-            if new_len > capacity {
+-                if vec.try_reserve_exact(new_len - capacity).is_err() {
+-                    return core::ptr::null_mut();
+-                }
+-            } else if new_len < capacity {
+-                vec.truncate(new_len);
+-                vec.shrink_to(new_len);
+-            }
+-
+-            unsafe { *capacity_cell = vec.capacity() };
+-            vec.as_mut_ptr() as *mut c_void
+-        }
+-
+-        Ok(Self(Object(unsafe {
+-            let val = qjs::JS_NewArrayBuffer(
+-                ctx.as_ptr(),
+-                ptr as _,
+-                size as _,
+-                FIXED_SIZE,
+-                Some(realloc_raw::<T>),
+-                capacity_cell as _,
+-                false,
+-            );
+-            ctx.handle_exception(val).inspect_err(|_| {
+-                // don't forget to free data when error occurred
+-                Vec::from_raw_parts(ptr, capacity, capacity);
+-                drop(Box::from_raw(capacity_cell));
+-            })?;
+-            Value::from_js_value(ctx, val)
+-        })))
++    /// Create an array buffer by copying initialized scalar data into engine-owned memory.
++    ///
++    /// The source vector is dropped normally, including its unused capacity. Engine-owned
++    /// storage allows JavaScript to resize or transfer the buffer without a Rust allocator callback.
++    pub fn new<T: TypedArrayItem>(ctx: Ctx<'js>, src: impl Into<Vec<T>>) -> Result<Self> {
++        Self::new_copy(ctx, src.into())
+     }
+ 
+     /// Create array buffer from slice
+-    pub fn new_copy<T: Copy>(ctx: Ctx<'js>, src: impl AsRef<[T]>) -> Result<Self> {
++    ///
++    /// ```compile_fail
++    /// use rquickjs_core::{ArrayBuffer, Context, Runtime};
++    /// let runtime = Runtime::new().unwrap();
++    /// let context = Context::full(&runtime).unwrap();
++    /// context.with(|ctx| {
++    ///     // bool does not permit every bit pattern and cannot back a safe byte copy.
++    ///     let _ = ArrayBuffer::new_copy(ctx, [true, false]);
++    /// });
++    /// ```
++    pub fn new_copy<T: TypedArrayItem>(ctx: Ctx<'js>, src: impl AsRef<[T]>) -> Result<Self> {
+         let src = src.as_ref();
+         let ptr = src.as_ptr();
+         let size = core::mem::size_of_val(src);
+@@ -175,7 +125,28 @@
+     /// until the buffer is collected, at which point the source is dropped.
+     /// Using this with a shared-immutable source (`Arc<[u8]>`, `bytes::Bytes`,
+     /// …) is unsound; use [`from_source_immutable`](Self::from_source_immutable) for those.
+-    pub fn from_source<S>(ctx: Ctx<'js>, src: S) -> Result<Self>
++    ///
++    /// # Safety
++    ///
++    /// The backing bytes must be writable and exclusively owned for the buffer's entire
++    /// lifetime. No Rust references or external readers/writers may alias the bytes while
++    /// JavaScript can mutate them. The pointer must have the native scalar alignment
++    /// required by every typed-array or Atomics operation that JavaScript will perform.
++    /// Transferring external storage can leak its ownership
++    /// callback if allocation of the transfer target fails; callers must tolerate that leak.
++    ///
++    /// ```compile_fail
++    /// use rquickjs_core::{ArrayBuffer, Context, Runtime};
++    /// use std::sync::Arc;
++    /// let runtime = Runtime::new().unwrap();
++    /// let context = Context::full(&runtime).unwrap();
++    /// let bytes: Arc<[u8]> = Arc::from([1, 2, 3]);
++    /// context.with(|ctx| {
++    ///     // Shared Rust bytes cannot silently become mutable JavaScript storage.
++    ///     let _ = ArrayBuffer::from_source(ctx, bytes.clone());
++    /// });
++    /// ```
++    pub unsafe fn from_source<S>(ctx: Ctx<'js>, src: S) -> Result<Self>
+     where
+         S: ArrayBufferSource + ParallelSend + 'static,
+     {
+@@ -187,7 +158,14 @@
+     /// Create a `SharedArrayBuffer` from a source that owns its backing bytes.
+     ///
+     /// See [`from_source`](Self::from_source) for ownership semantics.
+-    pub fn from_source_shared<S>(ctx: Ctx<'js>, src: S) -> Result<Self>
++    ///
++    /// # Safety
++    ///
++    /// The exclusive ownership obligations of `from_source` apply. The caller must also
++    /// prevent concurrent writes or reads through external aliases or other JavaScript
++    /// contexts whenever Rust accesses this shared backing store. The native-access
++    /// alignment obligations also apply to typed-array and Atomics operations.
++    pub unsafe fn from_source_shared<S>(ctx: Ctx<'js>, src: S) -> Result<Self>
+     where
+         S: ArrayBufferSource + ParallelSend + 'static,
+     {
+@@ -196,22 +174,27 @@
+         unsafe { Self::from_external(ctx, ptr, len, true, false, move || drop(src)) }
+     }
+ 
+-    /// Create an `ArrayBuffer` that JS sees as immutable, backed by a
+-    /// possibly shared-immutable source.
+-    ///
+-    /// JS writes throw, so it is sound for the caller to keep holding
+-    /// shared-immutable references to the backing store (`Arc<[u8]>`,
+-    /// `bytes::Bytes`, …).
++    /// Copy a possibly shared-immutable source into an engine-owned `ArrayBuffer`
++    /// and mark the copy immutable.
++    ///
++    /// The native immutable flag does not cover every writer (notably Atomics).
++    /// Copying ensures that JavaScript can never write into the original Rust source,
++    /// including when Rust retains shared references such as `Arc<[u8]>` or `bytes::Bytes`.
++    /// The source is dropped normally after construction, including on failure.
+     pub fn from_source_immutable<S>(ctx: Ctx<'js>, src: S) -> Result<Self>
+     where
+         S: ArrayBufferSource + ParallelSend + 'static,
+     {
+-        let ptr = src.as_ptr();
+-        let len = src.len();
+-        unsafe { Self::from_external(ctx, ptr, len, false, true, move || drop(src)) }
+-    }
+-
+-    /// Internal helper backing the safe `from_source*` constructors.
++        // ArrayBufferSource promises initialized, stable readable bytes for this copy.
++        Ok(Self(Object(unsafe {
++            let val = qjs::JS_NewArrayBufferCopy(ctx.as_ptr(), src.as_ptr(), src.len() as _);
++            ctx.handle_exception(val)?;
++            qjs::JS_SetImmutableArrayBuffer(val, true);
++            Value::from_js_value(ctx, val)
++        })))
++    }
++
++    /// Internal helper backing the `from_source*` constructors.
+     ///
+     /// `drop_fn` is invoked exactly once: when the buffer is garbage-collected,
+     /// or synchronously if construction fails.
+@@ -290,9 +273,10 @@
+     ///
+     /// # Safety
+     ///
+-    /// The returned slice aliases memory owned by the JS engine. The caller must not run
+-    /// any JavaScript for as long as the slice is alive, since JS can write into, detach,
+-    /// or (for a resizable buffer) reallocate the backing store, invalidating the slice.
++    /// The returned slice aliases the backing store. For the slice's entire lifetime,
++    /// prevent JavaScript execution, detach, resize, and any external or other-thread
++    /// writes to that store. This includes writers through SharedArrayBuffer aliases.
++    /// Keep the buffer and its backing owner alive and do not create mutable aliases.
+     pub unsafe fn as_bytes(&self) -> Option<&[u8]> {
+         Some(self.as_raw()?.as_ref())
+     }
+@@ -302,9 +286,10 @@
+     ///
+     /// # Safety
+     ///
+-    /// The returned slice aliases memory owned by the JS engine. The caller must not run
+-    /// any JavaScript for as long as the slice is alive, since JS can write into, detach,
+-    /// or (for a resizable buffer) reallocate the backing store, invalidating the slice.
++    /// The returned slice aliases the backing store. For the slice's entire lifetime,
++    /// prevent JavaScript execution, detach, resize, and any external or other-thread
++    /// writes to that store. This includes writers through SharedArrayBuffer aliases.
++    /// Keep the buffer and its backing owner alive and do not create mutable aliases.
+     pub unsafe fn as_slice<T: TypedArrayItem>(&self) -> StdResult<&[T], AsSliceError> {
+         let raw = Self::get_raw(&self.0).ok_or(AsSliceError::BufferUsed)?;
+         if raw.cast::<u8>().align_offset(mem::align_of::<T>()) != 0 {
+@@ -362,7 +347,9 @@
+     /// The returned pointer is only guaranteed valid until the next time
+     /// JavaScript runs: JS can write through it, detach the buffer, or, for a
+     /// resizable buffer, reallocate the backing store and free this pointer.
+-    /// Treat the pointer as invalidated after any call back into the engine.
++    /// Treat the pointer as invalidated after any call back into the engine. External
++    /// backing-store writers may also mutate it; dereferencing requires the same
++    /// lifetime and aliasing guarantees as `as_bytes`.
+     ///
+     /// Returns None if the buffer was already detached.
+     pub fn as_raw(&self) -> Option<NonNull<[u8]>> {
+@@ -574,7 +561,7 @@
+         let c = crate::Context::full(&rt).unwrap();
+         c.with(|ctx| {
+             let src = Tracker(alloc::vec![1u8, 2, 3, 4].into_boxed_slice());
+-            let ab = ArrayBuffer::from_source(ctx.clone(), src).unwrap();
++            let ab = unsafe { ArrayBuffer::from_source(ctx.clone(), src) }.unwrap();
+             assert_eq!(ab.len(), 4);
+             assert_eq!(unsafe { ab.as_bytes() }.unwrap(), &[1, 2, 3, 4]);
+         });
+@@ -609,7 +596,7 @@
+         let c = crate::Context::full(&rt).unwrap();
+         c.with(|ctx| {
+             let src = BadSource(alloc::vec![1u8, 2, 3, 4].into_boxed_slice());
+-            let err = ArrayBuffer::from_source(ctx.clone(), src);
++            let err = unsafe { ArrayBuffer::from_source(ctx.clone(), src) };
+             assert!(err.is_err());
+         });
+         assert!(DROPPED.load(Ordering::SeqCst));
+@@ -663,7 +650,11 @@
+                 unsafe { middle.as_bytes() }.unwrap(),
+                 (4u8..12).collect::<Vec<_>>()
+             );
+-            assert_eq!(Arc::strong_count(&buf), 5);
++            assert_eq!(
++                Arc::strong_count(&buf),
++                1,
++                "copies must not retain source Arcs"
++            );
+ 
+             ctx.globals().set("buf", full).unwrap();
+ 
+@@ -702,7 +693,8 @@
+         let rt = crate::Runtime::new().unwrap();
+         let c = crate::Context::full(&rt).unwrap();
+         c.with(|ctx| {
+-            let ab = ArrayBuffer::from_source(ctx.clone(), alloc::vec![1u8, 2, 3, 4]).unwrap();
++            let ab = unsafe { ArrayBuffer::from_source(ctx.clone(), alloc::vec![1u8, 2, 3, 4]) }
++                .unwrap();
+             assert_eq!(unsafe { ab.as_bytes() }.unwrap(), &[1, 2, 3, 4]);
+         });
+     }
+@@ -802,7 +794,7 @@
+                 data: alloc::vec![1u8, 2, 3, 4].into_boxed_slice(),
+                 drops: drops.clone(),
+             };
+-            let ab = ArrayBuffer::from_source(ctx.clone(), src).unwrap();
++            let ab = unsafe { ArrayBuffer::from_source(ctx.clone(), src) }.unwrap();
+             ctx.globals().set("buf", ab).unwrap();
+ 
+             assert!(ctx.eval::<(), _>("buf.transfer(8)").is_err());
+@@ -819,7 +811,7 @@
+     }
+ 
+     #[test]
+-    fn from_source_immutable_arc() {
++    fn from_source_immutable_arc_is_copied_without_retaining_source() {
+         let arc: Arc<[u8]> = Arc::from((0u8..8).collect::<Vec<_>>().into_boxed_slice());
+         let weak = Arc::downgrade(&arc);
+         assert_eq!(Arc::strong_count(&arc), 1);
+@@ -830,13 +822,17 @@
+         // Case 1: JS drops first while Rust keeps its Arc clone.
+         c.with(|ctx| {
+             let _ab = ArrayBuffer::from_source_immutable(ctx.clone(), arc.clone()).unwrap();
+-            assert_eq!(Arc::strong_count(&arc), 2, "Arc cloned into drop closure");
+-            // _ab drops at end of block; shim runs; closure drops its Arc clone.
++            assert_eq!(
++                Arc::strong_count(&arc),
++                1,
++                "source clone released after copy"
++            );
++            // _ab owns only engine memory.
+         });
+         assert_eq!(
+             Arc::strong_count(&arc),
+             1,
+-            "drop closure must release its Arc clone when ArrayBuffer is freed"
++            "engine memory must not retain an Arc clone"
+         );
+         assert!(
+             weak.upgrade().is_some(),
+@@ -847,20 +843,19 @@
+         c.with(|ctx| {
+             let ab = ArrayBuffer::from_source_immutable(ctx.clone(), arc.clone()).unwrap();
+             ctx.globals().set("buf", ab).unwrap();
+-            assert_eq!(Arc::strong_count(&arc), 2);
++            assert_eq!(Arc::strong_count(&arc), 1);
+         });
+         drop(arc);
+         assert!(
+-            weak.upgrade().is_some(),
+-            "allocation must stay alive: JS still holds the buffer via the Arc clone in the closure"
++            weak.upgrade().is_none(),
++            "Rust source must be released independently of JS"
+         );
+-        assert_eq!(
+-            weak.strong_count(),
+-            1,
+-            "only the closure's Arc clone should remain"
+-        );
+-
+-        // Drop the context: JS buffer is freed, shim runs, Arc clone released.
++        c.with(|ctx| {
++            let ab: ArrayBuffer = ctx.globals().get("buf").unwrap();
++            assert_eq!(unsafe { ab.as_bytes() }.unwrap(), &[0, 1, 2, 3, 4, 5, 6, 7]);
++        });
++
++        // Drop the context: only the independent engine copy is freed.
+         drop(c);
+         drop(rt);
+         assert!(
+@@ -883,4 +878,52 @@
+             );
+         });
+     }
+-}
++
++    #[test]
++    fn spare_vector_capacity_never_becomes_buffer_data() {
++        test_with(|ctx| {
++            let mut source = alloc::vec::Vec::with_capacity(1024);
++            source.extend_from_slice(&[10u32, 20, 30]);
++            let buffer = ArrayBuffer::new(ctx.clone(), source).unwrap();
++            assert_eq!(buffer.len(), 12);
++            assert_eq!(unsafe { buffer.as_slice::<u32>() }.unwrap(), &[10, 20, 30]);
++            ctx.globals().set("buffer", buffer).unwrap();
++            let grown: ArrayBuffer = ctx.eval("buffer.transfer(24)").unwrap();
++            assert_eq!(
++                unsafe { grown.as_slice::<u32>() }.unwrap(),
++                &[10, 20, 30, 0, 0, 0]
++            );
++            ctx.globals().set("grown", grown).unwrap();
++            let shrunk: ArrayBuffer = ctx.eval("grown.transfer(4)").unwrap();
++            assert_eq!(unsafe { shrunk.as_slice::<u32>() }.unwrap(), &[10]);
++        });
++    }
++
++    #[test]
++    fn copy_constructor_keeps_rust_source_immutable() {
++        test_with(|ctx| {
++            let source = [1u8, 2, 3];
++            let buffer = ArrayBuffer::new_copy(ctx.clone(), &source).unwrap();
++            ctx.globals().set("buffer", buffer).unwrap();
++            ctx.eval::<(), _>("new Uint8Array(buffer)[0] = 99").unwrap();
++            assert_eq!(source, [1, 2, 3]);
++        });
++    }
++    #[test]
++    fn immutable_source_copy_isolates_native_atomic_writers() {
++        test_with(|ctx| {
++            let source: Arc<[u8]> = Arc::from([1u8, 2, 3]);
++            let buffer = ArrayBuffer::from_source_immutable(ctx.clone(), source.clone()).unwrap();
++            // This assertion safely catches the original alias defect before any JS write.
++            assert_ne!(
++                buffer.as_raw().unwrap().cast::<u8>().as_ptr(),
++                source.as_ptr() as *mut u8
++            );
++            ctx.globals().set("buffer", buffer).unwrap();
++            ctx.eval::<(), _>("globalThis.view = new Uint8Array(buffer); Atomics.store(view, 0, 99); Atomics.add(view, 1, 4)").unwrap();
++            assert_eq!(&*source, &[1, 2, 3]);
++            let buffer: ArrayBuffer = ctx.globals().get("buffer").unwrap();
++            assert_eq!(unsafe { buffer.as_bytes() }.unwrap(), &[99, 6, 3]);
++        });
++    }
++}
+diff --git a/src/value/atom.rs b/src/value/atom.rs
+--- a/src/value/atom.rs
++++ b/src/value/atom.rs
+@@ -2,7 +2,7 @@
+ 
+ use crate::{qjs, Ctx, Error, Result, String, Value};
+ use alloc::string::{String as StdString, ToString as _};
+-use core::{ffi::CStr, hash::Hash, ptr::null_mut};
++use core::{hash::Hash, mem::MaybeUninit, slice, str};
+ 
+ mod predefined;
+ pub use predefined::PredefinedAtom;
+@@ -112,19 +112,17 @@
+ 
+     /// Convert the atom to a JavaScript string.
+     pub fn to_string(&self) -> Result<StdString> {
++        let mut len = MaybeUninit::uninit();
+         unsafe {
+-            let c_str = qjs::JS_AtomToCStringLen(self.ctx.as_ptr(), null_mut(), self.atom);
++            let c_str = qjs::JS_AtomToCStringLen(self.ctx.as_ptr(), len.as_mut_ptr(), self.atom);
+             if c_str.is_null() {
+-                // Might not ever happen but I am not 100% sure
+-                // so just incase check it.
+-                qjs::JS_FreeCString(self.ctx.as_ptr(), c_str);
+                 return Err(Error::Unknown);
+             }
+-            let bytes = CStr::from_ptr(c_str).to_bytes();
+-            // Safety: QuickJS should return valid utf8 so this should be safe.
+-            let res = core::str::from_utf8_unchecked(bytes).to_string();
++            // Use the returned length: atoms may contain embedded NUL bytes.
++            let bytes = slice::from_raw_parts(c_str.cast::<u8>(), len.assume_init() as usize);
++            let result = str::from_utf8(bytes).map(|value| value.to_string());
+             qjs::JS_FreeCString(self.ctx.as_ptr(), c_str);
+-            Ok(res)
++            Ok(result?)
+         }
+     }
+ 
+@@ -169,3 +167,22 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod test {
++    use crate::{test_with, Atom, Error, Value};
++
++    #[test]
++    fn atom_strings_check_utf8_and_preserve_embedded_nuls() {
++        test_with(|ctx| {
++            for source in [r"'\ud800'", r"'\udfff'"] {
++                let value: Value = ctx.eval(source).unwrap();
++                let atom = Atom::from_value(ctx.clone(), &value).unwrap();
++                assert!(matches!(atom.to_string(), Err(Error::Utf8(_))));
++            }
++            let value: Value = ctx.eval(r"'a\0b\ud83d\ude00'").unwrap();
++            let atom = Atom::from_value(ctx.clone(), &value).unwrap();
++            assert_eq!(atom.to_string().unwrap(), "a\0b😀");
++        });
++    }
++}
+diff --git a/src/value/string.rs b/src/value/string.rs
+--- a/src/value/string.rs
++++ b/src/value/string.rs
+@@ -64,6 +64,12 @@
+             return Err(Error::Unknown);
+         }
+         let len = unsafe { len.assume_init() };
++        // QuickJS preserves lone UTF-16 surrogates as WTF-8, which is not valid Rust UTF-8.
++        let bytes = unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len as usize) };
++        if let Err(error) = str::from_utf8(bytes) {
++            unsafe { qjs::JS_FreeCString(string.0.ctx.as_ptr(), ptr) };
++            return Err(error.into());
++        }
+         Ok(Self {
+             ptr: unsafe { NonNull::new_unchecked(ptr as *mut _) },
+             len,
+@@ -90,7 +96,7 @@
+     pub fn as_str(&self) -> &str {
+         // SAFETY: The pointer points to a JSString content which is ref counted
+         let bytes = unsafe { slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.len) };
+-        // SAFETY: The bytes are garanteed to be valid utf8 by QuickJS
++        // SAFETY: The bytes were validated in `from_string` and remain immutable
+         unsafe { str::from_utf8_unchecked(bytes) }
+     }
+ }
+@@ -206,4 +212,18 @@
+             assert!(s.len() > 8000);
+         });
+     }
+-}
++
++    #[test]
++    fn cstring_rejects_lone_surrogates_and_preserves_valid_unicode() {
++        test_with(|ctx| {
++            for source in [r"'\ud800'", r"'\udfff'"] {
++                let value: String = ctx.eval(source).unwrap();
++                assert!(matches!(value.to_cstring(), Err(Error::Utf8(_))));
++            }
++            let value: String = ctx.eval(r"'a\0b\ud83d\ude00'").unwrap();
++            let value = value.to_cstring().unwrap();
++            assert_eq!(value.as_str(), "a\0b😀");
++            assert_eq!(value.len(), "a\0b😀".len());
++        });
++    }
++}
+diff --git a/src/value/typed_array.rs b/src/value/typed_array.rs
+--- a/src/value/typed_array.rs
++++ b/src/value/typed_array.rs
+@@ -5,7 +5,7 @@
+     Value,
+ };
+ use core::{
+-    assert, debug_assert_eq, fmt,
++    assert, fmt,
+     marker::PhantomData,
+     mem::{self, MaybeUninit},
+     ops::Deref,
+@@ -14,16 +14,22 @@
+     slice,
+ };
+ 
+-/// The trait which implements types which capable to be TypedArray items
++/// Scalar types that can safely be copied to and viewed in a JavaScript typed array.
+ ///
+-pub trait TypedArrayItem: Copy {
++/// # Safety
++///
++/// Implementors must have nonzero size, no padding or uninitialized bytes, and accept
++/// every bit pattern. `ARRAY_TYPE` and `CLASS_NAME` must identify the same JavaScript
++/// scalar with exactly this size and representation. The type's alignment must be valid
++/// for that representation; borrowed views additionally check the backing alignment.
++pub unsafe trait TypedArrayItem: Copy {
+     const CLASS_NAME: PredefinedAtom;
+     const ARRAY_TYPE: qjs::JSTypedArrayEnum;
+ }
+ 
+ macro_rules! typedarray_items {
+     ($($name:ident: $type:ty, $array_type:expr,)*) => {
+-        $(impl TypedArrayItem for $type {
++        $(unsafe impl TypedArrayItem for $type {
+             const CLASS_NAME: PredefinedAtom = PredefinedAtom::$name;
+             const ARRAY_TYPE: qjs::JSTypedArrayEnum = $array_type;
+         })*
+@@ -54,7 +60,7 @@
+ #[repr(transparent)]
+ pub struct U8Clamped(pub u8);
+ 
+-impl TypedArrayItem for U8Clamped {
++unsafe impl TypedArrayItem for U8Clamped {
+     const CLASS_NAME: PredefinedAtom = PredefinedAtom::Uint8ClampedArray;
+     const ARRAY_TYPE: qjs::JSTypedArrayEnum = qjs::JSTypedArrayEnum_JS_TYPED_ARRAY_UINT8C;
+ }
+@@ -206,9 +212,10 @@
+     ///
+     /// # Safety
+     ///
+-    /// The returned slice aliases memory owned by the JS engine. The caller must not run
+-    /// any JavaScript for as long as the slice is alive, since JS can write into, detach,
+-    /// or (for a resizable buffer) reallocate the backing store, invalidating the slice.
++    /// The returned slice aliases the backing store. For the slice's entire lifetime,
++    /// prevent JavaScript execution, detach, resize, and any external or other-thread
++    /// writes to that store. This includes writers through SharedArrayBuffer aliases.
++    /// Keep the buffer and its backing owner alive and do not create mutable aliases.
+     pub unsafe fn as_bytes(&self) -> Option<&[u8]> {
+         Some(self.as_raw()?.as_ref())
+     }
+@@ -218,7 +225,9 @@
+     /// The returned pointer is only guaranteed valid until the next time
+     /// JavaScript runs: JS can write through it, detach the buffer, or, for a
+     /// resizable buffer, reallocate the backing store and free this pointer.
+-    /// Treat the pointer as invalidated after any call back into the engine.
++    /// Treat the pointer as invalidated after any call back into the engine. External
++    /// backing-store writers may also mutate it; dereferencing requires the same
++    /// lifetime and aliasing guarantees as `as_bytes`.
+     ///
+     /// Returns None if the buffer was already detached.
+     pub fn as_raw(&self) -> Option<NonNull<[u8]>> {
+@@ -288,7 +297,7 @@
+             .try_into()
+             .expect(qjs::SIZE_T_ERROR);
+         let raw = ArrayBuffer::get_raw(&buf)?;
+-        if (off + len) > raw.len() {
++        if off.checked_add(len)? > raw.len() {
+             return None;
+         }
+         // SAFETY: ptr was non-null and then we added an offset so it should still be non null
+@@ -301,7 +310,9 @@
+         if stp != mem::size_of::<T>() {
+             return None;
+         }
+-        debug_assert_eq!(ptr.as_ptr().align_offset(mem::align_of::<T>()), 0);
++        if ptr.as_ptr().align_offset(mem::align_of::<T>()) != 0 {
++            return None;
++        }
+         let ptr = ptr.cast::<T>();
+         Some((len / mem::size_of::<T>(), ptr))
+     }
+@@ -310,13 +321,14 @@
+     ///
+     /// # Panics
+     ///
+-    /// Panics if the array is detached or the class does not match `T`.
++    /// Panics if the array is detached, misaligned, or the class does not match `T`.
+     ///
+     /// # Safety
+     ///
+-    /// The returned slice aliases memory owned by the JS engine. The caller must not run
+-    /// any JavaScript for as long as the slice is alive, since JS can write into, detach,
+-    /// or (for a resizable buffer) reallocate the backing store, invalidating the slice.
++    /// The returned slice aliases the backing store. For the slice's entire lifetime,
++    /// prevent JavaScript execution, detach, resize, and any external or other-thread
++    /// writes to that store. This includes writers through SharedArrayBuffer aliases.
++    /// Keep the buffer and its backing owner alive and do not create mutable aliases.
+     pub unsafe fn as_slice(&self) -> &[T]
+     where
+         T: TypedArrayItem,
+@@ -606,4 +618,45 @@
+             assert_eq!(res, 0);
+         })
+     }
+-}
++
++    #[test]
++    fn offset_views_require_fresh_borrows_after_engine_changes() {
++        test_with(|ctx| {
++            let array: TypedArray<u16> = ctx
++                .eval("globalThis.buffer = new ArrayBuffer(8); globalThis.array = new Uint16Array(buffer, 2, 2); array.set([4, 5]); array")
++                .unwrap();
++            assert_eq!(unsafe { array.as_slice() }, &[4, 5]);
++            ctx.eval::<(), _>("array[0] = 9").unwrap();
++            assert_eq!(unsafe { array.as_slice() }, &[9, 5]);
++            let mut buffer = array.arraybuffer().unwrap();
++            buffer.detach();
++            assert!(array.as_raw().is_none());
++        });
++    }
++
++    #[test]
++    fn typed_views_reject_misaligned_external_storage() {
++        use alloc::boxed::Box;
++        struct Unaligned(Box<[u32; 3]>);
++        // The offset region consists of eight initialized bytes and remains stable.
++        unsafe impl crate::ArrayBufferSource for Unaligned {
++            fn as_ptr(&self) -> *mut u8 {
++                unsafe { self.0.as_ptr().cast::<u8>().add(1) as *mut u8 }
++            }
++            fn len(&self) -> usize {
++                8
++            }
++        }
++        test_with(|ctx| {
++            // The moved Box is exclusively owned. Only typed-array metadata and byte
++            // reads are used: native scalar/Atomics operations on this misaligned
++            // pointer would violate from_source's alignment contract.
++            let buffer =
++                unsafe { ArrayBuffer::from_source(ctx.clone(), Unaligned(Box::new([0; 3]))) }
++                    .unwrap();
++            let array = TypedArray::<u32>::from_arraybuffer(buffer).unwrap();
++            assert!(TypedArray::<u32>::get_raw(array.as_value()).is_none());
++            assert_eq!(unsafe { array.as_bytes() }.unwrap(), &[0; 8]);
++        });
++    }
++}
