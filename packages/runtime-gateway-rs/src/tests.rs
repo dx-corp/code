@@ -2711,6 +2711,7 @@ fn test_session_record(id: &str) -> SessionRecord {
         tags: Vec::new(),
         log_group_id: None,
         messages: Vec::new(),
+        last_turn_error: None,
     }
 }
 
@@ -13227,6 +13228,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         tags: Vec::new(),
         log_group_id: None,
         messages: Vec::new(),
+        last_turn_error: None,
     };
     let state = AppState {
         config: Arc::new(Config {
@@ -14530,3 +14532,53 @@ async fn platform_a2a_push_evicts_terminal_payloads_and_replay_history() {
 
 #[path = "tests/turn_diffs.rs"]
 mod turn_diff_tests;
+
+#[tokio::test]
+async fn failed_chat_turn_survives_session_store_reload_and_retry_clears_it() {
+    let session = test_session_record("failed-turn");
+    let state = test_app_state_with_sessions(HashMap::from([(session.id.clone(), session)]));
+    chat::record_chat_error(
+        &state,
+        Some("failed-turn"),
+        "Run `maestro login`".to_owned(),
+    )
+    .await;
+    let store = state.sessions.lock().await.clone();
+    let reloaded: SessionStore =
+        serde_json::from_slice(&serde_json::to_vec(&store).unwrap()).unwrap();
+    let value = sessions::session_full_value(&reloaded.sessions["failed-turn"]);
+    assert_eq!(value["lastTurnError"], "Run `maestro login`");
+    assert_eq!(
+        value["messageCount"], 0,
+        "a failure is not an assistant answer"
+    );
+    let auth = AuthContext {
+        unrestricted: true,
+        ..AuthContext::default()
+    };
+    let chat: ChatRequest = serde_json::from_value(serde_json::json!({
+        "sessionId": "failed-turn", "messages": [{"role": "user", "content": "Retry"}]
+    }))
+    .unwrap();
+    chat::record_chat_user_message(&state, &chat, &auth)
+        .await
+        .unwrap();
+    assert!(
+        state.sessions.lock().await.sessions["failed-turn"]
+            .last_turn_error
+            .is_none()
+    );
+}
+
+#[test]
+fn desktop_headless_handshake_uses_the_native_owner_protocol() {
+    let hello = codex_bridge::codex_headless_hello();
+    let _: maestro_local_host::headless::ToAgentMessage =
+        serde_json::from_value(hello.clone()).unwrap();
+    assert!(
+        maestro_local_host::headless::messages::SUPPORTED_CLIENT_PROTOCOL_VERSIONS
+            .contains(&hello["protocol_version"].as_str().unwrap())
+    );
+    assert_eq!(hello["role"], "controller");
+    assert_eq!(hello["capabilities"]["server_requests"][0], "approval");
+}

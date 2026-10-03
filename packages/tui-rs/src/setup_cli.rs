@@ -37,7 +37,7 @@ struct SetupOptions {
 fn parse_options(args: &[String]) -> Result<SetupOptions> {
     let mut options = SetupOptions {
         json: false,
-        live: false,
+        live: true,
         model: None,
         platform: false,
         byok: false,
@@ -47,6 +47,7 @@ fn parse_options(args: &[String]) -> Result<SetupOptions> {
         match args[index].as_str() {
             "--json" => options.json = true,
             "--live" => options.live = true,
+            "--offline" => options.live = false,
             "--platform" => options.platform = true,
             "--byok" => options.byok = true,
             "--model" => {
@@ -135,9 +136,15 @@ pub fn build_setup_report(doctor: DoctorReport) -> SetupReport {
         }
     }
 
+    if !doctor.live_requested && next_steps.is_empty() {
+        push_step(&mut next_steps, "verify-credentials", "deixic-code setup --live",
+            "Stored credentials have not been verified. Check the Identity session and provider before starting.".to_owned());
+    }
+
     SetupReport {
         schema_version: SETUP_SCHEMA_VERSION,
-        ready: doctor.ok
+        ready: doctor.live_requested
+            && doctor.ok
             && !doctor.checks.iter().any(|check| {
                 check.status == CheckStatus::Fail
                     || (check.id == "managed_inference"
@@ -173,7 +180,7 @@ pub async fn run_setup(args: &[String]) -> Result<i32> {
     let options = match parse_options(args) {
         Ok(options) => options,
         Err(error) if error.to_string() == "help" => {
-            println!("{}", crate::localization::cli_locale().format("Usage: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]", &[]));
+            println!("{}", crate::localization::cli_locale().format("Usage: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]", &[]));
             return Ok(0);
         }
         Err(error) => return Err(error),
@@ -445,7 +452,7 @@ mod tests {
         DoctorReport {
             schema_version: crate::doctor::REPORT_SCHEMA_VERSION,
             ok: true,
-            live_requested: false,
+            live_requested: true,
             selected_model: SelectedModelReport {
                 requested: format!("{provider}/model"),
                 provider: provider.to_owned(),
@@ -529,6 +536,25 @@ mod tests {
         assert!(!result.ready);
         assert_eq!(result.next_steps.len(), 1);
         assert_eq!(result.next_steps[0].command, "deixic-code codex login");
+    }
+
+    #[test]
+    fn offline_stored_credentials_do_not_claim_live_readiness() {
+        let mut doctor = report(
+            "evalops",
+            vec![check(
+                "credential_mode",
+                CheckStatus::Pass,
+                "platform: org org_1 via EvalOps identity",
+                None,
+            )],
+        );
+        doctor.live_requested = false;
+        let result = build_setup_report(doctor);
+        assert!(!result.ready);
+        assert_eq!(result.next_steps[0].command, "deixic-code setup --live");
+        assert!(parse_options(&["--json".to_owned()]).unwrap().live);
+        assert!(!parse_options(&["--offline".to_owned()]).unwrap().live);
     }
 
     #[test]

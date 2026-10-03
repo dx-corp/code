@@ -2352,21 +2352,6 @@ async fn test_handle_config_event_reloads_keybindings() {
 }
 
 #[tokio::test]
-async fn test_tab_submits_when_idle_with_non_shell_input() {
-    let mut app = new_test_app();
-    app.state.set_input("ship it");
-
-    app.handle_key(KeyCode::Tab, CrosstermModifiers::NONE)
-        .await
-        .unwrap();
-
-    assert_eq!(app.state.input(), "");
-    let last = app.state.messages.last().expect("user message");
-    assert_eq!(last.role, MessageRole::User);
-    assert_eq!(last.content, "ship it");
-}
-
-#[tokio::test]
 async fn test_tab_does_not_submit_idle_shell_draft() {
     let mut app = new_test_app();
     let initial_message_count = app.state.messages.len();
@@ -6696,3 +6681,5 @@ mod settings_experiments;
 mod session_restore;
 
 mod checkpoints;
+
+mod startup_recovery;

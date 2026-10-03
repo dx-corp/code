@@ -453,6 +453,7 @@ mod model_dynamics;
 mod provider_history;
 mod read_only_results;
 use provider_history::sanitize_semantic_conversation;
+pub mod loop_policy;
 mod provider_admission;
 mod provider_loop;
 mod provider_payload;

@@ -23031,14 +23031,14 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "Usage: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
+        "Usage: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
         [
-            "Usage: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
-            "Utilisation: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
-            "Verwendung: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
-            "使用方法: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
-            "제품 정보: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
-            "使用量: deixic-code setup [--json] [--live] [--model <provider/model>] [--platform|--byok]",
+            "Usage: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
+            "Utilisation: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
+            "Verwendung: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
+            "使用方法: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
+            "제품 정보: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
+            "使用量: deixic-code setup [--json] [--live|--offline] [--model <provider/model>] [--platform|--byok]",
         ],
     ),
     (

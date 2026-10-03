@@ -601,6 +601,25 @@ fn resolve_native_client(
     ))
 }
 
+/// The local execution host, composed exactly as [`NativeAgent`] composes it,
+/// for a turn that runs on the dex-loop kernel (`maestro-dex-host`) instead of
+/// this crate's actor. The same `ToolExecutor`, hooks, sandbox and firewall
+/// serve both loops; resolve the turn's model client with
+/// [`NativeExecutionHostHandle::resolve_model`].
+pub fn dex_loop_execution_host(
+    config: &NativeAgentConfig,
+    credential_vault: CredentialVault,
+) -> Result<NativeExecutionHostHandle> {
+    build_local_host(
+        config,
+        credential_vault,
+        None,
+        None,
+        None,
+        Arc::new(RwLock::new(None)),
+    )
+}
+
 fn build_local_host(
     config: &NativeAgentConfig,
     credential_vault: CredentialVault,

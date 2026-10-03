@@ -1446,6 +1446,16 @@ async fn cleanup_codex_headless_approvals(
     }
 }
 
+pub(crate) fn codex_headless_hello() -> Value {
+    serde_json::json!({
+        "type": "hello",
+        "protocol_version": maestro_local_host::headless::HEADLESS_PROTOCOL_VERSION,
+        "client_info": { "name": "maestro-rust-control-plane" },
+        "capabilities": { "server_requests": ["approval"] },
+        "role": "controller"
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_app_server_headless_cli(
     stream: &mut TcpStream,
@@ -1501,8 +1511,9 @@ pub(crate) async fn run_codex_app_server_headless_cli(
         .take()
         .ok_or_else(|| "failed to capture Codex headless stderr".to_string())?;
     let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).await.map(|_| bytes)
+        // The protocol carries actionable errors. Drain diagnostics without
+        // retaining an unbounded buffer or disclosing provider credentials.
+        tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await
     });
     let pending_approval_ids = Arc::new(Mutex::new(Vec::new()));
     let approval_run_id = codex_headless_run_id();
@@ -1511,21 +1522,7 @@ pub(crate) async fn run_codex_app_server_headless_cli(
     let mut lines = BufReader::new(stdout).lines();
 
     let request_result = async {
-        write_codex_headless_message(
-            &mut stdin,
-            &serde_json::json!({
-                "type": "hello",
-                "protocol_version": "2026-08-01",
-                "client_info": {
-                    "name": "maestro-rust-control-plane"
-                },
-                "capabilities": {
-                    "server_requests": ["approval"]
-                },
-                "role": "controller"
-            }),
-        )
-        .await?;
+        write_codex_headless_message(&mut stdin, &codex_headless_hello()).await?;
         write_codex_headless_message(
             &mut stdin,
             &serde_json::json!({
