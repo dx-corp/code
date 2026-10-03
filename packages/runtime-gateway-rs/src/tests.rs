@@ -5461,7 +5461,7 @@ async fn a2a_message_send_records_extensions_and_push_config() {
                 "configuration": {{
                     "taskPushNotificationConfig": {{
                         "id": "notify-1",
-                        "url": "https://hooks.example/a2a",
+                        "url": "https://8.8.8.8/a2a",
                         "token": "notify-token",
                         "authentication": {{
                             "schemes": ["Bearer"],
@@ -6148,7 +6148,7 @@ fn a2a_push_notification_config_generates_distinct_ids_when_missing() {
         "task-push",
         serde_json::json!({
             "taskId": "task-push",
-            "url": "https://hooks.example/a2a"
+            "url": "https://8.8.8.8/a2a"
         }),
         true,
     )
@@ -6157,7 +6157,7 @@ fn a2a_push_notification_config_generates_distinct_ids_when_missing() {
         "task-push",
         serde_json::json!({
             "taskId": "task-push",
-            "url": "https://hooks.example/a2a"
+            "url": "https://8.8.8.8/a2a"
         }),
         true,
     )
@@ -6411,7 +6411,7 @@ async fn a2a_push_notification_config_crud_updates_task_metadata() {
         .await
         .insert("task-push".to_string(), task);
 
-    let body = r#"{"id":"notify-1","taskId":"task-push","url":"https://hooks.example/a2a","token":"notify-token"}"#;
+    let body = r#"{"id":"notify-1","taskId":"task-push","url":"https://8.8.8.8/a2a","token":"notify-token"}"#;
     let request = format!(
         "POST /tasks/task-push/pushNotificationConfigs HTTP/1.1\r\nHost: localhost\r\nx-maestro-api-key: api-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
