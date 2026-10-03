@@ -1,0 +1,647 @@
+diff --git a/src/message/header/mod.rs b/src/message/header/mod.rs
+--- a/src/message/header/mod.rs
++++ b/src/message/header/mod.rs
+@@ -176,8 +176,7 @@
+ impl HeaderName {
+     /// Creates a new header name
+     pub fn new_from_ascii(ascii: String) -> Result<Self, InvalidHeaderName> {
+-        if !ascii.is_empty() && ascii.len() <= 76 && ascii.is_ascii() && !ascii.contains([':', ' '])
+-        {
++        if !ascii.is_empty() && ascii.len() <= 76 && ascii.bytes().all(valid_header_name_byte) {
+             Ok(Self(Cow::Owned(ascii)))
+         } else {
+             Err(InvalidHeaderName)
+@@ -193,14 +192,18 @@
+         let bytes = ascii.as_bytes();
+         let mut i = 0;
+         while i < bytes.len() {
+-            assert!(bytes[i] != b' ');
+-            assert!(bytes[i] != b':');
++            assert!(valid_header_name_byte(bytes[i]));
+ 
+             i += 1;
+         }
+ 
+         Self(Cow::Borrowed(ascii))
+     }
++}
++
++// RFC 5322 field-name is printable US-ASCII excluding colon.
++const fn valid_header_name_byte(byte: u8) -> bool {
++    byte >= 33 && byte <= 126 && byte != b':'
+ }
+ 
+ impl Display for HeaderName {
+@@ -386,6 +389,24 @@
+ 
+     use super::{HeaderName, HeaderValue, Headers, To};
+     use crate::message::Mailboxes;
++
++    #[test]
++    fn headername_constructors_agree_on_rfc_field_name_bytes() {
++        for byte in 0..=127u8 {
++            let name = format!("X-{}", char::from(byte));
++            let expected = (33..=126).contains(&byte) && byte != b':';
++            assert_eq!(HeaderName::new_from_ascii(name.clone()).is_ok(), expected);
++            let name = Box::leak(name.into_boxed_str());
++            assert_eq!(
++                std::panic::catch_unwind(|| HeaderName::new_from_ascii_str(name)).is_ok(),
++                expected
++            );
++        }
++        let valid = "X".repeat(76);
++        assert!(HeaderName::new_from_ascii(valid).is_ok());
++        assert!(HeaderName::new_from_ascii("X".repeat(77)).is_err());
++        assert!(HeaderName::new_from_ascii("X-Note\r\n\r\n".into()).is_err());
++    }
+ 
+     #[test]
+     fn valid_headername() {
+diff --git a/src/transport/smtp/client/async_connection.rs b/src/transport/smtp/client/async_connection.rs
+--- a/src/transport/smtp/client/async_connection.rs
++++ b/src/transport/smtp/client/async_connection.rs
+@@ -1,6 +1,6 @@
+ use std::{fmt::Display, net::IpAddr, time::Duration};
+ 
+-use futures_util::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
++use futures_util::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
+ 
+ #[cfg(feature = "tokio1")]
+ use super::async_net::AsyncTokioStream;
+@@ -8,8 +8,7 @@
+ use super::escape_crlf;
+ #[allow(deprecated)]
+ use super::{
+-    ClientCodec, MAX_RESPONSE_BYTES, MAX_RESPONSE_LINE_BYTES, TlsParameters,
+-    async_net::AsyncNetworkStream,
++    ClientCodec, TlsParameters, async_net::AsyncNetworkStream, response_reader::ResponseLine,
+ };
+ use crate::{
+     Envelope,
+@@ -358,45 +357,7 @@
+ 
+     /// Gets the SMTP response
+     pub async fn read_response(&mut self) -> Result<Response, Error> {
+-        let mut buffer = String::with_capacity(100);
+-        let mut pre = 0;
+-
+-        while self
+-            .stream
+-            .read_line(&mut buffer)
+-            .await
+-            .map_err(error::network)?
+-            > 0
+-        {
+-            if buffer.len() - pre > MAX_RESPONSE_LINE_BYTES {
+-                return Err(error::response("SMTP response line too long"));
+-            }
+-            if buffer.len() > MAX_RESPONSE_BYTES {
+-                return Err(error::response("SMTP response too large"));
+-            }
+-            pre = buffer.len();
+-
+-            #[cfg(feature = "tracing")]
+-            tracing::debug!("<< {}", escape_crlf(&buffer));
+-            match parse_response(&buffer) {
+-                Ok((_remaining, response)) => {
+-                    return if response.is_positive() {
+-                        Ok(response)
+-                    } else {
+-                        Err(error::code_from_response(&response))
+-                    };
+-                }
+-                Err(nom::Err::Failure(e)) => {
+-                    return Err(error::response(e.to_string()));
+-                }
+-                Err(nom::Err::Incomplete(_)) => { /* read more */ }
+-                Err(nom::Err::Error(e)) => {
+-                    return Err(error::response(e.to_string()));
+-                }
+-            }
+-        }
+-
+-        Err(error::response("incomplete response"))
++        read_response(&mut self.stream).await
+     }
+ 
+     /// The X509 certificate of the server (DER encoded)
+@@ -433,3 +394,107 @@
+         self.stream.get_ref().certificate_chain()
+     }
+ }
++
++async fn read_response<R: AsyncBufRead + Unpin>(stream: &mut R) -> Result<Response, Error> {
++    let mut buffer = String::with_capacity(100);
++
++    while read_response_line(stream, &mut buffer).await? > 0 {
++        #[cfg(feature = "tracing")]
++        tracing::debug!("<< {}", escape_crlf(&buffer));
++        match parse_response(&buffer) {
++            Ok((_remaining, response)) => {
++                return if response.is_positive() {
++                    Ok(response)
++                } else {
++                    Err(error::code_from_response(&response))
++                };
++            }
++            Err(nom::Err::Failure(e)) => {
++                return Err(error::response(e.to_string()));
++            }
++            Err(nom::Err::Incomplete(_)) => { /* read more */ }
++            Err(nom::Err::Error(e)) => {
++                return Err(error::response(e.to_string()));
++            }
++        }
++    }
++
++    Err(error::response("incomplete response"))
++}
++
++async fn read_response_line<R: AsyncBufRead + Unpin>(
++    stream: &mut R,
++    buffer: &mut String,
++) -> Result<usize, Error> {
++    let mut line = ResponseLine::new(buffer.len());
++    loop {
++        let available = stream.fill_buf().await.map_err(error::network)?;
++        if available.is_empty() {
++            return line.finish(buffer);
++        }
++        let (consumed, complete) = line.extend(available)?;
++        stream.consume_unpin(consumed);
++        if complete {
++            return line.finish(buffer);
++        }
++    }
++}
++
++#[cfg(all(test, feature = "tokio1"))]
++mod bounded_response_tests {
++    use futures_util::io::Cursor;
++    use std::{cell::Cell, rc::Rc};
++
++    use super::super::response_reader::tests::{
++        Expected, FailingPeer, NoNewlinePeer, assert_expected, cases,
++    };
++    use super::*;
++
++    #[tokio1_crate::test(flavor = "current_thread", crate = "tokio1_crate")]
++    async fn preserves_response_contracts_at_byte_boundaries() {
++        for (input, expected) in cases() {
++            // Single-byte chunks deliberately split CRLF and multibyte UTF-8.
++            let mut stream = futures_util::io::BufReader::with_capacity(1, Cursor::new(input));
++            assert_expected(read_response(&mut stream).await, expected);
++        }
++    }
++
++    #[tokio1_crate::test(flavor = "current_thread", crate = "tokio1_crate")]
++    async fn rejects_newline_free_peer_before_unbounded_read() {
++        let delivered = Rc::new(Cell::new(0));
++        let peer = NoNewlinePeer {
++            delivered: delivered.clone(),
++        };
++        let mut stream = futures_util::io::BufReader::with_capacity(64, peer);
++        assert_expected(
++            read_response(&mut stream).await,
++            Expected::ResponseError("SMTP response line too long"),
++        );
++        assert!(delivered.get() <= 1024);
++    }
++
++    #[tokio1_crate::test(flavor = "current_thread", crate = "tokio1_crate")]
++    async fn leaves_next_response_buffered() {
++        let mut stream =
++            futures_util::io::BufReader::new(Cursor::new(b"250 first\r\n251 second\r\n"));
++        assert_expected(
++            read_response(&mut stream).await,
++            Expected::Positive(250, vec!["first".into()]),
++        );
++        assert_expected(
++            read_response(&mut stream).await,
++            Expected::Positive(251, vec!["second".into()]),
++        );
++    }
++    #[tokio1_crate::test(flavor = "current_thread", crate = "tokio1_crate")]
++    async fn preserves_network_errors() {
++        let mut stream = futures_util::io::BufReader::new(FailingPeer);
++        let error = read_response(&mut stream).await.unwrap_err();
++        assert!(!error.is_response());
++        let source = std::error::Error::source(&error).unwrap();
++        assert_eq!(
++            source.downcast_ref::<std::io::Error>().unwrap().kind(),
++            std::io::ErrorKind::ConnectionReset
++        );
++    }
++}
+diff --git a/src/transport/smtp/client/connection.rs b/src/transport/smtp/client/connection.rs
+--- a/src/transport/smtp/client/connection.rs
++++ b/src/transport/smtp/client/connection.rs
+@@ -7,9 +7,7 @@
+ 
+ #[cfg(feature = "tracing")]
+ use super::escape_crlf;
+-use super::{
+-    ClientCodec, MAX_RESPONSE_BYTES, MAX_RESPONSE_LINE_BYTES, NetworkStream, TlsParameters,
+-};
++use super::{ClientCodec, NetworkStream, TlsParameters, response_reader::ResponseLine};
+ use crate::{
+     address::Envelope,
+     transport::smtp::{
+@@ -283,39 +281,7 @@
+ 
+     /// Gets the SMTP response
+     pub fn read_response(&mut self) -> Result<Response, Error> {
+-        let mut buffer = String::with_capacity(100);
+-        let mut pre = 0;
+-
+-        while self.stream.read_line(&mut buffer).map_err(error::network)? > 0 {
+-            if buffer.len() - pre > MAX_RESPONSE_LINE_BYTES {
+-                return Err(error::response("SMTP response line too long"));
+-            }
+-            if buffer.len() > MAX_RESPONSE_BYTES {
+-                return Err(error::response("SMTP response too large"));
+-            }
+-            pre = buffer.len();
+-
+-            #[cfg(feature = "tracing")]
+-            tracing::debug!("<< {}", escape_crlf(&buffer));
+-            match parse_response(&buffer) {
+-                Ok((_remaining, response)) => {
+-                    return if response.is_positive() {
+-                        Ok(response)
+-                    } else {
+-                        Err(error::code_from_response(&response))
+-                    };
+-                }
+-                Err(nom::Err::Failure(e)) => {
+-                    return Err(error::response(e.to_string()));
+-                }
+-                Err(nom::Err::Incomplete(_)) => { /* read more */ }
+-                Err(nom::Err::Error(e)) => {
+-                    return Err(error::response(e.to_string()));
+-                }
+-            }
+-        }
+-
+-        Err(error::response("incomplete response"))
++        read_response(&mut self.stream)
+     }
+ 
+     /// The X509 certificate of the server (DER encoded)
+@@ -352,3 +318,102 @@
+         self.stream.get_ref().certificate_chain()
+     }
+ }
++
++fn read_response<R: BufRead>(stream: &mut R) -> Result<Response, Error> {
++    let mut buffer = String::with_capacity(100);
++
++    while read_response_line(stream, &mut buffer)? > 0 {
++        #[cfg(feature = "tracing")]
++        tracing::debug!("<< {}", escape_crlf(&buffer));
++        match parse_response(&buffer) {
++            Ok((_remaining, response)) => {
++                return if response.is_positive() {
++                    Ok(response)
++                } else {
++                    Err(error::code_from_response(&response))
++                };
++            }
++            Err(nom::Err::Failure(e)) => {
++                return Err(error::response(e.to_string()));
++            }
++            Err(nom::Err::Incomplete(_)) => { /* read more */ }
++            Err(nom::Err::Error(e)) => {
++                return Err(error::response(e.to_string()));
++            }
++        }
++    }
++
++    Err(error::response("incomplete response"))
++}
++
++fn read_response_line<R: BufRead>(stream: &mut R, buffer: &mut String) -> Result<usize, Error> {
++    let mut line = ResponseLine::new(buffer.len());
++    loop {
++        let available = stream.fill_buf().map_err(error::network)?;
++        if available.is_empty() {
++            return line.finish(buffer);
++        }
++        let (consumed, complete) = line.extend(available)?;
++        stream.consume(consumed);
++        if complete {
++            return line.finish(buffer);
++        }
++    }
++}
++
++#[cfg(test)]
++mod bounded_response_tests {
++    use std::{cell::Cell, io::Cursor, rc::Rc};
++
++    use super::super::response_reader::tests::{
++        Expected, FailingPeer, NoNewlinePeer, assert_expected, cases,
++    };
++    use super::*;
++
++    #[test]
++    fn preserves_response_contracts_at_byte_boundaries() {
++        for (input, expected) in cases() {
++            // Single-byte chunks deliberately split CRLF and multibyte UTF-8.
++            let mut stream = std::io::BufReader::with_capacity(1, Cursor::new(input));
++            assert_expected(read_response(&mut stream), expected);
++        }
++    }
++
++    #[test]
++    fn rejects_newline_free_peer_before_unbounded_read() {
++        let delivered = Rc::new(Cell::new(0));
++        let peer = NoNewlinePeer {
++            delivered: delivered.clone(),
++        };
++        let mut stream = std::io::BufReader::with_capacity(64, peer);
++        assert_expected(
++            read_response(&mut stream),
++            Expected::ResponseError("SMTP response line too long"),
++        );
++        assert!(delivered.get() <= 1024);
++    }
++
++    #[test]
++    fn leaves_next_response_buffered() {
++        let mut stream = std::io::BufReader::new(Cursor::new(b"250 first\r\n251 second\r\n"));
++        assert_expected(
++            read_response(&mut stream),
++            Expected::Positive(250, vec!["first".into()]),
++        );
++        assert_expected(
++            read_response(&mut stream),
++            Expected::Positive(251, vec!["second".into()]),
++        );
++    }
++    #[test]
++    fn preserves_network_errors() {
++        let mut stream = std::io::BufReader::new(FailingPeer);
++        let error = read_response(&mut stream).unwrap_err();
++        assert!(!error.is_response());
++        let source = std::error::Error::source(&error).unwrap();
++        assert_eq!(
++            source.downcast_ref::<std::io::Error>().unwrap().kind(),
++            std::io::ErrorKind::ConnectionReset
++        );
++    }
++}
+diff --git a/src/transport/smtp/client/mod.rs b/src/transport/smtp/client/mod.rs
+--- a/src/transport/smtp/client/mod.rs
++++ b/src/transport/smtp/client/mod.rs
+@@ -48,6 +48,198 @@
+ mod async_net;
+ mod connection;
+ mod net;
++mod response_reader {
++    use std::io;
++
++    use super::{MAX_RESPONSE_BYTES, MAX_RESPONSE_LINE_BYTES};
++    use crate::transport::smtp::{error, error::Error};
++
++    /// Accumulates one line without retaining bytes beyond either response cap.
++    pub(super) struct ResponseLine {
++        bytes: Vec<u8>,
++        response_bytes: usize,
++    }
++
++    impl ResponseLine {
++        pub(super) fn new(response_bytes: usize) -> Self {
++            Self {
++                bytes: Vec::new(),
++                response_bytes,
++            }
++        }
++
++        pub(super) fn extend(&mut self, available: &[u8]) -> Result<(usize, bool), Error> {
++            let newline = available.iter().position(|&byte| byte == b'\n');
++            let consumed = newline.map_or(available.len(), |position| position + 1);
++            if consumed > MAX_RESPONSE_LINE_BYTES - self.bytes.len() {
++                return Err(error::response("SMTP response line too long"));
++            }
++            if consumed > MAX_RESPONSE_BYTES - self.response_bytes - self.bytes.len() {
++                return Err(error::response("SMTP response too large"));
++            }
++            self.bytes.extend_from_slice(&available[..consumed]);
++            Ok((consumed, newline.is_some()))
++        }
++
++        pub(super) fn finish(self, buffer: &mut String) -> Result<usize, Error> {
++            // Validate after the line is assembled: reads can split UTF-8 code points.
++            let line = std::str::from_utf8(&self.bytes).map_err(|error| {
++                error::network(io::Error::new(io::ErrorKind::InvalidData, error))
++            })?;
++            buffer.push_str(line);
++            Ok(self.bytes.len())
++        }
++    }
++
++    #[cfg(test)]
++    pub(super) mod tests {
++        use std::{cell::Cell, io, rc::Rc};
++
++        use super::*;
++        use crate::transport::smtp::response::Response;
++
++        pub(crate) enum Expected {
++            Positive(u16, Vec<String>),
++            Transient,
++            Permanent,
++            ResponseError(&'static str),
++            NetworkError,
++        }
++
++        pub(crate) fn cases() -> Vec<(Vec<u8>, Expected)> {
++            let exact_line = format!("250 {}\r\n", "x".repeat(MAX_RESPONSE_LINE_BYTES - 6));
++            let continuation = format!("250-{}\r\n", "x".repeat(MAX_RESPONSE_LINE_BYTES - 6));
++            let exact_total = format!("{}{}", continuation.repeat(99), exact_line);
++            vec![
++                (
++                    b"250 hello\r\n".to_vec(),
++                    Expected::Positive(250, vec!["hello".into()]),
++                ),
++                (
++                    "250-héllo\r\n250 世界\r\n".as_bytes().to_vec(),
++                    Expected::Positive(250, vec!["héllo".into(), "世界".into()]),
++                ),
++                (
++                    exact_line.into_bytes(),
++                    Expected::Positive(250, vec!["x".repeat(994)]),
++                ),
++                (
++                    exact_total.into_bytes(),
++                    Expected::Positive(250, vec!["x".repeat(994); 100]),
++                ),
++                (
++                    format!("250 {}\r\n", "x".repeat(995)).into_bytes(),
++                    Expected::ResponseError("SMTP response line too long"),
++                ),
++                (
++                    format!("{}250 ok\r\n", continuation.repeat(100)).into_bytes(),
++                    Expected::ResponseError("SMTP response too large"),
++                ),
++                (
++                    b"250-partial\r\n".to_vec(),
++                    Expected::ResponseError("incomplete response"),
++                ),
++                (
++                    b"250 partial".to_vec(),
++                    Expected::ResponseError("incomplete response"),
++                ),
++                (vec![], Expected::ResponseError("incomplete response")),
++                (b"550 rejected\r\n".to_vec(), Expected::Permanent),
++                (b"451 later\r\n".to_vec(), Expected::Transient),
++                (b"invalid\r\n".to_vec(), Expected::ResponseError("")),
++                (b"250 \xff\r\n".to_vec(), Expected::NetworkError),
++                (b"250 \xc3".to_vec(), Expected::NetworkError),
++            ]
++        }
++
++        pub(crate) fn assert_expected(result: Result<Response, Error>, expected: Expected) {
++            match expected {
++                Expected::Positive(code, lines) => {
++                    let response = result.unwrap();
++                    assert!(response.has_code(code));
++                    assert_eq!(response.message().collect::<Vec<_>>(), lines);
++                }
++                Expected::Transient => assert!(result.unwrap_err().is_transient()),
++                Expected::Permanent => assert!(result.unwrap_err().is_permanent()),
++                Expected::ResponseError(message) => {
++                    let error = result.unwrap_err();
++                    assert!(error.is_response(), "{error:?}");
++                    assert!(error.to_string().contains(message), "{error:?}");
++                }
++                Expected::NetworkError => {
++                    let error = result.unwrap_err();
++                    assert!(!error.is_response(), "{error:?}");
++                    let source = std::error::Error::source(&error).unwrap();
++                    assert_eq!(
++                        source.downcast_ref::<io::Error>().unwrap().kind(),
++                        io::ErrorKind::InvalidData
++                    );
++                }
++            }
++        }
++
++        // Fixed read budget makes the regression fail promptly on the original reader,
++        // instead of consuming unbounded memory or waiting forever for a newline.
++        pub(crate) struct NoNewlinePeer {
++            pub(crate) delivered: Rc<Cell<usize>>,
++        }
++
++        impl io::Read for NoNewlinePeer {
++            fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
++                let count = output.len().min(64);
++                assert!(
++                    self.delivered.get() + count <= 1088,
++                    "reader passed its bounded byte budget"
++                );
++                output[..count].fill(b'x');
++                self.delivered.set(self.delivered.get() + count);
++                Ok(count)
++            }
++        }
++
++        #[cfg(any(feature = "tokio1", feature = "async-std1"))]
++        impl futures_io::AsyncRead for NoNewlinePeer {
++            fn poll_read(
++                mut self: std::pin::Pin<&mut Self>,
++                _: &mut std::task::Context<'_>,
++                output: &mut [u8],
++            ) -> std::task::Poll<io::Result<usize>> {
++                std::task::Poll::Ready(io::Read::read(&mut *self, output))
++            }
++        }
++
++        pub(crate) struct FailingPeer;
++
++        impl io::Read for FailingPeer {
++            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
++                Err(io::Error::new(io::ErrorKind::ConnectionReset, "test reset"))
++            }
++        }
++
++        #[cfg(any(feature = "tokio1", feature = "async-std1"))]
++        impl futures_io::AsyncRead for FailingPeer {
++            fn poll_read(
++                mut self: std::pin::Pin<&mut Self>,
++                _: &mut std::task::Context<'_>,
++                output: &mut [u8],
++            ) -> std::task::Poll<io::Result<usize>> {
++                std::task::Poll::Ready(io::Read::read(&mut *self, output))
++            }
++        }
++
++        #[test]
++        fn rejected_bytes_are_never_retained() {
++            let mut line = ResponseLine::new(0);
++            line.extend(&vec![b'x'; MAX_RESPONSE_LINE_BYTES]).unwrap();
++            assert!(line.extend(b"x").is_err());
++            assert_eq!(line.bytes.len(), MAX_RESPONSE_LINE_BYTES);
++            let mut line = ResponseLine::new(MAX_RESPONSE_BYTES - 1);
++            line.extend(b"x").unwrap();
++            assert!(line.extend(b"x").is_err());
++            assert_eq!(line.bytes.len(), 1);
++        }
++    }
++}
+ mod tls;
+ 
+ /// Total bytes cap on an SMTP response (Postfix `smtp_response_limit`).
+diff --git a/src/transport/smtp/extension.rs b/src/transport/smtp/extension.rs
+--- a/src/transport/smtp/extension.rs
++++ b/src/transport/smtp/extension.rs
+@@ -141,7 +141,10 @@
+             }
+ 
+             let mut split = line.split_whitespace();
+-            match split.next().unwrap() {
++            let Some(keyword) = split.next() else {
++                return Err(error::response("Could not read server capability"));
++            };
++            match keyword {
+                 "8BITMIME" => {
+                     features.insert(Extension::EightBitMime);
+                 }
+@@ -294,6 +297,36 @@
+     use crate::transport::smtp::response::{Category, Code, Detail, Severity};
+ 
+     #[test]
++    fn whitespace_only_ehlo_capability_returns_response_error() {
++        for whitespace in [" ", "\t", " \t "] {
++            let wire = format!("250-localhost\r\n250 {whitespace}\r\n");
++            let response: Response = wire.parse().unwrap();
++            let error = ServerInfo::from_response(&response).unwrap_err();
++            assert!(error.is_response());
++            assert!(
++                error
++                    .to_string()
++                    .contains("Could not read server capability")
++            );
++        }
++    }
++
++    #[test]
++    fn ehlo_parser_preserves_empty_lines_and_known_capabilities() {
++        let response: Response = "250-localhost\r\n250-\r\n250-STARTTLS\r\n250-AUTH PLAIN LOGIN XOAUTH2 OTHER\r\n250-8BITMIME\r\n250 SMTPUTF8\r\n"
++            .parse()
++            .unwrap();
++        let info = ServerInfo::from_response(&response).unwrap();
++        assert_eq!(info.name(), "localhost");
++        assert!(info.supports_feature(Extension::StartTls));
++        assert!(info.supports_feature(Extension::EightBitMime));
++        assert!(info.supports_feature(Extension::SmtpUtfEight));
++        assert!(info.supports_auth_mechanism(Mechanism::Plain));
++        assert!(info.supports_auth_mechanism(Mechanism::Login));
++        assert!(info.supports_auth_mechanism(Mechanism::Xoauth2));
++    }
++
++    #[test]
+     fn test_clientid_fmt() {
+         assert_eq!(
+             format!("{}", ClientId::Domain("test".to_owned())),

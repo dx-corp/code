@@ -1,0 +1,151 @@
+diff --git a/src/headers/rfc2231.rs b/src/headers/rfc2231.rs
+--- a/src/headers/rfc2231.rs
++++ b/src/headers/rfc2231.rs
+@@ -7,6 +7,9 @@
+ use super::{MAX_LINE_LEN, hex_encoding, utils, writer::EmailWriter};
+ 
+ /// Encode a string via RFC 2231.
++///
++/// Returns an error if the writer fails or a continuation cannot consume
++/// any more of the value within the line limit. Output may be partial on error.
+ ///
+ /// # Examples
+ ///
+@@ -74,8 +77,16 @@
+     if utils::str_is_ascii_printable(value) {
+         // Can be written normally (Parameter Value Continuations)
+ 
+-        let quoted_plain_combined_len = key.len() + "=\"".len() + value.len() + "\"\r\n".len();
+-        if w.line_len() + quoted_plain_combined_len <= MAX_LINE_LEN {
++        let quoted_plain_combined_len = key
++            .len()
++            .checked_add(value.len())
++            .and_then(|len| len.checked_add("=\"".len() + "\"\r\n".len()))
++            .ok_or(fmt::Error)?;
++        if w.line_len()
++            .checked_add(quoted_plain_combined_len)
++            .ok_or(fmt::Error)?
++            <= MAX_LINE_LEN
++        {
+             // Fits line
+ 
+             w.write_str(key)?;
+@@ -95,10 +106,16 @@
+             loop {
+                 write!(w, " {}*{}=\"", key, i)?;
+ 
+-                let remaining_len = MAX_LINE_LEN - w.line_len() - "\"\r\n".len();
++                let remaining_len = MAX_LINE_LEN
++                    .checked_sub(w.line_len())
++                    .and_then(|len| len.checked_sub("\"\r\n".len()))
++                    .ok_or(fmt::Error)?;
+ 
+                 let value_ =
+                     utils::truncate_to_char_boundary(value, remaining_len.min(value.len()));
++                if value_.is_empty() && !value.is_empty() {
++                    return Err(fmt::Error);
++                }
+                 value = &value[value_.len()..];
+ 
+                 utils::write_escaped(value_, w)?;
+@@ -131,6 +148,7 @@
+                 w.write_str("utf-8''")?;
+             }
+ 
++            let value_len = value.len();
+             let mut chars = value.chars();
+             while w.line_len() < MAX_LINE_LEN - "=xx=xx=xx=xx;\r\n".len() {
+                 match chars.next() {
+@@ -148,6 +166,9 @@
+                 // End of value
+                 break;
+             }
++            if value.len() == value_len {
++                return Err(fmt::Error);
++            }
+ 
+             // End of line
+             w.write_char(';')?;
+@@ -167,6 +188,82 @@
+     use pretty_assertions::assert_eq;
+ 
+     use super::*;
++
++    // Count output without retaining it, and stop a broken encoder safely.
++    struct BudgetWriter {
++        remaining: usize,
++        exhausted: bool,
++    }
++
++    impl Write for BudgetWriter {
++        fn write_str(&mut self, value: &str) -> fmt::Result {
++            if value.len() > self.remaining {
++                self.exhausted = true;
++                return Err(fmt::Error);
++            }
++            self.remaining -= value.len();
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn long_key_unicode_fails_before_exhausting_writer() {
++        for key_len in 49..=62 {
++            let key = "a".repeat(key_len);
++            for value in ["é", "📕", "aé"] {
++                let mut sink = BudgetWriter {
++                    remaining: 16_384,
++                    exhausted: false,
++                };
++                let result = {
++                    let mut w = EmailWriter::new(&mut sink, 0, 0, false);
++                    encode(&key, value, &mut w)
++                };
++                assert!(result.is_err(), "key length {key_len}, value {value}");
++                assert!(!sink.exhausted, "key length {key_len}, value {value}");
++            }
++        }
++    }
++
++    #[test]
++    fn long_key_plain_fails_before_exhausting_writer() {
++        let key = "a".repeat(62);
++        // The first million segments consume 1,111,110 bytes. The next
++        // segment number leaves no space for the last byte of the value.
++        let value = "a".repeat(1_111_111);
++        let mut sink = BudgetWriter {
++            remaining: 128 * 1024 * 1024,
++            exhausted: false,
++        };
++        let result = {
++            let mut w = EmailWriter::new(&mut sink, 0, 0, false);
++            encode(&key, &value, &mut w)
++        };
++        assert!(result.is_err());
++        assert!(!sink.exhausted);
++    }
++
++    #[test]
++    fn line_length_overflow_returns_error() {
++        let mut output = String::new();
++        let result = {
++            let mut w = EmailWriter::new(&mut output, usize::MAX, 0, false);
++            encode("filename", "duck.txt", &mut w)
++        };
++        assert!(result.is_err());
++        assert!(output.is_empty());
++    }
++
++    #[test]
++    fn longest_unicode_key_with_room_encodes_value() {
++        let key = "a".repeat(48);
++        let mut output = String::new();
++        {
++            let mut w = EmailWriter::new(&mut output, 0, 0, false);
++            encode(&key, "📕", &mut w).unwrap();
++        }
++        assert_eq!(output, alloc::format!("\r\n {key}*0*=utf-8''%F0%9F%93%95"));
++    }
+ 
+     #[test]
+     fn empty() {
