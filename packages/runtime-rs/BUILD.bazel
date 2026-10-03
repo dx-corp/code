@@ -19,6 +19,7 @@ rust_library(
         "@crates//:dirs-7.0.0",
         "@crates//:futures-0.3.32",
         "//products/maestro/packages/ai-rs:maestro_ai",
+        "//products/maestro/packages/codemode-rs:agent_codemode",
         "//products/maestro/packages/codex-rs:maestro_codex",
         "//products/maestro/packages/coding-acceptance-rs:maestro_coding_acceptance",
         "//products/maestro/packages/context-rs:maestro_context",
