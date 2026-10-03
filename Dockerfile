@@ -42,11 +42,18 @@ COPY packages/ai-rs ./packages/ai-rs
 COPY packages/a2a-ledger-rs ./packages/a2a-ledger-rs
 COPY packages/session-history-rs ./packages/session-history-rs
 COPY packages/session-rs ./packages/session-rs
+# dex-loop remains actual source outside Maestro's recipe. Keep its shared
+# code-mode library actual too, rather than replacing that API with a dummy.
+# The native build restores the original full workspace manifest after cook.
+RUN sed -i '/^    "packages\/codemode-rs",$/d' Cargo.toml \
+    && sed -i 's|"vendor/\*"|"vendor/*", "packages/codemode-rs"|' Cargo.toml
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
 COPY --from=planner /app/recipe.json recipe.json
 COPY --from=planner /rust /rust
+# External dex-loop imports the actual shared library during dependency cooking.
+COPY packages/codemode-rs ./packages/codemode-rs
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4

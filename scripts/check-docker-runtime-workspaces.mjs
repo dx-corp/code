@@ -2,7 +2,8 @@
 // @ts-check
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const dockerfilePath = join(process.cwd(), "Dockerfile");
 if (!existsSync(dockerfilePath)) {
@@ -118,6 +119,123 @@ if (uncopied.length > 0) {
 	console.error(
 		`Dockerfile does not copy every Cargo workspace member: ${uncopied.join(", ")}`,
 	);
+	process.exit(1);
+}
+
+// Cargo owns dependency parsing, including workspace inheritance, aliases,
+// optional dependencies and target/build/dev tables. --no-deps avoids registry
+// resolution and --offline forbids a network fallback; neither builds crates.
+const packages = new Map();
+const loadPackages = (manifest) => {
+	const result = spawnSync("cargo", [
+		"metadata", "--offline", "--no-deps", "--format-version", "1",
+		"--manifest-path", manifest,
+	], { encoding: "utf8", timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
+	if (result.error || result.status !== 0) {
+		throw new Error(`Cannot resolve Docker path dependencies: ${result.error?.message ?? result.stderr}`);
+	}
+	const metadata = JSON.parse(result.stdout);
+	for (const pkg of metadata.packages) packages.set(resolve(pkg.manifest_path), pkg);
+	return metadata.packages;
+};
+const within = (parent, child) => {
+	const tail = relative(parent, child);
+	return tail !== ".." && !tail.startsWith(`..${sep}`) && !isAbsolute(tail);
+};
+try {
+	const maestroRoot = resolve(process.cwd());
+	const rustRoot = resolve(maestroRoot, "../../rust");
+	const pending = loadPackages(cargoManifestPath);
+	const visited = new Set();
+	const external = [];
+	const rustToMaestro = new Set();
+	while (pending.length > 0) {
+		const pkg = pending.pop();
+		if (visited.has(pkg.manifest_path)) continue;
+		visited.add(pkg.manifest_path);
+		if (!within(maestroRoot, pkg.manifest_path)) external.push(pkg.manifest_path);
+		for (const dependency of pkg.dependencies) {
+			if (!dependency.path) continue;
+			if (!within(maestroRoot, dependency.path) && !within(rustRoot, dependency.path)) {
+				throw new Error(`Unsupported external Docker dependency: ${dependency.path}`);
+			}
+			if (within(rustRoot, pkg.manifest_path) && within(maestroRoot, dependency.path)) {
+				rustToMaestro.add(dependency.path);
+			}
+			const manifest = resolve(dependency.path, "Cargo.toml");
+			if (!packages.has(manifest)) loadPackages(manifest);
+			const target = packages.get(manifest);
+			if (!target) throw new Error(`Cargo omitted local dependency ${manifest}`);
+			pending.push(target);
+		}
+	}
+	if (external.length > 0) {
+		const prepare = plannerStage.search(/^RUN\s+cargo\s+chef\s+prepare\b/m);
+		const plannerInputs = plannerStage.slice(0, Math.max(0, prepare));
+		const copies = [...plannerInputs.matchAll(
+			/^COPY --from=dex-loop-workspace (\S+) (\S+)\s*$/gm,
+		)];
+		const narrowed = plannerInputs.match(/c\\members = (\[[^'\n]+\])' \/rust\/Cargo.toml/);
+		const members = narrowed ? JSON.parse(narrowed[1]) : [];
+		// Rust's inherited paths point at mono's products/maestro directory;
+		// the image puts that same workspace at /app. Require the root-manifest
+		// remap before preparation rather than accepting copies alone.
+		const regexEscape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const beforePrepare = (command) => new RegExp(
+			`^(?:RUN|[ \\t]*&&)[ \\t]+${regexEscape(command)}(?:[ \\t]*\\\\)?[ \\t]*$`, "m",
+		).test(plannerInputs);
+		const actualSharedMembers = [];
+		for (const dependency of rustToMaestro) {
+			const source = relative(rustRoot, dependency).split(sep).join("/");
+			const member = relative(maestroRoot, dependency).split(sep).join("/");
+			const target = `../app/${member}`;
+			const remap = `sed -i 's|path = "${regexEscape(source)}"|path = "${target}"|' /rust/Cargo.toml`;
+			const workspaceRemap = `sed -i 's#path = "../products/maestro/#path = "/app/#g' /rust/Cargo.toml`;
+			if (!beforePrepare(remap) && !beforePrepare(workspaceRemap)) {
+				uncopied.push(`Rust-to-Maestro dependency path ${source} before cargo chef prepare`);
+			}
+			if (workspaceMembers.includes(member)) {
+				actualSharedMembers.push(member);
+				// Chef dummies only its own workspace. External actual Rust source
+				// must retain the APIs of this shared library during the cook.
+				const filter = `sed -i '/^    "${member.replaceAll("/", "\\/")}",$/d' Cargo.toml`;
+				const exclude = `sed -i 's|"vendor/\\*"|"vendor/*", "${member}"|' Cargo.toml`;
+				if (!beforePrepare(filter) || !beforePrepare(exclude)) {
+					uncopied.push(`actual shared library ${member} before cargo chef prepare`);
+				}
+			}
+		}
+		for (const manifest of external) {
+			const path = relative(rustRoot, manifest).split(sep).join("/");
+			const source = `/${path}`;
+			const copied = copies.some(([, from, to]) => {
+				const tail = posix.relative(from, source);
+				return tail !== ".." && !tail.startsWith("../") && !posix.isAbsolute(tail)
+					&& posix.join(to, tail) === `/rust/${path}`;
+			});
+			if (!copied) uncopied.push(`${path} before cargo chef prepare in the planner stage`);
+			if (!members.includes(posix.dirname(path))) {
+				uncopied.push(`${path} in the narrowed Rust workspace`);
+			}
+		}
+		const cook = nativeStage.search(/^RUN\s+cargo\s+chef\s+cook\b/m);
+		if (cook < 0 || !/^COPY --from=planner \/rust \/rust\s*$/m.test(nativeStage.slice(0, cook))) {
+			uncopied.push("planner Rust dependency tree before cargo chef cook in the native stage");
+		}
+		for (const dependency of rustToMaestro) {
+			const member = relative(maestroRoot, dependency).split(sep).join("/");
+			if (cook < 0 || !copiesMember(nativeStage.slice(0, cook), member)) {
+				uncopied.push(`shared dependency ${member} before cargo chef cook`);
+			}
+		}
+		if (actualSharedMembers.length > 0 && (cook < 0 || nativeBuild < cook ||
+			!/^COPY Cargo.toml Cargo.lock \.\/\s*$/m.test(nativeStage.slice(cook, nativeBuild)))) {
+			uncopied.push("original Maestro workspace after cook and before native build");
+		}
+		if (uncopied.length > 0) throw new Error(`Dockerfile omits reachable local dependencies: ${uncopied.join(", ")}`);
+	}
+} catch (error) {
+	console.error(error.message);
 	process.exit(1);
 }
 if (/Acquire::https::Verify-(?:Peer|Host)=false/.test(dockerfile)) {
