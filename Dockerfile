@@ -7,12 +7,8 @@ COPY Cargo.toml Cargo.lock ./
 # dex-loop dependency belongs to mono's separate Rust workspace; narrow that
 # workspace to its local dependency closure while retaining its shared versions
 # and lint configuration.
-COPY --from=dex-loop-workspace /Cargo.toml /rust/Cargo.toml
-COPY --from=dex-loop-workspace /crates/dex-loop /rust/crates/dex-loop
-COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract
-RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/dex-loop", "crates/managed-inference-contract"]' /rust/Cargo.toml \
-    && sed -i '/^\[patch.crates-io\]/,/^\[workspace.package\]/c\[workspace.package]' /rust/Cargo.toml \
-    && sed -i 's#path = "../products/maestro/#path = "/app/#g' /rust/Cargo.toml
+COPY vendor/dex-loop ./vendor/dex-loop
+COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
@@ -51,7 +47,8 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
 COPY --from=planner /app/recipe.json recipe.json
-COPY --from=planner /rust /rust
+COPY vendor/dex-loop ./vendor/dex-loop
+COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
 # External dex-loop imports the actual shared library during dependency cooking.
 COPY packages/codemode-rs ./packages/codemode-rs
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0

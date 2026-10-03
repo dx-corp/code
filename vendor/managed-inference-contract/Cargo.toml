@@ -1,5 +1,5 @@
 [package]
-name = "dex-loop"
+name = "managed-inference-contract"
 version = "0.1.0"
 edition = "2024"
 license = "UNLICENSED"
@@ -7,26 +7,12 @@ publish = false
 rust-version = "1.95"
 
 [dependencies]
-agent-codemode = { path = "../../packages/codemode-rs" }
-futures-util = "0.3"
-hex = "0.4"
-# Tool arguments are checked against the tool's schema before a call runs.
-jsonschema = { version = "0.49", default-features = false }
-managed-inference-contract = { path = "../managed-inference-contract" }
+aws-lc-rs = "1.17.1"
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2.0"
-# Only the timer, to race the model stream against `budget.wall` in
-# `Engine::model_step` and each tool call against its deadline: the crate
-# still does no I/O of its own.
-tokio = { version = "1.48", features = ["time"] }
-tokio-util = "0.7"
-
-[dev-dependencies]
-proptest = "1.9"
-rand = "0.8"
-tokio = { version = "1.48", features = ["macros", "rt", "sync", "test-util", "time"] }
 
 [lints.rust]
 non_ascii_idents = "deny"
