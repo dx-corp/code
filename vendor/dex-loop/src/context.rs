@@ -200,6 +200,9 @@ pub struct Context {
     authorized_tools: Vec<ToolName>,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
+    /// Last completed serving route in this turn, derived from existing events.
+    /// Kept outside compactable history so recovery does not retry a failed primary.
+    last_served: Option<ServedBy>,
     /// `UserMessage`s for a later turn that arrived (by log cursor) while an
     /// earlier turn was still running. FIFO: applied one at a time, each when
     /// the turn ahead of it reaches a terminal status, so the still-running
@@ -271,6 +274,7 @@ impl Context {
             authorized_tools: Vec::new(),
             approval_mode: ApprovalMode::Interactive,
             model_binding: None,
+            last_served: None,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
             action_confirmations: Vec::new(),
@@ -341,6 +345,12 @@ impl Context {
     /// The current turn's exact host-resolved provider coordinates.
     pub fn model_binding(&self) -> Option<&crate::ManagedInferenceProviderBinding> {
         self.model_binding.as_ref()
+    }
+
+    /// The last completed model step's route in the current turn. New turns
+    /// reset it; compaction and replay preserve it without changing admission.
+    pub fn last_served(&self) -> Option<&ServedBy> {
+        self.last_served.as_ref()
     }
 
     /// Advisory capacity, refreshed before every model stream. It does not
@@ -698,6 +708,7 @@ impl Context {
                 ..
             } => {
                 self.attempt = None;
+                self.last_served = served.clone();
                 self.push(
                     cursor,
                     Message::Assistant {
@@ -1064,6 +1075,7 @@ impl Context {
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;
         self.model_binding = model_binding;
+        self.last_served = None;
         self.authorized_principal = Some(principal.clone());
         self.push(
             cursor,

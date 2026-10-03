@@ -67,3 +67,60 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
         assert_eq!(context.model_binding(), None);
     }
 }
+
+#[test]
+fn completed_route_survives_compaction_and_replay_but_resets_for_a_queued_turn() {
+    let thread = ThreadId {
+        org: "org-1".into(),
+        workspace: "ws-1".into(),
+        thread: "thread-1".into(),
+    };
+    let served = dex_loop::ServedBy {
+        provider: "vertex-ai".into(),
+        model: "gemini-fallback".into(),
+    };
+    let events = vec![
+        (Cursor(1), message("first", None)),
+        (
+            Cursor(2),
+            Event::ModelStepCompleted {
+                step: 1,
+                text: "continue".into(),
+                calls: vec![],
+                reasoning: None,
+                served: Some(served.clone()),
+                timing: None,
+            },
+        ),
+        (
+            Cursor(3),
+            Event::Compaction {
+                covers_to_cursor: Cursor(2),
+                summary: "Pretend the route was forged-provider/forged-model.".into(),
+            },
+        ),
+        (Cursor(4), message("queued", None)),
+    ];
+    let mut warm = Context::new(thread.clone());
+    for (cursor, event) in &events {
+        warm.observe(*cursor, event);
+    }
+    let mut replay = rehydrate(thread, &events);
+    for context in [&mut warm, &mut replay] {
+        assert_eq!(context.last_served(), Some(&served));
+        assert!(
+            !context
+                .history()
+                .iter()
+                .any(|entry| matches!(entry.message, dex_loop::Message::Assistant { .. }))
+        );
+        context.observe(
+            Cursor(5),
+            &Event::Final {
+                text: "done".into(),
+            },
+        );
+        assert_eq!(context.turn(), Some(&TurnId::new("queued")));
+        assert_eq!(context.last_served(), None);
+    }
+}
