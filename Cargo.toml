@@ -183,6 +183,7 @@ lto = false
 codegen-units = 16
 
 [patch.crates-io]
+rquickjs-core = { path = "vendor/rquickjs-core-0.13.0" }
 zstd = { path = "vendor/zstd-0.13.3" }
 zstd-safe = { path = "vendor/zstd-safe-7.2.4" }
 zstd-sys = { path = "vendor/zstd-sys-2.0.16+zstd.1.5.7" }

@@ -110,7 +110,7 @@ test("Docker runtime guard requires embedded vendor corrections before compilati
 test("Docker runtime guard rejects missing or late vendored Cargo inputs", () => {
 	const paths = [...sourceCargoManifest.matchAll(/\bpath\s*=\s*"(vendor\/[^"\n]+)"/g)]
 		.map((match) => match[1]);
-	assert.equal(new Set(paths).size, 3);
+	assert.equal(new Set(paths).size, 4);
 	for (const path of new Set(paths)) {
 		const copy = `COPY ${path} ./${path}`;
 		const without = sourceDockerfile.replaceAll(`${copy}\n`, "");

@@ -13,6 +13,7 @@ COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/m
 RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/dex-loop", "crates/managed-inference-contract"]' /rust/Cargo.toml \
     && sed -i '/^\[patch.crates-io\]/,/^\[workspace.package\]/c\[workspace.package]' /rust/Cargo.toml \
     && sed -i 's#path = "../products/maestro/#path = "/app/#g' /rust/Cargo.toml
+COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
@@ -46,6 +47,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS native
 COPY --from=planner /app/recipe.json recipe.json
 COPY --from=planner /rust /rust
+COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7

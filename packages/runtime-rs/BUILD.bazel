@@ -21,6 +21,7 @@ rust_library(
         "//products/maestro/packages/ai-rs:maestro_ai",
         "//products/maestro/packages/codemode-rs:agent_codemode",
         "//products/maestro/packages/codex-rs:maestro_codex",
+        "//products/maestro/packages/codemode-rs:agent_codemode",
         "//products/maestro/packages/coding-acceptance-rs:maestro_coding_acceptance",
         "//products/maestro/packages/context-rs:maestro_context",
         "//products/maestro/packages/runtime-contracts-rs:maestro_runtime_contracts",
