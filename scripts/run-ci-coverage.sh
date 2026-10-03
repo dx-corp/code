@@ -62,7 +62,6 @@ timeout --signal=TERM --kill-after=30s 25m cargo llvm-cov nextest \
   --locked \
   --no-clean \
   --ignore-run-fail \
-  -- \
   --profile ci \
   --no-fail-fast
 

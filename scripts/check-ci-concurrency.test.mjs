@@ -39,6 +39,47 @@ const setupRust = readFileSync(
 	"utf8",
 );
 
+test("coverage sends the CI profile to Nextest rather than test binaries", () => {
+	const root = mkdtempSync(join(tmpdir(), "maestro-coverage-routing-"));
+	try {
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		const calls = join(root, "calls.jsonl");
+		writeFileSync(join(bin, "cargo"), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args.join(' ') === 'llvm-cov --version') { console.log('cargo-llvm-cov 0.9.0'); process.exit(0); }
+if (args.join(' ') === 'nextest --version') { console.log('cargo-nextest 0.9.143'); process.exit(0); }
+fs.appendFileSync(process.env.COVERAGE_CALLS, JSON.stringify({args, target:process.env.CARGO_TARGET_DIR}) + '\\n');
+if (args[1] === 'nextest' && args.includes('--')) { console.error('Nextest received unsupported test-binary arguments'); process.exit(96); }
+`, { mode: 0o755 });
+		for (const tool of ["cargo-llvm-cov", "cargo-nextest"]) {
+			writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		}
+		writeFileSync(join(bin, "timeout"), "#!/bin/sh\nshift\nshift\nshift\nexec \"$@\"\n", { mode: 0o755 });
+		const result = spawnSync("bash", [fileURLToPath(new URL("./run-ci-coverage.sh", import.meta.url))], {
+			cwd: root,
+			encoding: "utf8",
+			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MAESTRO_CI_CACHE_ROOT: join(root, "cache"), COVERAGE_CALLS: calls },
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const recorded = readFileSync(calls, "utf8").trim().split("\n").map(JSON.parse);
+		const run = recorded[0];
+		assert.deepEqual(run.args.slice(0, 2), ["llvm-cov", "nextest"]);
+		assert.equal(run.args[run.args.indexOf("--profile") + 1], "ci");
+		for (const flag of ["--workspace", "--lib", "--locked", "--no-clean", "--ignore-run-fail", "--no-fail-fast"]) {
+			assert.ok(run.args.includes(flag), `missing coverage option ${flag}`);
+		}
+		assert.equal(run.target, join(root, "cache", "cargo-target-cov"));
+		assert.deepEqual(recorded.slice(1).map(call => call.args), [
+			["llvm-cov", "report", "--summary-only"],
+			["llvm-cov", "report", "--lcov", "--output-path", "coverage-report/lcov.info"],
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("maestro-ci concurrency is per ref and cancels in-progress PR runs", () => {
 	assert.match(
 		workflow,
