@@ -143,6 +143,7 @@
 		{ "method": "POST", "path": "/api/chat/client-tool-result" },
 		{ "method": "POST", "path": "/api/chat/tool-retry" },
 		{ "method": "POST", "path": "/api/attachments/extract" },
+		{ "method": "GET", "path": "/api/sessions/:id/turn-diff" },
 		{ "method": "GET", "path": "/api/sessions/:id/artifacts" },
 		{ "method": "GET", "path": "/api/sessions/:id/artifact-access" },
 		{

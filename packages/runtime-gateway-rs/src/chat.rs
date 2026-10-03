@@ -1,4 +1,5 @@
 use super::*;
+use crate::turn_diffs::{begin_chat_snapshot, finish_chat_snapshot};
 use maestro_local_host::embedding::{EmbeddedAgent, EmbeddedAgentBuilder};
 
 pub(crate) fn is_chat_endpoint(head: &RequestHead) -> bool {
@@ -179,19 +180,21 @@ async fn handle_codex_app_server_chat(
     model: &str,
     prompt: &str,
     attachment_paths: &[String],
+    scope: Option<&str>,
 ) -> Result<bool, String> {
-    handle_codex_app_server_chat_transport(
+    handle_codex_app_server_chat_transport_scoped(
         stream,
         state,
         session_id,
         model,
         prompt,
         attachment_paths,
-        CodexBridgeTransport::Sse,
+        (CodexBridgeTransport::Sse, scope),
     )
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_codex_app_server_chat_transport(
     stream: &mut TcpStream,
     state: &AppState,
@@ -201,6 +204,28 @@ pub(crate) async fn handle_codex_app_server_chat_transport(
     attachment_paths: &[String],
     transport: CodexBridgeTransport,
 ) -> Result<bool, String> {
+    handle_codex_app_server_chat_transport_scoped(
+        stream,
+        state,
+        session_id,
+        model,
+        prompt,
+        attachment_paths,
+        (transport, None),
+    )
+    .await
+}
+
+async fn handle_codex_app_server_chat_transport_scoped(
+    stream: &mut TcpStream,
+    state: &AppState,
+    session_id: Option<&str>,
+    model: &str,
+    prompt: &str,
+    attachment_paths: &[String],
+    (transport, scope): (CodexBridgeTransport, Option<&str>),
+) -> Result<bool, String> {
+    let mut turn_snapshot = begin_chat_snapshot(state, session_id, prompt, scope).await;
     let session_approval_mode = approval_mode_for_session(state, session_id).await;
     let approval_mode = codex_app_server_approval_mode(&session_approval_mode);
     send_codex_bridge_event(
@@ -263,7 +288,7 @@ pub(crate) async fn handle_codex_app_server_chat_transport(
         send_codex_bridge_tool_event(stream, transport, tool_event).await?;
     }
 
-    let message =
+    let mut message =
         composer_assistant_message(&assistant_output.text, "", assistant_output.usage.clone());
     if !assistant_output.text.is_empty() {
         send_codex_bridge_event(
@@ -281,6 +306,7 @@ pub(crate) async fn handle_codex_app_server_chat_transport(
         )
         .await?;
     }
+    finish_chat_snapshot(&mut turn_snapshot, &mut message).await;
     record_chat_assistant_message(state, session_id, message.clone()).await;
     record_usage_entry(
         state,
@@ -327,15 +353,16 @@ async fn handle_codex_app_server_chat_ws(
     model: &str,
     prompt: &str,
     attachment_paths: &[String],
+    scope: Option<&str>,
 ) -> Result<bool, String> {
-    handle_codex_app_server_chat_transport(
+    handle_codex_app_server_chat_transport_scoped(
         stream,
         state,
         session_id,
         model,
         prompt,
         attachment_paths,
-        CodexBridgeTransport::WebSocket,
+        (CodexBridgeTransport::WebSocket, scope),
     )
     .await
 }
@@ -620,6 +647,7 @@ pub(crate) async fn handle_chat_endpoint(
             &codex_model,
             &prompt,
             &prepared_attachments.paths,
+            turn_scope.as_deref(),
         )
         .await?;
         if prompt_succeeded {
@@ -635,6 +663,13 @@ pub(crate) async fn handle_chat_endpoint(
         cleanup_prepared_attachments(prepared_attachments).await;
         return Ok(());
     }
+    let mut turn_snapshot = begin_chat_snapshot(
+        &state,
+        session_id.as_deref(),
+        &prompt,
+        turn_scope.as_deref(),
+    )
+    .await;
     let (usage_provider, usage_model) = usage_provider_model(&chat, &state, &model).await;
     let (mut client_tools, client_tool_names) = client_tool_definitions(&chat);
     // Gateway-handled session-messaging tools give an agent turn the same reach
@@ -1304,12 +1339,13 @@ pub(crate) async fn handle_chat_endpoint(
                         take_client_tool_results(&state, &client_tool_call_ids).await;
                     finish_client_tool_metadata(&mut assistant_tools, &client_tool_results);
                     let usage = last_usage.take();
-                    let message = composer_assistant_message_with_tools(
+                    let mut message = composer_assistant_message_with_tools(
                         &assistant_text,
                         &thinking_text,
                         usage,
                         &assistant_tools,
                     );
+                    finish_chat_snapshot(&mut turn_snapshot, &mut message).await;
                     record_chat_assistant_message(&state, session_id.as_deref(), message.clone()).await;
                     send_sse(
                         &mut stream,
@@ -1588,6 +1624,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
             &codex_model,
             &prompt,
             &prepared_attachments.paths,
+            turn_scope.as_deref(),
         )
         .await?;
         if prompt_succeeded {
@@ -1604,6 +1641,13 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         cleanup_prepared_attachments(prepared_attachments).await;
         return Ok(());
     }
+    let mut turn_snapshot = begin_chat_snapshot(
+        &state,
+        session_id.as_deref(),
+        &prompt,
+        turn_scope.as_deref(),
+    )
+    .await;
     let (usage_provider, usage_model) = usage_provider_model(&chat, &state, &model).await;
     let (mut client_tools, client_tool_names) = client_tool_definitions(&chat);
     // Gateway-handled session-messaging tools give an agent turn the same reach
@@ -2251,12 +2295,13 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                         take_client_tool_results(&state, &client_tool_call_ids).await;
                     finish_client_tool_metadata(&mut assistant_tools, &client_tool_results);
                     let usage = last_usage.take();
-                    let message = composer_assistant_message_with_tools(
+                    let mut message = composer_assistant_message_with_tools(
                         &assistant_text,
                         &thinking_text,
                         usage,
                         &assistant_tools,
                     );
+                    finish_chat_snapshot(&mut turn_snapshot, &mut message).await;
                     record_chat_assistant_message(&state, session_id.as_deref(), message.clone()).await;
                     send_ws_json(
                         &mut stream,
