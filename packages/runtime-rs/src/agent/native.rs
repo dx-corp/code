@@ -438,7 +438,9 @@ mod budget_controls;
 mod builtin_read;
 mod cancellation;
 mod classifier;
+mod classifier_wave;
 mod codemode;
+mod codemode_dispatch;
 mod codex;
 mod commands;
 mod context;
@@ -449,7 +451,9 @@ mod deferred_tool_schemas;
 mod deferred_tool_tests;
 mod model_dynamics;
 mod provider_history;
+mod read_only_results;
 use provider_history::sanitize_semantic_conversation;
+mod provider_admission;
 mod provider_loop;
 mod provider_payload;
 mod read_only_tools;
@@ -483,8 +487,8 @@ use self::tool_execution::{
 };
 
 use self::read_only_tools::{
-    QueuedReadOnlyToolExecution, execute_native_read_only_tool_wave,
-    is_explicit_inline_read_only_tool, is_native_parallel_read_only_tool_call,
+    QueuedReadOnlyToolExecution, is_explicit_inline_read_only_tool,
+    is_native_parallel_read_only_tool_call,
 };
 use self::tool_responses::repair_orphaned_tool_calls;
 /// Compatibility exports for callers that historically imported these types
@@ -1496,7 +1500,12 @@ impl NativeAgent {
             codex_active_turn_id: None,
             codemode_tool_budget: TurnStepBudget::new(DEFAULT_MAX_TURN_STEPS),
             codemode_cancel: None,
+            codemode_owner_cancel: None,
             codemode_parent_call_id: None,
+            codemode_values: HashMap::new(),
+            codemode_replies: HashMap::new(),
+            codemode_session: None,
+            codemode_events: std::collections::VecDeque::new(),
             codemode_journaled: HashSet::new(),
             codemode_cancelled_calls: HashSet::new(),
             codemode_indeterminate: false,
@@ -2395,7 +2404,12 @@ struct NativeAgentRunner {
     /// Identical scripted proposals share a guard for the whole user turn.
     codemode_tool_budget: TurnStepBudget,
     codemode_cancel: Option<CancellationToken>,
+    codemode_owner_cancel: Option<CancellationToken>,
     codemode_parent_call_id: Option<String>,
+    codemode_values: HashMap<String, (Value, String, bool)>,
+    codemode_replies: HashMap<String, (std::sync::mpsc::Sender<agent_codemode::Reply>, usize)>,
+    codemode_session: Option<agent_codemode::Session>,
+    codemode_events: std::collections::VecDeque<agent_codemode::Event>,
     codemode_journaled: HashSet<String>,
     codemode_cancelled_calls: HashSet<String>,
     codemode_indeterminate: bool,
@@ -3875,6 +3889,7 @@ fn vault_provider_tools(
             .attest_provider_identifier(&tool.name)
             .map_err(anyhow::Error::msg)?;
         let mut safe = tool.clone();
+        safe.namespace_instructions = None;
         safe.description = credential_vault.vault_in_text(&tool.description);
         safe.input_schema = vault_provider_schema(&tool.input_schema, credential_vault)?;
         safe_tools.push(safe);
@@ -4009,74 +4024,6 @@ fn set_explicit_max_tokens(config: &mut NativeAgentConfig, max_tokens: u32) {
 }
 
 impl NativeAgentRunner {
-    async fn admit_provider_request(
-        &self,
-        kind: &str,
-        request_id: &str,
-        model: Option<&str>,
-    ) -> Result<()> {
-        let policy_model =
-            model.map(|model| provider_request_policy_model_id(&self.config.model, model));
-        if let Some(reason) = policy_model
-            .as_deref()
-            .and_then(|model| self.tool_executor.model_allowed(model))
-        {
-            return Err(anyhow::Error::new(ProviderAdmissionDenied {
-                kind: kind.to_owned(),
-                request_id: request_id.to_owned(),
-                reason,
-            }));
-        }
-        let result = self
-            .hooks
-            .hook_pre_provider_request(kind, request_id, model)
-            .await;
-        let reason = match result {
-            NativeHookResult::Continue => return Ok(()),
-            NativeHookResult::Block { reason } => reason,
-            NativeHookResult::ModifyInput { .. } => {
-                "provider admission hook returned an unsupported input modification".to_owned()
-            }
-            NativeHookResult::InjectContext { .. } => {
-                "provider admission hook returned unsupported context injection".to_owned()
-            }
-        };
-        Err(anyhow::Error::new(ProviderAdmissionDenied {
-            kind: kind.to_owned(),
-            request_id: request_id.to_owned(),
-            reason,
-        }))
-    }
-
-    fn managed_gateway_receipt_event(
-        receipt: maestro_ai::ManagedGatewayReceipt,
-        experiment_eligible: bool,
-    ) -> FromAgent {
-        FromAgent::ManagedGatewayReceipt {
-            request_id: receipt.request_id,
-            record_id: receipt.record_id,
-            lineage_id: receipt.lineage_id,
-            record_status: receipt.record_status,
-            provider_tools_sha256: if experiment_eligible {
-                receipt.provider_tools_sha256
-            } else {
-                None
-            },
-            provider_tool_count: if experiment_eligible {
-                receipt.provider_tool_count
-            } else {
-                None
-            },
-            // Auxiliary compaction uses its own instructions. Keep its cost
-            // receipt, but never label it as exposure to the turn's treatment.
-            provider_prompt_sha256: if experiment_eligible {
-                receipt.provider_prompt_sha256
-            } else {
-                None
-            },
-        }
-    }
-
     async fn resolve_managed_request_lineage(
         &mut self,
         explicit_lineage: Option<String>,
@@ -4336,6 +4283,9 @@ impl NativeAgentRunner {
             // by another effect. Leave the queued Cancel command for the outer
             // turn to consume so it still emits TurnInterrupted exactly once.
             if let Some(cancel) = &self.codemode_cancel {
+                cancel.cancel();
+            }
+            if let Some(cancel) = &self.codemode_owner_cancel {
                 cancel.cancel();
             }
         }

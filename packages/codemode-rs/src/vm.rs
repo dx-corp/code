@@ -79,7 +79,7 @@ pub(crate) fn run(
 
 fn execute(
     code: String,
-    tools: Vec<Tool>,
+    mut tools: Vec<Tool>,
     events: &mpsc::UnboundedSender<Event>,
     stop: &CancellationToken,
     deadline: Duration,
@@ -104,6 +104,11 @@ fn execute(
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     let pending = Arc::new(Mutex::new(Vec::new()));
     let overflow = Arc::new(Mutex::new(None::<String>));
+    for tool in &mut tools {
+        if let Some(instructions) = &mut tool.namespace_instructions {
+            shorten(instructions, discovery::MAX_METADATA_BYTES, "...");
+        }
+    }
     context.with(|ctx| -> Result<(), String> {
         let pending_calls = pending.clone();
         let requested = summaries.clone();
@@ -129,6 +134,9 @@ fn execute(
             Ok(())
         }).map_err(|e| e.to_string())?;
         install_helpers(&ctx, &tools, output.clone(), overflow.clone(), store)?;
+        // The Rust helper retains bounded on-demand guidance. Do not charge
+        // the VM heap for copies repeated in every ALL_TOOLS declaration.
+        for tool in &mut tools { tool.namespace_instructions = None; }
         ctx.globals().set("__host_call", bridge).map_err(|e| e.to_string())?;
         ctx.globals().set("__host_text", emit).map_err(|e| e.to_string())?;
         ctx.globals().set("__catalog", serde_json::to_string(&tools).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -137,6 +145,8 @@ fn execute(
         let mut options = rquickjs::context::EvalOptions::default();
         options.filename = Some("codemode.js".into());
         let promise: Promise = ctx.eval_with_options(source, options).map_err(|e| js_error(&ctx, e))?;
+        let (reply, responses) = sync_mpsc::channel::<Reply>();
+        let mut inflight = std::collections::BTreeSet::new();
         loop {
             if stop.is_cancelled() { return Err("cancelled".into()); }
             if Instant::now() >= expires { return Err("deadline exceeded".into()); }
@@ -149,28 +159,39 @@ fn execute(
                 return result.map(|_| ()).map_err(|e| js_error(&ctx, e));
             }
             let calls = std::mem::take(&mut *pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-            if calls.is_empty() { return Err("script awaits a promise with no pending tool call".into()); }
-            for call in &calls { if let Some(summary) = summaries.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(call.index) { summary.status=CallStatus::Running; } }
-            let (reply, responses) = sync_mpsc::channel();
-            events.send(Event::Calls { calls, reply }).map_err(|_| "host disconnected")?;
-            let responses = loop {
+            if !calls.is_empty() {
+                for call in &calls {
+                    inflight.insert(call.index);
+                    if let Some(summary) = summaries.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(call.index) {
+                        summary.status = CallStatus::Running;
+                    }
+                }
+                events.send(Event::Calls { calls, reply: reply.clone() }).map_err(|_| "host disconnected")?;
+            }
+            if inflight.is_empty() { return Err("script awaits a promise with no pending tool call".into()); }
+            let settled = loop {
                 if stop.is_cancelled() { return Err("cancelled".into()); }
                 if Instant::now() >= expires { return Err("deadline exceeded".into()); }
+                if events.is_closed() { return Err("host disconnected".into()); }
                 match responses.recv_timeout(Duration::from_millis(10)) {
                     Ok(responses) => break responses,
                     Err(sync_mpsc::RecvTimeoutError::Timeout) => {},
                     Err(sync_mpsc::RecvTimeoutError::Disconnected) => return Err("host disconnected".into()),
                 }
             };
-            let responses = responses.into_iter().map(|(index, result)| {
+            // Settle only live calls. Old-wave senders remain valid, but neither
+            // duplicate nor unrequested indices may change diagnostics or JS.
+            let settled = settled.into_iter().filter_map(|(index, result)| {
+                if !inflight.remove(&index) { return None; }
                 if let Some(summary)=summaries.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(index) {
                     summary.status=if result.is_ok() {CallStatus::Ok} else {CallStatus::Error};
                 }
-                match result {
-                Ok(value) => serde_json::json!({"index":index,"value":value}),
-                Err(error) => serde_json::json!({"index":index,"error":error}),
-            }}).collect::<Vec<_>>();
-            respond.call::<_, ()>((serde_json::to_string(&responses).map_err(|e| e.to_string())?,)).map_err(|e| js_error(&ctx, e))?;
+                Some(match result {
+                    Ok(value) => serde_json::json!({"index":index,"value":value}),
+                    Err(error) => serde_json::json!({"index":index,"error":error}),
+                })
+            }).collect::<Vec<_>>();
+            respond.call::<_, ()>((serde_json::to_string(&settled).map_err(|e| e.to_string())?,)).map_err(|e| js_error(&ctx, e))?;
         }
     })
 }

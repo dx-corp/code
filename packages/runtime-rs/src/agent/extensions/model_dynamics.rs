@@ -31,6 +31,10 @@ impl ModelDynamicsExtension {
 }
 
 impl AgentExtension for ModelDynamicsExtension {
+    fn allows_independent_script_results(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "model-dynamics"
     }

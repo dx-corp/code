@@ -20,6 +20,7 @@ pub(crate) const PRELUDE: &str = r#"
   const tools = Object.create(null);
   const identifiers = new Set();
   for (const tool of catalog) {
+    delete tool.namespace_instructions;
     let identifier = tool.name.replace(/[^a-zA-Z0-9_$]/gu, "_");
     if (!/^[a-zA-Z_$]/.test(identifier)) identifier = "_" + identifier;
     if (identifiers.has(identifier)) throw new Error("ambiguous tool identifier: " + identifier);

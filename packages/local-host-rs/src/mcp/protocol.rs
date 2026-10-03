@@ -317,6 +317,9 @@ pub struct ServerInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
+    /// Untrusted server guidance; never policy or admission metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     /// Protocol version
     pub protocol_version: String,
     /// Server capabilities
@@ -535,6 +538,13 @@ pub struct ResourceReadResult {
 /// Tool call result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolResult {
+    /// Structured owner response retained alongside all content blocks.
+    #[serde(
+        default,
+        rename = "structuredContent",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<Value>,
     /// Result content
     pub content: Vec<McpContent>,
     /// Whether the tool call was an error
@@ -543,6 +553,14 @@ pub struct McpToolResult {
 }
 
 impl McpToolResult {
+    pub fn text(text: String) -> Self {
+        Self {
+            structured_content: None,
+            content: vec![McpContent::Text { text }],
+            is_error: false,
+        }
+    }
+
     /// Convert to a string representation
     #[must_use]
     pub fn as_string(&self) -> String {
@@ -790,6 +808,17 @@ pub fn sanitize_tool_description(raw: &str) -> Option<String> {
 pub fn cap_tool_result_bytes(result: &mut McpToolResult) -> usize {
     let mut budget = MAX_MCP_TOOL_RESULT_BYTES;
     let mut dropped = 0;
+    if let Some(value) = result.structured_content.as_ref() {
+        let size =
+            serde_json::to_vec(value).map_or(MAX_MCP_TOOL_RESULT_BYTES + 1, |value| value.len());
+        if size > budget {
+            dropped += size;
+            result.structured_content = None;
+            result.is_error = true;
+        } else {
+            budget -= size;
+        }
+    }
     for content in &mut result.content {
         let text = match content {
             McpContent::Text { text } => text,
@@ -988,8 +1017,29 @@ mod tests {
     }
 
     #[test]
+    fn codemode_mcp_roundtrip_preserves_structured_mixed_content() {
+        let value = serde_json::json!({"content":[{"type":"text","text":"page"},{"type":"image","data":"AA==","mimeType":"image/png"}],"isError":true,"structuredContent":{"cursor":"next","items":[{"id":1}]}});
+        let decoded: McpToolResult = serde_json::from_value(value.clone()).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(encoded["structuredContent"], value["structuredContent"]);
+        assert_eq!(encoded["content"], value["content"]);
+        assert_eq!(encoded["isError"], true);
+    }
+
+    #[test]
+    fn codemode_initialize_roundtrip_preserves_namespace_instructions() {
+        let value = serde_json::json!({"protocolVersion":"2025-03-26","capabilities":{},"instructions":"Use cursor pagination"});
+        let decoded: InitializeResult = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap()["instructions"],
+            "Use cursor pagination"
+        );
+    }
+
+    #[test]
     fn test_mcp_tool_result() {
         let result = McpToolResult {
+            structured_content: None,
             content: vec![
                 McpContent::Text {
                     text: "Line 1".to_string(),
@@ -1100,6 +1150,7 @@ mod tests {
     #[test]
     fn cap_tool_result_bytes_bounds_a_huge_text_block() {
         let mut result = McpToolResult {
+            structured_content: None,
             content: vec![McpContent::Text {
                 text: "z".repeat(3 * 1024 * 1024),
             }],
@@ -1117,6 +1168,7 @@ mod tests {
     #[test]
     fn cap_tool_result_bytes_leaves_small_results_alone() {
         let mut result = McpToolResult {
+            structured_content: None,
             content: vec![McpContent::Text {
                 text: "ok".to_string(),
             }],
@@ -1124,5 +1176,21 @@ mod tests {
         };
         assert_eq!(cap_tool_result_bytes(&mut result), 0);
         assert_eq!(result.content.len(), 1);
+    }
+    #[test]
+    fn codemode_oversize_structured_content_fails_explicitly_without_partial_json() {
+        let mut result = McpToolResult {
+            structured_content: Some(
+                serde_json::json!({"items":"x".repeat(MAX_MCP_TOOL_RESULT_BYTES+1)}),
+            ),
+            content: vec![McpContent::Text {
+                text: "page".into(),
+            }],
+            is_error: false,
+        };
+        assert!(cap_tool_result_bytes(&mut result) > MAX_MCP_TOOL_RESULT_BYTES);
+        assert!(result.structured_content.is_none());
+        assert!(result.is_error);
+        assert!(result.as_string().contains("MCP result exceeded"));
     }
 }

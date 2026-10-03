@@ -178,6 +178,7 @@ fn to_ai_tools(tools: &[&ToolSpec]) -> Vec<AiTool> {
     tools
         .iter()
         .map(|spec| AiTool {
+            namespace_instructions: None,
             name: spec.name.as_str().to_owned(),
             description: spec.label.clone(),
             input_schema: spec.schema.clone(),

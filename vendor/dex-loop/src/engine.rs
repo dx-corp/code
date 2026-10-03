@@ -1595,6 +1595,11 @@ where
                     }
                 } else if call.tool.as_str() == agent_codemode::TOOL_NAME {
                     self.run_codemode(ctx, call, cancel, run_started).await?
+                } else if self.tools.codemode_model_operation(&call.tool)
+                    == Some(crate::ModelOperation::Classify)
+                {
+                    self.run_classifier_owned(ctx.thread(), call, cancel, deadline)
+                        .await
                 } else {
                     let run = self.tools.run(ctx.thread(), call, cancel);
                     match tokio::time::timeout_at(deadline, run).await {
@@ -1717,8 +1722,8 @@ where
     /// does not merge them in itself, so they are never offered twice.
     fn offered(&self, ctx: &Context) -> Vec<ToolSpec> {
         // Search and core tools come first; exposed tools follow admission
-        // order. The script declaration describes this exact admitted catalog
-        // and changes when discovery exposes another tool.
+        // order. The wrapper stays stable; on-demand discovery describes the
+        // exact callable catalog without repeating direct declarations.
         let mut offered: Vec<ToolSpec> = std::iter::once(self.search.clone())
             .chain(std::iter::once(codemode::spec()))
             .chain(
@@ -1740,36 +1745,6 @@ where
             if let Some(spec) = self.tools.catalog().iter().find(|spec| &spec.name == name) {
                 offered.push(spec.clone());
             }
-        }
-        let catalog: Vec<_> = offered
-            .iter()
-            .filter(|entry| {
-                entry.name.as_str() != CODEMODE
-                    && entry.name.as_str() != TOOLS_SEARCH
-                    && !matches!(entry.executor, ExecutorKind::Client | ExecutorKind::User)
-            })
-            .map(|entry| agent_codemode::Tool {
-                name: entry.name.to_string(),
-                description: entry.description.clone(),
-                schema: entry.schema.clone(),
-                output_schema: self.tools.codemode_output_schema(&entry.name),
-                namespace: entry
-                    .name
-                    .as_str()
-                    .rsplit_once('.')
-                    .map(|(namespace, _)| namespace.to_owned()),
-                model_operation: self.tools.codemode_model_operation(&entry.name),
-                model_binding: self.tools.codemode_model_binding(&entry.name),
-            })
-            .collect();
-        if let Some(wrapper) = offered
-            .iter_mut()
-            .find(|entry| entry.name.as_str() == CODEMODE)
-        {
-            let instructions = agent_codemode::DESCRIPTION;
-            let catalog_budget = 12_000usize.saturating_sub(instructions.len() + 2) / 4;
-            let declarations = agent_codemode::declaration_description(&catalog, catalog_budget);
-            wrapper.description = format!("{instructions}\n\n{declarations}");
         }
         offered
     }
@@ -1793,10 +1768,7 @@ where
     }
 
     fn exhausted_budget(&self, ctx: &Context, elapsed: Duration) -> Option<BudgetAxis> {
-        if ctx.model_usage_unresolved() && self.budget.max_tokens != u64::MAX {
-            return Some(BudgetAxis::Tokens);
-        }
-        if ctx.model_usage_unresolved() && self.budget.max_cost_micros != u64::MAX {
+        if ctx.model_usage_unresolved() {
             return Some(BudgetAxis::Cost);
         }
         self.budget.exhausted(ctx.step(), ctx.usage(), elapsed)
@@ -1804,7 +1776,7 @@ where
 
     fn budget_message(&self, ctx: &Context, axis: BudgetAxis) -> String {
         if ctx.model_usage_unresolved() && matches!(axis, BudgetAxis::Tokens | BudgetAxis::Cost) {
-            return "model usage is unavailable after an admitted call; remaining finite turn capacity cannot be verified".into();
+            return "model usage is unavailable after an admitted call; reconcile it before further inference or effects".into();
         }
         let budget = &self.budget;
         match axis {

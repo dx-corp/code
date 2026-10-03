@@ -7,9 +7,11 @@ to the existing Rust tool boundaries. It does not own tool permissions,
 credentials, effect admission, approvals, or durable receipts.
 
 The model calls `codemode` with a `code` string containing the body of an async
-JavaScript function. Independent reads can run in one wave; their results can
-feed subsequent calls without another model request. Only `text()` output and
-the returned value enter the model's tool-result context.
+JavaScript function. Admitted reads settle individually after their owner
+controls. A fast result can feed another read while unrelated reads remain
+pending, and `Promise.race` can finish without waiting for its losing reads.
+Only selected `text()`/`image()` output and the returned value enter the
+model's tool-result context.
 
 ```javascript
 const matches = ALL_TOOLS.filter(tool => /search/.test(tool.name));
@@ -34,6 +36,12 @@ core or already-discovered tools; Maestro preserves its allowed-tool set and
 profile restrictions. Conversational questions and confirmations use direct
 tool calls. Recursive scripts are unavailable.
 
+`searchTools` includes parameter names and descriptions. `describeTool` renders
+bounded property guidance with its declaration. `describeNamespace` accepts
+unambiguous namespace aliases and returns bounded server instructions only on
+demand, marked as untrusted guidance. Instructions grant no executable authority.
+Direct tool declarations remain separate from the script's callable catalog.
+
 Each script gets a fresh QuickJS VM embedded in the native binary. There is no
 Node/Bun subprocess, host filesystem, network, module loader, process API, or
 timer API. The host bridge emits tool requests; the composing agent applies
@@ -42,20 +50,47 @@ run concurrently, while effects retain their existing ordered execution and
 effect receipts. A script cannot authorize its own nested calls.
 
 The VM has a 32 MiB heap, a 256 KiB stack, a maximum of 64 nested calls,
-64 KiB of output, and a hard 60-second deadline. Existing host deadlines and
+64 KiB of projected text including separators, and a hard 60-second deadline. Existing host deadlines and
 cancellation may stop it sooner. Output-limit violations remain failures even
 when the script catches the exception. A promise with no pending tool call
 fails immediately. Unawaited requests are discarded when the script finishes.
 
-Failed tool calls reject their JavaScript promises. A script failure preserves
+Refused calls and execution failures reject their JavaScript promises. Maestro
+preserves accepted MCP server results as `{content, isError, structuredContent}`,
+including mixed media and structured server errors. The typed value remains
+separate from display context; hook rejection and result transformations still
+apply before delivery. Credentials are scrubbed in both projections.
+
+A script failure preserves
 partial output; completed effects are not undone. Each composing agent retains
 the underlying call evidence separately from the script's model-facing summary.
 Restart handling preserves the existing refusal to replay an uncertain effect.
+Failure diagnostics take priority over partial text at the projection limit;
+any shortening is explicitly marked. Finishing a script cancels its child read
+token, while accepted effects and inference retain owner settlement.
 
-The VM has no durable store. Script-local variables cover dependencies within
-one call; existing agent journals remain the owners of execution state. This
-change does not import Pi's provider transports, model-running helpers, or
-session-storage format.
+`store`/`load` provide bounded untrusted JSON scratch state through the existing
+agent journals, committed only after known successful host acceptance. The VM
+owns no durable store or tool execution authority.
+
+Classifier waves admit at most four concurrent requests. Maestro reserves its
+remaining output budget before polling a wave; Dex derives argument-specific
+reservations from the gateway's exact reviewed route, price and token-bound
+contract. Unknown routes remain unavailable under finite Dex budgets. Reservations
+are separate from reported usage, and unresolved usage stops subsequent spend
+or effects. Specialist routes come from trusted host configuration, with the
+active chat route as the compatibility default.
+
+Maestro uses `model_dynamics.classifier_model` for the optional specialist model.
+Dex uses `DEX_CLASSIFIER_PROVIDER_BINDING_JSON` with the existing managed-provider
+binding shape. Both resolve through their existing governed connection owner;
+scripts cannot supply endpoints or credentials.
+
+Qualification fixtures capture actual gateway request bytes and exactly one
+reported usage settlement. Fixed fixture usage and prepared histories do not
+measure model quality or full-loop savings. The ignored configured-owner test
+in `dex-runtime` measures real answer selection only when explicitly enabled
+with authorized tenant coordinates and the existing gateway configuration.
 
 The native engine is pinned to `rquickjs` 0.13.0, published September 8, 2026,
 to retain the repository's fourteen-day dependency cooling period. Independent

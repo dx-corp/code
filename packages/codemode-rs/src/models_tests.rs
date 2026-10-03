@@ -8,6 +8,7 @@ fn tool(name: &str, operation: ModelOperation, model: &str) -> Tool {
         schema: json!({"type":"object","required":["input"],"additionalProperties":false,"properties":{"input":{"type":"string"}}}),
         output_schema: Some(json!({"type":"object","properties":{"label":{"type":"string"}}})),
         namespace: None,
+        namespace_instructions: None,
         model_operation: Some(operation),
         model_binding: Some(ModelBinding {
             owner: "model-owner".into(),

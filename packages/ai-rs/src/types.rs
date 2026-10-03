@@ -126,6 +126,9 @@ pub enum ImageSource {
 /// Tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
+    /// Untrusted namespace guidance exposed only through explicit discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_instructions: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
@@ -158,6 +161,7 @@ impl ToolSchemaEnforcement {
 impl Tool {
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
+            namespace_instructions: None,
             name: name.into(),
             description: description.into(),
             input_schema: serde_json::json!({

@@ -61,6 +61,10 @@ impl Default for DoomLoopExtension {
 }
 
 impl AgentExtension for DoomLoopExtension {
+    fn allows_independent_script_results(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         DOOM_LOOP_EXTENSION
     }

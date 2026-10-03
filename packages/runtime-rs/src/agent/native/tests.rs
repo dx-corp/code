@@ -66,6 +66,8 @@ pub(super) struct RuntimeTestHost {
     pre_message_models: Arc<Mutex<Vec<Option<String>>>>,
     projected_tool_outputs: Arc<Mutex<Vec<String>>>,
     post_hook_outputs: Arc<Mutex<Vec<String>>>,
+    read_delays: HashMap<String, Duration>,
+    mcp_fixture: Option<ToolResult>,
     eval_hook_outputs: Arc<Mutex<Vec<String>>>,
     checkpoint_barrier: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify, AtomicBool)>>,
     completed_tool_executions: Arc<AtomicUsize>,
@@ -126,6 +128,8 @@ impl RuntimeTestHost {
             pre_message_models: Arc::new(Mutex::new(Vec::new())),
             projected_tool_outputs: Arc::new(Mutex::new(Vec::new())),
             post_hook_outputs: Arc::new(Mutex::new(Vec::new())),
+            read_delays: HashMap::new(),
+            mcp_fixture: None,
             eval_hook_outputs: Arc::new(Mutex::new(Vec::new())),
             checkpoint_barrier: None,
             completed_tool_executions: Arc::new(AtomicUsize::new(0)),
@@ -203,49 +207,6 @@ impl RuntimeTestHost {
             }),
             "effect_pending must be durable before executing {call_id}"
         );
-    }
-
-    fn execution(&self, call_id: &str, name: &str, args: &Value) -> ToolExecution {
-        let output = match name.to_ascii_lowercase().as_str() {
-            "read" => {
-                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-                let path = self.cwd.join(path);
-                std::fs::read_to_string(path).unwrap_or_else(|_| "fixture read result".to_owned())
-            }
-            "write" | "edit" => args
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or("fixture write result")
-                .to_owned(),
-            "bash" => {
-                let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-                if command.trim().is_empty() || command.contains("pwd") {
-                    self.cwd.display().to_string()
-                } else if let Some(value) = command
-                    .strip_prefix("printf ")
-                    .or_else(|| command.strip_prefix("echo "))
-                {
-                    value.trim_matches([' ', '\'', '"']).to_owned()
-                } else {
-                    format!("fixture bash result: {command}")
-                }
-            }
-            "update_goal" => args.get("status").and_then(Value::as_str).map_or_else(
-                || serde_json::json!({"goal": {"status": "active"}}).to_string(),
-                |status| serde_json::json!({"goal": {"status": status}}).to_string(),
-            ),
-            "todo" => serde_json::json!({"open": 0}).to_string(),
-            _ => "fixture tool result".to_owned(),
-        };
-        let execution = ToolExecution::from_legacy(
-            call_id,
-            name,
-            ExecutionSource::Native,
-            ToolResult::success(output),
-        );
-        self.completed_tool_executions
-            .fetch_add(1, Ordering::SeqCst);
-        execution
     }
 
     fn hook_result() -> NativeHookResult {
@@ -438,6 +399,16 @@ impl NativeExecutionHost for RuntimeTestHost {
             }
             executions
         })
+    }
+
+    fn execute_read_only_wave_stream<'a>(
+        &'a self,
+        calls: &'a [NativeReadOnlyToolCall],
+        event_tx: &'a mpsc::UnboundedSender<FromAgent>,
+        cancel: Option<CancellationToken>,
+        completions: mpsc::UnboundedSender<(String, ToolExecution)>,
+    ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
+        self.fixture_read_wave_stream(calls, event_tx, cancel, completions)
     }
 
     fn clear_cache(&self) {}
@@ -7274,6 +7245,7 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
     let vault = CredentialVault::new();
     let raw = "plausible-token-1234567890";
     let tools = vec![Tool {
+        namespace_instructions: None,
         name: "safe_tool".to_owned(),
         description: format!("Use token: {raw}"),
         input_schema: serde_json::json!({"properties": {"authorization": {"default": format!("token: {raw}")}}}),
@@ -7293,6 +7265,7 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
         serde_json::json!({"type": "string"}),
     );
     let unsafe_key = Tool {
+        namespace_instructions: None,
         name: "safe_tool".to_owned(),
         description: String::new(),
         input_schema: Value::Object(schema),
@@ -7314,6 +7287,7 @@ fn provider_request_requires_vault_attestation_for_every_surface() {
     let config = RequestConfig {
         system: Some(format!("token: {raw}")),
         tools: Arc::new(vec![Tool {
+            namespace_instructions: None,
             name: "safe_tool".to_owned(),
             description: format!("Credential {raw}"),
             input_schema: serde_json::json!({"properties": {"key": {"default": raw}}}),
@@ -7365,6 +7339,7 @@ fn provider_request_rechecks_system_after_tool_credential_discovery() {
     let config = RequestConfig {
         system: Some(format!("Use {raw}")),
         tools: Arc::new(vec![Tool {
+            namespace_instructions: None,
             name: "safe_tool".to_owned(),
             description: format!("token: {raw}"),
             input_schema: serde_json::json!({"type": "object"}),
@@ -7392,6 +7367,7 @@ fn provider_request_pre_vaulted_history_rechecks_late_tool_credential() {
 
     let config = RequestConfig {
         tools: Arc::new(vec![Tool {
+            namespace_instructions: None,
             name: "safe_tool".to_owned(),
             description: format!("token: {raw}"),
             input_schema: serde_json::json!({"type": "object"}),
@@ -9103,6 +9079,8 @@ mod experiment_schema_policy_tests;
 
 #[path = "tests/codemode.rs"]
 mod codemode;
+#[path = "tests/codemode_host.rs"]
+mod codemode_host;
 
 #[path = "tests/classifier_streams.rs"]
 mod classifier_streams;

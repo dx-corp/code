@@ -1,3 +1,4 @@
+use super::mcp_output::mcp_model_output;
 use super::*;
 
 mod explore;
@@ -663,30 +664,6 @@ where
     output.push_str(&format!("[... {elided} bytes elided ...]\n"));
     output.push_str(&String::from_utf8_lossy(&tail_bytes));
     output
-}
-
-/// Text handed to the model for one MCP tool result.
-///
-/// Joins the text content blocks (falling back to a pretty-printed dump of
-/// non-text content) and strips terminal control characters. The Native agent
-/// owns the later model-facing clamp because only that layer knows whether the
-/// current tool allowlist lets the model retrieve a spill file with `read`.
-fn mcp_model_output(content: &[McpContent]) -> String {
-    let text_output = content
-        .iter()
-        .filter_map(|content| match content {
-            McpContent::Text { text } => Some(text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let output = if text_output.is_empty() {
-        serde_json::to_string_pretty(content)
-            .unwrap_or_else(|_| "MCP tool returned non-text content".to_string())
-    } else {
-        text_output
-    };
-    crate::output_sanitize::sanitize_control_chars(&output)
 }
 
 fn collect_string_values(value: Option<&Value>) -> Vec<String> {
@@ -1414,6 +1391,7 @@ impl ToolExecutor {
                         "server": server_name,
                         "tool": tool_label,
                         "content": result.content,
+                        "structuredContent": result.structured_content,
                         "isError": result.is_error
                     });
                     return if result.is_error {
@@ -3753,6 +3731,7 @@ fn cancelled_tool_result(message: &str) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::McpContent;
 
     #[test]
     fn streaming_redactor_holds_split_uri_delimiter_until_redaction() {

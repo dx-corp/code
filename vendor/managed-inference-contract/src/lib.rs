@@ -77,6 +77,54 @@ impl PrepaidModelPricing {
     }
 }
 
+/// Provider context window; the input bound never exceeds it.
+pub const INPUT_CONTEXT_TOKENS: u64 = 1_048_576;
+/// Chat-template control tokens the provider adds around each message. These
+/// are not present in the caller's bytes, so they are added explicitly.
+const PER_MESSAGE_TEMPLATE_TOKENS: u64 = 64;
+/// Fixed allowance for the system prelude, tool-call framing, and the
+/// response header the provider counts as prompt tokens.
+const REQUEST_BASE_TOKENS: u64 = 512;
+
+/// Upper bound on the prompt tokens a request can bill, derived from the
+/// request's UTF-8 size. Every tokenizer maps a token to a non-empty byte
+/// string, so text of B bytes cannot exceed B tokens; the JSON serialization
+/// counted here is strictly larger than the text inside it, the total is then
+/// doubled as margin, and the template and base allowances cover tokens the
+/// provider adds that never appear in the caller's bytes. Settlement compares
+/// the provider's reported usage against this same bound and retains the
+/// reservation when it is exceeded, so this must remain an upper bound and
+/// never become an estimate. A request that would exceed the context window
+/// is capped there, which is the previous behaviour for every request.
+pub fn prepaid_input_token_bound(
+    body: &serde_json::Map<String, serde_json::Value>,
+    messages: &[serde_json::Value],
+) -> u64 {
+    let serialized_len = |value: &serde_json::Value| -> u64 {
+        serde_json::to_vec(value)
+            .map(|bytes| bytes.len() as u64)
+            .unwrap_or(INPUT_CONTEXT_TOKENS)
+    };
+    let mut bytes: u64 = messages.iter().map(serialized_len).sum();
+    for key in [
+        "model",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stop",
+        "user",
+    ] {
+        if let Some(value) = body.get(key) {
+            bytes = bytes.saturating_add(serialized_len(value));
+        }
+    }
+    bytes
+        .saturating_mul(2)
+        .saturating_add((messages.len() as u64).saturating_mul(PER_MESSAGE_TEMPLATE_TOKENS))
+        .saturating_add(REQUEST_BASE_TOKENS)
+        .min(INPUT_CONTEXT_TOKENS)
+}
+
 /// Public coordinate of the shared managed route; never a provider secret.
 pub const DEFAULT_MANAGED_CREDENTIAL_NAME: &str = "deixic-llm-gateway-glm53";
 pub const DEFAULT_MANAGED_ENVIRONMENT: &str = "production";

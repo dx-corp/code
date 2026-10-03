@@ -50,16 +50,7 @@ pub(crate) fn install_helpers(
     let describe_ns = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
-            let members: Vec<_> = catalog
-                .iter()
-                .filter(|tool| namespace(tool).as_deref() == Some(&name))
-                .map(|tool| discovery::identifier(&tool.name))
-                .collect();
-            let value = if members.is_empty() {
-                Value::Null
-            } else {
-                serde_json::json!({"name":name,"tools":members})
-            };
+            let value = discovery::describe_namespace(&catalog, &name);
             serde_json::to_string(&value).map_err(bridge_error)
         },
     )

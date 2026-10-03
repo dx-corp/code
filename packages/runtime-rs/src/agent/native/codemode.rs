@@ -19,10 +19,13 @@ pub(super) fn register(
 }
 
 pub(super) fn output_schema(tool: &Tool, vault: &CredentialVault) -> Option<Value> {
-    // MCP outputSchema describes structuredContent, while this owner returns
-    // flattened content. Declaring that JavaScript result would be misleading.
+    // Scripts receive the complete MCP owner envelope, including mixed media.
     if tool.name.starts_with("mcp__") {
-        return None;
+        return Some(json!({"type":"object","properties":{
+            "content":{"type":"array","items":{"type":"object"}},
+            "isError":{"type":"boolean"},
+            "structuredContent":{"anyOf":[tool.output_schema.as_ref().map(|schema| vault.vault_in_json(schema)).unwrap_or(json!({})),{"type":"null"}]}
+        },"required":["content","isError"]}));
     }
     tool.output_schema
         .as_ref()
@@ -54,7 +57,56 @@ pub(super) fn vault_script_json(value: &Value, vault: &CredentialVault) -> Resul
     })
 }
 
+/// The vault can acquire credentials while an owner result is buffered. Apply
+/// its current mapping at the delivery boundary for every successful shape.
+pub(super) fn deliver_codemode_response(
+    retained: Option<(Value, String, bool)>,
+    content: String,
+    is_error: bool,
+    vault: &CredentialVault,
+) -> Result<Value, String> {
+    let value = match retained {
+        Some((value, _, accepted_error)) if !is_error || accepted_error => value,
+        _ if is_error => return Err(vault.vault_in_text(&content)),
+        _ => serde_json::from_str(&content).unwrap_or(Value::String(content)),
+    };
+    vault_script_json(&value, vault)
+}
+
 impl NativeAgentRunner {
+    /// Store only owner data that survived every per-result projection control.
+    pub(super) fn retain_codemode_value(
+        &mut self,
+        call_id: &str,
+        value: &Value,
+        before_extensions: &str,
+        projected: &str,
+        accepted_error: bool,
+    ) {
+        if self.codemode_cancel.is_none() || before_extensions != projected {
+            return;
+        }
+        if let Ok(value) = vault_script_json(value, &self.credential_vault) {
+            self.codemode_values.insert(
+                call_id.to_owned(),
+                (value, projected.to_owned(), accepted_error),
+            );
+        }
+    }
+
+    pub(super) fn codemode_response(
+        &mut self,
+        call_id: &str,
+        content: String,
+        is_error: bool,
+    ) -> Result<Value, String> {
+        let retained = self
+            .codemode_values
+            .remove(call_id)
+            .filter(|(_, baseline, _)| baseline == &content);
+        deliver_codemode_response(retained, content, is_error, &self.credential_vault)
+    }
+
     pub(super) fn emit_codemode_progress(&self) {
         if let Some(call_id) = &self.codemode_parent_call_id {
             let _ = self.event_tx.send(FromAgent::CodeModeProgress {
@@ -257,20 +309,18 @@ impl NativeAgentRunner {
                 } else {
                     "native".into()
                 }),
+                namespace_instructions: definition
+                    .tool
+                    .namespace_instructions
+                    .as_ref()
+                    .map(|text| self.credential_vault.vault_in_text(text)),
                 model_operation: (definition.tool.name == classifier::TOOL_NAME
                     && !self.external_tools.contains(classifier::TOOL_NAME))
                 .then_some(agent_codemode::ModelOperation::Classify),
                 model_binding: (definition.tool.name == classifier::TOOL_NAME
                     && !self.external_tools.contains(classifier::TOOL_NAME))
-                .then(|| agent_codemode::ModelBinding {
-                    owner: "maestro-native".into(),
-                    provider: self
-                        .client
-                        .as_ref()
-                        .map(|client| client.provider_name().to_owned())
-                        .unwrap_or_default(),
-                    model: self.config.model.clone(),
-                }),
+                .then(|| self.classifier_binding())
+                .flatten(),
             })
             .collect::<Vec<_>>();
         tools.sort_unstable_by(|left, right| left.name.cmp(&right.name));
@@ -328,10 +378,6 @@ impl NativeAgentRunner {
             return ToolResult::failure("codemode requires a code string");
         };
         let catalog = self.codemode_catalog();
-        let admitted = catalog
-            .iter()
-            .map(|tool| tool.name.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
         let cancel = self.shutdown_token.child_token();
         let deadline_cancel = cancel.clone();
         let timer = tokio::spawn(async move {
@@ -339,20 +385,24 @@ impl NativeAgentRunner {
             deadline_cancel.cancel();
         });
         self.codemode_journaled.clear();
+        self.codemode_values.clear();
         self.codemode_cancelled_calls.clear();
         self.codemode_indeterminate = false;
-        self.codemode_cancel = Some(cancel.clone());
+
         self.codemode_parent_call_id = Some(call_id.to_owned());
-        let mut session = agent_codemode::Session::start_with_store(
+        let session = agent_codemode::Session::start_with_store(
             code.to_owned(),
             catalog,
             &cancel,
             Duration::from_secs(60),
             self.codemode_store.values.clone(),
         );
+        self.codemode_owner_cancel = Some(cancel.clone());
+        self.codemode_cancel = Some(session.cancellation_token());
+        self.codemode_session = Some(session);
         let outcome = loop {
             self.set_active_tool_cancel_token(Some(cancel.clone()), false);
-            let event = session.next().await;
+            let event = self.next_codemode_event().await;
             self.set_active_tool_cancel_token(None, false);
             match event {
                 Some(agent_codemode::Event::Done(report)) => {
@@ -411,158 +461,9 @@ impl NativeAgentRunner {
                     };
                 }
                 Some(agent_codemode::Event::Calls { calls, reply }) => {
-                    if cancel.is_cancelled() || self.take_active_operation_interruption() {
-                        cancel.cancel();
-                        let _ = reply.send(
-                            calls
-                                .into_iter()
-                                .map(|call| (call.index, Err("Script cancelled".to_owned())))
-                                .collect(),
-                        );
-                        break ToolResult::failure(
-                            "Script cancelled; calls already executed retain their receipts.",
-                        );
+                    if let Err(error) = Box::pin(self.execute_codemode_calls(calls, reply)).await {
+                        break ToolResult::failure(error);
                     }
-                    for call in &calls {
-                        let id = format!("{call_id}/{}", call.index);
-                        self.codemode_progress.insert(
-                            id.clone(),
-                            super::super::protocol::CodeModeChildProgress {
-                                call_id: id,
-                                tool: call.name.clone(),
-                                status: None,
-                                duration_ms: None,
-                            },
-                        );
-                    }
-                    self.emit_codemode_progress();
-                    let ids = calls
-                        .iter()
-                        .map(|call| (format!("{call_id}/{}", call.index), call.index))
-                        .collect::<HashMap<_, _>>();
-                    let mut batch = Vec::with_capacity(calls.len());
-                    for call in calls {
-                        let parse_error = if !admitted.contains(&call.name.to_ascii_lowercase()) {
-                            Some(format!(
-                                "Tool `{}` is not available in this script",
-                                call.name
-                            ))
-                        } else {
-                            self.codemode_tool_budget
-                                .admit_tool(&call.name, &call.args)
-                                .err()
-                                .map(str::to_owned)
-                        };
-                        batch.push((
-                            format!("{call_id}/{}", call.index),
-                            call.name,
-                            call.args,
-                            parse_error,
-                        ));
-                    }
-                    let process_admission = self
-                        .process_budget
-                        .as_ref()
-                        .map(|state| {
-                            state
-                                .lock()
-                                .map_err(|_| "process budget poisoned".to_owned())?
-                                .admit_tools(batch.len())
-                                .map_err(str::to_owned)
-                        })
-                        .transpose();
-                    if let Err(reason) = process_admission {
-                        // Refuse each proposal through the same result/journal
-                        // path without scheduling any executable call.
-                        for (_, _, _, refusal) in &mut batch {
-                            *refusal = Some(reason.clone());
-                        }
-                    }
-                    let batch_arguments = batch
-                        .iter()
-                        .map(|(id, name, args, _)| (id.clone(), (name.clone(), args.clone())))
-                        .collect::<HashMap<_, _>>();
-                    // Boxing breaks the async call graph: execute_tool can enter
-                    // this method, but the catalog prevents recursive scripts.
-                    let mut results = match Box::pin(self.execute_tool_batch(batch, true)).await {
-                        Ok((results, _)) => results,
-                        Err(error) => {
-                            let _ = reply.send(
-                                ids.into_values()
-                                    .map(|index| (index, Err(error.to_string())))
-                                    .collect(),
-                            );
-                            break ToolResult::failure(error.to_string());
-                        }
-                    };
-                    // Calls refused before dispatch also need a durable refusal,
-                    // while dispatched calls already carry their owner's receipt.
-                    for block in &results {
-                        let ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            ..
-                        } = block
-                        else {
-                            continue;
-                        };
-                        if self.codemode_journaled.contains(tool_use_id) {
-                            continue;
-                        }
-                        let Some((name, args)) = batch_arguments.get(tool_use_id) else {
-                            continue;
-                        };
-                        let execution = if self.codemode_cancelled_calls.contains(tool_use_id) {
-                            ToolExecution::cancelled(
-                                tool_use_id,
-                                name,
-                                ExecutionSource::Native,
-                                ExecutionPhase::Queued,
-                            )
-                        } else {
-                            ToolExecution::denied(
-                                tool_use_id,
-                                name,
-                                DenialReason::ActionFirewall {
-                                    message: content.clone(),
-                                },
-                            )
-                        }
-                        .with_managed_policy(self.tool_executor.managed_policy_metadata());
-                        match self.begin_tool_operation(tool_use_id, name, args).await {
-                            Ok(operation) => {
-                                self.record_tool_operation_outcome(operation, &execution)
-                                    .await;
-                                self.complete_tool_operation(tool_use_id).await;
-                            }
-                            Err(error) => self.tool_executor.report_diagnostic(error),
-                        }
-                    }
-                    self.apply_tool_batch_end_extensions(&mut results);
-                    let responses = results
-                        .into_iter()
-                        .filter_map(|block| {
-                            let ContentBlock::ToolResult {
-                                tool_use_id,
-                                content,
-                                is_error,
-                            } = block
-                            else {
-                                return None;
-                            };
-                            let index = *ids.get(&tool_use_id)?;
-                            Some((
-                                index,
-                                if is_error == Some(true) {
-                                    Err(content)
-                                } else {
-                                    Ok(serde_json::from_str(&content)
-                                        .unwrap_or(Value::String(content)))
-                                },
-                            ))
-                        })
-                        .collect();
-                    let _ = reply.send(responses);
                 }
                 None => {
                     break ToolResult::failure("Script worker closed without a completion result");
@@ -572,7 +473,12 @@ impl NativeAgentRunner {
         timer.abort();
         let was_cancelled = cancel.is_cancelled();
         cancel.cancel();
+        self.codemode_session = None;
+        self.codemode_events.clear();
+        self.codemode_replies.clear();
+        self.codemode_values.clear();
         self.codemode_cancel = None;
+        self.codemode_owner_cancel = None;
         self.codemode_parent_call_id = None;
         if was_cancelled {
             outcome.with_details(json!({"cancelled":true}))

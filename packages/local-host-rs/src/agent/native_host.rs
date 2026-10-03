@@ -164,6 +164,7 @@ pub struct LocalNativeExecutionHost {
         Option<Arc<std::sync::RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>>,
     pinned_model_capabilities: Option<(String, NativeModelCapabilities)>,
     executor: Arc<ToolExecutor>,
+    read_only_permits: Arc<tokio::sync::Semaphore>,
     hooks: Arc<tokio::sync::Mutex<IntegratedHookSystem>>,
     resolve_model: Arc<ModelResolver>,
     model_route: Arc<dyn Fn(&str) -> NativeModelRoute + Send + Sync + 'static>,
@@ -214,6 +215,9 @@ impl LocalNativeExecutionHost {
             experiment_scope,
             pinned_model_capabilities,
             executor,
+            read_only_permits: Arc::new(tokio::sync::Semaphore::new(
+                native_read_only_batch_config().max_concurrency,
+            )),
             hooks: Arc::new(tokio::sync::Mutex::new(hooks)),
             resolve_model: Arc::new(resolve_model),
             model_route: Arc::new(model_route),
@@ -489,6 +493,18 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         event_tx: &'a mpsc::UnboundedSender<FromAgent>,
         cancel: Option<CancellationToken>,
     ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
+        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+        drop(completion_rx);
+        self.execute_read_only_wave_stream(calls, event_tx, cancel, completion_tx)
+    }
+
+    fn execute_read_only_wave_stream<'a>(
+        &'a self,
+        calls: &'a [NativeReadOnlyToolCall],
+        event_tx: &'a mpsc::UnboundedSender<FromAgent>,
+        cancel: Option<CancellationToken>,
+        completions: mpsc::UnboundedSender<(String, ToolExecution)>,
+    ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
         let calls = calls
             .iter()
             .map(|call| {
@@ -503,26 +519,31 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         let event_tx = event_tx.clone();
         let generation = self.executor.credential_generation();
         let config = native_read_only_batch_config();
+        let shared_permits = self.read_only_permits.clone();
         let receipt_policy = self.managed_policy_metadata();
         Box::pin(async move {
             let batch = BatchExecutor::from_shared_executor(executor, config);
-            let results = match cancel {
-                Some(cancel) => {
-                    batch
-                        .execute_with_cancel_at_generation(
-                            calls,
-                            Some(event_tx),
-                            cancel,
-                            generation,
-                        )
-                        .await
+            let (owner_tx, mut owner_rx) = mpsc::unbounded_channel();
+            let forward_policy = receipt_policy.clone();
+            let forwarding = tokio::spawn(async move {
+                while let Some((id, execution)) = owner_rx.recv().await {
+                    let _ = completions.send((
+                        id,
+                        ToolExecution::with_managed_policy(execution, forward_policy.clone()),
+                    ));
                 }
-                None => {
-                    batch
-                        .execute_at_generation(calls, Some(event_tx), generation)
-                        .await
-                }
-            };
+            });
+            let results = batch
+                .execute_with_cancel_and_completions_at_generation(
+                    calls,
+                    Some(event_tx),
+                    cancel.unwrap_or_default(),
+                    generation,
+                    Some(owner_tx),
+                    Some(shared_permits),
+                )
+                .await;
+            let _ = forwarding.await;
             results
                 .into_iter()
                 .map(|result| {
@@ -1122,6 +1143,7 @@ mod tests {
                 experiment_scope: None,
                 pinned_model_capabilities: None,
                 executor: Arc::new(ToolExecutor::new("/tmp")),
+                read_only_permits: Arc::new(tokio::sync::Semaphore::new(8)),
                 hooks: Arc::new(tokio::sync::Mutex::new(hooks)),
                 resolve_model,
                 model_route,

@@ -18,6 +18,24 @@ impl NativeAgentRunner {
         let mut processed_any_tool = false;
 
         while let Some((call_id, tool_name, args, parse_error)) = pending_tool_calls_iter.next() {
+            if scripted
+                && (self.codemode_indeterminate
+                    || self.classifier_budget_uncertain
+                    || self
+                        .codemode_cancel
+                        .as_ref()
+                        .is_some_and(CancellationToken::is_cancelled))
+            {
+                let cancelled = self
+                    .codemode_cancel
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled);
+                if cancelled {
+                    self.codemode_cancelled_calls.insert(call_id.clone());
+                }
+                tool_results.push(ContentBlock::ToolResult { tool_use_id:call_id, content:if cancelled { "Script completed or cancelled before this call was admitted" } else { "A prior accepted operation has an unknown outcome; reconcile it before further calls" }.into(), is_error:Some(true) });
+                continue;
+            }
             self.tool_response_coordinator.remove_cancelled(&call_id);
             if processed_any_tool {
                 if !scripted && self.drain_pending_commands().await {
@@ -315,19 +333,45 @@ impl NativeAgentRunner {
                 }
             }
 
-            let can_parallelize_read_only = is_native_parallel_read_only_tool_call(
-                &tool_key,
-                requires_approval,
-                annotations.as_ref(),
-                is_explicit_inline_read_only_tool(&tool_key, &self.tool_executor),
-            );
+            let native_classifier = scripted
+                && tool_key == classifier::TOOL_NAME
+                && !requires_approval
+                && !is_external_tool;
+            let can_parallelize_read_only = native_classifier
+                || is_native_parallel_read_only_tool_call(
+                    &tool_key,
+                    requires_approval,
+                    annotations.as_ref(),
+                    is_explicit_inline_read_only_tool(&tool_key, &self.tool_executor),
+                );
 
-            if !can_parallelize_read_only {
+            let mixed_parallel_wave = pending_read_only_tool_calls.first().is_some_and(|first| {
+                first.tool_name.eq_ignore_ascii_case(classifier::TOOL_NAME) != native_classifier
+            });
+            if !can_parallelize_read_only || mixed_parallel_wave {
                 self.drain_read_only_tool_calls(
                     &mut pending_read_only_tool_calls,
                     &mut tool_results,
                 )
                 .await?;
+            }
+            if scripted
+                && (self.codemode_indeterminate
+                    || self.classifier_budget_uncertain
+                    || self
+                        .codemode_cancel
+                        .as_ref()
+                        .is_some_and(CancellationToken::is_cancelled))
+            {
+                let cancelled = self
+                    .codemode_cancel
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled);
+                if cancelled {
+                    self.codemode_cancelled_calls.insert(call_id.clone());
+                }
+                tool_results.push(ContentBlock::ToolResult { tool_use_id:call_id, content:if cancelled { "Script completed or cancelled before this call was admitted" } else { "A prior accepted operation has an unknown outcome; reconcile it before further calls" }.into(), is_error:Some(true) });
+                continue;
             }
 
             let deferred_disposition =

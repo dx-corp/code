@@ -226,6 +226,11 @@ pub trait AgentExtension: Send + Sync {
     ///
     /// `last_result` is the final result in the batch, which is where a tenant
     /// appends text meant to be read after the batch.
+    /// Whether batch-end is observational only. False keeps script replies buffered.
+    fn allows_independent_script_results(&self) -> bool {
+        false
+    }
+
     fn on_tool_batch_end(&mut self, cx: &BatchEndContext, last_result: &mut ToolResultPayload) {
         let _ = (cx, last_result);
     }
@@ -408,6 +413,12 @@ impl ExtensionRegistry {
             tenant.extension.on_native_tool_result(cx);
             record_timing(&mut tenant.stats, started);
         }
+    }
+
+    pub fn allows_independent_script_results(&self) -> bool {
+        self.tenants
+            .iter()
+            .all(|tenant| tenant.extension.allows_independent_script_results())
     }
 
     /// Fire [`AgentExtension::on_tool_batch_end`] on every tenant, in order.
@@ -896,5 +907,34 @@ mod tests {
     fn default_registry_registers_the_doom_loop_tenant() {
         let registry = ExtensionRegistry::with_default_tenants();
         assert_eq!(registry.names(), vec![doom_loop::DOOM_LOOP_EXTENSION]);
+    }
+    #[test]
+    fn codemode_custom_batch_extensions_buffer_independent_results_by_default() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = ExtensionRegistry::with_default_tenants();
+        assert!(registry.allows_independent_script_results());
+        registry.register(Box::new(ScriptedExtension::new("batch-veto", &log)));
+        assert!(
+            !registry.allows_independent_script_results(),
+            "Unqualified batch projection must finish before data reaches a script"
+        );
+        let mut payload = ToolResultPayload {
+            content: "owner data".into(),
+            is_error: false,
+        };
+        registry.on_tool_batch_end(
+            &BatchEndContext {
+                turn_id: "turn".into(),
+                batch_size: 2,
+                error_count: 0,
+            },
+            &mut payload,
+        );
+        assert!(
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|event| event == "batch-veto:on_tool_batch_end")
+        );
     }
 }

@@ -4,9 +4,21 @@
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::Value;
+use std::{future::Future, pin::Pin, sync::mpsc::Sender};
+
+struct PendingCompletion {
+    index: usize,
+    call: ProposedCall,
+    result: Result<ToolResult, Fenced>,
+    reply: Sender<agent_codemode::Reply>,
+    reservation: (u64, u64),
+    classifier: bool,
+}
+type PendingCalls<'a> =
+    FuturesUnordered<Pin<Box<dyn Future<Output = PendingCompletion> + Send + 'a>>>;
 
 use super::*;
-use crate::Output;
+use crate::{Output, ThreadId};
 
 pub(super) fn spec() -> ToolSpec {
     ToolSpec {
@@ -61,6 +73,7 @@ where
                     .as_str()
                     .rsplit_once('.')
                     .map(|(namespace, _)| namespace.to_owned()),
+                namespace_instructions: None,
                 model_operation: self.tools.codemode_model_operation(&entry.name),
                 model_binding: self.tools.codemode_model_binding(&entry.name),
             })
@@ -75,10 +88,37 @@ where
             deadline.saturating_duration_since(Instant::now()),
             ctx.codemode_store(&parent.principal),
         );
+        let script_cancel = session.cancellation_token();
+        let mut pending = PendingCalls::new();
+        let mut reserved = (0u64, 0u64);
+        let mut classifiers = 0usize;
         let mut uncertain = false;
-        while let Some(event) = session.next().await {
+        loop {
+            let event = tokio::select! {
+                completed = pending.next(), if !pending.is_empty() => {
+                    if let Some(completed) = completed {
+                        uncertain |= self.codemode_completed(ctx,completed,&mut reserved,&mut classifiers,cancel,deadline).await?;
+                    }
+                    continue;
+                }
+                event = session.next() => match event {Some(event)=>event,None=>break},
+            };
             match event {
                 agent_codemode::Event::Done(report) => {
+                    // VM completion cancels losing reads. Accepted inference
+                    // and serial effects still settle through their owners.
+                    while let Some(completed) = pending.next().await {
+                        uncertain |= self
+                            .codemode_completed(
+                                ctx,
+                                completed,
+                                &mut reserved,
+                                &mut classifiers,
+                                cancel,
+                                deadline,
+                            )
+                            .await?;
+                    }
                     let mut filter = self.sanitizer.filter();
                     let mut content = filter.push(&report.content());
                     content.push_str(&filter.finish());
@@ -100,18 +140,41 @@ where
                         .filter(|block| matches!(block, crate::OutputBlock::Image { .. }))
                         .cloned()
                         .collect();
-                    let output = if images.is_empty() {
+                    if outcome == Outcome::Succeeded && content.len() > 64 * 1024 {
+                        return Ok(ToolResult::error(
+                            "script text exceeds Dex's 64 KiB capacity after sanitization; return a smaller projection",
+                        ));
+                    }
+                    if content.len() > 64 * 1024 {
+                        // Host-added unknown evidence takes priority over a
+                        // large partial projection; shortening remains explicit.
+                        const NOTE: &str = "\n[Earlier partial script output shortened to preserve outcome evidence]\n";
+                        let mut head = if uncertain { 200 } else { 0 };
+                        while !content.is_char_boundary(head) {
+                            head -= 1;
+                        }
+                        let mut tail = content.len() - (64 * 1024 - head - NOTE.len());
+                        while !content.is_char_boundary(tail) {
+                            tail += 1;
+                        }
+                        // Keep the unknown-outcome prefix and the VM's final
+                        // error/effect diagnostics, shortening intervening data.
+                        content = format!("{}{NOTE}{}", &content[..head], &content[tail..]);
+                    }
+                    let mut blocks = vec![crate::OutputBlock::Text {
+                        text: content.clone(),
+                    }];
+                    blocks.extend(images);
+                    if let Err(reason) = crate::validate_codemode_blocks(&blocks) {
+                        return Ok(if uncertain {
+                            ToolResult::unknown(reason)
+                        } else {
+                            ToolResult::error(reason)
+                        });
+                    }
+                    let output = if blocks.len() == 1 {
                         Output::Text(content)
                     } else {
-                        let mut blocks = vec![crate::OutputBlock::Text { text: content }];
-                        blocks.extend(images);
-                        if let Err(reason) = crate::validate_codemode_blocks(&blocks) {
-                            return Ok(if uncertain {
-                                ToolResult::unknown(reason)
-                            } else {
-                                ToolResult::error(reason)
-                            });
-                        }
                         Output::Blocks(blocks)
                     };
                     if outcome == Outcome::Succeeded && !report.store_writes.is_empty() {
@@ -167,8 +230,7 @@ where
                         }],
                     )
                     .await?;
-                    let mut responses = Vec::new();
-                    let mut reads = Vec::new();
+
                     for (request, call) in calls.iter().zip(&proposals) {
                         let Some(entry) = self.offered_spec(ctx, &call.tool).filter(|entry| {
                             entry.name.as_str() != agent_codemode::TOOL_NAME
@@ -182,27 +244,65 @@ where
                                 "unavailable in codemode; call conversational tools directly",
                             );
                             self.finish(ctx, call, result.clone()).await?;
-                            responses.push((
+                            let _ = reply.send(vec![(
                                 request.index,
                                 self.codemode_response(ctx, call, result, cancel, deadline)
                                     .await,
-                            ));
+                            )]);
                             continue;
                         };
                         // Reads before an effect complete first. This also lets
                         // owner policy consult evidence from the previous wave.
-                        let model_operation =
-                            self.tools.codemode_model_operation(&call.tool).is_some();
-                        if !entry.read_only || model_operation {
-                            self.codemode_reads(ctx, &mut reads, &mut responses, cancel, deadline)
-                                .await?;
+                        let operation = self.tools.codemode_model_operation(&call.tool);
+                        let model_operation = operation.is_some();
+                        let classifier = operation == Some(crate::ModelOperation::Classify);
+                        if !entry.read_only || (model_operation && !classifier) {
+                            while let Some(completed) = pending.next().await {
+                                uncertain |= self
+                                    .codemode_completed(
+                                        ctx,
+                                        completed,
+                                        &mut reserved,
+                                        &mut classifiers,
+                                        cancel,
+                                        deadline,
+                                    )
+                                    .await?;
+                            }
                         }
-                        let refusal = if cancel.is_cancelled() || Instant::now() >= deadline {
+                        // The owner caps inference at four; reserve all calls
+                        // before polling this wave, and settle capacity before
+                        // admitting a later group.
+                        if classifier {
+                            while classifiers >= 4 {
+                                let Some(completed) = pending.next().await else {
+                                    break;
+                                };
+                                uncertain |= self
+                                    .codemode_completed(
+                                        ctx,
+                                        completed,
+                                        &mut reserved,
+                                        &mut classifiers,
+                                        cancel,
+                                        deadline,
+                                    )
+                                    .await?;
+                            }
+                        }
+                        let refusal = if script_cancel.is_cancelled() || Instant::now() >= deadline
+                        {
                             Some(ToolResult::error(NOT_RUN_INTERRUPTED))
                         } else if let Some(reason) =
-                            self.codemode_budget_refusal(ctx, call, run_started)
+                            self.codemode_reserved_budget_refusal(ctx, call, run_started, reserved)
                         {
                             Some(ToolResult::error(reason))
+                        } else if ctx.model_usage_unresolved()
+                            && (!entry.read_only || model_operation)
+                        {
+                            Some(ToolResult::error(
+                                "not executed: admitted model usage is unresolved; reconcile it before further spend or effects",
+                            ))
                         } else if let Err(reason) = validate_args(&entry, &call.args) {
                             Some(ToolResult::error(reason))
                         } else if ctx.has_stalled_call(call) {
@@ -218,16 +318,16 @@ where
                         };
                         if let Some(result) = refusal {
                             self.finish(ctx, call, result.clone()).await?;
-                            responses.push((
+                            let _ = reply.send(vec![(
                                 request.index,
                                 self.codemode_response(ctx, call, result, cancel, deadline)
                                     .await,
-                            ));
+                            )]);
                             continue;
                         }
                         let verdict = tokio::select! {
                             biased;
-                            () = cancel.cancelled() => Verdict::Deny(NOT_RUN_INTERRUPTED.into()),
+                            () = script_cancel.cancelled() => Verdict::Deny(NOT_RUN_INTERRUPTED.into()),
                             () = tokio::time::sleep_until(deadline) => Verdict::Deny(NOT_RUN_WALL.into()),
                             verdict = self.tools.policy(ctx, call) => verdict,
                         };
@@ -259,30 +359,83 @@ where
                         };
                         if let Some(result) = refused {
                             self.finish(ctx, call, result.clone()).await?;
-                            responses.push((
+                            let _ = reply.send(vec![(
                                 request.index,
                                 self.codemode_response(ctx, call, result, cancel, deadline)
                                     .await,
-                            ));
-                        } else if entry.read_only && !model_operation {
-                            reads.push((request.index, call.clone(), entry));
+                            )]);
+                        } else if entry.read_only && (!model_operation || classifier) {
+                            let reservation = if classifier {
+                                (
+                                    self.tools.model_cost_bound_for(call).unwrap_or(0),
+                                    self.tools.model_token_bound_for(call).unwrap_or(0),
+                                )
+                            } else {
+                                (0, 0)
+                            };
+                            if classifier {
+                                match self.effects.claim(call).await? {
+                                    Claim::Existing(result) => {
+                                        let result = self.settle_claim(&call.id, result).await?;
+                                        self.finish(ctx, call, result.clone()).await?;
+                                        uncertain |= result.outcome == Outcome::Unknown;
+                                        let response = self
+                                            .codemode_response(ctx, call, result, cancel, deadline)
+                                            .await;
+                                        let _ = reply.send(vec![(request.index, response)]);
+                                        continue;
+                                    }
+                                    Claim::Granted => {}
+                                }
+                            }
+                            self.emit(ctx, vec![started(call, &entry)]).await?;
+                            classifiers += usize::from(classifier);
+                            reserved.0 = reserved.0.saturating_add(reservation.0);
+                            reserved.1 = reserved.1.saturating_add(reservation.1);
+                            let thread = ctx.thread().clone();
+                            let call = call.clone();
+                            let index = request.index;
+                            let reply = reply.clone();
+                            let read_cancel = script_cancel.clone();
+                            pending.push(Box::pin(async move {
+                                let result=if classifier {
+                                    // Already-admitted spend is reconciled even
+                                    // if a different promise finishes the VM.
+                                    let result=self.run_classifier_owned(&thread,&call,&read_cancel,deadline).await;
+                                    self.effects.record(&call.id,&result).await.map(|()| result)
+                                } else {
+                                    Ok(tokio::select! {
+                                        biased;
+                                        ()=read_cancel.cancelled()=>ToolResult::error(READ_INTERRUPTED),
+                                        ()=tokio::time::sleep_until(deadline)=>ToolResult::error(DEADLINE_READ),
+                                        result=self.tools.run(&thread,&call,&read_cancel)=>result,
+                                    })
+                                };
+                                PendingCompletion {index,call,result,reply,reservation,classifier}
+                            }));
                         } else {
-                            let result = self
-                                .codemode_mutation(ctx, call, &entry, cancel, deadline)
-                                .await?;
+                            let result = if script_cancel.is_cancelled() {
+                                let result = ToolResult::error(NOT_RUN_INTERRUPTED);
+                                self.finish(ctx, call, result.clone()).await?;
+                                result
+                            } else {
+                                self.codemode_mutation(
+                                    ctx,
+                                    call,
+                                    &entry,
+                                    cancel,
+                                    &script_cancel,
+                                    deadline,
+                                )
+                                .await?
+                            };
                             uncertain |= result.outcome == Outcome::Unknown;
-                            responses.push((
-                                request.index,
-                                self.codemode_response(ctx, call, result, cancel, deadline)
-                                    .await,
-                            ));
+                            let response = self
+                                .codemode_response(ctx, call, result, cancel, deadline)
+                                .await;
+                            let _ = reply.send(vec![(request.index, response)]);
                         }
                     }
-                    self.codemode_reads(ctx, &mut reads, &mut responses, cancel, deadline)
-                        .await?;
-                    // A cancelled VM may have left while admitted effects were
-                    // settling. Their durable outcomes were still recorded above.
-                    let _ = reply.send(responses);
                 }
             }
         }
@@ -297,28 +450,41 @@ where
         call: &ProposedCall,
         started: Instant,
     ) -> Option<String> {
+        self.codemode_reserved_budget_refusal(ctx, call, started, (0, 0))
+    }
+
+    fn codemode_reserved_budget_refusal(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        started: Instant,
+        reserved: (u64, u64),
+    ) -> Option<String> {
         if let Some(axis) = self.exhausted_budget(ctx, started.elapsed()) {
             return Some(format!("not executed: {}", self.budget_message(ctx, axis)));
         }
         if self.tools.codemode_model_operation(&call.tool).is_some() {
             if self.budget.max_cost_micros != u64::MAX
-                && self.tools.model_cost_bound(&call.tool).is_none_or(|bound| {
+                && self.tools.model_cost_bound_for(call).is_none_or(|bound| {
                     bound
                         > self
                             .budget
                             .max_cost_micros
                             .saturating_sub(ctx.usage().cost_micros)
+                            .saturating_sub(reserved.0)
                 })
             {
                 return Some("not executed: this model operation has no owner reservation within the remaining turn cost budget".into());
             }
             if self.budget.max_tokens != u64::MAX
-                && self
-                    .tools
-                    .model_token_bound(&call.tool)
-                    .is_none_or(|bound| {
-                        bound > self.budget.max_tokens.saturating_sub(ctx.usage().tokens())
-                    })
+                && self.tools.model_token_bound_for(call).is_none_or(|bound| {
+                    bound
+                        > self
+                            .budget
+                            .max_tokens
+                            .saturating_sub(ctx.usage().tokens())
+                            .saturating_sub(reserved.1)
+                })
             {
                 return Some("not executed: this model operation has no owner reservation within the remaining turn token budget".into());
             }
@@ -346,49 +512,61 @@ where
         response(resolved)
     }
 
-    async fn codemode_reads(
+    async fn codemode_completed(
         &self,
         ctx: &mut Context,
-        reads: &mut Vec<(usize, ProposedCall, ToolSpec)>,
-        responses: &mut agent_codemode::Reply,
+        completed: PendingCompletion,
+        reserved: &mut (u64, u64),
+        classifiers: &mut usize,
         cancel: &CancellationToken,
         deadline: Instant,
-    ) -> Result<(), Fenced> {
-        let reads = std::mem::take(reads);
-        if reads.is_empty() {
-            return Ok(());
+    ) -> Result<bool, Fenced> {
+        let result = completed.result?;
+        *classifiers = classifiers.saturating_sub(usize::from(completed.classifier));
+        let before_cost = ctx.usage().cost_micros;
+        let before_tokens = ctx.usage().tokens();
+        let mut uncertain = result.outcome == Outcome::Unknown;
+        self.finish(ctx, &completed.call, result.clone()).await?;
+        if completed.classifier
+            && ((completed.reservation.0 > 0
+                && ctx.usage().cost_micros.saturating_sub(before_cost) > completed.reservation.0)
+                || (completed.reservation.1 > 0
+                    && ctx.usage().tokens().saturating_sub(before_tokens)
+                        > completed.reservation.1))
+        {
+            // Retain exact owner usage, but the reservation can no longer
+            // authorize further spend. This is reconciled like unknown usage.
+            self.emit(ctx,vec![Event::ModelUsageUnresolved {call:completed.call.id.clone(),reason:"classifier owner usage exceeded its admitted reservation; reconcile before further spend".into()}]).await?;
+            uncertain = true;
         }
-        self.emit(
-            ctx,
-            reads
-                .iter()
-                .map(|(_, call, entry)| started(call, entry))
-                .collect(),
-        )
-        .await?;
-        let mut pending = FuturesUnordered::new();
-        let thread = ctx.thread().clone();
-        for (index, call, _) in reads {
-            let thread = thread.clone();
-            pending.push(async move {
-                let result = tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => ToolResult::error(READ_INTERRUPTED),
-                    () = tokio::time::sleep_until(deadline) => ToolResult::error(DEADLINE_READ),
-                    result = self.tools.run(&thread, &call, cancel) => result,
-                };
-                (index, call, result)
-            });
+        reserved.0 = reserved.0.saturating_sub(completed.reservation.0);
+        reserved.1 = reserved.1.saturating_sub(completed.reservation.1);
+        let response = self
+            .codemode_response(ctx, &completed.call, result, cancel, deadline)
+            .await;
+        let _ = completed.reply.send(vec![(completed.index, response)]);
+        Ok(uncertain)
+    }
+
+    pub(super) async fn run_classifier_owned(
+        &self,
+        thread: &ThreadId,
+        call: &ProposedCall,
+        cancel: &CancellationToken,
+        deadline: Instant,
+    ) -> ToolResult {
+        let owned_cancel = cancel.child_token();
+        let run = self.tools.run(thread, call, &owned_cancel);
+        tokio::pin!(run);
+        tokio::select! {
+            result=&mut run=>result,
+            ()=async {tokio::select! {() = cancel.cancelled() => {}, () = tokio::time::sleep_until(deadline) => {}}}=> {
+                owned_cancel.cancel();
+                // The production owner caps its transport at 30 seconds. A generic
+                // port that violates that contract still cannot hold the turn.
+                tokio::time::timeout(Duration::from_secs(30),run).await.unwrap_or_else(|_|ToolResult::unknown("classifier owner did not settle within its cancellation grace; accepted usage and receipts remain unresolved"))
+            }
         }
-        while let Some((index, call, result)) = pending.next().await {
-            self.finish(ctx, &call, result.clone()).await?;
-            responses.push((
-                index,
-                self.codemode_response(ctx, &call, result, cancel, deadline)
-                    .await,
-            ));
-        }
-        Ok(())
     }
 
     async fn codemode_mutation(
@@ -397,13 +575,17 @@ where
         call: &ProposedCall,
         entry: &ToolSpec,
         cancel: &CancellationToken,
+        script_cancel: &CancellationToken,
         deadline: Instant,
     ) -> Result<ToolResult, Fenced> {
         let result = match self.effects.claim(call).await? {
             Claim::Existing(result) => self.settle_claim(&call.id, result).await?,
             Claim::Granted => {
-                let result = if cancel.is_cancelled() || Instant::now() >= deadline {
-                    ToolResult::error(NOT_RUN_WALL)
+                let result = if script_cancel.is_cancelled()
+                    || cancel.is_cancelled()
+                    || Instant::now() >= deadline
+                {
+                    ToolResult::error(NOT_RUN_INTERRUPTED)
                 } else {
                     self.emit(ctx, vec![started(call, entry)]).await?;
                     // Interrupt reaches the executor; a mutation settles even

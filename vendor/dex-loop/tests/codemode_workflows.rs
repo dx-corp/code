@@ -3,6 +3,8 @@
 #[allow(dead_code)]
 mod support;
 
+use std::time::Duration;
+
 use dex_loop::{
     Budget, CancellationToken, Context, Event, Exit, Outcome, Output, PrincipalId, ProposedCall,
     ThreadId, ToolName, ToolResult, ToolSpec, Tools, TurnId, Verdict,
@@ -442,7 +444,7 @@ async fn model_calls_in_a_promise_wave_recheck_actual_cost_before_the_next_admis
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![script(
-            "await Promise.all([tools.classify({key:'one'}),tools.classify({key:'two'})]).catch(e => text(String(e))); ",
+            "text(await Promise.allSettled([tools.classify({key:'one'}),tools.classify({key:'two'})])); ",
         )],
         vec![text("done")],
     ]);
@@ -716,5 +718,311 @@ async fn failed_wrapper_summary_is_host_owned_and_excludes_script_diagnostics() 
             .contains("private-diagnostic")
     );
     assert!(!summary.contains("private-diagnostic"));
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+#[tokio::test]
+async fn admitted_classifiers_run_as_a_bounded_reserved_wave() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![script(
+            "text(await Promise.all([tools.classify({key:'one'}),tools.classify({key:'two'})]));",
+        )],
+        vec![text("done")],
+    ]);
+    let tools = MeteredTools {
+        inner: FakeTools::new(vec![read_tool("classify")]).barrier(&["one", "two"]),
+        known_usage: true,
+    };
+    let mut ctx = log.start_turn("t1", "parallel classify");
+    let engine = dex_loop::Engine::new(
+        log.clone(),
+        model,
+        tools.clone(),
+        FakeEffects::default(),
+        dex_loop::Lexicon::default(),
+        Budget {
+            max_cost_micros: 25,
+            ..Default::default()
+        },
+    );
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        engine.run(&mut ctx, &CancellationToken::new()),
+    )
+    .await;
+    assert_eq!(result, Ok(Ok(Exit::Done)));
+    assert_eq!(tools.inner.runs().len(), 2);
+    assert_eq!(ctx.usage().cost_micros, 20);
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|e| matches!(e, Event::Usage(_)))
+            .count(),
+        2
+    );
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+#[tokio::test]
+async fn unresolved_classifier_usage_stops_spend_and_effects_even_without_finite_limits() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![script(
+            "await tools.classify({key:'one'}); await tools.update({key:'effect'}).catch(e=>text(String(e))); await tools.classify({key:'two'}).catch(e=>text(String(e)));",
+        )],
+        vec![text("cannot dispatch further inference")],
+    ]);
+    let tools = MeteredTools {
+        inner: FakeTools::new(vec![read_tool("classify"), write_tool("update")]),
+        known_usage: false,
+    };
+    let mut ctx = log.start_turn("t1", "unresolved spend");
+    let engine = dex_loop::Engine::new(
+        log.clone(),
+        model.clone(),
+        tools.clone(),
+        FakeEffects::default(),
+        dex_loop::Lexicon::default(),
+        Budget::default(),
+    );
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Failed)
+    );
+    assert_eq!(tools.inner.runs().len(), 1);
+    assert_eq!(model.seen().len(), 1);
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+#[derive(Clone)]
+struct ConcurrentMeteredTools {
+    inner: MeteredTools,
+    active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    peak: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    bound: u64,
+}
+impl Tools for ConcurrentMeteredTools {
+    fn catalog(&self) -> &[ToolSpec] {
+        self.inner.catalog()
+    }
+    fn codemode_model_operation(&self, name: &ToolName) -> Option<dex_loop::ModelOperation> {
+        self.inner.codemode_model_operation(name)
+    }
+    fn codemode_model_binding(&self, name: &ToolName) -> Option<dex_loop::ModelBinding> {
+        self.inner.codemode_model_binding(name)
+    }
+    fn model_cost_bound(&self, _: &ToolName) -> Option<u64> {
+        Some(self.bound)
+    }
+    fn model_token_bound(&self, _: &ToolName) -> Option<u64> {
+        Some(4)
+    }
+    async fn search(&self, principal: &PrincipalId, query: &str) -> Vec<ToolName> {
+        self.inner.search(principal, query).await
+    }
+    async fn policy(&self, ctx: &Context, call: &ProposedCall) -> Verdict {
+        self.inner.policy(ctx, call).await
+    }
+    async fn run(
+        &self,
+        thread: &ThreadId,
+        call: &ProposedCall,
+        cancel: &CancellationToken,
+    ) -> ToolResult {
+        use std::sync::atomic::Ordering;
+        let count = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(count, Ordering::SeqCst);
+        let result = self.inner.run(thread, call, cancel).await;
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+    async fn resolve_codemode_result(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        result: &ToolResult,
+        max_bytes: usize,
+    ) -> Result<ToolResult, String> {
+        self.inner
+            .resolve_codemode_result(ctx, call, result, max_bytes)
+            .await
+    }
+    async fn model_usage(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        result: &ToolResult,
+    ) -> Result<Option<dex_loop::Usage>, String> {
+        self.inner.model_usage(ctx, call, result).await
+    }
+}
+
+#[tokio::test]
+async fn classifier_host_caps_dispatch_at_four_with_finite_cost_and_tokens() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![script(
+            "text(await Promise.all(['a','b','c','d','e'].map(key=>tools.classify({key}))));",
+        )],
+        vec![text("done")],
+    ]);
+    let inner = FakeTools::new(vec![read_tool("classify")]).barrier(&["a", "b", "c", "d"]);
+    let inner = ["a", "b", "c", "d"].into_iter().fold(inner, |tools, key| {
+        tools.delay(key, Duration::from_millis(40))
+    });
+    let tools = ConcurrentMeteredTools {
+        inner: MeteredTools {
+            inner,
+            known_usage: true,
+        },
+        active: Arc::new(AtomicUsize::new(0)),
+        peak: Arc::new(AtomicUsize::new(0)),
+        bound: 10,
+    };
+    let mut ctx = log.start_turn("t1", "bounded classify");
+    let engine = dex_loop::Engine::new(
+        log.clone(),
+        model,
+        tools.clone(),
+        FakeEffects::default(),
+        dex_loop::Lexicon::default(),
+        Budget {
+            max_cost_micros: 60,
+            max_tokens: 24,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            engine.run(&mut ctx, &CancellationToken::new())
+        )
+        .await,
+        Ok(Ok(Exit::Done))
+    );
+    assert_eq!(tools.peak.load(Ordering::SeqCst), 4);
+    assert_eq!(tools.active.load(Ordering::SeqCst), 0);
+    assert_eq!(outer_result(&log, "t1-1-0").0, Outcome::Succeeded);
+    assert_eq!(ctx.usage().cost_micros, 50);
+    assert_eq!(ctx.usage().tokens(), 20);
+    assert_eq!(
+        log.events()
+            .iter()
+            .filter(|event| matches!(event, Event::Usage(_)))
+            .count(),
+        5
+    );
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+#[tokio::test]
+async fn usage_above_owner_reservation_is_retained_and_blocks_new_spend() {
+    use std::sync::{Arc, atomic::AtomicUsize};
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![script(
+            "await tools.classify({key:'one'}); await tools.classify({key:'two'}).catch(e=>text(String(e)));",
+        )],
+        vec![text("cannot dispatch")],
+    ]);
+    let tools = ConcurrentMeteredTools {
+        inner: MeteredTools {
+            inner: FakeTools::new(vec![read_tool("classify")]),
+            known_usage: true,
+        },
+        active: Arc::new(AtomicUsize::new(0)),
+        peak: Arc::new(AtomicUsize::new(0)),
+        bound: 9,
+    };
+    let mut ctx = log.start_turn("t1", "reservation violation");
+    let engine = dex_loop::Engine::new(
+        log.clone(),
+        model.clone(),
+        tools.clone(),
+        FakeEffects::default(),
+        dex_loop::Lexicon::default(),
+        Budget {
+            max_cost_micros: 30,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Failed)
+    );
+    assert_eq!(tools.inner.inner.runs().len(), 1);
+    assert_eq!(ctx.usage().cost_micros, 10);
+    assert_eq!(model.seen().len(), 1);
+    assert!(log.events().iter().any(|event|matches!(event,Event::ModelUsageUnresolved {reason,..} if reason.contains("exceeded"))));
+    assert_eq!(outer_result(&log, "t1-1-0").0, Outcome::Unknown);
+    assert_eq!(log.rehydrate(), ctx);
+}
+
+#[derive(Clone)]
+struct NonCooperativeClassifier(FakeTools);
+impl Tools for NonCooperativeClassifier {
+    fn catalog(&self) -> &[ToolSpec] {
+        self.0.catalog()
+    }
+    fn codemode_model_operation(&self, name: &ToolName) -> Option<dex_loop::ModelOperation> {
+        (name.as_str() == "classify").then_some(dex_loop::ModelOperation::Classify)
+    }
+    async fn search(&self, principal: &PrincipalId, query: &str) -> Vec<ToolName> {
+        self.0.search(principal, query).await
+    }
+    async fn policy(&self, ctx: &Context, call: &ProposedCall) -> Verdict {
+        self.0.policy(ctx, call).await
+    }
+    async fn run(&self, _: &ThreadId, _: &ProposedCall, _: &CancellationToken) -> ToolResult {
+        std::future::pending().await
+    }
+    async fn model_usage(
+        &self,
+        _: &Context,
+        _: &ProposedCall,
+        _: &ToolResult,
+    ) -> Result<Option<dex_loop::Usage>, String> {
+        Err("noncooperative owner did not settle metered usage".into())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn noncooperative_classifier_has_bounded_settlement_and_durable_unknown() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("classify", json!({"key":"one"}))],
+        vec![text("must not dispatch")],
+    ]);
+    let tools = NonCooperativeClassifier(FakeTools::new(vec![read_tool("classify")]));
+    let effects = FakeEffects::default();
+    let mut ctx = log.start_turn("t1", "noncooperative classifier");
+    let engine = dex_loop::Engine::new(
+        log.clone(),
+        model.clone(),
+        tools,
+        effects.clone(),
+        dex_loop::Lexicon::default(),
+        Budget::default(),
+    )
+    .with_tool_call_deadline(Duration::from_millis(50));
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Failed)
+    );
+    assert!(started.elapsed() >= Duration::from_secs(30));
+    assert!(started.elapsed() < Duration::from_secs(31));
+    assert_eq!(model.seen().len(), 1);
+    let result = effects
+        .recorded(&dex_loop::CallId::new("t1-1-0"))
+        .flatten()
+        .unwrap();
+    assert_eq!(result.outcome, Outcome::Unknown);
+    assert!(result.receipt.is_none());
     assert_eq!(log.rehydrate(), ctx);
 }

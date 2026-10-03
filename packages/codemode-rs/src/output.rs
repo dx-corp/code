@@ -65,15 +65,23 @@ pub fn image_block(value: Value) -> Result<OutputBlock, String> {
 pub(crate) struct OutputSink {
     pub blocks: Vec<OutputBlock>,
     text_bytes: usize,
+    text_count: usize,
     image_bytes: usize,
     image_count: usize,
 }
 impl OutputSink {
     pub fn text(&mut self, text: String) -> Result<(), String> {
-        if self.blocks.len() >= 1024 || self.text_bytes.saturating_add(text.len()) > 65_536 {
+        // Report::content joins text blocks with one newline, even across
+        // selected images and even when a text block is empty.
+        let bytes = self
+            .text_bytes
+            .saturating_add(text.len())
+            .saturating_add(usize::from(self.text_count > 0));
+        if self.blocks.len() >= 1024 || bytes > 65_536 {
             return Err("maximum 64 KiB script output".into());
         }
-        self.text_bytes += text.len();
+        self.text_bytes = bytes;
+        self.text_count += 1;
         self.blocks.push(OutputBlock::Text { text });
         Ok(())
     }
