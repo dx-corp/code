@@ -132,7 +132,7 @@ use crate::agent::{
 };
 use crate::lsp;
 use crate::mcp::{
-    McpClient, McpConfig, McpConfigScope, McpContent, McpPrompt, McpServerConfig, McpTransport,
+    McpClient, McpConfig, McpConfigScope, McpPrompt, McpServerConfig, McpTransport,
     append_mcp_prompt_summary, load_mcp_config_with_managed_connections,
 };
 use crate::orb_connection::{HostedOrbOwnerBinding, hosted_orb_owner_binding};
@@ -2987,6 +2987,7 @@ pub(crate) fn emit_typed_tool_end(
 
 mod coding_task;
 mod execute;
+mod mcp_output;
 mod tool_registry;
 pub use tool_registry::ToolRegistry;
 #[cfg(test)]

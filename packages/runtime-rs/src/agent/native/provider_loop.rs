@@ -251,13 +251,9 @@ impl NativeAgentRunner {
             // Ordinary budgets historically floor requests at one token and
             // let their caller stop the run. Unmetered auxiliary usage cannot
             // publish invented counters to that caller, so this owner stops it.
-            if self.classifier_budget_uncertain
-                && self
-                    .output_token_budget
-                    .is_some_and(|budget| self.output_tokens_spent >= u64::from(budget))
-            {
+            if self.classifier_budget_uncertain {
                 let _ = self.event_tx.send(FromAgent::Status {
-                    message: "Classification completion or final usage is unknown; the finite output budget is exhausted. Reconcile billing or provide a new output grant before continuing.".into(),
+                    message: "Classification completion, final usage, or its admitted reservation is unresolved. Reconcile the accepted owner request before continuing.".into(),
                 });
                 return Ok(());
             }

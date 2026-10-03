@@ -113,6 +113,7 @@ impl NativeAgentRunner {
         let provider_tools: Vec<Tool> = dynamic_tools
             .iter()
             .map(|tool| Tool {
+                namespace_instructions: None,
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),

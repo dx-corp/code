@@ -190,3 +190,114 @@ async fn conditional_pagination_preserves_selection_with_fewer_model_turns_and_c
         measurements[1].2.as_micros()
     );
 }
+
+struct Fanout {
+    catalog: Vec<ToolSpec>,
+    calls: Arc<Mutex<Vec<Value>>>,
+}
+
+impl Tools for Fanout {
+    fn catalog(&self) -> &[ToolSpec] {
+        &self.catalog
+    }
+    async fn search(&self, _: &PrincipalId, _: &str) -> Vec<ToolName> {
+        Vec::new()
+    }
+    async fn policy(&self, _: &Context, _: &ProposedCall) -> Verdict {
+        Verdict::Allow
+    }
+    async fn run(&self, _: &ThreadId, call: &ProposedCall, _: &CancellationToken) -> ToolResult {
+        self.calls.lock().unwrap().push(call.args.clone());
+        let id = call.args["id"].as_u64().unwrap();
+        ToolResult {
+            outcome: if id == 2 {
+                Outcome::Failed
+            } else {
+                Outcome::Succeeded
+            },
+            output: Output::Text(if id == 2 {
+                "source unavailable".into()
+            } else {
+                json!({"id":id,"detail":"private detail ".repeat(200)}).to_string()
+            }),
+            receipt: None,
+        }
+    }
+}
+
+#[tokio::test]
+async fn fanout_fixture_preserves_successes_and_visible_failure_without_replaying_owner_reads() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call(
+            "codemode",
+            json!({"code":
+                "const rows=await Promise.allSettled([1,2,3].map(id=>tools.lookup({id}))); text(rows.map((row,i)=>row.status==='fulfilled'?{id:row.value.id}:{id:i+1,error:'source unavailable'}));"
+            }),
+        )],
+        vec![text("done")],
+    ]);
+    let dispatched = Arc::default();
+    let tools = Fanout {
+        catalog: vec![read_tool("lookup")],
+        calls: Arc::clone(&dispatched),
+    };
+    let mut context = log.start_turn(
+        "fanout-qualification",
+        "Select IDs and identify unavailable sources.",
+    );
+    assert_eq!(
+        Engine::new(
+            log.clone(),
+            model.clone(),
+            tools,
+            FakeEffects::default(),
+            Lexicon::default(),
+            Budget::default()
+        )
+        .run(&mut context, &CancellationToken::new())
+        .await,
+        Ok(Exit::Done)
+    );
+    let histories = model.seen();
+    let results = tool_texts(histories.last().unwrap());
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(results[0]).unwrap(),
+        json!([{ "id":1 }, { "id":2,"error":"source unavailable" }, { "id":3 }])
+    );
+    let mut calls = dispatched.lock().unwrap().clone();
+    calls.sort_by_key(|args| args["id"].as_u64().unwrap());
+    assert_eq!(
+        calls,
+        vec![json!({"id":1}), json!({"id":2}), json!({"id":3})]
+    );
+    let events = log.events();
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            dex_loop::Event::ToolStarted { call, tool, .. } if tool.as_str() == "lookup" => {
+                Some(call)
+            }
+            _ => None,
+        })
+        .collect();
+    let finishes: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            dex_loop::Event::ToolFinished { call, outcome, .. } if started.contains(&call) => {
+                Some(*outcome)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finishes.len(), 3);
+    assert_eq!(
+        finishes
+            .iter()
+            .filter(|outcome| **outcome == Outcome::Failed)
+            .count(),
+        1
+    );
+    assert_eq!(log.rehydrate(), context);
+}

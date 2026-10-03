@@ -120,6 +120,9 @@ impl CodeModeChildProgress {
 /// Typed internal result used by native execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecution {
+    /// Owner data for script composition, independent of human-facing rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_value: Option<serde_json::Value>,
     pub outcome: ToolOutcome,
     pub receipt: ExecutionReceipt,
     /// Runtime-owned scratch commit; never provider content or receipt details.
@@ -150,6 +153,7 @@ impl ToolExecution {
     ) -> Self {
         let outcome = ToolOutcome::Denied { reason };
         Self {
+            script_value: None,
             codemode_store: None,
             images: Vec::new(),
             outcome: outcome.clone(),
@@ -175,6 +179,16 @@ impl ToolExecution {
     ) -> Self {
         let call_id = call_id.into();
         let tool_name = tool_name.into();
+        let script_value = result.details.as_ref().filter(|details| {
+            tool_name.starts_with("mcp__") && matches!(source, ExecutionSource::Native | ExecutionSource::Cache) &&
+            details.get("server").and_then(serde_json::Value::as_str).is_some()
+                && details.get("tool").and_then(serde_json::Value::as_str).is_some()
+                && details.get("content").and_then(serde_json::Value::as_array).is_some()
+                && details.get("isError").and_then(serde_json::Value::as_bool).is_some()
+        }).map(|details| serde_json::json!({
+            "content": details["content"], "isError": details["isError"],
+            "structuredContent": details.get("structuredContent").cloned().unwrap_or(serde_json::Value::Null)
+        }));
         let details = receipt_details(&tool_name, result.details.as_ref());
         let cancelled = result.details.as_ref().is_some_and(|details| {
             details
@@ -217,6 +231,7 @@ impl ToolExecution {
         };
 
         Self {
+            script_value,
             codemode_store: None,
             images: Vec::new(),
             outcome: outcome.clone(),
@@ -248,6 +263,7 @@ impl ToolExecution {
     ) -> Self {
         let outcome = ToolOutcome::Cancelled { phase };
         Self {
+            script_value: None,
             codemode_store: None,
             images: Vec::new(),
             outcome: outcome.clone(),
@@ -2166,5 +2182,26 @@ mod tests {
             ensure_untrusted_content_policy(Some(base.clone())),
             Some(base)
         );
+    }
+    #[test]
+    fn codemode_mcp_envelope_keeps_absent_structure_explicit_and_errors_truthful() {
+        for is_error in [false, true] {
+            let mut result = ToolResult::success("page").with_details(serde_json::json!({"server":"catalog","tool":"list","content":[{"type":"text","text":"page"}],"isError":is_error}));
+            if is_error {
+                result.success = false;
+                result.error = Some("MCP tool reported an error".into());
+            }
+            let execution = ToolExecution::from_legacy(
+                "call",
+                "mcp__catalog__list",
+                ExecutionSource::Native,
+                result,
+            );
+            let value = execution.script_value.as_ref().unwrap();
+            assert_eq!(value["structuredContent"], serde_json::Value::Null);
+            assert_eq!(value["content"][0]["text"], "page");
+            assert_eq!(value["isError"], is_error);
+            assert_eq!(execution.is_error(), is_error);
+        }
     }
 }

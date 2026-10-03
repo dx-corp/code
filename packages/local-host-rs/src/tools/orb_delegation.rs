@@ -996,6 +996,7 @@ mod tests {
                         .map(|result| {
                             result
                                 .map(|value| McpToolResult {
+                                    structured_content: None,
                                     content: vec![McpContent::Text {
                                         text: serde_json::to_string(&value).unwrap(),
                                     }],

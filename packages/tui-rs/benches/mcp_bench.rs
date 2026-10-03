@@ -192,6 +192,7 @@ fn bench_mcp_tool_conversion(c: &mut Criterion) {
 /// Benchmark McpToolResult to_string
 fn bench_mcp_tool_result(c: &mut Criterion) {
     let result = McpToolResult {
+        structured_content: None,
         content: vec![
             McpContent::Text {
                 text: "Line 1 of output".to_string(),

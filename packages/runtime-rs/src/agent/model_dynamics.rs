@@ -62,6 +62,8 @@ pub struct ModelDynamicsConfig {
     pub boost: Option<ModelChoice>,
     /// Optional tool-free summarizer; the active conversation model is unchanged.
     pub summary_model: Option<String>,
+    /// Trusted tool-free classifier route; defaults to the active model.
+    pub classifier_model: Option<String>,
     pub fallbacks: Vec<ModelChoice>,
     pub auto_boost: bool,
 }

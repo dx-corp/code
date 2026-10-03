@@ -528,7 +528,20 @@ impl NativeAgentRunner {
             let description = format!(
                 "{}\n\n{}",
                 agent_codemode::DESCRIPTION,
-                agent_codemode::declaration_description(&self.codemode_catalog(), 3000)
+                agent_codemode::declaration_description(
+                    &self
+                        .codemode_catalog()
+                        .into_iter()
+                        .filter(|candidate| {
+                            self.active_tool_names
+                                .contains(&candidate.name.to_ascii_lowercase())
+                                && !tools
+                                    .iter()
+                                    .any(|direct| direct.name.eq_ignore_ascii_case(&candidate.name))
+                        })
+                        .collect::<Vec<_>>(),
+                    3000
+                )
             );
             Arc::new(
                 tools

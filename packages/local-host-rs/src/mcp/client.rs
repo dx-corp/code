@@ -208,6 +208,7 @@ pub struct McpConnection {
     pending: PendingResponses,
     /// Available tools
     tools: Vec<McpTool>,
+    namespace_instructions: Option<String>,
     /// Available resources
     resources: Vec<McpResource>,
     /// Available prompts
@@ -249,6 +250,7 @@ impl McpConnection {
             next_id: AtomicU64::new(1),
             pending: Arc::new(std::sync::Mutex::new(HashMap::new())),
             tools: Vec::new(),
+            namespace_instructions: None,
             resources: Vec::new(),
             prompts: Vec::new(),
             initialized: false,
@@ -293,6 +295,7 @@ impl McpConnection {
         // catalog before exposing it or recording its schema baseline.
         let listed = http_conn.tools().to_vec();
         let _ = self.admit_tools(listed);
+        self.namespace_instructions = http_conn.instructions().map(str::to_owned);
         self.resources = http_conn.resources().to_vec();
         self.prompts = http_conn.prompts().to_vec();
         self.initialized = true;
@@ -436,9 +439,13 @@ impl McpConnection {
         let request = McpRequest::initialize(self.next_id(), &ClientInfo::default());
         let response = self.send_request(request).await?;
 
-        let _init_result: InitializeResult = response
+        let init_result: InitializeResult = response
             .result_as()
             .map_err(|e| McpError::Protocol(format!("Invalid initialize response: {e}")))?;
+
+        self.namespace_instructions = init_result
+            .instructions
+            .map(|text| text.chars().take(4096).collect());
 
         // Send initialized notification
         let notification = serde_json::json!({
@@ -1271,7 +1278,9 @@ impl McpClient {
                 continue;
             }
             for tool in conn.tools() {
-                tools.push(tool.to_tool(name));
+                let mut definition = tool.to_tool(name);
+                definition.namespace_instructions = conn.namespace_instructions.clone();
+                tools.push(definition);
             }
         }
 

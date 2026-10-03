@@ -476,6 +476,30 @@ impl NativeAgentRunner {
                 .with_managed_policy(self.tool_executor.managed_policy_metadata());
             }
         };
+        if self.codemode_parent_call_id.is_some()
+            && (self.codemode_indeterminate || self.classifier_budget_uncertain)
+        {
+            let execution = ToolExecution::denied(call_id, tool_name, DenialReason::ActionFirewall { message: "A prior accepted nested operation has an unknown outcome; reconcile it before further calls".into() }).with_managed_policy(self.tool_executor.managed_policy_metadata());
+            self.record_tool_operation_outcome(operation, &execution)
+                .await;
+            return execution;
+        }
+        if self
+            .codemode_cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            let execution = ToolExecution::cancelled(
+                call_id,
+                tool_name,
+                ExecutionSource::Native,
+                ExecutionPhase::Queued,
+            )
+            .with_managed_policy(self.tool_executor.managed_policy_metadata());
+            self.record_tool_operation_outcome(operation, &execution)
+                .await;
+            return execution;
+        }
         let started = Instant::now();
         let span = tool_span_for_call(tool_name, Some(call_id));
         if tool_name.eq_ignore_ascii_case("recall_output") {
@@ -743,6 +767,15 @@ impl NativeAgentRunner {
             }
         }
         let content = content.content;
+        let owner_script_value = (!self
+            .external_tools
+            .contains(&tool_name.to_ascii_lowercase()))
+        .then(|| result.script_value.clone())
+        .flatten();
+        let script_value = owner_script_value.clone().unwrap_or_else(|| {
+            serde_json::from_str(&content).unwrap_or(Value::String(content.clone()))
+        });
+        let accepted_mcp_error = owner_script_value.is_some() && is_error;
 
         let hook_outcome = if approved {
             // Execute hooks only for tools that were allowed to run.
@@ -805,6 +838,7 @@ impl NativeAgentRunner {
         // Hand the finished call to the extensions. The `doom-loop` tenant
         // records it here, which is where `SafetyController::record_tool_call`
         // used to be called directly.
+        let before_extensions = self.credential_vault.vault_in_text(&result_content);
         let (mut result_content, mut reported_error) = self.apply_tool_result_extensions(
             &call_id,
             &tool_name,
@@ -825,6 +859,15 @@ impl NativeAgentRunner {
             reported_error = true;
         }
 
+        if hook_outcome.rejected.is_none() && (!reported_error || accepted_mcp_error) {
+            self.retain_codemode_value(
+                &call_id,
+                &script_value,
+                &before_extensions,
+                &result_content,
+                accepted_mcp_error,
+            );
+        }
         self.complete_tool_operation(&call_id).await;
         ContentBlock::ToolResult {
             tool_use_id: call_id,
@@ -908,131 +951,5 @@ impl NativeAgentRunner {
             self.codemode_cancelled_calls.extend(cancelled_ids);
         }
         true
-    }
-    pub(super) async fn drain_read_only_tool_calls(
-        &mut self,
-        pending: &mut Vec<QueuedReadOnlyToolExecution>,
-        tool_results: &mut Vec<ContentBlock>,
-    ) -> Result<()> {
-        if pending.is_empty() {
-            return Ok(());
-        }
-
-        let pending_calls = std::mem::take(pending);
-        let mut operations = HashMap::new();
-        for call in &pending_calls {
-            let operation = self
-                .begin_tool_operation(&call.call_id, &call.tool_name, &call.execution_args)
-                .await
-                .map_err(anyhow::Error::msg)?;
-            operations.insert(call.call_id.clone(), operation);
-        }
-        let cancel_token = self
-            .codemode_cancel
-            .as_ref()
-            .unwrap_or(&self.shutdown_token)
-            .child_token();
-        self.set_active_tool_cancel_token(Some(cancel_token.clone()), false);
-        // These calls run concurrently in one batch, so the batch is the only
-        // interval this path can measure. Each call is reported with the batch
-        // elapsed, which is an upper bound on its own -- documented in
-        // `docs/design/HOOKS_SYSTEM.md` so a hook reading `durationMs` knows
-        // what it is looking at.
-        let wave_started = Instant::now();
-        let mut results_by_call_id = execute_native_read_only_tool_wave(
-            &self.tool_executor,
-            &self.event_tx,
-            &pending_calls,
-            Some(cancel_token),
-        )
-        .await;
-        let wave_duration_ms = wave_started.elapsed().as_millis() as u64;
-        self.set_active_tool_cancel_token(None, false);
-
-        for call in pending_calls {
-            let result = results_by_call_id.remove(&call.call_id).unwrap_or_else(|| {
-                ToolExecution::from_legacy(
-                    &call.call_id,
-                    &call.tool_name,
-                    ExecutionSource::Native,
-                    ToolResult::failure("Tool task did not return a result"),
-                )
-                .with_managed_policy(self.tool_executor.managed_policy_metadata())
-            });
-            if let Some(operation) = operations.remove(&call.call_id) {
-                self.record_tool_operation_outcome(operation, &result).await;
-            }
-            let content = self
-                .credential_vault
-                .vault_in_text(&if self.codemode_cancel.is_some() {
-                    result.raw_content()
-                } else {
-                    result.model_content()
-                });
-            let is_error = result.is_error();
-
-            // Hooks receive the tool body before the model-facing envelope;
-            // the shared dispatcher vaults credentials first.
-            let hook_outcome = run_post_execution_hooks(
-                &self.hooks,
-                &self.credential_vault,
-                PostExecutionHookInput {
-                    tool_name: &call.tool_name,
-                    call_id: &call.call_id,
-                    args: &call.args,
-                    raw_output: &result.raw_content(),
-                    is_error,
-                    duration_ms: result.receipt.duration_ms.unwrap_or(wave_duration_ms),
-                },
-            )
-            .await;
-            let reported_error = is_error || hook_outcome.rejected.is_some();
-
-            let mut final_content = append_hook_context(
-                &self.hooks,
-                content,
-                NativeHookEvent::PreToolUse,
-                call.extra_context.as_deref(),
-            );
-            final_content = append_hook_context(
-                &self.hooks,
-                final_content,
-                NativeHookEvent::PostToolUse,
-                hook_outcome.context.as_deref(),
-            );
-            if let Some(reason) = &hook_outcome.rejected {
-                final_content =
-                    format!("{final_content}\n\n[Eval gate rejected this result: {reason}]");
-            }
-
-            if let Err(err) = apply_workflow_state_hooks(
-                &call.tool_name,
-                &call.call_id,
-                &call.args,
-                &mut self.workflow_state,
-                is_error,
-            ) {
-                final_content = format!("{}\n\n[Workflow error: {}]", final_content, err.message);
-            }
-
-            let (final_content, reported_error) = self.apply_tool_result_extensions(
-                &call.call_id,
-                &call.tool_name,
-                &call.safe_args,
-                result.receipt.duration_ms.unwrap_or(wave_duration_ms),
-                final_content,
-                reported_error,
-                Some(&result.receipt),
-            );
-
-            tool_results.push(ContentBlock::ToolResult {
-                tool_use_id: call.call_id.clone(),
-                content: final_content,
-                is_error: Some(reported_error),
-            });
-            self.complete_tool_operation(&call.call_id).await;
-        }
-
-        Ok(())
     }
 }

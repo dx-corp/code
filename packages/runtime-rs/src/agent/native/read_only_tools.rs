@@ -1,11 +1,4 @@
-use std::collections::HashMap;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
-
-use super::super::{FromAgent, ToolExecution};
-use crate::agent::native_host::{
-    NativeExecutionHostHandle, NativeReadOnlyToolCall, NativeToolAnnotations,
-};
+use crate::agent::native_host::{NativeExecutionHostHandle, NativeToolAnnotations};
 
 #[derive(Debug)]
 pub(super) struct QueuedReadOnlyToolExecution {
@@ -78,25 +71,6 @@ pub(super) fn is_explicit_inline_read_only_tool(
     tool_executor: &NativeExecutionHostHandle,
 ) -> bool {
     tool_executor.is_explicit_inline_read_only_tool(tool_name)
-}
-
-pub(super) async fn execute_native_read_only_tool_wave(
-    tool_executor: &NativeExecutionHostHandle,
-    event_tx: &mpsc::UnboundedSender<FromAgent>,
-    pending: &[QueuedReadOnlyToolExecution],
-    cancel_token: Option<CancellationToken>,
-) -> HashMap<String, ToolExecution> {
-    let calls: Vec<NativeReadOnlyToolCall> = pending
-        .iter()
-        .map(|call| NativeReadOnlyToolCall {
-            call_id: call.call_id.clone(),
-            tool_name: call.tool_name.clone(),
-            args: call.execution_args.clone(),
-        })
-        .collect();
-    tool_executor
-        .execute_read_only_wave(&calls, event_tx, cancel_token)
-        .await
 }
 
 #[cfg(test)]

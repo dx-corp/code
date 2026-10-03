@@ -263,6 +263,7 @@ impl InlineTool {
     #[must_use]
     pub fn to_tool(&self) -> Tool {
         Tool {
+            namespace_instructions: None,
             name: self.definition.name.clone(),
             description: self.definition.description.clone(),
             input_schema: self.build_schema(),

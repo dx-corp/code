@@ -319,6 +319,21 @@ pub trait NativeExecutionHost: Send + Sync {
         event_tx: &'a mpsc::UnboundedSender<FromAgent>,
         cancel: Option<CancellationToken>,
     ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>>;
+    fn execute_read_only_wave_stream<'a>(
+        &'a self,
+        calls: &'a [NativeReadOnlyToolCall],
+        event_tx: &'a mpsc::UnboundedSender<FromAgent>,
+        cancel: Option<CancellationToken>,
+        completions: mpsc::UnboundedSender<(String, ToolExecution)>,
+    ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
+        Box::pin(async move {
+            let results = self.execute_read_only_wave(calls, event_tx, cancel).await;
+            for (id, result) in &results {
+                let _ = completions.send((id.clone(), result.clone()));
+            }
+            results
+        })
+    }
     fn clear_cache(&self);
     fn set_steer_signal(&self, signal: Arc<SteerSignal>);
     fn reset_coding_turn(&self);
@@ -691,6 +706,17 @@ impl NativeExecutionHostHandle {
         cancel: Option<CancellationToken>,
     ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
         self.0.execute_read_only_wave(calls, event_tx, cancel)
+    }
+
+    pub fn execute_read_only_wave_stream<'a>(
+        &'a self,
+        calls: &'a [NativeReadOnlyToolCall],
+        event_tx: &'a mpsc::UnboundedSender<FromAgent>,
+        cancel: Option<CancellationToken>,
+        completions: mpsc::UnboundedSender<(String, ToolExecution)>,
+    ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
+        self.0
+            .execute_read_only_wave_stream(calls, event_tx, cancel, completions)
     }
 
     pub fn clear_cache(&self) {

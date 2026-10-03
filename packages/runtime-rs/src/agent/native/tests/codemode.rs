@@ -1063,14 +1063,35 @@ async fn classifier_provider_fixture(
     Vec<Value>,
     Vec<maestro_runtime_contracts::ToolOperationRecord>,
 ) {
+    classifier_provider_usage_fixture(code, label, with_usage, budget, model, partial_usage, 9)
+        .await
+}
+
+async fn classifier_provider_usage_fixture(
+    code: &str,
+    label: &str,
+    with_usage: bool,
+    budget: Option<u32>,
+    model: &str,
+    partial_usage: bool,
+    billed_output_tokens: u64,
+) -> (
+    Vec<Value>,
+    Vec<maestro_runtime_contracts::ToolOperationRecord>,
+) {
     let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workspace.path().join("eligible-read.txt"),
+        "known readable fixture",
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let code = code.to_owned();
     let label = label.to_owned();
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for index in 0..if budget.is_some() && (!with_usage || partial_usage) {
+        for index in 0..if !with_usage || partial_usage || billed_output_tokens > 512 {
             2
         } else {
             3
@@ -1087,7 +1108,7 @@ async fn classifier_provider_fixture(
                 let chunk = json!({"id":"script","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"classifier-script","type":"function","function":{"name":"codemode","arguments":json!({"code":code}).to_string()}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":10}});
                 format!("data: {chunk}\n\ndata: [DONE]\n\n")
             } else if !is_tool_followup {
-                let mut chunk = json!({"id":"classified","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":json!({"label":label,"confidence":0.9}).to_string()},"finish_reason":"stop"}],"usage":{"prompt_tokens":17,"completion_tokens":9}});
+                let mut chunk = json!({"id":"classified","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":json!({"label":label,"confidence":0.9}).to_string()},"finish_reason":"stop"}],"usage":{"prompt_tokens":17,"completion_tokens":billed_output_tokens}});
                 if partial_usage {
                     chunk["usage"]
                         .as_object_mut()
@@ -1369,12 +1390,18 @@ async fn codemode_compacted_image_identity_prevents_old_image_reinsertion() {
 }
 
 #[test]
-fn codemode_mcp_flattened_result_has_unknown_return_declaration() {
+fn codemode_mcp_envelope_declaration_matches_script_result() {
     let schema = json!({"type":"object","properties":{"cursor":{"type":"string"}}});
     let tool = Tool::new("mcp__catalog__list", "Advertised structured result")
         .with_output_schema(schema.clone());
     assert_eq!(tool.output_schema, Some(schema));
-    assert!(super::super::codemode::output_schema(&tool, &CredentialVault::new()).is_none());
+    let output = super::super::codemode::output_schema(&tool, &CredentialVault::new()).unwrap();
+    assert_eq!(
+        output["properties"]["structuredContent"]["anyOf"][0],
+        tool.output_schema.unwrap()
+    );
+    assert_eq!(output["properties"]["content"]["type"], "array");
+    assert_eq!(output["properties"]["isError"]["type"], "boolean");
 }
 
 #[test]
@@ -1426,4 +1453,549 @@ fn codemode_store_sanitizes_nested_credentials_and_key_collisions() {
     assert_eq!(safe["counter"], 2);
     let collision = json!({(secret):1,(reference):2});
     assert!(super::super::codemode::vault_script_json(&collision, &vault).is_err());
+}
+
+#[tokio::test]
+async fn codemode_allowed_hook_context_preserves_typed_read_value() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workspace.path().join("typed.json"),
+        r#"{"label":"yes","confidence":0.9}"#,
+    )
+    .unwrap();
+    let (client, server) = codemode_http_fixture(
+        "const value = await tools.read({path:'typed.json'}); text(value.label);",
+    )
+    .await;
+    let mut host = RuntimeTestHost::new(workspace.path(), client);
+    host.post_tool_context = Some("Allowed contextual guidance".into());
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent
+        .prompt("Read typed value".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    let result = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .unwrap();
+    assert!(
+        result["content"].as_str().unwrap().contains("yes"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn codemode_inline_description_does_not_repeat_directly_declared_tools() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (client, server) = codemode_http_fixture("text('done');").await;
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let host = RuntimeTestHost::new(workspace.path(), client);
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent
+        .prompt("Inspect declarations".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    let declarations = requests[0]["tools"].as_array().unwrap();
+    let description = declarations
+        .iter()
+        .find(|t| t["function"]["name"] == "codemode")
+        .unwrap()["function"]["description"]
+        .as_str()
+        .unwrap();
+    for tool in declarations {
+        let name = tool["function"]["name"].as_str().unwrap();
+        if name != "codemode" {
+            assert!(
+                !description.contains(&format!("\"{name}\"(args:")),
+                "Direct declaration repeated: {name}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn codemode_read_race_and_dependent_pipeline_settle_before_unrelated_read() {
+    let workspace = tempfile::tempdir().unwrap();
+    for (path, label) in [
+        ("slow.json", "slow"),
+        ("fast.json", "fast"),
+        ("dependent.json", "dependent"),
+    ] {
+        std::fs::write(
+            workspace.path().join(path),
+            json!({"label":label}).to_string(),
+        )
+        .unwrap();
+    }
+    let code = "const slow = tools.read({path:'slow.json'}); const fast = tools.read({path:'fast.json'}); const winner = await Promise.race([slow, fast]); const next = await tools.read({path:'dependent.json'}); text(winner.label + ':' + next.label);";
+    let (client, server) = codemode_http_fixture(code).await;
+    let mut host = RuntimeTestHost::new(workspace.path(), client);
+    host.read_delays
+        .insert("slow.json".into(), Duration::from_secs(2));
+    host.read_delays
+        .insert("fast.json".into(), Duration::from_millis(10));
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let host = host.with_tool_operation_journal(journal.clone());
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent
+        .prompt("Race then dependent read".into(), vec![])
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), wait_for_turn_completed(&mut events))
+        .await
+        .expect("Race/dependent read waited for unrelated slow read");
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    assert!(
+        requests[1].to_string().contains("fast:dependent"),
+        "{}",
+        requests[1]
+    );
+    let records = journal.lock().unwrap();
+    assert!(records.iter().any(|record| record.call_id == "script-1/0"
+        && record.outcome.as_ref().is_some_and(|outcome| {
+            outcome
+                .receipt
+                .as_ref()
+                .is_some_and(|receipt| matches!(receipt.status, ExecutionStatus::Cancelled { .. }))
+        })));
+}
+
+#[tokio::test]
+async fn codemode_mcp_accepted_structured_error_retains_data_but_hook_denial_rejects() {
+    for reject in [false, true] {
+        let workspace = tempfile::tempdir().unwrap();
+        let code = "try { const result = await tools.mcp__catalog__list({}); text(JSON.stringify({error:result.isError,cursor:result.structuredContent.cursor,media:result.content[1].type})); } catch (error) { text('rejected:' + String(error)); }";
+        let (client, server) = codemode_http_fixture(code).await;
+        let mut host = RuntimeTestHost::new(workspace.path(), client);
+        Arc::make_mut(&mut host.tool_definitions).push(ToolDefinition {
+            tool: Tool::new("mcp__catalog__list", "Catalog owner")
+                .with_schema(json!({"type":"object"})),
+            requires_approval: false,
+        });
+        host.mcp_permission_tools
+            .insert("mcp__catalog__list".into());
+        host.mcp_fixture = Some(ToolResult {
+            success: false,
+            output: "page".into(),
+            error: Some("MCP tool reported an error".into()),
+            details: Some(
+                json!({"server":"catalog","tool":"list","content":[{"type":"text","text":"page"},{"type":"image","data":"AA==","mimeType":"image/png"}],"isError":true,"structuredContent":{"cursor":"next"}}),
+            ),
+        });
+        if reject {
+            host.eval_hook = Some(NativeHookResult::Block {
+                reason: "Do not expose this result".into(),
+            });
+        }
+        let config = NativeAgentConfig {
+            model: "openai/gpt-4o".into(),
+            cwd: workspace.path().display().to_string(),
+            approval_mode: ApprovalMode::Yolo,
+            ..Default::default()
+        };
+        let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+        agent
+            .prompt("Read accepted structured error".into(), vec![])
+            .await
+            .unwrap();
+        wait_for_turn_completed(&mut events).await;
+        agent.shutdown().await;
+        let requests = server.await.unwrap();
+        let rendered = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "tool" && message["tool_call_id"] == "script-1")
+            .and_then(|message| message["content"].as_str())
+            .unwrap();
+        if reject {
+            assert!(rendered.contains("rejected:"), "{rendered}");
+            assert!(!rendered.contains("next"), "{rendered}");
+        } else {
+            assert!(rendered.contains("next"), "{rendered}");
+            assert!(rendered.contains("image"), "{rendered}");
+            assert!(!rendered.contains("rejected:"), "{rendered}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn codemode_classifier_wave_reserves_before_parallel_dispatch_and_uses_trusted_route() {
+    let workspace = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let code = "const values = await Promise.all([models.classify({}, {text:'first',labels:['yes','no']}),models.classify({}, {text:'second',labels:['yes','no']})]); text(values.map(value => value.label).join(','));";
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let initial = read_scripted_provider_request(&mut stream).await;
+        let chunk = json!({"id":"wave","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"wave-script","type":"function","function":{"name":"codemode","arguments":json!({"code":code}).to_string()}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":10}});
+        let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        let mut classifiers = Vec::new();
+        // An actual accept barrier: serial classification cannot satisfy it.
+        for _ in 0..2 {
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .expect("Classifier requests must overlap")
+                .unwrap();
+            let request = read_scripted_provider_request(&mut stream).await;
+            classifiers.push((stream, request));
+        }
+        let mut requests = vec![initial];
+        for (mut stream, request) in classifiers {
+            requests.push(request);
+            let chunk = json!({"id":"accepted","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"{\"label\":\"yes\"}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":17,"completion_tokens":9}});
+            let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        }
+        let (mut stream, _) = listener.accept().await.unwrap();
+        requests.push(read_scripted_provider_request(&mut stream).await);
+        let body = chat_sse_response("done", "Done.", false);
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        requests
+    });
+    let client = UnifiedClient::OpenAI(
+        crate::ai::OpenAiClient::with_base_url("test-key", format!("http://{address}/v1")).unwrap(),
+    );
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let host =
+        RuntimeTestHost::new(workspace.path(), client).with_tool_operation_journal(journal.clone());
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        model_dynamics: crate::agent::model_dynamics::ModelDynamicsConfig {
+            classifier_model: Some("openai/gpt-4o-mini".into()),
+            ..Default::default()
+        },
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent.set_output_token_budget(100).unwrap();
+    agent
+        .prompt("Classify a parallel wave".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    let cap_sum = requests[1..3]
+        .iter()
+        .map(|request| request["max_tokens"].as_u64().unwrap())
+        .sum::<u64>();
+    assert!(
+        cap_sum <= 90,
+        "Remaining budget must cover the whole wave: {cap_sum}"
+    );
+    assert!(
+        requests[1..3]
+            .iter()
+            .all(|request| request["model"] == "gpt-4o-mini")
+    );
+    assert_eq!(
+        requests[3]["model"], "gpt-4o",
+        "Chat route remains unchanged"
+    );
+    assert!(requests[3].to_string().contains("yes,yes"));
+    let records = journal.lock().unwrap();
+    let usages = records
+        .iter()
+        .filter(|record| {
+            record.phase == maestro_runtime_contracts::ToolOperationPhase::Completed
+                && record.tool_name == "classify"
+        })
+        .filter_map(|record| record.outcome.as_ref())
+        .filter_map(|outcome| outcome.receipt.as_ref())
+        .filter_map(|receipt| match &receipt.details {
+            super::super::super::protocol::ToolReceiptDetails::ModelInference {
+                usage: Some(usage),
+                ..
+            } => Some(usage.output_tokens),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        usages,
+        [9, 9],
+        "Final usage is charged once per accepted owner request"
+    );
+}
+
+#[tokio::test]
+async fn codemode_read_race_cancels_queued_effect_with_durable_receipt() {
+    let workspace = tempfile::tempdir().unwrap();
+    for path in ["slow.json", "fast.json"] {
+        std::fs::write(workspace.path().join(path), r#"{"label":"read"}"#).unwrap();
+    }
+    let (client, server) = codemode_http_fixture("const slow = tools.read({path:'slow.json'}); const fast = tools.read({path:'fast.json'}); tools.write({path:'should-not-exist',content:'effect'}); text((await Promise.race([slow,fast])).label);").await;
+    let mut host = RuntimeTestHost::new(workspace.path(), client);
+    host.read_delays
+        .insert("slow.json".into(), Duration::from_secs(2));
+    host.read_delays
+        .insert("fast.json".into(), Duration::from_millis(10));
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let executions = host.completed_tool_executions.clone();
+    let host = host.with_tool_operation_journal(journal.clone());
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent
+        .prompt("Race without running queued effect".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    assert!(requests[1].to_string().contains("read"));
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        1,
+        "Only the winning read executed"
+    );
+    assert!(
+        journal
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|record| record.call_id == "script-1/2"
+                && record.outcome.as_ref().is_some_and(|outcome| outcome
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| matches!(
+                        receipt.status,
+                        ExecutionStatus::Cancelled { .. }
+                    ))))
+    );
+}
+
+#[tokio::test]
+async fn codemode_typed_read_and_hook_context_scrub_credentials_before_script_output() {
+    let workspace = tempfile::tempdir().unwrap();
+    let secret = "script-owned-secret-123456789012345";
+    std::fs::write(
+        workspace.path().join("typed.json"),
+        json!({"label":secret,"confidence":0.9}).to_string(),
+    )
+    .unwrap();
+    let vault = CredentialVault::new();
+    let reference = vault.store(secret, crate::agent::CredentialType::Token);
+    let (client, server) = codemode_http_fixture("const value = await tools.read({path:'typed.json'}); text(JSON.stringify({label:value.label,confidence:value.confidence}));").await;
+    let mut host = RuntimeTestHost::new(workspace.path(), client.clone());
+    host.post_tool_context = Some(format!("Allowed context containing {secret}"));
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let resolved = NativeResolvedClient {
+        provider_name: client.provider_name().to_owned(),
+        client: Some(client),
+        model_route: NativeModelRoute::DirectProvider,
+    };
+    let (agent, mut events) = super::super::NativeAgent::start_with_resolved_client(
+        config,
+        NativeExecutionHostHandle::new(Arc::new(host)),
+        vec![],
+        vault,
+        None,
+        resolved,
+    )
+    .unwrap();
+    agent
+        .prompt("Read typed data safely".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    let rendered = requests[1].to_string();
+    assert!(
+        !rendered.contains(secret),
+        "Raw owner credential reached the provider"
+    );
+    assert!(
+        rendered.contains(&reference),
+        "Typed label was not preserved through hook context: {rendered}"
+    );
+    assert!(rendered.contains("0.9"), "{rendered}");
+}
+
+#[tokio::test]
+async fn codemode_classifier_unknown_usage_without_finite_budget_stops_spend_and_effects() {
+    let (requests, records) = classifier_fixture("try{await models.classify({}, {text:'A bird',labels:['bird','car']});}catch(e){} try{await tools.write({path:'unsafe',content:'effect'});}catch(e){} try{await models.classify({}, {text:'Again',labels:['bird','car']});}catch(e){} store('unsafe',1); text('done');", "bird", false, None).await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "Unknown accepted usage cannot admit another provider request"
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|record| record.tool_name == "classify")
+            .filter_map(|record| record.outcome.as_ref())
+            .any(|outcome| outcome
+                .receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.status == ExecutionStatus::Indeterminate))
+    );
+    assert!(
+        records
+            .iter()
+            .filter_map(|record| record.outcome.as_ref())
+            .all(|outcome| outcome.codemode_store.is_none())
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|record| record.tool_name == "write")
+            .filter_map(|record| record.outcome.as_ref())
+            .all(|outcome| outcome
+                .receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.status != ExecutionStatus::Succeeded))
+    );
+}
+
+#[tokio::test]
+async fn codemode_classifier_owner_reservation_breach_preserves_actual_usage_and_stops_effects() {
+    let (requests, records) = classifier_provider_usage_fixture("try{await models.classify({}, {text:'A bird',labels:['bird','car']});}catch(e){} try{await tools.write({path:'unsafe',content:'effect'});}catch(e){} store('unsafe',1); text('done');", "bird", true, None, "openai/gpt-4o", false, 600).await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1]["max_tokens"], 512);
+    let receipt = records
+        .iter()
+        .filter(|record| record.tool_name == "classify")
+        .filter_map(|record| record.outcome.as_ref())
+        .filter_map(|outcome| outcome.receipt.as_ref())
+        .find(|receipt| receipt.status == ExecutionStatus::Indeterminate)
+        .unwrap();
+    match &receipt.details {
+        super::super::super::protocol::ToolReceiptDetails::ModelInference {
+            usage: Some(usage),
+            ..
+        } => assert_eq!(usage.output_tokens, 600),
+        _ => panic!("Actual final owner usage must be retained"),
+    }
+    assert!(
+        records
+            .iter()
+            .filter_map(|record| record.outcome.as_ref())
+            .all(|outcome| outcome.codemode_store.is_none())
+    );
+}
+
+#[test]
+fn codemode_buffered_results_recheck_current_credentials_at_delivery() {
+    let vault = CredentialVault::new();
+    let secret = "later-learned-script-token-1234567890";
+    let original = json!({"token":secret,"count":2});
+    let retained = super::super::codemode::vault_script_json(&original, &vault).unwrap();
+    assert_eq!(
+        retained["token"], secret,
+        "The owner result preceded credential discovery"
+    );
+    let reference = vault.store(secret, crate::agent::CredentialType::Token);
+    for accepted_error in [false, true] {
+        let safe = super::super::codemode::deliver_codemode_response(
+            Some((retained.clone(), original.to_string(), accepted_error)),
+            original.to_string(),
+            accepted_error,
+            &vault,
+        )
+        .unwrap();
+        assert_eq!(safe["token"], reference);
+        assert_eq!(safe["count"], 2);
+    }
+    let fallback = super::super::codemode::deliver_codemode_response(
+        None,
+        original.to_string(),
+        false,
+        &vault,
+    )
+    .unwrap();
+    assert_eq!(fallback["token"], reference);
+    let text =
+        super::super::codemode::deliver_codemode_response(None, secret.into(), false, &vault)
+            .unwrap();
+    assert_eq!(text, reference);
+    let error = super::super::codemode::deliver_codemode_response(
+        None,
+        format!("Denied: {secret}"),
+        true,
+        &vault,
+    )
+    .unwrap_err();
+    assert!(!error.contains(secret));
+    assert!(error.contains(&reference));
+    let collision = json!({(secret):1,(reference):2});
+    assert!(
+        super::super::codemode::deliver_codemode_response(
+            Some((collision.clone(), collision.to_string(), false)),
+            collision.to_string(),
+            false,
+            &vault
+        )
+        .is_err()
+    );
+    assert!(
+        super::super::codemode::deliver_codemode_response(
+            None,
+            collision.to_string(),
+            false,
+            &vault
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn codemode_unknown_classifier_blocks_read_from_same_mixed_wave() {
+    let (requests, records) = classifier_fixture("const classify=models.classify({}, {text:'A bird',labels:['bird','car']}); const read=tools.read({path:'eligible-read.txt'}); await Promise.allSettled([classify,read]); text('done');", "bird", false, None).await;
+    assert_eq!(requests.len(), 2);
+    assert!(records.iter().any(|record| {
+        record.tool_name == "classify"
+            && record
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.receipt.as_ref())
+                .is_some_and(|receipt| receipt.status == ExecutionStatus::Indeterminate)
+    }));
+    assert!(!records.iter().any(|record| {
+        record.tool_name == "read"
+            && record
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.receipt.as_ref())
+                .is_some_and(|receipt| receipt.status == ExecutionStatus::Succeeded)
+    }));
 }

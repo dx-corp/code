@@ -234,6 +234,12 @@ pub trait Tools: Send + Sync {
     fn model_token_bound(&self, _name: &ToolName) -> Option<u64> {
         None
     }
+    fn model_cost_bound_for(&self, call: &ProposedCall) -> Option<u64> {
+        self.model_cost_bound(&call.tool)
+    }
+    fn model_token_bound_for(&self, call: &ProposedCall) -> Option<u64> {
+        self.model_token_bound(&call.tool)
+    }
     fn model_usage(
         &self,
         _ctx: &Context,

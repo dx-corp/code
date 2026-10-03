@@ -251,6 +251,7 @@ mod tests {
         let config = RequestConfig {
             system: Some("a".into()),
             tools: Arc::new(vec![Tool {
+                namespace_instructions: None,
                 name: "bash".into(),
                 description: "a".into(),
                 input_schema: serde_json::json!({"type":"object", "additionalProperties":false,

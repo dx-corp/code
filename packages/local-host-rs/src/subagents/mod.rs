@@ -6009,7 +6009,7 @@ mod tests {
     use futures::future::BoxFuture;
 
     use super::*;
-    use crate::mcp::{McpContent, McpToolResult};
+    use crate::mcp::McpToolResult;
     use crate::tools::orb_delegation::OrbToolCaller;
 
     struct OwnerBindingCaller {
@@ -6080,12 +6080,9 @@ mod tests {
             };
             Box::pin(async move {
                 tokio::time::sleep(self.delay).await;
-                Ok(McpToolResult {
-                    content: vec![McpContent::Text {
-                        text: serde_json::to_string(&value).expect("owner caller response"),
-                    }],
-                    is_error: false,
-                })
+                Ok(McpToolResult::text(
+                    serde_json::to_string(&value).expect("owner caller response"),
+                ))
             })
         }
     }

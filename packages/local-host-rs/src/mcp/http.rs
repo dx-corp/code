@@ -151,6 +151,7 @@ pub struct HttpConnection {
     next_id: AtomicU64,
     /// Available tools
     tools: Vec<McpTool>,
+    namespace_instructions: Option<String>,
     /// Available resources
     resources: Vec<McpResource>,
     /// Available prompts
@@ -225,6 +226,7 @@ impl HttpConnection {
             base_url,
             next_id: AtomicU64::new(1),
             tools: Vec::new(),
+            namespace_instructions: None,
             resources: Vec::new(),
             prompts: Vec::new(),
             initialized: false,
@@ -448,6 +450,10 @@ impl HttpConnection {
             self.protocol_version = Some(init_result.protocol_version);
         }
 
+        self.namespace_instructions = init_result
+            .instructions
+            .map(|text| text.chars().take(4096).collect());
+
         // Send initialized notification
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -544,6 +550,11 @@ impl HttpConnection {
 
         self.prompts = prompts_result.prompts;
         Ok(())
+    }
+
+    /// Bounded untrusted initialize guidance for explicit namespace discovery.
+    pub fn instructions(&self) -> Option<&str> {
+        self.namespace_instructions.as_deref()
     }
 
     /// Get available tools
