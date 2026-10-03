@@ -2739,6 +2739,7 @@ fn test_app_state_with_sessions(sessions: HashMap<String, SessionRecord>) -> App
         shared_sessions: Arc::new(Mutex::new(HashMap::new())),
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
+        native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13272,6 +13273,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         shared_sessions: Arc::new(Mutex::new(HashMap::new())),
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
+        native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13363,6 +13365,7 @@ async fn invalid_session_store_is_left_untouched_and_future_writes_are_blocked()
         shared_sessions: Arc::new(Mutex::new(HashMap::new())),
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
+        native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13501,81 +13504,6 @@ fn enterprise_policy_admin_routes_are_implemented() {
         let head = csrf_head_for_path(method, path, None);
         assert!(is_extended_endpoint(&head));
     }
-}
-#[test]
-fn undo_endpoint_reads_and_consumes_tui_checkpoint_store() {
-    use maestro_local_host::checkpoints::{Checkpoint, CheckpointStore, EntryKind, FileEntry};
-    use sha2::{Digest, Sha256};
-
-    let temp = unique_test_dir("maestro-undo-checkpoint");
-    std::fs::create_dir_all(&temp).unwrap();
-    // Match checkpoint capture: persist the resolved root, not a platform alias.
-    let temp = dunce::canonicalize(temp).unwrap();
-    let file = temp.join("src.txt");
-    let before = b"before";
-    let after = b"after";
-    std::fs::write(&file, after).unwrap();
-    let before_hash = Sha256::digest(before)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let after_hash = Sha256::digest(after)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-
-    let store = CheckpointStore::new(&temp.join("sessions"), "session-1");
-    let checkpoint_dir = store.root().join("checkpoint-1");
-    std::fs::create_dir_all(checkpoint_dir.join("blobs")).unwrap();
-    std::fs::write(checkpoint_dir.join("blobs").join(&before_hash), before).unwrap();
-    let checkpoint = Checkpoint {
-        id: "checkpoint-1".to_string(),
-        created_at: "2026-08-05T00:00:00Z".to_string(),
-        prompt: "edit src.txt".to_string(),
-        repo_root: temp.clone(),
-        head: None,
-        user_turn_index: None,
-        entries: vec![FileEntry {
-            path: "src.txt".to_string(),
-            kind: EntryKind::Modified,
-            pre_blob: Some(before_hash),
-            post_hash: Some(after_hash),
-        }],
-    };
-    std::fs::write(
-        checkpoint_dir.join("checkpoint.json"),
-        serde_json::to_vec(&checkpoint).unwrap(),
-    )
-    .unwrap();
-
-    let head = RequestHead {
-        method: "GET".to_string(),
-        path: "/api/undo".to_string(),
-        query: HashMap::from([(String::from("sessionId"), String::from("session-1"))]),
-        headers: HashMap::new(),
-    };
-    let summary = undo_response_for_store(&head, &store);
-    assert_eq!(summary["totalChanges"], 1);
-    assert_eq!(summary["canUndo"], true);
-
-    let restored = restore_undo_response_for_store(&store);
-    assert_eq!(restored["success"], true, "{restored}");
-    assert_eq!(std::fs::read(&file).unwrap(), before);
-    assert_eq!(store.list().len(), 0);
-    // A missing restore blob must not become success after other file work.
-    std::fs::create_dir_all(&checkpoint_dir).unwrap();
-    std::fs::write(
-        checkpoint_dir.join("checkpoint.json"),
-        serde_json::to_vec(&checkpoint).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(&file, after).unwrap();
-    let failed = restore_undo_response_for_store(&store);
-    assert_eq!(failed["success"], false);
-    assert_eq!(failed["failedFiles"].as_array().unwrap().len(), 1);
-    assert_eq!(std::fs::read(&file).unwrap(), after);
-    assert_eq!(store.list().len(), 1);
-    let _ = std::fs::remove_dir_all(temp);
 }
 
 // ---------------------------------------------------------------------------
@@ -14599,3 +14527,6 @@ async fn platform_a2a_push_evicts_terminal_payloads_and_replay_history() {
     assert!(!tasks.contains_key("callback-0000"));
     assert!(!histories.contains_key("callback-0000"));
 }
+
+#[path = "tests/turn_diffs.rs"]
+mod turn_diff_tests;

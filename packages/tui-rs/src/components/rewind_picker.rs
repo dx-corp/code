@@ -176,6 +176,7 @@ mod tests {
                     kind: EntryKind::Modified,
                     pre_blob: Some("pre".to_string()),
                     post_hash: Some("post".to_string()),
+                    post_snapshot_oversized: false,
                 })
                 .collect(),
         }

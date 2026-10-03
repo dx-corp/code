@@ -692,6 +692,9 @@ pub(super) async fn handle_session_get(
 
     match session_path.tail {
         None => json_response(200, &session_full_value(&session)),
+        Some("turn-diff") => {
+            crate::turn_diffs::session_turn_diff_response(head, state, &session).await
+        }
         Some("timeline") => json_response(200, &session_timeline_value(&session)),
         Some("share") => json_response(
             200,

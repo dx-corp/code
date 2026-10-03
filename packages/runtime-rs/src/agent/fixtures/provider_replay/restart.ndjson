@@ -1,0 +1,65 @@
+{"phase":"parent_created","direction":"outbound","frame":{"method":"initialize","params":{"capabilities":{"experimentalApi":true}}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"$request_id","result":{"protocolVersion":"2025-01-01","capabilities":{"methods":["thread/start","thread/resume","turn/start","turn/interrupt"],"notifications":["item/tool/call","item/agentMessage/delta","turn/completed"]}}}}
+{"phase":"parent_created","direction":"outbound","frame":{"method":"initialized"}}
+{"phase":"parent_created","direction":"outbound","frame":{"method":"thread/start","params":{"model":"gpt-5.5","cwd":"$workspace","approvalPolicy":"on-request","sandbox":"read-only","dynamicTools":[{"name":"spawn_subagent","description":"Fixture spawn_subagent","inputSchema":{"type":"object"}},{"name":"resume_subagent","description":"Fixture resume_subagent","inputSchema":{"type":"object"}}],"developerInstructions":"Fixture replay instructions."}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-parent","sessionId":"thread-parent","parentThreadId":null,"historyMode":"paginated","cwd":"$workspace","status":{"type":"idle"},"turns":[]}}}}
+{"phase":"parent_created","direction":"outbound","frame":{"method":"turn/start","params":{"threadId":"thread-parent","input":[{"type":"text","text":"Inspect the fixture with a child."}]}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"$request_id","result":{"turn":{"id":"turn-parent-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}}
+{"phase":"parent_created","direction":"inbound","frame":{"method":"turn/started","params":{"threadId":"thread-parent","turn":{"id":"turn-parent-1","status":"inProgress","items":[]}}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"approval-command-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-parent","turnId":"turn-parent-1","itemId":"command-1","command":"touch fixture.txt","cwd":"$workspace"}}}
+{"phase":"parent_created","direction":"outbound","frame":{"id":"approval-command-1","result":{"decision":"decline"}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"rpc-call-spawn","method":"item/tool/call","params":{"threadId":"thread-parent","turnId":"turn-parent-1","callId":"call-spawn","tool":"spawn_subagent","arguments":{"task":"Inspect fixture.txt"}}}}
+{"phase":"parent_created","direction":"outbound","frame":{"id":"rpc-call-spawn","result":{"success":true,"contentItems":[{"type":"inputText","text":"child-session"}]}}}
+{"phase":"parent_created","direction":"inbound","frame":{"method":"item/agentMessage/delta","params":{"threadId":"thread-parent","turnId":"turn-parent-1","itemId":"message-turn-parent-1","delta":"Child queued."}}}
+{"phase":"parent_created","direction":"inbound","frame":{"method":"item/completed","params":{"threadId":"thread-parent","turnId":"turn-parent-1","item":{"id":"message-turn-parent-1","type":"agentMessage","text":"Child queued.","phase":"final_answer"}}}}
+{"phase":"parent_created","direction":"inbound","frame":{"method":"turn/completed","params":{"threadId":"thread-parent","turn":{"id":"turn-parent-1","items":[],"status":"completed","error":null}}}}
+{"phase":"parent_created","direction":"outbound","frame":{"method":"thread/read","params":{"threadId":"thread-parent","includeTurns":false}}}
+{"phase":"parent_created","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-parent"}}}}
+{"phase":"child_created","direction":"outbound","frame":{"method":"initialize","params":{"capabilities":{"experimentalApi":true}}}}
+{"phase":"child_created","direction":"inbound","frame":{"id":"$request_id","result":{"protocolVersion":"2025-01-01","capabilities":{"methods":["thread/start","thread/resume","turn/start","turn/interrupt"],"notifications":["item/tool/call","item/agentMessage/delta","turn/completed"]}}}}
+{"phase":"child_created","direction":"outbound","frame":{"method":"initialized"}}
+{"phase":"child_created","direction":"outbound","frame":{"method":"thread/start","params":{"model":"gpt-5.5","cwd":"$workspace","approvalPolicy":"on-request","sandbox":"read-only","dynamicTools":[{"name":"read","description":"Fixture read","inputSchema":{"type":"object"}}],"developerInstructions":"Fixture replay instructions."}}}
+{"phase":"child_created","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-child","sessionId":"thread-child","parentThreadId":"thread-parent","historyMode":"paginated","cwd":"$workspace","status":{"type":"idle"},"turns":[]}}}}
+{"phase":"child_created","direction":"outbound","frame":{"method":"turn/start","params":{"threadId":"thread-child","input":[{"type":"text","text":"Inspect fixture.txt."}]}}}
+{"phase":"child_created","direction":"inbound","frame":{"id":"$request_id","result":{"turn":{"id":"turn-child-1","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}}
+{"phase":"child_created","direction":"inbound","frame":{"method":"turn/started","params":{"threadId":"thread-child","turn":{"id":"turn-child-1","status":"inProgress","items":[]}}}}
+{"phase":"child_created","direction":"inbound","frame":{"id":"rpc-call-read","method":"item/tool/call","params":{"threadId":"thread-child","turnId":"turn-child-1","callId":"call-read","tool":"read","arguments":{"path":"fixture.txt"}}}}
+{"phase":"child_created","direction":"outbound","frame":{"id":"rpc-call-read","result":{"success":true,"contentItems":[{"type":"inputText","text":"fixture contents"}]}}}
+{"phase":"child_created","direction":"inbound","frame":{"method":"item/agentMessage/delta","params":{"threadId":"thread-child","turnId":"turn-child-1","itemId":"message-turn-child-1","delta":"Fixture inspected."}}}
+{"phase":"child_created","direction":"inbound","frame":{"method":"item/completed","params":{"threadId":"thread-child","turnId":"turn-child-1","item":{"id":"message-turn-child-1","type":"agentMessage","text":"Fixture inspected.","phase":"final_answer"}}}}
+{"phase":"child_created","direction":"inbound","frame":{"method":"turn/completed","params":{"threadId":"thread-child","turn":{"id":"turn-child-1","items":[],"status":"completed","error":null}}}}
+{"phase":"child_created","direction":"outbound","frame":{"method":"thread/read","params":{"threadId":"thread-child","includeTurns":false}}}
+{"phase":"child_created","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-child"}}}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"method":"initialize","params":{"capabilities":{"experimentalApi":true}}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"protocolVersion":"2025-01-01","capabilities":{"methods":["thread/start","thread/resume","turn/start","turn/interrupt"],"notifications":["item/tool/call","item/agentMessage/delta","turn/completed"]}}}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"method":"initialized"}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"method":"thread/resume","params":{"threadId":"thread-parent","model":"gpt-5.5","cwd":"$workspace"}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-parent","sessionId":"thread-parent","parentThreadId":null,"historyMode":"paginated","cwd":"$workspace","status":{"type":"idle"},"turns":[]}}}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"method":"turn/start","params":{"threadId":"thread-parent","input":[{"type":"text","text":"Ask the same child to report."}]}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"turn":{"id":"turn-parent-2","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"method":"turn/started","params":{"threadId":"thread-parent","turn":{"id":"turn-parent-2","status":"inProgress","items":[]}}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"id":"rpc-call-resume","method":"item/tool/call","params":{"threadId":"thread-parent","turnId":"turn-parent-2","callId":"call-resume","tool":"resume_subagent","arguments":{"id":"child-session","prompt":"Report the inspection."}}}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"id":"rpc-call-resume","result":{"success":true,"contentItems":[{"type":"inputText","text":"child-session"}]}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"method":"item/agentMessage/delta","params":{"threadId":"thread-parent","turnId":"turn-parent-2","itemId":"message-turn-parent-2","delta":"Existing child resumed."}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"method":"item/completed","params":{"threadId":"thread-parent","turnId":"turn-parent-2","item":{"id":"message-turn-parent-2","type":"agentMessage","text":"Existing child resumed.","phase":"final_answer"}}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"method":"turn/completed","params":{"threadId":"thread-parent","turn":{"id":"turn-parent-2","items":[],"status":"completed","error":null}}}}
+{"phase":"parent_resumed","direction":"outbound","frame":{"method":"thread/read","params":{"threadId":"thread-parent","includeTurns":false}}}
+{"phase":"parent_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-parent"}}}}
+{"phase":"child_resumed","direction":"outbound","frame":{"method":"initialize","params":{"capabilities":{"experimentalApi":true}}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"protocolVersion":"2025-01-01","capabilities":{"methods":["thread/start","thread/resume","turn/start","turn/interrupt"],"notifications":["item/tool/call","item/agentMessage/delta","turn/completed"]}}}}
+{"phase":"child_resumed","direction":"outbound","frame":{"method":"initialized"}}
+{"phase":"child_resumed","direction":"outbound","frame":{"method":"thread/resume","params":{"threadId":"thread-child","model":"gpt-5.5","cwd":"$workspace"}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-child","sessionId":"thread-child","parentThreadId":"thread-parent","historyMode":"paginated","cwd":"$workspace","status":{"type":"idle"},"turns":[]}}}}
+{"phase":"child_resumed","direction":"outbound","frame":{"method":"turn/start","params":{"threadId":"thread-child","input":[{"type":"text","text":"Report the inspection."}]}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"turn":{"id":"turn-child-2","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"method":"turn/started","params":{"threadId":"thread-child","turn":{"id":"turn-child-2","status":"inProgress","items":[]}}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"method":"item/agentMessage/delta","params":{"threadId":"thread-child","turnId":"turn-child-2","itemId":"message-turn-child-2","delta":"Fixture report complete."}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"method":"item/completed","params":{"threadId":"thread-child","turnId":"turn-child-2","item":{"id":"message-turn-child-2","type":"agentMessage","text":"Fixture report complete.","phase":"final_answer"}}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"method":"turn/completed","params":{"threadId":"thread-child","turn":{"id":"turn-child-2","items":[],"status":"completed","error":null}}}}
+{"phase":"child_resumed","direction":"outbound","frame":{"method":"thread/read","params":{"threadId":"thread-child","includeTurns":false}}}
+{"phase":"child_resumed","direction":"inbound","frame":{"id":"$request_id","result":{"thread":{"id":"thread-child"}}}}
+{"phase":"resume_unavailable","direction":"outbound","frame":{"method":"initialize","params":{"capabilities":{"experimentalApi":true}}}}
+{"phase":"resume_unavailable","direction":"inbound","frame":{"id":"$request_id","result":{"protocolVersion":"2025-01-01","capabilities":{"methods":["thread/start","thread/resume","turn/start","turn/interrupt"],"notifications":["item/tool/call","item/agentMessage/delta","turn/completed"]}}}}
+{"phase":"resume_unavailable","direction":"outbound","frame":{"method":"initialized"}}
+{"phase":"resume_unavailable","direction":"outbound","frame":{"method":"thread/resume","params":{"threadId":"thread-parent","model":"gpt-5.5","cwd":"$workspace"}}}
+{"phase":"resume_unavailable","direction":"inbound","frame":{"id":"$request_id","error":{"code":-32000,"message":"Provider temporarily unavailable","data":{"kind":"transportUnavailable"}}}}

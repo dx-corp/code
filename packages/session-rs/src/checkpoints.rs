@@ -230,6 +230,10 @@ pub struct FileEntry {
     /// SHA-256 of the post-turn content. `None` means the file was absent
     /// after the turn.
     pub post_hash: Option<String>,
+    /// Post content exceeded the bounded review snapshot budget. The streamed
+    /// hash still protects rewind and deletion of created files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub post_snapshot_oversized: bool,
 }
 
 /// A finalized checkpoint manifest.
@@ -295,9 +299,35 @@ pub fn begin_turn(
     session_id: &str,
     prompt: &str,
 ) -> Option<PendingTurn> {
+    begin_turn_inner(cwd, sessions_dir, session_id, prompt, false)
+}
+
+/// Bounded native review capture. Unreadable/oversized preimages invalidate the
+/// review rather than silently publishing an empty or partial turn.
+#[must_use]
+pub fn begin_turn_snapshot(
+    cwd: &Path,
+    sessions_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+) -> Option<PendingTurn> {
+    begin_turn_inner(cwd, sessions_dir, session_id, prompt, true)
+}
+
+fn begin_turn_inner(
+    cwd: &Path,
+    sessions_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+    bounded: bool,
+) -> Option<PendingTurn> {
     let repo_root = dunce::canonicalize(git::repo_root(cwd)?).ok()?;
     let head = git_text(&repo_root, &["rev-parse", "--verify", "HEAD"]);
-    let status = status_snapshot(&repo_root)?;
+    let mut status = status_snapshot(&repo_root)?;
+    if bounded {
+        status.untracked = expand_native_untracked(&repo_root, &status.untracked)?;
+        status.dirty.extend(status.untracked.iter().cloned());
+    }
 
     let store = CheckpointStore::new(sessions_dir, session_id);
     let id = format!(
@@ -318,8 +348,25 @@ pub fn begin_turn(
 
     let mut pre_dirty = HashMap::new();
     let mut unreadable = HashSet::new();
+    let mut budget = 512 * 1024;
     for path in status.dirty {
-        match checked_worktree_path(&repo_root, &path).and_then(fs::read) {
+        match checked_worktree_path(&repo_root, &path).and_then(|path| {
+            if !bounded {
+                return fs::read(path);
+            }
+            let mut bytes = Vec::new();
+            fs::File::open(path)?
+                .take(budget + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > budget {
+                return Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    "Preimage exceeds review limit",
+                ));
+            }
+            budget = budget.saturating_sub(bytes.len() as u64);
+            Ok(bytes)
+        }) {
             Ok(bytes) => match store_blob(&cp_dir, &bytes) {
                 Ok(hash) => {
                     pre_dirty.insert(path, Some(hash));
@@ -356,23 +403,81 @@ pub fn begin_turn(
 /// Diff the worktree against the pre-turn snapshot and persist a checkpoint
 /// for everything the turn changed. Returns `None` when nothing changed (the
 /// pending directory is removed) or the repository disappeared.
-pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>> {
+pub fn finalize_turn(pending: PendingTurn) -> io::Result<Option<Checkpoint>> {
+    finalize_turn_inner(pending, false)
+}
+
+/// Retain a completed native turn even when it made no changes. Both sides are
+/// saved in the existing checkpoint store; later reads never consult the worktree.
+pub fn finalize_turn_snapshot(pending: PendingTurn) -> io::Result<Option<Checkpoint>> {
+    finalize_turn_inner(pending, true)
+}
+
+fn finalize_turn_inner(
+    mut pending: PendingTurn,
+    retain_empty: bool,
+) -> io::Result<Option<Checkpoint>> {
     let cp_dir = pending.store.new_checkpoint_dir(&pending.id);
-    let Some(post) = status_snapshot(&pending.repo_root) else {
+    let Some(mut post) = status_snapshot(&pending.repo_root) else {
         let _ = fs::remove_dir_all(&cp_dir);
         return Ok(None);
     };
 
+    if retain_empty {
+        post.untracked = expand_native_untracked(&pending.repo_root, &post.untracked)
+            .ok_or_else(|| io::Error::other("Untracked file list exceeds review limit"))?;
+    }
+    if retain_empty && !pending.unreadable.is_empty() {
+        return Err(io::Error::other("Pre-turn files could not be captured"));
+    }
+    let mut post_budget = 512 * 1024;
+    let dirty_pre_size = if retain_empty {
+        pending
+            .pre_dirty
+            .values()
+            .flatten()
+            .filter_map(|hash| fs::metadata(cp_dir.join("blobs").join(hash)).ok())
+            .map(|metadata| metadata.len())
+            .sum::<u64>()
+    } else {
+        0
+    };
+    let mut pre_budget = (512_u64 * 1024).saturating_sub(dirty_pre_size);
     let mut entries: Vec<FileEntry> = Vec::new();
 
     // Tracked candidates: anything dirty before or after the turn.
     let mut candidates: HashSet<&str> = pending.pre_dirty.keys().map(String::as_str).collect();
     candidates.extend(post.dirty.iter().map(String::as_str));
+    // A turn may commit its edits before ending. Compare the saved beginning
+    // HEAD to the final worktree; current HEAD alone would report pristine.
+    let committed_paths = if retain_empty {
+        let mut command = Command::new("git");
+        if let Some(head) = pending.head.as_deref() {
+            command.args(["diff", "--name-only", "-z", "--no-renames", head, "--"]);
+        } else {
+            command.args(["ls-files", "-z"]);
+        }
+        let output = command.current_dir(&pending.repo_root).output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(
+                "Cannot enumerate turn changes from saved HEAD",
+            ));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    candidates.extend(committed_paths.iter().map(String::as_str));
     for path in candidates {
         if pending.unreadable.contains(path) {
             continue;
         }
-        if pending.pre_untracked.contains(path) {
+        if pending.pre_untracked.contains(path) && !retain_empty {
             // Pre-existing untracked file: content was never snapshotted.
             continue;
         }
@@ -382,19 +487,51 @@ pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>>
                 // Clean at turn start: pre-turn content is the HEAD blob. If
                 // the file is not in HEAD it was created (and staged) during
                 // the turn.
+                if retain_empty
+                    && pending
+                        .head
+                        .as_deref()
+                        .and_then(|head| {
+                            git_text(
+                                &pending.repo_root,
+                                &["cat-file", "-s", &format!("{head}:{path}")],
+                            )
+                        })
+                        .and_then(|size| size.trim().parse::<u64>().ok())
+                        .is_some_and(|size| size > pre_budget)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::FileTooLarge,
+                        "Preimage exceeds review limit",
+                    ));
+                }
                 pending
                     .head
                     .as_deref()
                     .and_then(|head| head_blob(&pending.repo_root, head, path))
-                    .map(|bytes| store_blob(&cp_dir, &bytes))
+                    .map(|bytes| {
+                        if retain_empty {
+                            if bytes.len() as u64 > pre_budget {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::FileTooLarge,
+                                    "Preimage exceeds review limit",
+                                ));
+                            }
+                            pre_budget -= bytes.len() as u64;
+                        }
+                        store_blob(&cp_dir, &bytes)
+                    })
                     .transpose()?
             }
         };
-        let Ok(post_hash) =
-            checked_worktree_path(&pending.repo_root, path).and_then(|path| file_hash(&path))
-        else {
-            continue;
-        };
+        let (post_hash, post_snapshot_oversized) =
+            match checked_worktree_path(&pending.repo_root, path)
+                .and_then(|path| snapshot_file(&cp_dir, &path, retain_empty, &mut post_budget))
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) if retain_empty => return Err(error),
+                Err(_) => continue,
+            };
         if pre_blob == post_hash {
             continue;
         }
@@ -408,6 +545,7 @@ pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>>
             kind,
             pre_blob,
             post_hash,
+            post_snapshot_oversized,
         });
     }
 
@@ -423,31 +561,45 @@ pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>>
                 &mut files,
             );
             if files.len() > MAX_EXPANDED_UNTRACKED_FILES {
+                if retain_empty {
+                    return Err(io::Error::other("Created file list exceeds review limit"));
+                }
                 continue;
             }
             for (rel, abs) in files {
-                if let Ok(Some(hash)) = file_hash(&abs) {
+                let snapshot = snapshot_file(&cp_dir, &abs, retain_empty, &mut post_budget);
+                if retain_empty && snapshot.is_err() {
+                    return Err(snapshot.expect_err("capture failed"));
+                }
+                if let Ok((Some(hash), post_snapshot_oversized)) = snapshot {
                     entries.push(FileEntry {
                         path: rel,
                         kind: EntryKind::Created,
                         pre_blob: None,
                         post_hash: Some(hash),
+                        post_snapshot_oversized,
                     });
                 }
             }
-        } else if let Ok(Some(hash)) =
-            checked_worktree_path(&pending.repo_root, path).and_then(|path| file_hash(&path))
-        {
-            entries.push(FileEntry {
-                path: path.clone(),
-                kind: EntryKind::Created,
-                pre_blob: None,
-                post_hash: Some(hash),
-            });
+        } else {
+            let snapshot = checked_worktree_path(&pending.repo_root, path)
+                .and_then(|path| snapshot_file(&cp_dir, &path, retain_empty, &mut post_budget));
+            if retain_empty && snapshot.is_err() {
+                return Err(snapshot.expect_err("capture failed"));
+            }
+            if let Ok((Some(hash), post_snapshot_oversized)) = snapshot {
+                entries.push(FileEntry {
+                    path: path.clone(),
+                    kind: EntryKind::Created,
+                    pre_blob: None,
+                    post_hash: Some(hash),
+                    post_snapshot_oversized,
+                });
+            }
         }
     }
 
-    if entries.is_empty() {
+    if entries.is_empty() && !retain_empty {
         let _ = fs::remove_dir_all(&cp_dir);
         return Ok(None);
     }
@@ -467,7 +619,8 @@ pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>>
     let referenced: HashSet<&str> = checkpoint
         .entries
         .iter()
-        .filter_map(|entry| entry.pre_blob.as_deref())
+        .flat_map(|entry| [entry.pre_blob.as_deref(), entry.post_hash.as_deref()])
+        .flatten()
         .collect();
     for blob in fs::read_dir(cp_dir.join("blobs"))? {
         let blob = blob?;
@@ -479,6 +632,180 @@ pub fn finalize_turn(mut pending: PendingTurn) -> io::Result<Option<Checkpoint>>
     pending.cleanup.0 = None;
     pending.store.evict(MAX_CHECKPOINTS_PER_SESSION)?;
     Ok(Some(checkpoint))
+}
+
+/// Bounded read of durable before/after content for one finalized turn.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnSnapshotFile {
+    pub path: String,
+    pub kind: EntryKind,
+    pub availability: &'static str,
+    pub before_content: Option<String>,
+    pub after_content: Option<String>,
+}
+
+impl CheckpointStore {
+    /// Returns None for missing or evicted turns. Missing old post blobs remain
+    /// unavailable, rather than being reconstructed from today's worktree.
+    pub fn turn_snapshot(
+        &self,
+        turn_index: Option<usize>,
+        workspace: &Path,
+    ) -> io::Result<Option<(usize, Vec<TurnSnapshotFile>)>> {
+        let checkpoint = self.list().into_iter().rev().find(|checkpoint| {
+            checkpoint
+                .user_turn_index
+                .is_some_and(|index| turn_index.is_none_or(|requested| index == requested))
+        });
+        let Some(checkpoint) = checkpoint else {
+            return Ok(None);
+        };
+        let Some(repo_root) =
+            git::repo_root(workspace).and_then(|path| dunce::canonicalize(path).ok())
+        else {
+            return Ok(None);
+        };
+        if checkpoint.repo_root != repo_root {
+            return Ok(None);
+        }
+        if checkpoint.entries.len() > 1000
+            || checkpoint
+                .entries
+                .iter()
+                .map(|entry| entry.path.len())
+                .sum::<usize>()
+                > 128 * 1024
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Checkpoint file list exceeds review limit",
+            ));
+        }
+        let dir = self.checkpoint_dir_for_restore(&checkpoint.id);
+        let mut budget = 512 * 1024;
+        let mut files = Vec::new();
+        for entry in checkpoint.entries {
+            let mut read = |hash: Option<&str>| -> io::Result<Vec<u8>> {
+                let Some(hash) = hash else {
+                    return Ok(Vec::new());
+                };
+                if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid checkpoint blob hash",
+                    ));
+                }
+                let path = dir.join("blobs").join(hash);
+                let size = fs::metadata(&path)?.len();
+                if size > budget {
+                    return Err(io::Error::new(
+                        io::ErrorKind::FileTooLarge,
+                        "Snapshot exceeds review limit",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                fs::File::open(path)?
+                    .take(budget + 1)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() as u64 > budget {
+                    return Err(io::Error::new(
+                        io::ErrorKind::FileTooLarge,
+                        "Snapshot exceeds review limit",
+                    ));
+                }
+                if sha256(&bytes) != hash {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Checkpoint content is corrupt",
+                    ));
+                }
+                budget = budget.saturating_sub(bytes.len() as u64);
+                Ok(bytes)
+            };
+            let content = if entry.post_snapshot_oversized {
+                Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    "Snapshot exceeds review limit",
+                ))
+            } else {
+                read(entry.pre_blob.as_deref()).and_then(|before| {
+                    read(entry.post_hash.as_deref()).map(|after| (before, after))
+                })
+            };
+            let (availability, before_content, after_content) = match content {
+                Ok((before, after)) if before.contains(&0) || after.contains(&0) => {
+                    ("binary", None, None)
+                }
+                Ok((before, after)) => {
+                    match (String::from_utf8(before), String::from_utf8(after)) {
+                        (Ok(before), Ok(after)) => ("patch", Some(before), Some(after)),
+                        _ => ("binary", None, None),
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::FileTooLarge => {
+                    ("truncated", None, None)
+                }
+                Err(_) => ("unavailable", None, None),
+            };
+            files.push(TurnSnapshotFile {
+                path: entry.path,
+                kind: entry.kind,
+                availability,
+                before_content,
+                after_content,
+            });
+        }
+        Ok(Some((
+            checkpoint.user_turn_index.expect("selected linked turn"),
+            files,
+        )))
+    }
+}
+
+fn expand_native_untracked(root: &Path, paths: &HashSet<String>) -> Option<HashSet<String>> {
+    let mut expanded = HashSet::new();
+    for path in paths {
+        if path.ends_with('/') {
+            let mut files = Vec::new();
+            collect_files(&root.join(path), root, &mut files);
+            expanded.extend(files.into_iter().map(|(relative, _)| relative));
+        } else {
+            expanded.insert(path.clone());
+        }
+        if expanded.len() > MAX_EXPANDED_UNTRACKED_FILES {
+            return None;
+        }
+    }
+    Some(expanded)
+}
+
+fn snapshot_file(
+    cp_dir: &Path,
+    path: &Path,
+    retain: bool,
+    budget: &mut u64,
+) -> io::Result<(Option<String>, bool)> {
+    if !retain {
+        return file_hash(path).map(|hash| (hash, false));
+    }
+    let Some(hash) = file_hash(path)? else {
+        return Ok((None, false));
+    };
+    // Hashing remains streaming. Retention never allocates an unbounded file.
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(*budget + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > *budget {
+        return Ok((Some(hash), true));
+    }
+    if sha256(&bytes) != hash {
+        return Err(io::Error::other("File changed during checkpoint capture"));
+    }
+    store_blob(cp_dir, &bytes)?;
+    *budget = budget.saturating_sub(bytes.len() as u64);
+    Ok((Some(hash), false))
 }
 
 /// Outcome of restoring one checkpoint.
@@ -630,6 +957,20 @@ pub fn fork_before_turn(
             }
             crate::fs_atomic::create_dir_all_synced(target_dir.join("blobs"))?;
             store_blob(&target_dir, &bytes)?;
+        }
+        for hash in checkpoint
+            .entries
+            .iter()
+            .filter_map(|entry| entry.post_hash.as_ref())
+        {
+            if source_dir.join("blobs").join(hash).is_file() {
+                let bytes = read_blob(&source_dir, hash)?;
+                if sha256(&bytes) != *hash {
+                    return Err(io::Error::other("Retained checkpoint content is corrupt."));
+                }
+                crate::fs_atomic::create_dir_all_synced(target_dir.join("blobs"))?;
+                store_blob(&target_dir, &bytes)?;
+            }
         }
         target.save(&checkpoint)?;
     }
@@ -1247,6 +1588,231 @@ mod tests {
             drop(pending);
             assert!(!dir.exists(), "abandoned capture must release its blobs");
         }
+    }
+
+    #[test]
+    fn native_turn_snapshot_uses_retained_content_and_isolates_turn_session_workspace() {
+        let fx = git_fixture();
+        let mut pending = begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "edit").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("a.rs"), "first saved change\n").unwrap();
+        finalize_turn_snapshot(pending).unwrap().unwrap();
+        fs::write(fx.repo.join("a.rs"), "later unrelated content\n").unwrap();
+        let (index, files) = store(&fx)
+            .turn_snapshot(Some(0), &fx.repo)
+            .unwrap()
+            .unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(
+            files[0].after_content.as_deref(),
+            Some("first saved change\n")
+        );
+        assert_eq!(files[0].availability, "patch");
+        assert!(
+            store(&fx)
+                .turn_snapshot(Some(1), &fx.repo)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            CheckpointStore::new(&fx.sessions, "another-session")
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .is_none()
+        );
+        let other = git_fixture();
+        assert!(
+            store(&fx)
+                .turn_snapshot(Some(0), &other.repo)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_empty_turn_is_saved_and_abandoned_capture_cleans_up() {
+        let fx = git_fixture();
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "empty").unwrap();
+        pending.user_turn_index = Some(0);
+        finalize_turn_snapshot(pending).unwrap().unwrap();
+        assert!(
+            store(&fx)
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        let pending = begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "abandon").unwrap();
+        let directory = pending.store.new_checkpoint_dir(&pending.id);
+        drop(pending);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn native_snapshot_missing_binary_corrupt_and_oversized_stay_distinct() {
+        let fx = git_fixture();
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "binary").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("new.bin"), [0, 1, 2]).unwrap();
+        let checkpoint = finalize_turn_snapshot(pending).unwrap().unwrap();
+        let files = store(&fx)
+            .turn_snapshot(Some(0), &fx.repo)
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(files[0].availability, "binary");
+        let hash = checkpoint.entries[0].post_hash.as_ref().unwrap();
+        let blob = store(&fx)
+            .new_checkpoint_dir(&checkpoint.id)
+            .join("blobs")
+            .join(hash);
+        fs::write(&blob, "corrupt").unwrap();
+        assert_eq!(
+            store(&fx)
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .unwrap()
+                .1[0]
+                .availability,
+            "unavailable"
+        );
+        fs::remove_file(blob).unwrap();
+        assert_eq!(
+            store(&fx)
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .unwrap()
+                .1[0]
+                .availability,
+            "unavailable"
+        );
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "large").unwrap();
+        pending.user_turn_index = Some(1);
+        fs::write(fx.repo.join("large.bin"), vec![b'x'; 512 * 1024 + 1]).unwrap();
+        let checkpoint = finalize_turn_snapshot(pending).unwrap().unwrap();
+        assert!(checkpoint.entries[0].post_hash.is_some());
+        assert!(checkpoint.entries[0].post_snapshot_oversized);
+        assert_eq!(
+            store(&fx)
+                .turn_snapshot(Some(1), &fx.repo)
+                .unwrap()
+                .unwrap()
+                .1[0]
+                .availability,
+            "truncated"
+        );
+        assert!(
+            !store(&fx)
+                .new_checkpoint_dir(&checkpoint.id)
+                .join("blobs")
+                .join(checkpoint.entries[0].post_hash.as_ref().unwrap())
+                .exists()
+        );
+    }
+
+    #[test]
+    fn native_snapshot_captures_existing_and_new_untracked_files() {
+        let fx = git_fixture();
+        fs::create_dir(fx.repo.join("drafts")).unwrap();
+        fs::write(fx.repo.join("drafts/existing.txt"), "before draft").unwrap();
+        fs::write(fx.repo.join("stable.txt"), "unchanged").unwrap();
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "draft").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("drafts/existing.txt"), "after draft").unwrap();
+        fs::write(fx.repo.join("drafts/new.txt"), "new draft").unwrap();
+        finalize_turn_snapshot(pending).unwrap().unwrap();
+        let files = store(&fx)
+            .turn_snapshot(Some(0), &fx.repo)
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["drafts/existing.txt", "drafts/new.txt"]
+        );
+        assert_eq!(files[0].before_content.as_deref(), Some("before draft"));
+        assert_eq!(files[0].after_content.as_deref(), Some("after draft"));
+        assert_eq!(files[1].before_content.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn native_snapshot_reads_edit_and_commit_from_saved_start_head() {
+        let fx = git_fixture();
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "commit").unwrap();
+        pending.user_turn_index = Some(0);
+        let original = fs::read_to_string(fx.repo.join("a.rs")).unwrap();
+        fs::write(fx.repo.join("a.rs"), "committed new content\n").unwrap();
+        run_git(&fx.repo, &["add", "a.rs"]);
+        run_git(&fx.repo, &["commit", "--quiet", "-m", "turn change"]);
+        finalize_turn_snapshot(pending).unwrap().unwrap();
+        let files = store(&fx)
+            .turn_snapshot(Some(0), &fx.repo)
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(files[0].before_content.as_deref(), Some(original.as_str()));
+        assert_eq!(
+            files[0].after_content.as_deref(),
+            Some("committed new content\n")
+        );
+    }
+
+    #[test]
+    fn native_post_content_budget_is_shared_across_files() {
+        let fx = git_fixture();
+        let mut pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "several files").unwrap();
+        pending.user_turn_index = Some(0);
+        for name in ["large-a.txt", "large-b.txt", "large-c.txt"] {
+            fs::write(fx.repo.join(name), vec![b'x'; 256 * 1024]).unwrap();
+        }
+        let checkpoint = finalize_turn_snapshot(pending).unwrap().unwrap();
+        // Identical hashes can share disk content, but each retained pre/post
+        // pair still consumes the capture budget and omitted entries are typed.
+        assert!(
+            checkpoint
+                .entries
+                .iter()
+                .any(|entry| entry.post_snapshot_oversized)
+        );
+        let total = fs::read_dir(store(&fx).new_checkpoint_dir(&checkpoint.id).join("blobs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().metadata().unwrap().len())
+            .sum::<u64>();
+        assert!(total <= 512 * 1024);
+        assert!(
+            store(&fx)
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .unwrap()
+                .1
+                .iter()
+                .any(|file| file.availability == "truncated")
+        );
+    }
+
+    #[test]
+    fn native_large_dirty_preimage_does_not_publish_pristine_turn() {
+        let fx = git_fixture();
+        fs::write(fx.repo.join("a.rs"), vec![b'x'; 512 * 1024 + 1]).unwrap();
+        let pending =
+            begin_turn_snapshot(&fx.repo, &fx.sessions, "session-1", "large dirty").unwrap();
+        assert!(finalize_turn_snapshot(pending).is_err());
+        assert!(
+            store(&fx)
+                .turn_snapshot(Some(0), &fx.repo)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

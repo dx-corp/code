@@ -55,6 +55,7 @@ mod migrations;
 mod model_catalog;
 mod session_messaging;
 mod sessions;
+mod turn_diffs;
 
 #[allow(unused_imports)]
 pub(crate) use a2a::{
@@ -89,16 +90,18 @@ use a2a_platform_registration::{
 #[cfg(test)]
 use a2a_skill_catalog::A2A_SUBAGENT_REQUEST_METADATA_PATH;
 use auth::*;
+#[cfg(test)]
+use chat::handle_codex_app_server_chat_transport;
 #[allow(unused_imports)]
 pub(crate) use chat::{
     ChatAttachment, ChatMessage, ChatRequest, ExtractAttachmentRequest, ExtractDocumentOutput,
     PreparedAttachments, approval_blocked_tool_event, build_prompt_from_chat,
     composer_assistant_message, composer_assistant_message_with_tools, composer_text_content,
     finish_client_tool_metadata, finish_tool_metadata, handle_chat_endpoint,
-    handle_chat_websocket_endpoint, handle_codex_app_server_chat_transport, is_chat_endpoint,
-    is_chat_websocket_endpoint, prepare_chat_attachments, record_chat_user_message,
-    record_tool_call_metadata, send_sse, send_ws_json, sse_headers, strip_data_url_prefix,
-    try_parse_websocket_text_message, update_tool_metadata_status, websocket_accept_key,
+    handle_chat_websocket_endpoint, is_chat_endpoint, is_chat_websocket_endpoint,
+    prepare_chat_attachments, record_chat_user_message, record_tool_call_metadata, send_sse,
+    send_ws_json, sse_headers, strip_data_url_prefix, try_parse_websocket_text_message,
+    update_tool_metadata_status, websocket_accept_key,
 };
 pub(crate) use codex_bridge::*;
 use extended::{ExtendedApiState, handle_extended_endpoint, is_extended_endpoint};
@@ -461,6 +464,7 @@ struct AppState {
     shared_sessions: Arc<Mutex<HashMap<String, SharedSessionGrant>>>,
     approval_modes: Arc<Mutex<HashMap<String, String>>>,
     pending_tool_responses: Arc<Mutex<HashMap<String, PendingToolResponseSender>>>,
+    native_snapshot_registry: Arc<turn_diffs::NativeSnapshotRegistry>,
     // Maps a pending-request id to the session or authenticated principal that
     // owns the blocked agent turn. Sessionless client-tool turns retain a
     // resumable owner without weakening the cross-tenant resume check.
@@ -796,6 +800,7 @@ pub async fn serve_listener(
         shared_sessions: Arc::new(Mutex::new(shared_sessions)),
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
+        native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         a2a_tasks: Arc::new(Mutex::new(a2a_tasks)),
