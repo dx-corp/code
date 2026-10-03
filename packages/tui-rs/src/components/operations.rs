@@ -83,6 +83,28 @@ impl ReceiptSummary {
             ToolReceiptDetails::FeedbackDraft { .. } => {
                 (maestro_ui::localization::tr("feedback draft"), None)
             }
+            ToolReceiptDetails::ModelInference {
+                provider,
+                model,
+                usage,
+                cost,
+            } => (
+                "model inference",
+                Some(format!(
+                    "{} · {}{}",
+                    bounded_text(provider, STRING_LIMIT),
+                    bounded_text(model, STRING_LIMIT),
+                    usage
+                        .as_ref()
+                        .map(|usage| format!(
+                            " · {} input / {} output tokens",
+                            usage.input_tokens, usage.output_tokens
+                        ))
+                        .unwrap_or_else(|| cost
+                            .map(|cost| format!(" · ${cost:.6} · token usage unknown"))
+                            .unwrap_or_default())
+                )),
+            ),
             ToolReceiptDetails::Cached => ("cached", None),
             ToolReceiptDetails::None => (maestro_ui::localization::tr("none"), None),
         };

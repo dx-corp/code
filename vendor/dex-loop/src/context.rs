@@ -69,6 +69,9 @@ impl Message {
             }
             Message::Tool { output, .. } => match output {
                 Output::Text(text) => text.len(),
+                Output::Blocks(blocks) => {
+                    serde_json::to_vec(blocks).map_or(64 * 1024, |bytes| bytes.len())
+                }
                 // A reference may render a preview as well as metadata. Dex's
                 // host caps a preview at 16 KiB; count that conservative
                 // allowance so tool-heavy histories compact before rendering.
@@ -154,6 +157,13 @@ pub struct ToolEvidence {
     pub result: ToolResult,
 }
 
+impl ToolEvidence {
+    /// Exact owner ToolFinished event, independent of the grouped history cursor.
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
+    }
+}
+
 /// Evidence retention is bounded. Evicted results no longer authorize follow-up
 /// verification; callers must run the tool again to establish fresh evidence.
 pub const TOOL_EVIDENCE_LIMIT: usize = 128;
@@ -232,6 +242,9 @@ pub struct Context {
     failed_call: Option<FailedCall>,
     /// Set only on the model-attempt copy, never on durable thread context.
     remaining_budget: Option<crate::RemainingBudget>,
+    scratch: crate::codemode_state::Scratch,
+    model_usage_unresolved: bool,
+    specialist_usage_recorded: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -284,6 +297,9 @@ impl Context {
             last_compaction: None,
             failed_call: None,
             remaining_budget: None,
+            scratch: Default::default(),
+            model_usage_unresolved: false,
+            specialist_usage_recorded: false,
         }
     }
 
@@ -468,6 +484,24 @@ impl Context {
     /// Model calls started in the current turn.
     pub fn step(&self) -> u32 {
         self.step
+    }
+
+    /// Only scratch values bound to this script's accepted principal.
+    pub(crate) fn codemode_store(&self, principal: &PrincipalId) -> agent_codemode::Store {
+        self.scratch.read(principal)
+    }
+    pub(crate) fn validate_codemode_store(
+        &self,
+        principal: &PrincipalId,
+        writes: &agent_codemode::StoreWrites,
+    ) -> Result<(), String> {
+        self.scratch.validate_preparation(principal, writes)
+    }
+    pub(crate) fn has_specialist_usage(&self) -> bool {
+        self.specialist_usage_recorded || self.model_usage_unresolved
+    }
+    pub(crate) fn model_usage_unresolved(&self) -> bool {
+        self.model_usage_unresolved
     }
 
     /// Model spend in the current turn.
@@ -740,6 +774,31 @@ impl Context {
                 self.attempt = None;
                 self.pre_started.clear();
             }
+            Event::CodeModeStorePrepared {
+                parent,
+                principal,
+                writes,
+            } => {
+                if self.proposed_call(parent).is_some_and(|call| {
+                    call.tool.as_str() == agent_codemode::TOOL_NAME && &call.principal == principal
+                }) && self
+                    .tool_evidence
+                    .iter()
+                    .all(|evidence| &evidence.call.id != parent)
+                {
+                    self.scratch.prepare(parent, principal, writes);
+                }
+            }
+            Event::ModelUsageResolved { call } => {
+                if self.proposed_call(call).is_some() {
+                    self.specialist_usage_recorded = true;
+                }
+            }
+            Event::ModelUsageUnresolved { call, .. } => {
+                if self.proposed_call(call).is_some() {
+                    self.model_usage_unresolved = true;
+                }
+            }
             Event::CodeModeCallsProposed { parent, calls } => {
                 // Only an accepted engine wrapper can parent script proposals.
                 if let Some(wrapper) = self.proposed_call(parent).cloned()
@@ -804,7 +863,9 @@ impl Context {
                 outcome,
                 output,
                 receipt,
+                ..
             } => {
+                self.scratch.finish(call, *outcome);
                 if let Some(proposal) = self.proposed_call(call).cloned()
                     && !self
                         .tool_evidence
@@ -1039,6 +1100,7 @@ impl Context {
     /// the turn ahead of it ends.
     fn begin_turn(&mut self, cursor: Cursor, next: PendingTurn) {
         self.close_abandoned_step(cursor);
+        self.scratch.discard_pending();
         // Flush before overwriting `self.turn`: any steer still queued here
         // is a straggler of the turn that was running (never picked up by
         // that turn's own `StepStarted` flush before it ended), so it is
@@ -1060,6 +1122,8 @@ impl Context {
         self.status = Status::Running;
         self.step = 0;
         self.usage = Usage::default();
+        self.model_usage_unresolved = false;
+        self.specialist_usage_recorded = false;
         self.attempt = None;
         self.interrupt_requested = false;
         self.exposed.clear();

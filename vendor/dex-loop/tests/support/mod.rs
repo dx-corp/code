@@ -657,7 +657,7 @@ impl Tools for FakeTools {
         _max_bytes: usize,
     ) -> Result<ToolResult, String> {
         Ok(match &result.output {
-            Output::Text(_) => result.clone(),
+            Output::Text(_) | Output::Blocks(_) => result.clone(),
             Output::Ref(reference) => ToolResult {
                 output: Output::Text(
                     serde_json::json!({"output_ref":reference.as_str()}).to_string(),
@@ -784,6 +784,9 @@ pub fn shape(event: &Event) -> String {
         } => {
             format!("attempt_failed:{step}:{code}:{then:?}")
         }
+        Event::CodeModeStorePrepared { parent, .. } => format!("store_prepared:{parent}"),
+        Event::ModelUsageResolved { call } => format!("usage_resolved:{call}"),
+        Event::ModelUsageUnresolved { call, .. } => format!("usage_unresolved:{call}"),
         Event::CodeModeCallsProposed { parent, calls } => {
             format!("script:{parent}:[{}]", ids(calls))
         }
@@ -836,6 +839,7 @@ pub fn view(messages: &[Message]) -> Vec<String> {
                 let output = match output {
                     Output::Ref(reference) => reference.to_string(),
                     Output::Text(text) => text.clone(),
+                    Output::Blocks(_) => "selected media".into(),
                 };
                 format!("tool:{call}:{}:{output}", outcome(*result))
             }

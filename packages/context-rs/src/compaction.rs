@@ -46,6 +46,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 mod calibration;
+mod continuation_references;
+pub use continuation_references::{
+    ContinuationCommand, ContinuationFileOperation, ContinuationFileOperationKind,
+    ToolOutputReference,
+};
 
 /// Durable state needed to continue a compacted conversation without guessing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +58,9 @@ pub struct ContinuationRecord {
     /// Existing session-owned output files, not executable instructions or grants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_outputs: Vec<ToolOutputReference>,
+    /// Image identities already projected before compaction, without image bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projected_tool_images: Vec<maestro_ai::ToolImageOwner>,
     /// Successful typed file operations reported by the execution host. Not grants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_operations: Vec<ContinuationFileOperation>,
@@ -76,37 +84,6 @@ pub struct ContinuationRecord {
     pub verification: Vec<String>,
     /// SHA-256 of the exact compacted message slice.
     pub source_hash: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContinuationFileOperationKind {
-    Read,
-    Write,
-    Edit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ContinuationFileOperation {
-    pub tool_call_id: String,
-    pub path: String,
-    pub kind: ContinuationFileOperationKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ToolOutputReference {
-    pub tool_call_id: String,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContinuationCommand {
-    pub tool_call_id: String,
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
-    #[serde(default)]
-    pub failed: bool,
 }
 
 /// Configuration for context compaction
@@ -449,6 +426,17 @@ pub fn build_continuation_record(messages: &[Message]) -> ContinuationRecord {
                             }
                             push_unique(&mut record.evidence, bounded);
                         }
+                        ContentBlock::Image {
+                            source:
+                                maestro_ai::ImageSource::Base64 {
+                                    owner: Some(owner), ..
+                                },
+                        } => {
+                            extend_unique(
+                                &mut record.projected_tool_images,
+                                std::iter::once(owner),
+                            );
+                        }
                         ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => {}
                     }
                 }
@@ -511,6 +499,10 @@ impl ContinuationRecord {
         extend_unique(&mut operations, self.file_operations.iter());
         self.file_operations = operations;
         extend_unique(&mut self.tool_outputs, previous.tool_outputs.iter());
+        extend_unique(
+            &mut self.projected_tool_images,
+            previous.projected_tool_images.iter(),
+        );
         if self.objective.is_none() {
             self.objective.clone_from(&previous.objective);
         }
@@ -3734,3 +3726,7 @@ mod tests {
         assert_ne!(first, token_estimation::estimate_tokens(text));
     }
 }
+
+#[cfg(test)]
+#[path = "compaction/image_projection_tests.rs"]
+mod image_projection_tests;

@@ -54,6 +54,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
                 outcome: Outcome::Succeeded,
                 output: Output::Text(format!("owner-result-{index}")),
                 receipt: None,
+                summary: None,
             },
         );
     }
@@ -99,6 +100,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
             outcome: Outcome::Succeeded,
             output: Output::Text("passed".into()),
             receipt: None,
+            summary: None,
         },
     );
     assert_eq!(warm.tool_evidence(), restarted.tool_evidence());

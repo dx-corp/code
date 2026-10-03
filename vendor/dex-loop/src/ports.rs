@@ -214,6 +214,35 @@ pub trait Tools: Send + Sync {
     /// Every tool this turn may use, core or discoverable.
     fn catalog(&self) -> &[ToolSpec];
 
+    fn codemode_output_schema(&self, _name: &ToolName) -> Option<serde_json::Value> {
+        None
+    }
+    fn codemode_model_operation(&self, _name: &ToolName) -> Option<crate::ModelOperation> {
+        None
+    }
+    fn codemode_model_binding(&self, _name: &ToolName) -> Option<crate::ModelBinding> {
+        None
+    }
+    /// Actual host reservation bounds, never estimates inferred from model prose.
+    /// Only first-party typed failure codes/templates, never raw output prose.
+    fn completion_summary(&self, _call: &ProposedCall, _result: &ToolResult) -> Option<String> {
+        None
+    }
+    fn model_cost_bound(&self, _name: &ToolName) -> Option<u64> {
+        None
+    }
+    fn model_token_bound(&self, _name: &ToolName) -> Option<u64> {
+        None
+    }
+    fn model_usage(
+        &self,
+        _ctx: &Context,
+        _call: &ProposedCall,
+        _result: &ToolResult,
+    ) -> impl Future<Output = Result<Option<Usage>, String>> + Send {
+        std::future::ready(Ok(None))
+    }
+
     fn spec(&self, name: &ToolName) -> Option<&ToolSpec> {
         self.catalog().iter().find(|spec| &spec.name == name)
     }
@@ -265,6 +294,9 @@ pub trait Tools: Send + Sync {
             crate::Output::Text(_) => Err(
                 "tool result exceeds the script data limit; request a smaller page directly".into(),
             ),
+            crate::Output::Blocks(_) => {
+                Err("image results require explicit image projection".into())
+            }
             crate::Output::Ref(_) => Err(
                 "stored tool output is unavailable for script processing; read it directly".into(),
             ),

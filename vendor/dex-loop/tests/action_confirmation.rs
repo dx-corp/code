@@ -219,6 +219,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
             outcome: Outcome::Failed,
             output: Output::Text("preview".into()),
             receipt: None,
+            summary: None,
         },
         Event::Question {
             call: CallId::new("question-1"),
@@ -277,6 +278,7 @@ fn action_record_capacity_expires_old_references_without_summary_authority() {
                 output: Output::Text(
                     json!({"status":"needs_confirmation","args_digest":digest}).to_string(),
                 ),
+                summary: None,
             },
         );
         let question = CallId::new(format!("question-{index}"));
@@ -394,6 +396,7 @@ fn starting_a_dispatch_consumes_consent_even_when_the_effect_fails_or_is_unknown
                 outcome,
                 output: Output::Text("reported outcome".into()),
                 receipt: None,
+                summary: None,
             },
         ));
         let mut fresh = execution();

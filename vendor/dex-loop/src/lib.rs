@@ -20,6 +20,8 @@
 //! ```
 
 mod budget;
+mod codemode_output;
+mod codemode_state;
 mod compaction;
 mod context;
 mod engine;
@@ -54,3 +56,6 @@ pub use ports::{
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};
 pub use tokio_util::sync::CancellationToken;
+
+pub use agent_codemode::{ModelBinding, ModelOperation, OutputBlock};
+pub use codemode_output::validate_codemode_blocks;

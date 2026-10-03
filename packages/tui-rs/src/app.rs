@@ -5559,7 +5559,7 @@ fn parse_rfc3339_system_time(timestamp: &str) -> Result<SystemTime> {
 }
 
 fn restore_visible_session_messages(state: &mut AppState, session: &ParsedSession) {
-    state.messages.clear();
+    state.clear_conversation_messages();
     state.clear_focus_turn_state();
 
     for app_msg in &session.messages {

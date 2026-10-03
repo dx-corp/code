@@ -162,6 +162,8 @@ mod tests {
             .unwrap()
             .tool_calls
             .push(ToolCallState {
+                parent_call_id: None,
+                duration_ms: None,
                 call_id: "edit-1".into(),
                 tool: "edit".into(),
                 args: serde_json::json!({}),

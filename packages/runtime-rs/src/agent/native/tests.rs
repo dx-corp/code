@@ -1,38 +1,3 @@
-#[test]
-fn prompt_experiment_excludes_auxiliary_compaction_receipts() {
-    for eligible in [false, true] {
-        let receipt = maestro_ai::ManagedGatewayReceipt {
-            request_id: "request".into(),
-            record_id: "record".into(),
-            lineage_id: "lineage".into(),
-            record_status: "planned".into(),
-            provider_prompt_sha256: Some("sha256:verified".into()),
-            provider_tools_sha256: Some("sha256:tools".into()),
-            provider_tool_count: Some(3),
-        };
-        let FromAgent::ManagedGatewayReceipt {
-            record_id,
-            provider_prompt_sha256,
-            provider_tools_sha256,
-            provider_tool_count,
-            ..
-        } = NativeAgentRunner::managed_gateway_receipt_event(receipt, eligible)
-        else {
-            panic!("gateway receipt must be preserved")
-        };
-        assert_eq!(record_id, "record");
-        assert_eq!(
-            provider_tools_sha256.as_deref(),
-            eligible.then_some("sha256:tools")
-        );
-        assert_eq!(provider_tool_count, eligible.then_some(3));
-        assert_eq!(
-            provider_prompt_sha256.as_deref(),
-            eligible.then_some("sha256:verified")
-        );
-    }
-}
-
 use super::super::native_host::{
     NativeCodexAuth, NativeExecutionHost, NativeExecutionHostHandle, NativeFirewallVerdict,
     NativeHookEvent, NativeHookResult, NativeHostFuture, NativeModelRoute, NativeReadOnlyToolCall,
@@ -52,6 +17,9 @@ use std::sync::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+#[path = "tests/inference_receipts.rs"]
+mod inference_receipts;
 
 #[path = "tests/builtin_read.rs"]
 mod builtin_read;
@@ -7309,6 +7277,7 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
         name: "safe_tool".to_owned(),
         description: format!("Use token: {raw}"),
         input_schema: serde_json::json!({"properties": {"authorization": {"default": format!("token: {raw}")}}}),
+        output_schema: None,
         schema_enforcement: Default::default(),
     }];
     let safe = vault_provider_tools(&tools, &vault).expect("safe provider tools");
@@ -7327,6 +7296,7 @@ fn provider_tool_definitions_keep_raw_credentials_out_of_descriptions_and_schema
         name: "safe_tool".to_owned(),
         description: String::new(),
         input_schema: Value::Object(schema),
+        output_schema: None,
         schema_enforcement: Default::default(),
     };
     assert!(vault_provider_tools(&[unsafe_key], &vault).is_err());
@@ -7347,6 +7317,7 @@ fn provider_request_requires_vault_attestation_for_every_surface() {
             name: "safe_tool".to_owned(),
             description: format!("Credential {raw}"),
             input_schema: serde_json::json!({"properties": {"key": {"default": raw}}}),
+            output_schema: None,
             schema_enforcement: Default::default(),
         }]),
         ..RequestConfig::default()
@@ -7397,6 +7368,7 @@ fn provider_request_rechecks_system_after_tool_credential_discovery() {
             name: "safe_tool".to_owned(),
             description: format!("token: {raw}"),
             input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
             schema_enforcement: Default::default(),
         }]),
         ..RequestConfig::default()
@@ -7423,6 +7395,7 @@ fn provider_request_pre_vaulted_history_rechecks_late_tool_credential() {
             name: "safe_tool".to_owned(),
             description: format!("token: {raw}"),
             input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
             schema_enforcement: Default::default(),
         }]),
         ..RequestConfig::default()
@@ -9130,3 +9103,6 @@ mod experiment_schema_policy_tests;
 
 #[path = "tests/codemode.rs"]
 mod codemode;
+
+#[path = "tests/classifier_streams.rs"]
+mod classifier_streams;

@@ -266,6 +266,7 @@ impl InlineTool {
             name: self.definition.name.clone(),
             description: self.definition.description.clone(),
             input_schema: self.build_schema(),
+            output_schema: None,
             schema_enforcement: ToolSchemaEnforcement::Off,
         }
     }

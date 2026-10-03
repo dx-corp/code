@@ -32,7 +32,8 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use super::types::{
-    ContentBlock, Message, MessageContent, RequestConfig, Role, StopReason, StreamEvent,
+    ContentBlock, ImageSource, Message, MessageContent, RequestConfig, Role, StopReason,
+    StreamEvent,
 };
 use super::{AiProvider, provider_model_name};
 
@@ -162,6 +163,17 @@ impl GoogleClient {
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::Text { text } => Some(Part::Text { text: text.clone() }),
+                    ContentBlock::Image {
+                        source:
+                            ImageSource::Base64 {
+                                media_type, data, ..
+                            },
+                    } => Some(Part::InlineData {
+                        inline_data: InlineData {
+                            mime_type: media_type.clone(),
+                            data: data.clone(),
+                        },
+                    }),
                     ContentBlock::Thinking { thinking, .. } => Some(Part::Text {
                         text: format!("<thinking>{thinking}</thinking>"),
                     }),
@@ -233,8 +245,9 @@ async fn stream_google_response(
     let mut stream = response.bytes_stream();
 
     let mut buffer = Vec::new();
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
+    let mut terminal_stop_reason = None;
     let mut cache_read_tokens = None;
 
     while let Some(chunk) = stream.next().await {
@@ -287,15 +300,15 @@ async fn stream_google_response(
                                     "SAFETY" => Some(StopReason::EndTurn),
                                     _ => Some(StopReason::EndTurn),
                                 };
-                                let _ = tx.send(StreamEvent::MessageStop { stop_reason });
+                                terminal_stop_reason = stop_reason;
                             }
                         }
                     }
 
                     // Update usage
                     if let Some(metadata) = response.usage_metadata {
-                        input_tokens = metadata.prompt_token_count.unwrap_or(input_tokens);
-                        output_tokens = metadata.candidates_token_count.unwrap_or(output_tokens);
+                        input_tokens = metadata.prompt_token_count.or(input_tokens);
+                        output_tokens = metadata.candidates_token_count.or(output_tokens);
                         cache_read_tokens =
                             metadata.cached_content_token_count.or(cache_read_tokens);
                     }
@@ -305,11 +318,15 @@ async fn stream_google_response(
     }
 
     // Send final usage
-    let _ = tx.send(super::google::cache_usage_event(
-        input_tokens,
-        output_tokens,
-        cache_read_tokens,
-    ));
+    if let Some(event) = optional_cache_usage_event(input_tokens, output_tokens, cache_read_tokens)
+    {
+        let _ = tx.send(event);
+    }
+    if let Some(stop_reason) = terminal_stop_reason {
+        let _ = tx.send(StreamEvent::MessageStop {
+            stop_reason: Some(stop_reason),
+        });
+    }
 
     Ok(())
 }
@@ -318,6 +335,14 @@ fn google_sse_data(event: &str) -> Option<&str> {
     event
         .lines()
         .find_map(|line| line.strip_prefix("data:").map(str::trim))
+}
+
+pub(super) fn optional_cache_usage_event(
+    input: Option<u64>,
+    output: Option<u64>,
+    cached: Option<u64>,
+) -> Option<StreamEvent> {
+    Some(cache_usage_event(input?, output?, cached))
 }
 
 /// Google prompt counts include cached tokens. Keep cache absence distinct from zero.
@@ -356,6 +381,10 @@ struct Content {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum Part {
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: InlineData,
+    },
     Text {
         text: String,
     },
@@ -367,6 +396,13 @@ enum Part {
         #[serde(rename = "functionResponse")]
         function_response: FunctionResponse,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -432,6 +468,42 @@ struct UsageMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_google_usage_remains_unknown_instead_of_zero() {
+        assert!(optional_cache_usage_event(Some(17), None, None).is_none());
+        assert!(optional_cache_usage_event(None, Some(9), None).is_none());
+        assert!(optional_cache_usage_event(None, None, None).is_none());
+        assert!(matches!(
+            optional_cache_usage_event(Some(17), Some(0), None),
+            Some(StreamEvent::Usage {
+                input_tokens: 17,
+                output_tokens: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn script_image_reaches_prepared_provider_payload() {
+        let client = GoogleClient::new("test-key");
+        let messages: Vec<Message> = serde_json::from_value(json!([{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"pixel","owner":{"call_id":"script-owner","index":0}}}]}])).unwrap();
+        let request = serde_json::to_value(
+            client
+                .build_request(&messages, &RequestConfig::default())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            request["contents"][0]["parts"][0]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(
+            request["contents"][0]["parts"][0]["inlineData"]["data"],
+            "pixel"
+        );
+        assert!(!request.to_string().contains("script-owner"));
+    }
 
     #[test]
     fn sse_data_accepts_event_header_and_no_space_after_colon() {

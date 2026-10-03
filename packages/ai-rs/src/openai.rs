@@ -1689,14 +1689,14 @@ impl OpenAiClient {
                                     detail: None,
                                 },
                             }),
-                            ImageSource::Base64 { media_type, data } => {
-                                Some(OpenAiContentPart::ImageUrl {
-                                    image_url: ImageUrlData {
-                                        url: format!("data:{media_type};base64,{data}"),
-                                        detail: None,
-                                    },
-                                })
-                            }
+                            ImageSource::Base64 {
+                                media_type, data, ..
+                            } => Some(OpenAiContentPart::ImageUrl {
+                                image_url: ImageUrlData {
+                                    url: format!("data:{media_type};base64,{data}"),
+                                    detail: None,
+                                },
+                            }),
                         },
                         ContentBlock::ToolUse { .. } => None,
                         _ => None,

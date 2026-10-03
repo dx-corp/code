@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::time::timeout;
@@ -23,6 +23,11 @@ const DEFAULT_LOGIN_TIMEOUT_MS: u64 = 5 * 60_000;
 /// Turns can run for several minutes when tools are involved.
 const DEFAULT_TURN_TIMEOUT_MS: u64 = 10 * 60_000;
 const MAX_NOTIFICATION_HISTORY: usize = 100;
+const MAX_DIAGNOSTIC_TEXT_BYTES: usize = 1024;
+const MAX_DIAGNOSTIC_FIELDS: usize = 64;
+const MAX_DIAGNOSTIC_DEPTH: usize = 8;
+const DIAGNOSTIC_TRUNCATED: &str = "[truncated]";
+const DIAGNOSTIC_REDACTED: &str = "[redacted]";
 const DEFAULT_CODEX_COMMAND: &str = "codex";
 const DEFAULT_CODEX_APP_SERVER_ARGS: &[&str] = &["app-server", "--listen", "stdio://"];
 
@@ -450,12 +455,12 @@ impl CodexAppServerClient {
         if let Some(stderr) = stderr {
             let event_tx_stderr = event_tx.clone();
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                let mut reader = BufReader::new(stderr);
+                while let Ok(Some(line)) = read_diagnostic_line(&mut reader).await {
                     let trimmed = line.trim();
                     if !trimmed.is_empty()
                         && event_tx_stderr
-                            .send(IoEvent::Stderr(trimmed.to_owned()))
+                            .send(IoEvent::Stderr(diagnostic_text(trimmed)))
                             .is_err()
                     {
                         break;
@@ -584,7 +589,7 @@ impl CodexAppServerClient {
                     }
                     IoEvent::Stderr(line) => {
                         let mut tail = stderr_r.lock().await;
-                        tail.push_back(line);
+                        tail.push_back(diagnostic_text(&line));
                         while tail.len() > 20 {
                             tail.pop_front();
                         }
@@ -1393,15 +1398,178 @@ async fn handle_line(
     }
 }
 
+/// Drain stderr records while retaining at most one bounded prefix. Stdout
+/// uses the full protocol reader because its payloads are execution inputs.
+async fn read_diagnostic_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<String>> {
+    let mut prefix = Vec::with_capacity(MAX_DIAGNOSTIC_TEXT_BYTES);
+    let mut observed = false;
+    loop {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
+            return Ok(observed.then(|| diagnostic_text(&String::from_utf8_lossy(&prefix))));
+        }
+        observed = true;
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let end = newline.unwrap_or(buffer.len());
+        let retained = end.min(MAX_DIAGNOSTIC_TEXT_BYTES - prefix.len());
+        prefix.extend_from_slice(&buffer[..retained]);
+        let consumed = end + usize::from(newline.is_some());
+        reader.consume(consumed);
+        if newline.is_some() {
+            return Ok(Some(diagnostic_text(&String::from_utf8_lossy(&prefix))));
+        }
+    }
+}
+
+/// Bound only diagnostic copies; transport results and notifications remain intact.
+fn diagnostic_text(text: &str) -> String {
+    let max_prefix = MAX_DIAGNOSTIC_TEXT_BYTES - DIAGNOSTIC_TRUNCATED.len();
+    let mut end = text.len().min(max_prefix);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = &text[..end];
+    // Free-form stderr/error messages have no trustworthy schema. Suppress a
+    // credential-bearing record rather than retaining a partially masked token.
+    let lower = prefix.to_ascii_lowercase();
+    if [
+        "bearer ",
+        "authorization",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "token=",
+        "token:",
+        "password",
+        "secret=",
+        "sk-",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        return DIAGNOSTIC_REDACTED.to_owned();
+    }
+    let mut bounded = prefix.to_owned();
+    if end < text.len() {
+        bounded.push_str(DIAGNOSTIC_TRUNCATED);
+    }
+    bounded
+}
+
+fn diagnostic_secret_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    normalized.contains("authorization")
+        || normalized.contains("password")
+        || normalized.contains("secret")
+        || normalized.contains("credential")
+        || normalized.contains("apikey")
+        || normalized.ends_with("token")
+        || normalized.ends_with("tokens")
+}
+
+fn diagnostic_value(value: &Value, depth: usize, fields: &mut usize, bytes: &mut usize) -> Value {
+    if depth >= MAX_DIAGNOSTIC_DEPTH || *fields == 0 || *bytes == 0 {
+        return Value::String(DIAGNOSTIC_TRUNCATED.to_owned());
+    }
+    match value {
+        Value::Object(object) => {
+            let mut bounded = Map::new();
+            // Direct lookup keeps lifecycle and error routing ahead of bulk
+            // payloads, even when the provider puts a large value first.
+            const METADATA: &[&str] = &[
+                "code",
+                "reason",
+                "type",
+                "status",
+                "method",
+                "threadId",
+                "turnId",
+                "requestId",
+                "message",
+                "error",
+            ];
+            let entries = METADATA
+                .iter()
+                .filter_map(|key| object.get_key_value(*key))
+                .chain(
+                    object
+                        .iter()
+                        .filter(|(key, _)| !METADATA.contains(&key.as_str())),
+                );
+            for (key, item) in entries {
+                if *fields == 0 || key.len() > 64 || key.len() >= *bytes {
+                    bounded.insert("diagnosticTruncated".into(), Value::Bool(true));
+                    break;
+                }
+                *fields -= 1;
+                *bytes -= key.len();
+                let item = if diagnostic_secret_key(key) {
+                    Value::String(DIAGNOSTIC_REDACTED.to_owned())
+                } else {
+                    diagnostic_value(item, depth + 1, fields, bytes)
+                };
+                bounded.insert(key.clone(), item);
+            }
+            Value::Object(bounded)
+        }
+        Value::Array(array) => {
+            let mut bounded = Vec::new();
+            for item in array {
+                if *fields == 0 || *bytes == 0 {
+                    bounded.push(Value::String(DIAGNOSTIC_TRUNCATED.to_owned()));
+                    break;
+                }
+                *fields -= 1;
+                bounded.push(diagnostic_value(item, depth + 1, fields, bytes));
+            }
+            Value::Array(bounded)
+        }
+        Value::String(text) => {
+            let mut end = text.len().min(*bytes);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let bounded = diagnostic_text(&text[..end]);
+            *bytes = bytes.saturating_sub(bounded.len());
+            let suffix = if end < text.len()
+                && !bounded.ends_with(DIAGNOSTIC_TRUNCATED)
+                && bounded != DIAGNOSTIC_REDACTED
+            {
+                DIAGNOSTIC_TRUNCATED
+            } else {
+                ""
+            };
+            Value::String(format!("{bounded}{suffix}"))
+        }
+        Value::Number(number) => {
+            *bytes = bytes.saturating_sub(32);
+            Value::Number(number.clone())
+        }
+        Value::Bool(value) => Value::Bool(*value),
+        Value::Null => Value::Null,
+    }
+}
+
 fn json_rpc_error_from_value(error: &Value) -> JsonRpcError {
     JsonRpcError {
         code: error.get("code").and_then(Value::as_i64),
         message: error
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("Codex app-server request failed")
-            .to_owned(),
-        data: error.get("data").cloned(),
+            .map(diagnostic_text)
+            .unwrap_or_else(|| "Codex app-server request failed".to_owned()),
+        data: error.get("data").map(|data| {
+            let mut fields = MAX_DIAGNOSTIC_FIELDS;
+            let mut bytes = MAX_DIAGNOSTIC_TEXT_BYTES;
+            diagnostic_value(data, 0, &mut fields, &mut bytes)
+        }),
     }
 }
 
@@ -1423,7 +1591,7 @@ async fn reject_all(
             format!("\n{}", ordered.join("\n"))
         }
     };
-    let full = format!("{message}{stderr}");
+    let full = format!("{}{stderr}", diagnostic_text(message));
     let mut map = pending.lock().unwrap();
     for (_, tx) in map.drain() {
         let _ = tx.send(Err(anyhow!(full.clone())));
@@ -1901,6 +2069,115 @@ lines.on("line", (line) => {
             message.contains("exited with code 1") || message.contains("client is closed"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn error_diagnostics_bound_payloads_and_preserve_routing_metadata() {
+        let error = json!({
+            "code": -32000,
+            "message": "provider failed",
+            "data": {
+                "a_large_payload": "界".repeat(100_000),
+                "reason": "provider_unavailable",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "status": "failed",
+                "accessToken": "fixture-private-token",
+                "nested": { "authorization": "Bearer fixture-private-token" },
+                "items": (0..10_000).collect::<Vec<_>>()
+            }
+        });
+        let diagnostic = json_rpc_error_from_value(&error);
+        assert_eq!(diagnostic.code, Some(-32000));
+        assert_eq!(diagnostic.message, "provider failed");
+        let data = diagnostic.data.unwrap();
+        assert_eq!(data["reason"], "provider_unavailable");
+        assert_eq!(data["threadId"], "thread-1");
+        assert_eq!(data["turnId"], "turn-1");
+        assert_eq!(data["status"], "failed");
+        let serialized = serde_json::to_string(&data).unwrap();
+        assert!(serialized.len() <= 8192, "{} bytes", serialized.len());
+        assert!(!serialized.contains("fixture-private-token"));
+        assert!(serialized.contains("truncated"));
+        assert_eq!(
+            error["data"]["a_large_payload"].as_str().unwrap().len(),
+            300_000
+        );
+    }
+
+    #[test]
+    fn error_diagnostics_redact_small_credential_fields_without_losing_error_reason() {
+        let error = json!({"code":-32603, "message":"provider authentication failed", "data":{
+            "reason":"expired", "accessToken":"fixture-private-token",
+            "nested":{"api_key":"fixture-private-key"},
+            "details":"Authorization: Bearer fixture-private-token"
+        }});
+        let diagnostic = json_rpc_error_from_value(&error);
+        assert_eq!(diagnostic.code, Some(-32603));
+        assert_eq!(diagnostic.message, "provider authentication failed");
+        let data = diagnostic.data.unwrap();
+        assert_eq!(data["reason"], "expired");
+        assert_eq!(data["accessToken"], "[redacted]");
+        assert_eq!(data["nested"]["api_key"], "[redacted]");
+        assert_eq!(data["details"], "[redacted]");
+        assert!(!format!("{data:?}").contains("fixture-private"));
+    }
+
+    #[test]
+    fn error_diagnostics_bound_depth_and_escaped_messages() {
+        let mut data = json!("leaf");
+        for _ in 0..100 {
+            data = json!({"child": data});
+        }
+        let diagnostic = json_rpc_error_from_value(&json!({
+            "code": -32603, "message": "\u{0000}".repeat(100_000), "data": data
+        }));
+        assert!(diagnostic.message.len() <= 1024);
+        assert!(format!("{diagnostic:?}").len() <= 8192);
+        assert!(
+            serde_json::to_string(&diagnostic.data)
+                .unwrap()
+                .contains("truncated")
+        );
+        let secret = json_rpc_error_from_value(&json!({
+            "message": "request failed: Authorization: Bearer fixture-private-token"
+        }));
+        assert!(!secret.to_string().contains("fixture-private-token"));
+    }
+
+    #[tokio::test]
+    async fn stderr_diagnostics_drain_large_lines_without_losing_the_next_record() {
+        let input = format!("{}\nnext record\n", "界".repeat(100_000));
+        let mut reader = BufReader::new(input.as_bytes());
+        let first = read_diagnostic_line(&mut reader).await.unwrap().unwrap();
+        assert!(first.len() <= 1024);
+        assert!(first.contains("truncated"));
+        assert_eq!(
+            read_diagnostic_line(&mut reader).await.unwrap().as_deref(),
+            Some("next record")
+        );
+        assert!(read_diagnostic_line(&mut reader).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stderr_diagnostics_bound_each_record_before_retaining_it() {
+        let (client, mock) = CodexAppServerClient::mock();
+        let task = tokio::spawn(async move { client.read_account(false).await });
+        mock.next_request().await.unwrap();
+        mock.event_tx
+            .send(IoEvent::Stderr("界".repeat(100_000)))
+            .unwrap();
+        mock.event_tx
+            .send(IoEvent::Stderr(
+                "Authorization: Bearer fixture-private-token".into(),
+            ))
+            .unwrap();
+        mock.exit(9);
+        let error = task.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("exited with code 9"));
+        assert!(error.len() <= 8192);
+        assert!(!error.contains("fixture-private-token"));
+        assert!(error.contains("truncated"));
     }
 
     #[tokio::test]

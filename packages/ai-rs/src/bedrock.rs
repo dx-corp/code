@@ -460,7 +460,10 @@ fn build_content_block(block: &ContentBlock) -> Option<Result<bedrock::types::Co
 }
 
 fn build_image_block(source: &ImageSource) -> Result<bedrock::types::ContentBlock> {
-    let ImageSource::Base64 { media_type, data } = source else {
+    let ImageSource::Base64 {
+        media_type, data, ..
+    } = source
+    else {
         bail!("Bedrock Converse requires base64 image sources");
     };
     let format = media_type

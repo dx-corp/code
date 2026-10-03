@@ -1280,6 +1280,9 @@ async fn execute_native_turn(claim: &ClaimedAutomationRun, cwd: &Path) -> Automa
                     error_type: None,
                 };
             }
+            // Presentation-only script progress must not enter the automation
+            // output digest or be treated as a terminal execution result.
+            FromAgent::CodeModeProgress { .. } => {}
             FromAgent::TurnInterrupted { .. } => return failed_run("turn_interrupted"),
             FromAgent::ProviderError { .. } => return failed_run("provider_error"),
             FromAgent::Error { terminal: true, .. } => return failed_run("agent_error"),

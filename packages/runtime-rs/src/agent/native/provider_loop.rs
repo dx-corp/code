@@ -248,6 +248,19 @@ impl NativeAgentRunner {
         let mut steered_after_text_loop = false;
         let mut steered_after_billed_empty = false;
         'turn: loop {
+            // Ordinary budgets historically floor requests at one token and
+            // let their caller stop the run. Unmetered auxiliary usage cannot
+            // publish invented counters to that caller, so this owner stops it.
+            if self.classifier_budget_uncertain
+                && self
+                    .output_token_budget
+                    .is_some_and(|budget| self.output_tokens_spent >= u64::from(budget))
+            {
+                let _ = self.event_tx.send(FromAgent::Status {
+                    message: "Classification completion or final usage is unknown; the finite output budget is exhausted. Reconcile billing or provide a new output grant before continuing.".into(),
+                });
+                return Ok(());
+            }
             step_budget.admit_attempt().map_err(anyhow::Error::msg)?;
             text_loop_detector.reset();
             step_budget.record_step();
@@ -1016,6 +1029,9 @@ impl NativeAgentRunner {
                     role: Role::User,
                     content: MessageContent::Blocks(tool_results),
                 });
+                // Images are a separate user message: Chat Completions projects tool
+                // results into role:tool messages and otherwise drops sibling blocks.
+                self.project_codemode_images();
                 if self.finish_tool_batch() || self.drain_pending_commands().await {
                     self.repair_orphaned_tool_calls();
                     return Err(anyhow::anyhow!("Request cancelled"));

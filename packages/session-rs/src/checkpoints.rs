@@ -1029,6 +1029,213 @@ mod tests {
         CheckpointStore::new(&fx.sessions, "session-1")
     }
 
+    fn assert_overlapping_sessions_preserve_later_edits(
+        fx: &Fixture,
+        first_cwd: &Path,
+        other_cwd: &Path,
+    ) {
+        fs::write(fx.repo.join("safe.rs"), "safe original\n").unwrap();
+        fs::write(fx.repo.join("deleted.rs"), "deleted original\n").unwrap();
+        fs::write(fx.repo.join("nested/other.rs"), "other original\n").unwrap();
+        run_git(&fx.repo, &["add", "."]);
+        run_git(
+            &fx.repo,
+            &["commit", "--quiet", "-m", "shared workspace files"],
+        );
+
+        let mut pending = begin_turn(first_cwd, &fx.sessions, "session-1", "first edit").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("a.rs"), "first session\n").unwrap();
+        fs::write(fx.repo.join("safe.rs"), "first safe edit\n").unwrap();
+        fs::remove_file(fx.repo.join("deleted.rs")).unwrap();
+        fs::write(fx.repo.join("created.rs"), "first created\n").unwrap();
+        let first = finalize_turn(pending).unwrap().unwrap();
+
+        let mut pending = begin_turn(other_cwd, &fx.sessions, "session-2", "other edit").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("a.rs"), "other session\n").unwrap();
+        fs::write(fx.repo.join("deleted.rs"), "other recreated\n").unwrap();
+        fs::write(fx.repo.join("created.rs"), "other extended\n").unwrap();
+        fs::write(fx.repo.join("nested/other.rs"), "other unrelated edit\n").unwrap();
+        let other = finalize_turn(pending).unwrap().unwrap();
+        assert_eq!(first.repo_root, other.repo_root);
+        assert_eq!(first.repo_root, dunce::canonicalize(&fx.repo).unwrap());
+
+        let (candidates, skipped) = preview_turns(&store(fx), 0).unwrap();
+        assert_eq!(candidates, ["safe.rs"]);
+        assert_eq!(
+            skipped.into_iter().collect::<HashSet<_>>(),
+            HashSet::from([
+                "a.rs".to_string(),
+                "created.rs".to_string(),
+                "deleted.rs".to_string(),
+            ])
+        );
+        let reports = restore_turns(&store(fx), 0).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].failed.is_empty());
+        assert_eq!(reports[0].restored, ["safe.rs"]);
+        assert!(reports[0].deleted.is_empty());
+        assert_eq!(reports[0].skipped.len(), 3);
+        for (path, content) in [
+            ("a.rs", "other session\n"),
+            ("created.rs", "other extended\n"),
+            ("deleted.rs", "other recreated\n"),
+            ("nested/other.rs", "other unrelated edit\n"),
+            ("safe.rs", "safe original\n"),
+        ] {
+            assert_eq!(fs::read_to_string(fx.repo.join(path)).unwrap(), content);
+        }
+        assert!(store(fx).list().is_empty());
+        let other_store = CheckpointStore::new(&fx.sessions, "session-2");
+        assert_eq!(
+            other_store.list().len(),
+            1,
+            "restoring one session keeps the other's history"
+        );
+        let report = restore_latest(&other_store).unwrap().unwrap();
+        assert!(report.failed.is_empty());
+        assert!(report.skipped.is_empty());
+        assert_eq!(
+            fs::read_to_string(fx.repo.join("a.rs")).unwrap(),
+            "first session\n"
+        );
+        assert_eq!(
+            fs::read_to_string(fx.repo.join("created.rs")).unwrap(),
+            "other extended\n",
+            "pre-existing untracked files remain outside the second session's checkpoint"
+        );
+        assert!(!fx.repo.join("deleted.rs").exists());
+        assert_eq!(
+            fs::read_to_string(fx.repo.join("nested/other.rs")).unwrap(),
+            "other original\n"
+        );
+    }
+
+    #[test]
+    fn overlapping_session_roots_preserve_other_sessions_later_edits() {
+        // A root and its nested cwd name the same Git worktree. Sharing it
+        // must still allow restoring unchanged files, with per-file guards
+        // protecting tracked, created, and recreated files owned by others.
+        for (first_nested, other_nested) in [(false, false), (false, true), (true, false)] {
+            let fx = git_fixture();
+            let nested = fx.repo.join("nested");
+            fs::create_dir(&nested).unwrap();
+            let first_cwd = if first_nested { &nested } else { &fx.repo };
+            let other_cwd = if other_nested { &nested } else { &fx.repo };
+            assert_overlapping_sessions_preserve_later_edits(&fx, first_cwd, other_cwd);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aliased_nested_session_preserves_other_sessions_later_edits() {
+        let fx = git_fixture();
+        let nested = fx.repo.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let alias = fx._tmp.path().join("alias");
+        std::os::unix::fs::symlink(&nested, &alias).unwrap();
+        assert_overlapping_sessions_preserve_later_edits(&fx, &fx.repo, &alias);
+    }
+
+    #[test]
+    fn restore_rechecks_manual_edits_after_preview() {
+        let fx = git_fixture();
+        let mut pending = begin_turn(&fx.repo, &fx.sessions, "session-1", "edit").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("a.rs"), "agent edit\n").unwrap();
+        fs::write(fx.repo.join("created.rs"), "agent created\n").unwrap();
+        finalize_turn(pending).unwrap().unwrap();
+        let (candidates, skipped) = preview_turns(&store(&fx), 0).unwrap();
+        assert_eq!(candidates, ["a.rs", "created.rs"]);
+        assert!(skipped.is_empty());
+
+        fs::write(fx.repo.join("a.rs"), "manual edit after preview\n").unwrap();
+        fs::write(
+            fx.repo.join("created.rs"),
+            "manual extension after preview\n",
+        )
+        .unwrap();
+        let reports = restore_turns(&store(&fx), 0).unwrap();
+        assert!(reports[0].failed.is_empty());
+        assert!(reports[0].restored.is_empty());
+        assert!(reports[0].deleted.is_empty());
+        assert_eq!(reports[0].skipped, ["a.rs", "created.rs"]);
+        assert_eq!(
+            fs::read_to_string(fx.repo.join("a.rs")).unwrap(),
+            "manual edit after preview\n"
+        );
+        assert_eq!(
+            fs::read_to_string(fx.repo.join("created.rs")).unwrap(),
+            "manual extension after preview\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_rechecks_symlink_alias_after_preview() {
+        let fx = git_fixture();
+        let mut pending = begin_turn(&fx.repo, &fx.sessions, "session-1", "edit").unwrap();
+        pending.user_turn_index = Some(0);
+        fs::write(fx.repo.join("a.rs"), "agent edit\n").unwrap();
+        finalize_turn(pending).unwrap().unwrap();
+        assert_eq!(
+            preview_turns(&store(&fx), 0).unwrap(),
+            (vec!["a.rs".to_string()], vec![])
+        );
+        let outside = fx._tmp.path().join("outside.rs");
+        // Matching bytes must not authorize a write through a new alias.
+        fs::write(&outside, "agent edit\n").unwrap();
+        fs::remove_file(fx.repo.join("a.rs")).unwrap();
+        std::os::unix::fs::symlink(&outside, fx.repo.join("a.rs")).unwrap();
+
+        let reports = restore_turns(&store(&fx), 0).unwrap();
+        assert_eq!(reports[0].failed.len(), 1);
+        assert!(reports[0].restored.is_empty());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "agent edit\n");
+        assert!(
+            fs::symlink_metadata(fx.repo.join("a.rs"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(store(&fx).list().len(), 1);
+    }
+
+    #[test]
+    fn restore_rejects_manifest_paths_outside_worktree() {
+        for relative in [
+            "../outside.rs",
+            "/outside.rs",
+            "",
+            ".",
+            "nested/../../outside.rs",
+        ] {
+            let fx = git_fixture();
+            let outside = fx._tmp.path().join("outside.rs");
+            fs::write(&outside, "agent edit\n").unwrap();
+            let mut pending = begin_turn(&fx.repo, &fx.sessions, "session-1", "edit").unwrap();
+            pending.user_turn_index = Some(0);
+            fs::write(fx.repo.join("a.rs"), "agent edit\n").unwrap();
+            let mut checkpoint = finalize_turn(pending).unwrap().unwrap();
+            checkpoint.entries[0].path = relative.to_string();
+            store(&fx).save(&checkpoint).unwrap();
+
+            let (candidates, skipped) = preview_turns(&store(&fx), 0).unwrap();
+            assert!(candidates.is_empty());
+            assert_eq!(skipped, [relative]);
+            let reports = restore_turns(&store(&fx), 0).unwrap();
+            assert_eq!(reports[0].failed.len(), 1);
+            assert!(reports[0].restored.is_empty());
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "agent edit\n");
+            assert_eq!(
+                fs::read_to_string(fx.repo.join("a.rs")).unwrap(),
+                "agent edit\n"
+            );
+            assert_eq!(store(&fx).list().len(), 1);
+        }
+    }
+
     #[test]
     fn abandoned_capture_releases_its_directory() {
         let fx = git_fixture();

@@ -201,6 +201,7 @@ fn failure_recovery_survives_restart_and_compaction_but_new_input_resets_it() {
                 outcome: dex_loop::Outcome::Failed,
                 output: dex_loop::Output::Text("failed".into()),
                 receipt: None,
+                summary: None,
             },
         ] {
             let cursor = log.host_append(event.clone());

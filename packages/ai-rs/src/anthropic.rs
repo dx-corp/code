@@ -96,6 +96,9 @@ struct SseParserState {
     pending_stop_reason: Option<StopReason>,
     /// Thinking signature from `signature_delta`, associated with thinking blocks
     pending_thinking_signature: Option<String>,
+    usage_input_tokens: Option<u64>,
+    usage_cache_read_tokens: Option<u64>,
+    usage_cache_creation_tokens: Option<u64>,
 }
 
 const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
@@ -465,11 +468,21 @@ impl AnthropicClient {
 
         // Add tools with cache_control on the last tool for tool definition caching
         if !config.tools.is_empty() {
+            let mut tools_json: Vec<serde_json::Value> = config
+                .tools
+                .iter()
+                .map(|tool| {
+                    let mut wire = serde_json::json!(tool);
+                    if let Some(fields) = wire.as_object_mut() {
+                        // Result declarations belong to discovery, not Anthropic's
+                        // tool input contract (including its count-token endpoint).
+                        fields.remove("output_schema");
+                    }
+                    wire
+                })
+                .collect();
             if mark_tools {
                 // Add cache_control to the last tool for tool definition caching
-                let mut tools_json: Vec<serde_json::Value> =
-                    config.tools.iter().map(|t| serde_json::json!(t)).collect();
-
                 // Add cache_control to the last tool
                 if let Some(last_tool) = tools_json.last_mut() {
                     if let Some(obj) = last_tool.as_object_mut() {
@@ -479,11 +492,8 @@ impl AnthropicClient {
                         );
                     }
                 }
-
-                body["tools"] = serde_json::json!(tools_json);
-            } else {
-                body["tools"] = serde_json::json!(config.tools.as_ref());
             }
+            body["tools"] = serde_json::json!(tools_json);
         }
 
         if let Some(thinking) = &config.thinking {
@@ -634,6 +644,11 @@ fn parse_sse_event(data: &str, state: &mut SseParserState) -> Option<StreamEvent
     match event_type {
         "message_start" => {
             let parsed: MessageStartEvent = serde_json::from_str(event_data).ok()?;
+            if let Some(usage) = &parsed.message.usage {
+                state.usage_input_tokens = usage.input_tokens;
+                state.usage_cache_read_tokens = usage.cache_read_input_tokens;
+                state.usage_cache_creation_tokens = usage.cache_creation_input_tokens;
+            }
             Some(StreamEvent::MessageStart {
                 id: parsed.message.id,
                 model: parsed.message.model,
@@ -702,11 +717,19 @@ fn parse_sse_event(data: &str, state: &mut SseParserState) -> Option<StreamEvent
                     state.pending_stop_reason = delta.stop_reason;
                 }
             }
-            parsed.usage.map(|usage| StreamEvent::Usage {
-                input_tokens: usage.input_tokens.unwrap_or(0),
-                output_tokens: usage.output_tokens.unwrap_or(0),
-                cache_read_tokens: usage.cache_read_input_tokens,
-                cache_creation_tokens: usage.cache_creation_input_tokens,
+            let usage = parsed.usage?;
+            state.usage_input_tokens = usage.input_tokens.or(state.usage_input_tokens);
+            state.usage_cache_read_tokens = usage
+                .cache_read_input_tokens
+                .or(state.usage_cache_read_tokens);
+            state.usage_cache_creation_tokens = usage
+                .cache_creation_input_tokens
+                .or(state.usage_cache_creation_tokens);
+            Some(StreamEvent::Usage {
+                input_tokens: state.usage_input_tokens?,
+                output_tokens: usage.output_tokens?,
+                cache_read_tokens: state.usage_cache_read_tokens,
+                cache_creation_tokens: state.usage_cache_creation_tokens,
             })
         }
         "message_stop" => {
@@ -746,6 +769,8 @@ struct MessageStartEvent {
 struct MessageInfo {
     id: String,
     model: String,
+    #[serde(default)]
+    usage: Option<UsageInfo>,
 }
 
 /// Content block start event - signals start of a new content block
@@ -883,6 +908,70 @@ mod tests {
     /// Helper to create a fresh parser state for tests
     fn new_state() -> SseParserState {
         SseParserState::default()
+    }
+
+    #[test]
+    fn partial_anthropic_usage_never_fabricates_completion_tokens() {
+        let mut state = new_state();
+        let partial = "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":17}}";
+        assert!(!matches!(
+            parse_sse_event(partial, &mut state),
+            Some(StreamEvent::Usage { .. })
+        ));
+    }
+
+    #[test]
+    fn discovery_output_schema_stays_out_of_anthropic_provider_tool_parameters() {
+        let schema = serde_json::json!({"type":"object","properties":{"label":{"type":"string"}},"required":["label"]});
+        let tool = Tool::new("classify", "Classify text").with_output_schema(schema.clone());
+        let messages = vec![Message {
+            role: Role::User,
+            content: MessageContent::Text("Classify a bird".into()),
+        }];
+        let client = AnthropicClient::new("test-key").unwrap();
+        for cached in [false, true] {
+            let config = RequestConfig {
+                model: "anthropic/claude-opus-4-7".into(),
+                tools: std::sync::Arc::new(vec![tool.clone()]),
+                cache_system_prompt: cached,
+                ..Default::default()
+            };
+            for body in [
+                client.build_request_body(&messages, &config).unwrap(),
+                client.build_count_tokens_body(&messages, &config).unwrap(),
+            ] {
+                let wire = &body["tools"][0];
+                assert_eq!(wire["name"], "classify");
+                assert_eq!(wire["input_schema"], tool.input_schema);
+                assert!(
+                    wire.get("output_schema").is_none(),
+                    "discovery metadata must not become an Anthropic tool parameter: {wire}"
+                );
+            }
+        }
+        assert_eq!(
+            tool.output_schema,
+            Some(schema),
+            "the admitted catalog retains the owner's output declaration"
+        );
+    }
+
+    #[test]
+    fn final_anthropic_usage_preserves_start_input_and_final_output() {
+        let mut state = new_state();
+        parse_sse_event(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"id\",\"model\":\"claude\",\"usage\":{\"input_tokens\":17,\"output_tokens\":0}}}",
+            &mut state,
+        );
+        let event = parse_sse_event("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":9},\"delta\":{\"stop_reason\":\"end_turn\"}}",&mut state).unwrap();
+        assert!(matches!(
+            event,
+            StreamEvent::Usage {
+                input_tokens: 17,
+                output_tokens: 9,
+                ..
+            }
+        ));
     }
 
     #[test]

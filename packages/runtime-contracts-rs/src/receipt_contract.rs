@@ -79,6 +79,14 @@ pub enum ToolReceiptDetails {
     /// [`ToolDetails`] variant (e.g. `gh_issue`, `websearch`) but whose raw
     /// `details` JSON carried an `origin`/`url`/`query` field.
     Origin(String),
+    /// Actual active-provider execution; missing usage remains unknown.
+    ModelInference {
+        provider: String,
+        model: String,
+        usage: Option<crate::TokenUsage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<f64>,
+    },
     Cached,
     None,
 }

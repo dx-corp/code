@@ -177,6 +177,7 @@ fn bench_mcp_tool_conversion(c: &mut Criterion) {
             },
             "required": ["arg1"]
         })),
+        output_schema: None,
         annotations: None,
     };
 

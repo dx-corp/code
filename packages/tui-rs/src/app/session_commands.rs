@@ -94,7 +94,7 @@ impl App {
         self.adopt_session_context(None, "new");
         self.dex_terminal = None;
         self.dex_delight = Default::default();
-        self.state.messages.clear();
+        self.state.clear_conversation_messages();
         self.state.clear_focus_turn_state();
         self.state.scroll_offset = 0;
         self.state.alerts.clear();

@@ -15,13 +15,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dex_loop::{
-    Context, Entry, Message as LoopMessage, ModelChunk, ModelError, Outcome, Output, ToolName,
-    ToolSpec, Usage,
+    Context, Entry, Message as LoopMessage, ModelChunk, ModelError, Outcome, Output, OutputBlock,
+    ToolName, ToolSpec, Usage,
 };
 use futures_util::Stream;
 use maestro_ai::{
-    ContentBlock as AiContentBlock, Message as AiMessage, MessageContent, RequestConfig, Role,
-    StreamEvent, Tool as AiTool, UnifiedClient,
+    ContentBlock as AiContentBlock, ImageSource, Message as AiMessage, MessageContent,
+    RequestConfig, Role, StreamEvent, Tool as AiTool, UnifiedClient,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -62,11 +62,51 @@ impl AiRsModel {
     }
 }
 
-fn to_ai_messages(history: &[Entry]) -> Vec<AiMessage> {
-    history
-        .iter()
-        .filter_map(|entry| to_ai_message(&entry.message))
-        .collect()
+fn to_ai_messages(history: &[Entry]) -> Result<Vec<AiMessage>, ModelError> {
+    let mut messages = Vec::new();
+    let mut images = Vec::new();
+    for entry in history {
+        if !matches!(&entry.message, LoopMessage::Tool { .. }) {
+            flush_tool_images(&mut messages, &mut images);
+        }
+        if let LoopMessage::Tool {
+            output: Output::Blocks(blocks),
+            ..
+        } = &entry.message
+        {
+            dex_loop::validate_codemode_blocks(blocks).map_err(|message| ModelError {
+                class: dex_loop::ErrorClass::Protocol,
+                message: format!("Invalid typed tool output: {message}"),
+            })?;
+            for block in blocks {
+                if let OutputBlock::Image { mime_type, data } = block {
+                    images.push(AiContentBlock::Image {
+                        source: ImageSource::Base64 {
+                            media_type: mime_type.clone(),
+                            data: data.clone(),
+                            owner: None,
+                        },
+                    });
+                }
+            }
+        }
+        if let Some(message) = to_ai_message(&entry.message) {
+            messages.push(message);
+        }
+    }
+    flush_tool_images(&mut messages, &mut images);
+    Ok(messages)
+}
+
+fn flush_tool_images(messages: &mut Vec<AiMessage>, images: &mut Vec<AiContentBlock>) {
+    if !images.is_empty() {
+        // Keep every peer result together before starting a new user message;
+        // Chat Completions drops images placed beside a ToolResult block.
+        messages.push(AiMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(std::mem::take(images)),
+        });
+    }
 }
 
 fn to_ai_message(message: &LoopMessage) -> Option<AiMessage> {
@@ -107,6 +147,15 @@ fn to_ai_message(message: &LoopMessage) -> Option<AiMessage> {
         } => {
             let content = match output {
                 Output::Text(text) => text.clone(),
+                // Pixels are projected separately after all sibling results.
+                Output::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        OutputBlock::Text { text } => Some(text.as_str()),
+                        OutputBlock::Image { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
                 // `LocalTools` never produces this variant (see `tools.rs`);
                 // a real out-of-line store needs its own resolver here.
                 Output::Ref(_) => {
@@ -132,6 +181,7 @@ fn to_ai_tools(tools: &[&ToolSpec]) -> Vec<AiTool> {
             name: spec.name.as_str().to_owned(),
             description: spec.label.clone(),
             input_schema: spec.schema.clone(),
+            output_schema: None,
             schema_enforcement: Default::default(),
         })
         .collect()
@@ -239,6 +289,13 @@ impl dex_loop::Model for AiRsModel {
         let client = self.client.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
+            let messages = match messages {
+                Ok(messages) => messages,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            };
             match client.stream(&messages, &config).await {
                 Ok(mut source) => {
                     let mut translator = ChunkTranslator::default();
@@ -261,6 +318,10 @@ impl dex_loop::Model for AiRsModel {
         UnboundedReceiverStream::new(rx)
     }
 }
+
+#[cfg(test)]
+#[path = "model_image_tests.rs"]
+mod image_projection_tests;
 
 #[cfg(test)]
 mod tests {
