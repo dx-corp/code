@@ -2976,34 +2976,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         self.current_thinking_level = thinking_level;
         self.state.thinking_level = thinking_level;
         let (thinking_enabled, thinking_budget) = thinking_level.to_config();
-        let config = NativeAgentConfig {
-            model_capabilities: None,
-            model_dynamics: crate::config::model_dynamics_config(),
-            model: model.clone(),
-            max_tokens: crate::model_catalog::default_max_output_tokens(&model),
-            max_tokens_source: MaxTokensSource::Catalog,
-            system_prompt: Some(self.build_system_prompt()),
-            thinking_enabled,
-            thinking_budget,
-            cwd: cwd.clone(),
-            approval_mode: self.state.approval_mode,
-            context_window: self.state.context_window,
-            // See the `sandbox_policy` field doc on `App`: without this,
-            // only calls reaching the human approval modal via `self.tool_executor` were ever
-            // sandboxed. Yolo mode and Selective mode's allowlisted calls
-            // run through the native agent runner's own executor instead.
-            sandbox_policy: self.sandbox_policy.clone(),
-            managed_mcp_policy: self.managed_setup.is_managed().then(|| {
-                crate::mcp::ManagedMcpPolicy {
-                    version: self.managed_setup.version(),
-                    policy: self.managed_setup.mcp_policy().clone(),
-                }
-            }),
-            external_tool_schema_policy: ExternalToolSchemaPolicy::Eager,
-            max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
-            allow_unbounded_turn: false,
-            retry_config: crate::agent::retry::RetryConfig::default(),
-        };
+        let config = self.native_agent_config(&model, &cwd, thinking_enabled, thinking_budget);
 
         let policy_model = policy_model_id(&model);
         if let Some(reason) = check_model_allowed(&policy_model) {
@@ -5895,6 +5868,7 @@ fn short_codex_status_id(value: &str) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod a2a_handoff;
+mod agent_config;
 mod bug_reports;
 mod checkpoints;
 mod command_handlers;

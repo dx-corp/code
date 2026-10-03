@@ -67,6 +67,7 @@ use crate::semantic_text::{
     FlushReason as SemanticFlushReason, Release as SemanticRelease, SemanticTextRelease,
 };
 
+mod agent_config;
 mod managed_authorization;
 mod semantic_stream;
 
@@ -426,34 +427,7 @@ impl HeadlessState {
     fn ensure_agent(&mut self) -> Result<&NativeAgent> {
         if self.agent.is_none() {
             let started = Instant::now();
-            let config = NativeAgentConfig {
-                model_dynamics: headless_model_dynamics(crate::config::model_dynamics_config()),
-                model: self.model.clone(),
-                model_capabilities: Some(self.model_capabilities),
-                max_tokens: crate::model_catalog::default_max_output_tokens(&self.model),
-                max_tokens_source: MaxTokensSource::Catalog,
-                system_prompt: Some(self.system_prompt.clone()),
-                thinking_enabled: self.thinking_enabled,
-                thinking_budget: self.thinking_budget,
-                cwd: self.cwd.clone(),
-                // The headless protocol's own `ApprovalMode` (Auto/Fail/Prompt,
-                // imported above) only resolves calls the runner already
-                // marked `requires_approval`; preserve the prior (mode-unaware)
-                // per-tool heuristic here exactly so that decision is unchanged.
-                approval_mode: crate::state::ApprovalMode::Selective,
-                context_window: None,
-                // Headless has no sandbox-policy resolution today (unlike the interactive TUI's
-                // `config::resolve_interactive_sandbox_policy` or print
-                // mode's `PrintModeOptions::sandbox_policy`); preserve that
-                // status quo explicitly rather than silently expanding this
-                // PR's scope to headless sandboxing.
-                sandbox_policy: None,
-                managed_mcp_policy: None,
-                max_turn_steps: crate::agent::DEFAULT_MAX_TURN_STEPS,
-                allow_unbounded_turn: false,
-                retry_config: crate::agent::retry::RetryConfig::hosted_outage(),
-                external_tool_schema_policy: crate::agent::ExternalToolSchemaPolicy::Eager,
-            };
+            let config = self.native_agent_config();
             let (agent, mut event_rx) = if let Some(grant) = self.governed_grant.as_ref() {
                 let (allowed_tools, external_tools, bindings) = governed_agent_inputs(grant)?;
                 let created = NativeAgent::new_with_governed_tools_and_credential_vault(

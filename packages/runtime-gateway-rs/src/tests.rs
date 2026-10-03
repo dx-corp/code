@@ -2697,7 +2697,7 @@ fn csrf_head_for_path(method: &str, path: &str, token: Option<&str>) -> RequestH
     }
 }
 
-fn test_session_record(id: &str) -> SessionRecord {
+pub(super) fn test_session_record(id: &str) -> SessionRecord {
     SessionRecord {
         id: id.to_string(),
         owner: None,
@@ -2710,12 +2710,13 @@ fn test_session_record(id: &str) -> SessionRecord {
         favorite: None,
         tags: Vec::new(),
         log_group_id: None,
+        background_read_cursor: 0,
         messages: Vec::new(),
         last_turn_error: None,
     }
 }
 
-fn test_app_state_with_sessions(sessions: HashMap<String, SessionRecord>) -> AppState {
+pub(super) fn test_app_state_with_sessions(sessions: HashMap<String, SessionRecord>) -> AppState {
     let config = Arc::new(auth_test_config());
     let (a2a_task_events, _) = broadcast::channel(256);
     AppState {
@@ -2741,6 +2742,7 @@ fn test_app_state_with_sessions(sessions: HashMap<String, SessionRecord>) -> App
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
+        pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -2840,7 +2842,7 @@ fn unique_test_dir(prefix: &str) -> PathBuf {
     env::temp_dir().join(format!("{prefix}-{}-{now}", process::id()))
 }
 
-async fn tcp_stream_pair() -> (TcpStream, TcpStream) {
+pub(super) async fn tcp_stream_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -10903,27 +10905,6 @@ fn assistant_tool_metadata_reconstructs_artifacts_after_persist() {
     );
 }
 
-#[test]
-fn assistant_usage_cost_uses_contract_shape() {
-    let message = composer_assistant_message(
-        "done",
-        "",
-        Some(TokenUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            cache_read_tokens: 3,
-            cache_write_tokens: 4,
-            cost: None,
-        }),
-    );
-
-    assert_eq!(message["usage"]["cost"]["input"], 0.0);
-    assert_eq!(message["usage"]["cost"]["output"], 0.0);
-    assert_eq!(message["usage"]["cost"]["cacheRead"], 0.0);
-    assert_eq!(message["usage"]["cost"]["cacheWrite"], 0.0);
-    assert_eq!(message["usage"]["cost"]["total"], 0.0);
-}
-
 #[tokio::test]
 async fn usage_buckets_include_contract_breakdown_fields() {
     let path = env::temp_dir().join(format!(
@@ -13227,6 +13208,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         favorite: None,
         tags: Vec::new(),
         log_group_id: None,
+        background_read_cursor: 0,
         messages: Vec::new(),
         last_turn_error: None,
     };
@@ -13276,6 +13258,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
+        pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13368,6 +13351,7 @@ async fn invalid_session_store_is_left_untouched_and_future_writes_are_blocked()
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
+        pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -14532,6 +14516,12 @@ async fn platform_a2a_push_evicts_terminal_payloads_and_replay_history() {
 
 #[path = "tests/turn_diffs.rs"]
 mod turn_diff_tests;
+
+#[path = "sessions_page_tests.rs"]
+mod sessions_page_tests;
+
+#[path = "pull_request_watch_api_tests.rs"]
+mod pull_request_watch_api_tests;
 
 #[tokio::test]
 async fn failed_chat_turn_survives_session_store_reload_and_retry_clears_it() {

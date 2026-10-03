@@ -606,6 +606,7 @@ fn mcp_lifecycle_state(
 /// non-Sync primitives. However, it can be moved across async tasks and used within
 /// a single-threaded context safely.
 pub struct ToolExecutor {
+    background_task_access: background_tasks::BackgroundTaskAccess,
     code_authority: Option<crate::code_authority::CodeToolAuthority>,
     /// Shared vault used to keep credential references valid across this execution session.
     credential_vault: CredentialVault,
@@ -889,12 +890,6 @@ pub(crate) struct ToolExecutionOptions<'a> {
 }
 
 impl ToolExecutor {
-    #[cfg(test)]
-    pub(crate) fn with_test_code_authority(mut self) -> Self {
-        self.code_authority = Some(crate::code_authority::CodeToolAuthority::for_test(vec![]));
-        self
-    }
-
     pub fn with_code_authority(mut self) -> Self {
         self.code_authority = crate::code_authority::CodeToolAuthority::configured();
         self
@@ -1002,6 +997,7 @@ impl ToolExecutor {
         ));
 
         Self {
+            background_task_access: crate::tools::background_tasks::BackgroundTaskAccess::Legacy,
             code_authority: None,
             credential_vault,
             bash: BashTool::new(&cwd),
@@ -1058,6 +1054,7 @@ impl ToolExecutor {
         ));
 
         Self {
+            background_task_access: crate::tools::background_tasks::BackgroundTaskAccess::Legacy,
             code_authority: None,
             credential_vault: CredentialVault::new(),
             bash: BashTool::new(&cwd),
@@ -1118,6 +1115,7 @@ impl ToolExecutor {
         ));
 
         Self {
+            background_task_access: crate::tools::background_tasks::BackgroundTaskAccess::Legacy,
             code_authority: None,
             credential_vault,
             bash: BashTool::new(&cwd),
@@ -2985,6 +2983,7 @@ pub(crate) fn emit_typed_tool_end(
     });
 }
 
+mod background;
 mod coding_task;
 mod execute;
 mod mcp_output;

@@ -38,6 +38,8 @@ pub(super) struct SessionStore {
 #[serde(rename_all = "camelCase")]
 pub(super) struct SessionRecord {
     pub(super) id: String,
+    #[serde(default)]
+    pub(super) background_read_cursor: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +97,14 @@ pub(super) async fn handle_session_endpoint(
         Ok(auth) => auth,
         Err(response) => return response,
     };
+    if let Some(path) =
+        session_path_from_path(&head.path).filter(|path| path.tail == Some("pr-watches"))
+    {
+        return crate::pull_request_watch_http::handle(
+            stream, initial, head, state, &auth, path.id,
+        )
+        .await;
+    }
     match head.method.as_str() {
         "GET" if head.path == "/api/sessions" => json_response(
             200,
@@ -179,6 +189,17 @@ pub(super) async fn handle_session_endpoint(
             let Some(session_path) = session_path_from_path(&head.path) else {
                 return json_response(404, &serde_json::json!({ "error": "Not found" }));
             };
+            if session_path.tail == Some("background-read") {
+                return crate::background::handle_background_read(
+                    stream,
+                    initial,
+                    head,
+                    state,
+                    session_path.id,
+                    &auth,
+                )
+                .await;
+            }
             if session_path.tail.is_some() {
                 return json_response(404, &serde_json::json!({ "error": "Not found" }));
             };
@@ -472,7 +493,9 @@ pub(super) async fn persist_session_store(state: &AppState) {
         );
         return;
     }
-    let store = state.sessions.lock().await.clone();
+    // Keep the owner lock through persistence: a delayed older snapshot must
+    // not overwrite a newer acknowledged background read cursor.
+    let store = state.sessions.lock().await;
     if let Err(error) = persist_session_store_snapshot(state, &store).await {
         eprintln!("failed to persist session store atomically: {error}");
     }
@@ -513,6 +536,7 @@ pub(super) fn create_session_record(title: Option<String>, owner: Option<String>
     let now = now_rfc3339();
     SessionRecord {
         id: new_session_id(),
+        background_read_cursor: 0,
         owner,
         organization_id: None,
         workspace_id: None,
@@ -679,6 +703,23 @@ pub(super) async fn handle_session_get(
     session_path: SessionPath<'_>,
     auth: &AuthContext,
 ) -> Vec<u8> {
+    if session_path.tail == Some("background-tasks") {
+        return crate::background::handle_background_get(state, session_path.id, auth).await;
+    }
+    if session_path.tail == Some("page") {
+        // Project only this slice; never clone the whole conversation on a page read.
+        let store = state.sessions.lock().await;
+        let Some(session) = store.sessions.get(session_path.id) else {
+            return json_response(404, &serde_json::json!({ "error": "Session not found" }));
+        };
+        if !session_visible_to_auth(session, auth) {
+            return json_response(404, &serde_json::json!({ "error": "Session not found" }));
+        }
+        return match session_page_value(session, &head.query) {
+            Ok(value) => json_response(200, &value),
+            Err(error) => json_response(400, &serde_json::json!({ "error": error })),
+        };
+    }
     let Some(session) = state
         .sessions
         .lock()
@@ -1877,6 +1918,9 @@ pub(super) fn session_summary_value(session: &SessionRecord) -> Value {
         "updatedAt": session.updated_at,
         "messageCount": session.message_count
     });
+    if let Some(background) = crate::background::session_background_summary(session) {
+        value["background"] = background;
+    }
     if let Some(favorite) = session.favorite {
         value["favorite"] = Value::Bool(favorite);
     }
@@ -1904,6 +1948,130 @@ pub(super) fn session_full_value(session: &SessionRecord) -> Value {
     value
 }
 
+const SESSION_PAGE_MESSAGE_LIMIT: usize = 50;
+const SESSION_PAGE_MAX_MESSAGES: usize = 100;
+const SESSION_PAGE_MAX_BYTES: usize = 256 * 1024;
+const SESSION_PAGE_MESSAGE_MAX_BYTES: usize = 32 * 1024;
+
+fn session_page_value(
+    session: &SessionRecord,
+    query: &HashMap<String, String>,
+) -> Result<Value, &'static str> {
+    let limit = match query.get("limit") {
+        Some(limit) => limit
+            .parse::<usize>()
+            .ok()
+            .filter(|limit| (1..=SESSION_PAGE_MAX_MESSAGES).contains(limit))
+            .ok_or("invalid page limit")?,
+        None => SESSION_PAGE_MESSAGE_LIMIT,
+    };
+    let end = match query.get("cursor") {
+        Some(cursor) => {
+            if cursor.len() > 4096 {
+                return Err("invalid page cursor");
+            }
+            let decoded = URL_SAFE_NO_PAD
+                .decode(cursor)
+                .map_err(|_| "invalid page cursor")?;
+            let (version, id, index): (u8, String, usize) =
+                serde_json::from_slice(&decoded).map_err(|_| "invalid page cursor")?;
+            if version != 1 || id != session.id || index == 0 || index > session.messages.len() {
+                return Err("invalid page cursor");
+            }
+            index
+        }
+        None => session.messages.len(),
+    };
+    let mut start = end;
+    let mut bytes = 0;
+    let mut messages = Vec::new();
+    for index in (end.saturating_sub(limit)..end).rev() {
+        let message = bounded_public_session_message(&session.messages[index]);
+        let size = serde_json::to_vec(&message)
+            .map_err(|_| "invalid session message")?
+            .len();
+        if bytes + size > SESSION_PAGE_MAX_BYTES {
+            break;
+        }
+        bytes += size;
+        start = index;
+        messages.push(message);
+    }
+    messages.reverse();
+    // A page exposes only bounded desktop metadata; user-defined tags or titles
+    // must not defeat its public payload budget. Full reads retain their contract.
+    let title: String = session.title.chars().take(256).collect();
+    let mut value = serde_json::json!({
+        "id": session.id,
+        "title": title,
+        "titleTruncated": title.len() < session.title.len(),
+        "createdAt": session.created_at,
+        "updatedAt": session.updated_at,
+    });
+    if let Some(error) = &session.last_turn_error {
+        // Startup failures remain actionable through the bounded desktop read.
+        value["lastTurnError"] = Value::String(error.chars().take(1024).collect());
+    }
+    if let Some(background) = crate::background::session_background_summary(session) {
+        value["background"] = background;
+    }
+    value["messageCount"] = serde_json::json!(session.messages.len());
+    value["messages"] = Value::Array(messages);
+    value["startIndex"] = serde_json::json!(start);
+    value["hasEarlier"] = Value::Bool(start > 0);
+    value["nextCursor"] = if start > 0 {
+        let cursor =
+            serde_json::to_vec(&(1_u8, &session.id, start)).map_err(|_| "invalid page cursor")?;
+        Value::String(URL_SAFE_NO_PAD.encode(cursor))
+    } else {
+        Value::Null
+    };
+    Ok(value)
+}
+
+fn bounded_public_session_message(message: &Value) -> Value {
+    let public = public_session_message(message);
+    if serde_json::to_vec(&public).is_ok_and(|bytes| bytes.len() <= SESSION_PAGE_MESSAGE_MAX_BYTES)
+    {
+        return public;
+    }
+    // Large tool/structured payloads receive an explicitly marked text excerpt.
+    let mut excerpt = String::new();
+    let mut encoded_bytes = 0;
+    let mut append = |text: &str| {
+        for ch in text.chars() {
+            let size = serde_json::to_string(&ch.to_string())
+                .map(|encoded| encoded.len().saturating_sub(2))
+                .unwrap_or(6);
+            if encoded_bytes + size > SESSION_PAGE_MESSAGE_MAX_BYTES / 2 {
+                break;
+            }
+            encoded_bytes += size;
+            excerpt.push(ch);
+        }
+    };
+    if let Some(content) = public.get("content").and_then(Value::as_str) {
+        append(content);
+    } else if let Some(parts) = public.get("content").and_then(Value::as_array) {
+        for part in parts {
+            if let Some(text) = part
+                .as_str()
+                .or_else(|| part.get("text").and_then(Value::as_str))
+            {
+                append(text);
+            }
+        }
+    } else if let Some(text) = public.get("text").and_then(Value::as_str) {
+        append(text);
+    }
+    let role = public
+        .get("role")
+        .and_then(Value::as_str)
+        .filter(|role| role.len() <= 64)
+        .unwrap_or("assistant");
+    serde_json::json!({ "role": role, "content": excerpt, "contentTruncated": true })
+}
+
 pub(super) fn public_session_message(message: &Value) -> Value {
     let mut message = message.clone();
     if let Some(object) = message.as_object_mut() {
@@ -1920,9 +2088,10 @@ pub(super) fn sanitize_attachment_for_read(attachment: &mut Value) {
     let Some(object) = attachment.as_object_mut() else {
         return;
     };
-    let had_inline_content = object.remove("content").is_some()
-        || object.remove("contentBase64").is_some()
-        || object.remove("content_base64").is_some();
+    let mut had_inline_content = false;
+    for key in ["content", "contentBase64", "content_base64"] {
+        had_inline_content |= object.remove(key).is_some();
+    }
     if had_inline_content && !object.contains_key("contentOmitted") {
         object.insert("contentOmitted".to_string(), Value::Bool(true));
     }

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -95,6 +95,10 @@ struct InitOptions {
     trace_mode: Option<String>,
     ttl_seconds: Option<u64>,
     workspace_id: Option<String>,
+    /// Also accept the redirect address pasted at the terminal. Only the
+    /// standalone login commands set it: they exit after login, so the
+    /// terminal reader cannot take a line meant for a later prompt.
+    accept_pasted_callback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -749,6 +753,13 @@ async fn login_with_scopes(
                 .append_pair("workspace_id", &workspace_id);
         }
     }
+    // Over SSH the browser runs on another machine, and its redirect to
+    // 127.0.0.1 never reaches this listener; the person can paste the
+    // address it ended on instead.
+    let pasted_lines = (authorization_url_sender.is_none()
+        && options.accept_pasted_callback
+        && std::io::stdin().is_terminal())
+    .then(terminal_lines);
     if let Some(sender) = authorization_url_sender {
         // The alternate-screen TUI owns all terminal output. Give it the link
         // before launching the browser so it can offer a manual fallback.
@@ -765,6 +776,12 @@ async fn login_with_scopes(
             )
         );
         eprintln!("{}", authorization_url.as_str());
+        if pasted_lines.is_some() {
+            eprintln!("{}", crate::localization::cli_locale().format(
+                    "If your browser runs on another machine (for example over SSH), paste the address it ends on here and press Enter:",
+                    &[],
+                ));
+        }
     } else {
         status(options, "Waiting for EvalOps identity callback...");
         println!(
@@ -775,9 +792,24 @@ async fn login_with_scopes(
             )
         );
         println!("{}", authorization_url.as_str());
+        if pasted_lines.is_some() {
+            println!("{}", crate::localization::cli_locale().format(
+                    "If your browser runs on another machine (for example over SSH), paste the address it ends on here and press Enter:",
+                    &[],
+                ));
+        }
     }
     open_browser(authorization_url.as_str());
-    let callback = tokio::time::timeout(Duration::from_mins(5), accept_callback(listener, &state))
+    let callback = async {
+        match pasted_lines {
+            Some(lines) => tokio::select! {
+                callback = accept_callback(listener, &state) => callback,
+                callback = accept_pasted_callback(lines, &state) => callback,
+            },
+            None => accept_callback(listener, &state).await,
+        }
+    };
+    let callback = tokio::time::timeout(Duration::from_mins(5), callback)
         .await
         .context("EvalOps login timed out after 5 minutes")??;
     let token_body = url::form_urlencoded::Serializer::new(String::new())
@@ -842,6 +874,66 @@ async fn login_with_scopes(
 
 struct CallbackResult {
     code: String,
+}
+
+/// Lines typed at the terminal, read on a detached thread so a login that
+/// completes through the browser never waits on stdin.
+fn terminal_lines() -> tokio::sync::mpsc::UnboundedReceiver<String> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines() {
+            let Ok(line) = line else { break };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+/// Waits for a pasted callback address; other lines get a hint. Never
+/// resolves once the terminal closes, leaving the browser callback to win.
+async fn accept_pasted_callback(
+    mut lines: tokio::sync::mpsc::UnboundedReceiver<String>,
+    expected_state: &str,
+) -> Result<CallbackResult> {
+    while let Some(line) = lines.recv().await {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(callback) = pasted_callback(&line, expected_state)? {
+            return Ok(callback);
+        }
+        eprintln!("{}", crate::localization::cli_locale().format(
+                "That is not the EvalOps login callback address. Paste the full address from your browser's address bar:",
+                &[],
+            ));
+    }
+    std::future::pending().await
+}
+
+/// The callback address a browser ended on, pasted at the terminal. It must
+/// name this login's callback (host, port and path) and carries the same code
+/// and state, so the same checks as the listener apply.
+fn pasted_callback(input: &str, expected_state: &str) -> Result<Option<CallbackResult>> {
+    let Ok(url) = Url::parse(input.trim()) else {
+        return Ok(None);
+    };
+    let local_host = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    if !local_host || url.port() != Some(callback_port()) || url.path() != CALLBACK_PATH {
+        return Ok(None);
+    }
+    let query = url.query_pairs().into_owned().collect::<BTreeMap<_, _>>();
+    if let Some(error) = query.get("error") {
+        bail!(
+            "{}",
+            crate::localization::cli_locale().format(
+                "EvalOps identity login failed: {0}",
+                std::slice::from_ref(error)
+            )
+        );
+    }
+    validated_callback_code(&query, expected_state).map(|code| Some(CallbackResult { code }))
 }
 
 async fn accept_callback(listener: TcpListener, expected_state: &str) -> Result<CallbackResult> {
@@ -2450,6 +2542,7 @@ pub async fn perform_evalops_login() -> Result<()> {
         .context("build EvalOps HTTP client")?;
     let options = InitOptions {
         force_login: true,
+        accept_pasted_callback: true,
         ..InitOptions::default()
     };
     status(&options, "Opening EvalOps login");
@@ -2471,6 +2564,7 @@ pub async fn perform_evalops_login_with_scopes(extra_scopes: &str) -> Result<()>
         .context("build EvalOps HTTP client")?;
     let options = InitOptions {
         force_login: true,
+        accept_pasted_callback: true,
         ..InitOptions::default()
     };
     let scopes = merge_login_scopes(REQUIRED_LOGIN_SCOPES, extra_scopes);
@@ -3104,6 +3198,52 @@ mod tests {
         );
         assert!(validated_callback_code(&valid, "different").is_err());
         assert!(validated_callback_code(&BTreeMap::new(), "expected").is_err());
+    }
+
+    #[test]
+    fn a_pasted_callback_address_is_held_to_the_listener_checks() {
+        let port = callback_port();
+        let pasted = |address: String| pasted_callback(&address, "expected");
+        let callback = pasted(format!(
+            "http://127.0.0.1:{port}/auth/callback/evalops?code=abc&state=expected"
+        ))
+        .unwrap()
+        .expect("the callback address is accepted");
+        assert_eq!(callback.code, "abc");
+        assert!(
+            pasted(format!(
+                "  http://localhost:{port}/auth/callback/evalops?code=abc&state=expected\n"
+            ))
+            .unwrap()
+            .is_some(),
+            "surrounding whitespace and localhost are fine"
+        );
+        // Another login's state is refused, as the listener refuses it.
+        assert!(
+            pasted(format!(
+                "http://127.0.0.1:{port}/auth/callback/evalops?code=abc&state=other"
+            ))
+            .is_err()
+        );
+        // An identity error ends the login.
+        assert!(
+            pasted(format!(
+                "http://127.0.0.1:{port}/auth/callback/evalops?error=access_denied&state=expected"
+            ))
+            .is_err()
+        );
+        // Anything that is not this callback is not a callback.
+        for other in [
+            "not a url".to_owned(),
+            format!("https://evil.example:{port}/auth/callback/evalops?code=abc&state=expected"),
+            format!(
+                "http://127.0.0.1:{}/auth/callback/evalops?code=abc&state=expected",
+                port + 1
+            ),
+            format!("http://127.0.0.1:{port}/elsewhere?code=abc&state=expected"),
+        ] {
+            assert!(pasted(other).unwrap().is_none());
+        }
     }
 
     #[test]
