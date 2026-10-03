@@ -97,6 +97,7 @@ pub(super) async fn run_native_workflow_child(
         managed_policy_off_runtime(working_directory.clone(), baseline_policy).await?;
     let credential_vault = CredentialVault::new();
     let config = NativeAgentConfig {
+        background_task_access: maestro_local_host::tools::background_tasks::BackgroundTaskAccess::Legacy,
         model,
         model_capabilities: None,
         // The caller's reservation is the whole-child cumulative output cap.

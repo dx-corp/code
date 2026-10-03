@@ -250,7 +250,27 @@ struct UsageEntry {
     #[serde(default)]
     tokens_cache_write: u64,
     #[serde(default)]
-    cost: f64,
+    cost: Option<f64>,
+    #[serde(default)]
+    cost_source: Option<crate::usage_cost::UsageCostSource>,
+}
+
+impl UsageEntry {
+    fn known_cost(&self) -> Option<f64> {
+        if self.cost_source == Some(crate::usage_cost::UsageCostSource::Unpriced) {
+            return None;
+        }
+        self.cost.filter(|cost| cost.is_finite())
+    }
+
+    fn cost_source(&self) -> crate::usage_cost::UsageCostSource {
+        if self.known_cost().is_none() {
+            crate::usage_cost::UsageCostSource::Unpriced
+        } else {
+            self.cost_source
+                .unwrap_or(crate::usage_cost::UsageCostSource::LegacyRecorded)
+        }
+    }
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -266,7 +286,12 @@ struct UsageTokenTotals {
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageBucket {
+    // Sum of known costs; counts below describe completeness.
     cost: f64,
+    cost_sources: crate::usage_cost::UsageCostCounts,
+    known_cost_requests: u64,
+    unpriced_requests: u64,
+    cost_complete: bool,
     requests: u64,
     tokens: u64,
     tokens_detailed: UsageTokenTotals,
@@ -284,6 +309,7 @@ async fn load_usage_entries(path: &Path) -> Vec<UsageEntry> {
 pub(super) async fn usage_snapshot(path: &Path) -> Value {
     let entries = load_usage_entries(path).await;
     let mut total_cost = 0.0;
+    let mut cost_sources = crate::usage_cost::UsageCostCounts::default();
     let mut totals = UsageTokenTotals::default();
     let mut by_provider: HashMap<String, UsageBucket> = HashMap::new();
     let mut by_model: HashMap<String, UsageBucket> = HashMap::new();
@@ -293,7 +319,8 @@ pub(super) async fn usage_snapshot(path: &Path) -> Value {
             + entry.tokens_output
             + entry.tokens_cache_read
             + entry.tokens_cache_write;
-        total_cost += entry.cost;
+        total_cost += entry.known_cost().unwrap_or(0.0);
+        cost_sources.add(entry.cost_source());
         totals.input += entry.tokens_input;
         totals.output += entry.tokens_output;
         totals.cache_read += entry.tokens_cache_read;
@@ -306,7 +333,7 @@ pub(super) async fn usage_snapshot(path: &Path) -> Value {
             &entry.provider
         };
         let provider_bucket = by_provider.entry(provider.to_string()).or_default();
-        add_usage_to_bucket(provider_bucket, entry.cost, tokens, entry);
+        add_usage_to_bucket(provider_bucket, tokens, entry);
 
         let model = if entry.model.is_empty() {
             "unknown"
@@ -314,12 +341,16 @@ pub(super) async fn usage_snapshot(path: &Path) -> Value {
             &entry.model
         };
         let model_bucket = by_model.entry(format!("{provider}/{model}")).or_default();
-        add_usage_to_bucket(model_bucket, entry.cost, tokens, entry);
+        add_usage_to_bucket(model_bucket, tokens, entry);
     }
 
     serde_json::json!({
         "summary": {
             "totalCost": total_cost,
+            "knownCostRequests": cost_sources.known(),
+            "unpricedRequests": cost_sources.unpriced(),
+            "costComplete": cost_sources.unpriced() == 0,
+            "costSources": cost_sources,
             "totalRequests": entries.len(),
             "totalTokens": totals.total,
             "tokensDetailed": totals,
@@ -333,8 +364,12 @@ pub(super) async fn usage_snapshot(path: &Path) -> Value {
     })
 }
 
-fn add_usage_to_bucket(bucket: &mut UsageBucket, cost: f64, tokens: u64, entry: &UsageEntry) {
-    bucket.cost += cost;
+fn add_usage_to_bucket(bucket: &mut UsageBucket, tokens: u64, entry: &UsageEntry) {
+    bucket.cost += entry.known_cost().unwrap_or(0.0);
+    bucket.cost_sources.add(entry.cost_source());
+    bucket.known_cost_requests = bucket.cost_sources.known();
+    bucket.unpriced_requests = bucket.cost_sources.unpriced();
+    bucket.cost_complete = bucket.unpriced_requests == 0;
     bucket.requests += 1;
     bucket.tokens += tokens;
     bucket.calls += 1;
@@ -345,6 +380,10 @@ fn add_usage_to_bucket(bucket: &mut UsageBucket, cost: f64, tokens: u64, entry: 
     bucket.tokens_detailed.cache_write += entry.tokens_cache_write;
     bucket.tokens_detailed.total += tokens;
 }
+
+#[cfg(test)]
+#[path = "local_usage_tests.rs"]
+mod local_usage_tests;
 
 pub(super) async fn package_scripts(cwd: &Path) -> Vec<String> {
     let allowlist = allowed_run_scripts();

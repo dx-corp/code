@@ -11386,6 +11386,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "If your browser runs on another machine (for example over SSH), paste the address it ends on here and press Enter:",
+        [
+            "Si su navegador se ejecuta en otra máquina (por ejemplo, por SSH), pegue aquí la dirección en la que termina y pulse Intro:",
+            "Si votre navigateur s'exécute sur une autre machine (par exemple via SSH), collez ici l'adresse sur laquelle il aboutit et appuyez sur Entrée :",
+            "Wenn Ihr Browser auf einem anderen Rechner läuft (zum Beispiel über SSH), fügen Sie hier die Adresse ein, bei der er landet, und drücken Sie die Eingabetaste:",
+            "ブラウザが別のマシンで動作している場合（SSH 経由など）は、最終的に表示されたアドレスをここに貼り付けて Enter キーを押してください:",
+            "브라우저가 다른 컴퓨터에서 실행 중이면(예: SSH 사용 시) 브라우저가 마지막으로 연 주소를 여기에 붙여 넣고 Enter 키를 누르세요:",
+            "如果您的浏览器在另一台机器上运行（例如通过 SSH），请将浏览器最终停留的地址粘贴到此处并按 Enter：",
+        ],
+    ),
+    (
         "Image Viewing",
         [
             "Vista de imagen",
@@ -20425,6 +20436,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
     (
         "Tasks",
         ["Tareas", "Tâches", "Aufgaben", "タスク", "작업", "任务"],
+    ),
+    (
+        "That is not the EvalOps login callback address. Paste the full address from your browser's address bar:",
+        [
+            "Esa no es la dirección de retorno del inicio de sesión de EvalOps. Pegue la dirección completa de la barra de direcciones de su navegador:",
+            "Ce n'est pas l'adresse de retour de la connexion EvalOps. Collez l'adresse complète depuis la barre d'adresse de votre navigateur :",
+            "Das ist nicht die Rückgabeadresse der EvalOps-Anmeldung. Fügen Sie die vollständige Adresse aus der Adressleiste Ihres Browsers ein:",
+            "これは EvalOps ログインのコールバックアドレスではありません。ブラウザのアドレスバーにある完全なアドレスを貼り付けてください:",
+            "EvalOps 로그인 콜백 주소가 아닙니다. 브라우저 주소 표시줄의 전체 주소를 붙여 넣으세요:",
+            "这不是 EvalOps 登录的回调地址。请粘贴浏览器地址栏中的完整地址：",
+        ],
     ),
     (
         "The agent is not running.",

@@ -33,21 +33,12 @@ pub(crate) fn codex_app_server_model_id(model: &str) -> Option<String> {
 }
 
 pub(crate) async fn usage_provider_model(
-    chat: &ChatRequest,
+    _chat: &ChatRequest,
     state: &AppState,
     agent_model: &str,
 ) -> (String, String) {
-    if chat
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .is_none()
-    {
-        let selected = state.selected_model.lock().await;
-        return (selected.provider.clone(), selected.id.clone());
-    }
-
+    // Account against the immutable model selected for this execution. The
+    // user's current selection can change while a turn is running.
     if let Some((provider, model)) = agent_model.split_once('/') {
         return (provider.to_string(), model.to_string());
     }
@@ -70,6 +61,16 @@ pub(crate) async fn record_usage_entry(
     };
     let _persist = state.usage_persist_lock.lock().await;
     let path = &state.config.usage_file_path;
+    persist_usage_entry(path, session_id, provider, model, usage).await;
+}
+
+async fn persist_usage_entry(
+    path: &Path,
+    session_id: Option<&str>,
+    provider: &str,
+    model: &str,
+    usage: &TokenUsage,
+) {
     let mut entries = tokio::fs::read_to_string(path)
         .await
         .ok()
@@ -82,9 +83,17 @@ pub(crate) async fn record_usage_entry(
         "tokensInput": usage.input_tokens,
         "tokensOutput": usage.output_tokens,
         "tokensCacheRead": usage.cache_read_tokens,
-        "tokensCacheWrite": usage.cache_write_tokens,
-        "cost": usage.cost.unwrap_or(0.0)
+        "tokensCacheWrite": usage.cache_write_tokens
     });
+    if let Value::Object(cost) =
+        serde_json::to_value(crate::usage_cost::price_usage(provider, model, usage))
+            .expect("usage cost contains only finite numbers")
+    {
+        entry
+            .as_object_mut()
+            .expect("usage entry is an object")
+            .extend(cost);
+    }
     if let Some(session_id) = session_id {
         entry["sessionId"] = Value::String(session_id.to_string());
     }
@@ -101,6 +110,10 @@ pub(crate) async fn record_usage_entry(
         let _ = tokio::fs::write(path, bytes).await;
     }
 }
+
+#[cfg(test)]
+#[path = "codex_bridge_usage_tests.rs"]
+mod codex_bridge_usage_tests;
 
 fn codex_app_server_cli_path() -> PathBuf {
     env::var("MAESTRO_CODEX_APP_SERVER_CLI")
@@ -1478,7 +1491,10 @@ pub(crate) async fn run_codex_app_server_headless_cli(
     let bridge_prompt = prepare_codex_bridge_prompt(cwd, prompt, attachment_paths).await?;
     let sandbox_mode = codex_app_server_sandbox_mode();
     let mut command = codex_bridge_command(&cli_path);
-    command.arg("headless").env("MAESTRO_MODEL", model);
+    command
+        .arg("headless")
+        .env("MAESTRO_MODEL", model)
+        .env("MAESTRO_GATEWAY_BACKGROUND_SCOPE_REQUIRED", "1");
     if let Some(sandbox_mode) = sandbox_mode {
         command.env("MAESTRO_SANDBOX_MODE", sandbox_mode);
     }

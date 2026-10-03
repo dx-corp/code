@@ -626,6 +626,12 @@ pub fn bundled_models() -> &'static [ModelInfo] {
     &BUNDLED_CATALOG.models
 }
 
+/// Version of the committed catalog used by [`bundled_rates`].
+#[must_use]
+pub fn bundled_catalog_version() -> u64 {
+    BUNDLED_CATALOG.generated_at
+}
+
 /// Per-million-token USD rates for one model.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelRates {

@@ -41,7 +41,7 @@ use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -58,7 +58,8 @@ use super::shell_env::resolve_shell_environment;
 use crate::safety::{Severity, check_dangerous_patterns};
 
 /// Status of a background task.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BackgroundTaskStatus {
     /// Task is currently running.
     Running,
@@ -70,9 +71,50 @@ pub enum BackgroundTaskStatus {
     Stopped,
 }
 
+/// Immutable authorized coordinates captured before a task is spawned.
+/// `session_generation` prevents a deleted/recreated session id adopting old tasks.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTaskScope {
+    pub session_id: String,
+    pub session_generation: String,
+    pub owner: Option<String>,
+    pub organization_id: Option<String>,
+    pub workspace_id: Option<String>,
+}
+
+impl BackgroundTaskScope {
+    pub fn is_valid(&self) -> bool {
+        !self.session_id.trim().is_empty()
+            && !self.session_generation.trim().is_empty()
+            && self.owner.as_ref().is_none_or(|id| !id.trim().is_empty())
+            && match (&self.organization_id, &self.workspace_id) {
+                (None, None) => true, // explicit local/legacy subject-only scope
+                (Some(org), Some(workspace)) => {
+                    !org.trim().is_empty() && !workspace.trim().is_empty()
+                }
+                _ => false,
+            }
+    }
+}
+
+/// Host-selected access policy; an absent gateway session is never legacy CLI access.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BackgroundTaskAccess {
+    #[default]
+    Legacy,
+    Scoped(BackgroundTaskScope),
+    Denied,
+}
+
 /// A background task with its metadata and status.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackgroundTask {
+    #[serde(default)]
+    pub scope: Option<BackgroundTaskScope>,
+    #[serde(default)]
+    pub completion_sequence: u64,
     pub id: String,
     pub pid: Option<u32>,
     pub command: String,
@@ -89,7 +131,7 @@ pub struct BackgroundTask {
 }
 
 static TASKS: std::sync::LazyLock<RwLock<HashMap<String, BackgroundTask>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+    std::sync::LazyLock::new(|| RwLock::new(load_terminal_tasks()));
 static ROTATION_OBSERVERS: std::sync::LazyLock<RwLock<HashMap<String, LogRotationObserver>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 static MONITORS: std::sync::LazyLock<RwLock<HashMap<String, BackgroundMonitor>>> =
@@ -102,6 +144,22 @@ static MONITOR_BUDGET: std::sync::LazyLock<StdMutex<MonitorBudget>> =
     std::sync::LazyLock::new(|| StdMutex::new(MonitorBudget::new()));
 static TASK_LIFECYCLE_EVENTS: std::sync::LazyLock<RwLock<VecDeque<TaskLifecycleEvent>>> =
     std::sync::LazyLock::new(|| RwLock::new(VecDeque::new()));
+
+// Serialize writes so an older snapshot cannot overwrite a newer lifecycle event.
+static SNAPSHOT_WRITE_LOCK: StdMutex<()> = StdMutex::new(());
+static SNAPSHOT_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
+static COMPLETION_SEQUENCE: std::sync::LazyLock<AtomicU64> = std::sync::LazyLock::new(|| {
+    let persisted = read_snapshot_value()["completionSequence"]
+        .as_u64()
+        .unwrap_or(0);
+    let retained = read_owned_tasks()
+        .unwrap_or_default()
+        .iter()
+        .map(|task| task.completion_sequence)
+        .max()
+        .unwrap_or(0);
+    AtomicU64::new(persisted.max(retained))
+});
 
 const DEFAULT_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const DEFAULT_LOG_SEGMENTS: usize = 2;
@@ -215,17 +273,38 @@ fn persist_path() -> PathBuf {
 }
 
 fn write_running_snapshot(running: &[PersistedRunningTask]) {
+    let Ok(_write_guard) = SNAPSHOT_WRITE_LOCK.lock() else {
+        return;
+    };
     let path = persist_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let payload = serde_json::json!({ "running": running });
+    let mut payload = read_snapshot_value();
+    payload["running"] = serde_json::json!(running);
     if let Ok(raw) = serde_json::to_string_pretty(&payload) {
         let _ = crate::fs_atomic::write_atomic(&path, raw.as_bytes());
     }
 }
 
 fn persist_running_snapshot() {
+    let _ = persist_task_snapshot();
+}
+
+fn persist_task_snapshot() -> Result<(), String> {
+    let _write_guard = SNAPSHOT_WRITE_LOCK
+        .lock()
+        .map_err(|_| "Background snapshot unavailable".to_string())?;
+    let result = write_task_snapshot();
+    if let Ok(mut error) = SNAPSHOT_ERROR.lock() {
+        *error = result.as_ref().err().cloned();
+    }
+    result
+}
+
+fn write_task_snapshot() -> Result<(), String> {
+    // A corrupt saved roster must not be replaced by an empty accepted state.
+    let _ = read_owned_tasks()?;
     let running: Vec<PersistedRunningTask> = TASKS
         .read()
         .map(|tasks| {
@@ -246,7 +325,110 @@ fn persist_running_snapshot() {
                 .collect()
         })
         .unwrap_or_default();
-    write_running_snapshot(&running);
+    let owned = TASKS
+        .read()
+        .map_err(|_| "Background registry unavailable".to_string())?
+        .values()
+        .filter(|task| task.scope.is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    let path = persist_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let payload = serde_json::json!({ "running": running, "ownedTasks": owned,
+        "completionSequence": COMPLETION_SEQUENCE.load(Ordering::SeqCst) });
+    let raw = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
+    crate::fs_atomic::write_atomic(&path, &raw).map_err(|error| error.to_string())
+}
+
+fn read_snapshot_value() -> serde_json::Value {
+    fs::read(persist_path())
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn read_owned_tasks() -> Result<Vec<BackgroundTask>, String> {
+    let raw = match fs::read(persist_path()) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Could not read background task state: {error}")),
+    };
+    let value: serde_json::Value = serde_json::from_slice(&raw)
+        .map_err(|error| format!("Could not parse background task state: {error}"))?;
+    if !value.is_object() {
+        return Err("Invalid background task state".into());
+    }
+    serde_json::from_value(
+        value
+            .get("ownedTasks")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(|error| format!("Could not parse background task roster: {error}"))
+}
+
+fn load_terminal_tasks() -> HashMap<String, BackgroundTask> {
+    // A restarted host cannot supervise a previous process. Do not invent its
+    // completion from PID liveness; only restore recorded terminal events.
+    read_owned_tasks()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|task| {
+            !matches!(task.status, BackgroundTaskStatus::Running)
+                && task
+                    .scope
+                    .as_ref()
+                    .is_some_and(BackgroundTaskScope::is_valid)
+        })
+        .map(|task| (task.id.clone(), task))
+        .collect()
+}
+
+/// Read the existing owner's durable roster, never global/cwd-only tasks.
+/// Persistence failures are returned rather than presenting an unsaved completion.
+pub fn list_scoped(scope: &BackgroundTaskScope) -> Result<Vec<BackgroundTask>, String> {
+    if !scope.is_valid() {
+        return Err("Invalid background task scope".to_string());
+    }
+    if let Some(error) = SNAPSHOT_ERROR
+        .lock()
+        .map_err(|_| "Background snapshot unavailable".to_string())?
+        .clone()
+    {
+        return Err(format!("Could not save background lifecycle: {error}"));
+    }
+    // Read completion only from the saved event metadata, not from an
+    // optimistic in-memory status or a drained notification queue.
+    let mut tasks = read_owned_tasks()?
+        .into_iter()
+        .filter(|task| task.scope.as_ref() == Some(scope))
+        .filter(|task| {
+            !matches!(task.status, BackgroundTaskStatus::Running)
+                || task_belongs_to_scope(&task.id, scope)
+        })
+        .collect::<Vec<_>>();
+    tasks.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then(left.id.cmp(&right.id))
+    });
+    for task in &mut tasks {
+        task.command = redact_text(&task.command);
+    }
+    Ok(tasks)
+}
+
+/// Scope checks apply to model-facing log/stop/monitor calls as well as the UI.
+pub fn task_belongs_to_scope(id: &str, scope: &BackgroundTaskScope) -> bool {
+    scope.is_valid()
+        && TASKS.read().is_ok_and(|tasks| {
+            tasks
+                .get(id)
+                .is_some_and(|task| task.scope.as_ref() == Some(scope))
+        })
 }
 
 fn process_is_live(pid: u32) -> bool {
@@ -1071,6 +1253,31 @@ pub async fn start(
     env: Option<HashMap<String, String>>,
     sandbox_policy: Option<crate::sandbox::SandboxPolicy>,
 ) -> Result<BackgroundTask, String> {
+    start_owned(
+        command,
+        cwd,
+        workspace_dir,
+        shell,
+        env,
+        sandbox_policy,
+        None,
+    )
+    .await
+}
+
+/// The scope comes only from trusted host configuration, never model arguments.
+pub async fn start_owned(
+    command: String,
+    cwd: String,
+    workspace_dir: String,
+    shell: bool,
+    env: Option<HashMap<String, String>>,
+    sandbox_policy: Option<crate::sandbox::SandboxPolicy>,
+    scope: Option<BackgroundTaskScope>,
+) -> Result<BackgroundTask, String> {
+    if scope.as_ref().is_some_and(|scope| !scope.is_valid()) {
+        return Err("Invalid background task scope".to_string());
+    }
     // Apply the same dangerous-command analysis as the bash tool; background
     // tasks bypass approval flows, so high-severity commands must be blocked
     // here rather than approved.
@@ -1207,6 +1414,8 @@ pub async fn start(
     }
 
     let task = BackgroundTask {
+        scope,
+        completion_sequence: 0,
         id: id.clone(),
         pid,
         command: command.clone(),
@@ -1239,13 +1448,20 @@ pub async fn start(
 
         if let Ok(mut tasks) = TASKS.write() {
             if let Some(existing) = tasks.get_mut(&id) {
-                existing.finished_at = Some(SystemTime::now());
+                if existing.scope.is_some() && existing.completion_sequence == 0 {
+                    existing.completion_sequence = COMPLETION_SEQUENCE
+                        .fetch_add(1, Ordering::SeqCst)
+                        .saturating_add(1);
+                }
+                existing.finished_at = existing.finished_at.or(Some(SystemTime::now()));
                 existing.exit_code = Some(exit_code);
-                existing.status = if failed {
-                    BackgroundTaskStatus::Failed
-                } else {
-                    BackgroundTaskStatus::Exited
-                };
+                if !matches!(existing.status, BackgroundTaskStatus::Stopped) {
+                    existing.status = if failed {
+                        BackgroundTaskStatus::Failed
+                    } else {
+                        BackgroundTaskStatus::Exited
+                    };
+                }
             }
         }
         if let Ok(mut tasks) = TASKS.write() {
@@ -1263,7 +1479,16 @@ pub async fn start(
         }
     });
 
-    persist_running_snapshot();
+    if task.scope.is_some() {
+        if let Err(error) = persist_task_snapshot() {
+            let _ = stop(&task.id);
+            return Err(format!(
+                "Could not save background task acceptance: {error}"
+            ));
+        }
+    } else {
+        persist_running_snapshot();
+    }
     Ok(task)
 }
 
@@ -1292,9 +1517,20 @@ pub fn stop(id: &str) -> Result<BackgroundTask, String> {
     let mut tasks = TASKS
         .write()
         .map_err(|_| "Task registry unavailable".to_string())?;
+
     let task = tasks
         .get_mut(id)
         .ok_or_else(|| "Task not found".to_string())?;
+    // Restored terminal metadata retains a historical PID. Never signal that
+    // PID: the operating system may have reused it for an unrelated process.
+    if !matches!(task.status, BackgroundTaskStatus::Running) {
+        return Ok(task.clone());
+    }
+    if task.scope.is_some() && task.completion_sequence == 0 {
+        task.completion_sequence = COMPLETION_SEQUENCE
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+    }
 
     if let Some(pid) = task.pid {
         super::process_utils::kill_process_tree(pid);
@@ -1340,12 +1576,250 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn scoped_test_task(scope: Option<BackgroundTaskScope>) -> BackgroundTask {
+        BackgroundTask {
+            scope,
+            completion_sequence: 7,
+            id: "owned-task".into(),
+            pid: None,
+            command: "echo done".into(),
+            cwd: "/shared/workspace".into(),
+            log_path: "test.log".into(),
+            log_write_failed: false,
+            log_write_error: None,
+            status: BackgroundTaskStatus::Exited,
+            started_at: SystemTime::UNIX_EPOCH,
+            finished_at: Some(SystemTime::UNIX_EPOCH),
+            exit_code: Some(0),
+        }
+    }
+
+    fn test_scope() -> BackgroundTaskScope {
+        BackgroundTaskScope {
+            session_id: "session-a".into(),
+            session_generation: "created-a".into(),
+            owner: Some("alice".into()),
+            organization_id: Some("org-a".into()),
+            workspace_id: Some("workspace-a".into()),
+        }
+    }
+
+    fn authorized_test_executor(cwd: &str, calls: usize) -> crate::tools::ToolExecutor {
+        // Public dispatch authorizes each call before the background-access gate.
+        // Supply one live decision per expected call; unexpected calls still panic.
+        let decision = crate::code_authority::CodeAuthorityDecision {
+            allowed: true,
+            device_id: "verified-device".into(),
+            decision_id: "background-call".into(),
+            policy_id: "identity-code-hardware-authority".into(),
+            policy_version: "1".into(),
+            request_digest: "bound-request".into(),
+            expires_at_unix_seconds: i64::MAX,
+        };
+        crate::tools::ToolExecutor::new(cwd)
+            .with_test_code_authority_decisions(vec![Ok(decision); calls])
+    }
+
+    #[tokio::test]
+    async fn denied_executor_cannot_read_or_mutate_owned_tasks_while_cli_keeps_access() {
+        let _env_guard = crate::config::test_process_env_lock_async().await;
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path().to_string_lossy().to_string();
+        let log_path = directory.path().join("owned.log");
+        fs::write(&log_path, "owned secret output\n").unwrap();
+        let mut task = scoped_test_task(Some(test_scope()));
+        task.id = format!("executor-access-{}", Uuid::new_v4());
+        task.log_path = log_path.to_string_lossy().to_string();
+        TASKS.write().unwrap().insert(task.id.clone(), task.clone());
+        let denied = authorized_test_executor(&cwd, 5)
+            .with_background_task_access(BackgroundTaskAccess::Denied);
+        for action in ["list", "logs", "stop", "waitForRotation", "start"] {
+            let args = serde_json::json!({
+                "action": action, "taskId": task.id,
+                "command": "printf forbidden", "shell": true
+            });
+            let result = denied
+                .execute("background_tasks", &args, None, action)
+                .await;
+            assert!(!result.success, "denied executor accepted {action}");
+            assert!(
+                result
+                    .error
+                    .unwrap_or_default()
+                    .contains("authorized session binding")
+            );
+        }
+        assert!(matches!(
+            TASKS.read().unwrap()[&task.id].status,
+            BackgroundTaskStatus::Exited
+        ));
+        let cli = authorized_test_executor(&cwd, 2);
+        let listed = cli
+            .execute(
+                "background_tasks",
+                &serde_json::json!({"action":"list"}),
+                None,
+                "legacy-list",
+            )
+            .await;
+        assert!(listed.success && listed.output.contains(&task.id));
+        let args = serde_json::json!({"action":"logs", "taskId":task.id});
+        let logs = cli
+            .execute("background_tasks", &args, None, "legacy-logs")
+            .await;
+        assert!(logs.success && logs.output.contains("owned secret output"));
+        let scoped = authorized_test_executor(&cwd, 1)
+            .with_background_task_access(BackgroundTaskAccess::Scoped(test_scope()));
+        assert!(
+            scoped
+                .execute("background_tasks", &args, None, "scoped-logs")
+                .await
+                .success
+        );
+        let mut other_scope = test_scope();
+        other_scope.session_generation = "reused-session".into();
+        let other = authorized_test_executor(&cwd, 1)
+            .with_background_task_access(BackgroundTaskAccess::Scoped(other_scope));
+        assert!(
+            !other
+                .execute("background_tasks", &args, None, "other-logs")
+                .await
+                .success
+        );
+        TASKS.write().unwrap().remove(&task.id);
+    }
+
+    #[tokio::test]
+    async fn accepted_owned_command_persists_its_terminal_event_without_draining_notifications() {
+        let _env_guard = crate::config::test_process_env_lock_async().await;
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path().to_string_lossy().to_string();
+        let mut scope = test_scope();
+        scope.session_generation = Uuid::new_v4().to_string();
+        let task = start_owned(
+            "printf done".into(),
+            cwd.clone(),
+            cwd,
+            true,
+            None,
+            None,
+            Some(scope.clone()),
+        )
+        .await
+        .unwrap();
+        let mut terminal = None;
+        for _ in 0..100 {
+            terminal = list_scoped(&scope).unwrap().into_iter().find(|candidate| {
+                candidate.id == task.id
+                    && !matches!(candidate.status, BackgroundTaskStatus::Running)
+            });
+            if terminal.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let terminal = terminal
+            .expect("scoped completion must be durable without polling the draining event queue");
+        assert_eq!(terminal.scope, Some(scope));
+        assert!(terminal.completion_sequence > 0);
+        assert!(matches!(terminal.status, BackgroundTaskStatus::Exited));
+        let restored: BackgroundTask =
+            serde_json::from_value(serde_json::to_value(&terminal).unwrap()).unwrap();
+        assert_eq!(restored.completion_sequence, terminal.completion_sequence);
+        TASKS.write().unwrap().remove(&task.id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopping_replayed_terminal_metadata_never_signals_its_historical_pid() {
+        let id = format!("terminal-stop-{}", Uuid::new_v4());
+        let mut task = scoped_test_task(Some(test_scope()));
+        task.id = id.clone();
+        // Use a test-owned process so a regression cannot signal another owner.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        task.pid = Some(child.id());
+        TASKS.write().unwrap().insert(id.clone(), task);
+        let stopped = stop(&id).unwrap();
+        let still_running = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            still_running,
+            "terminal metadata must not signal its historical PID"
+        );
+        assert!(matches!(stopped.status, BackgroundTaskStatus::Exited));
+        assert_eq!(stopped.completion_sequence, 7);
+        TASKS.write().unwrap().remove(&id);
+    }
+
+    #[test]
+    fn scoped_metadata_survives_replay_and_excludes_legacy_tasks() {
+        let scope = test_scope();
+        let task = scoped_test_task(Some(scope.clone()));
+        let replay: BackgroundTask =
+            serde_json::from_value(serde_json::to_value(task).unwrap()).unwrap();
+        assert_eq!(replay.scope, Some(scope));
+        assert_eq!(replay.completion_sequence, 7);
+        let legacy: BackgroundTask =
+            serde_json::from_value(serde_json::to_value(scoped_test_task(None)).unwrap()).unwrap();
+        assert!(legacy.scope.is_none());
+    }
+
+    #[test]
+    fn scoped_lookup_rejects_other_owners_tenants_and_reused_session_ids() {
+        let scope = test_scope();
+        let id = format!("scope-test-{}", Uuid::new_v4());
+        let mut task = scoped_test_task(Some(scope.clone()));
+        task.id = id.clone();
+        TASKS.write().unwrap().insert(id.clone(), task);
+        assert!(task_belongs_to_scope(&id, &scope));
+        for field in [
+            "owner",
+            "organization",
+            "workspace",
+            "session",
+            "generation",
+        ] {
+            let mut other = scope.clone();
+            match field {
+                "owner" => other.owner = Some("bob".into()),
+                "organization" => other.organization_id = Some("org-b".into()),
+                "workspace" => other.workspace_id = Some("workspace-b".into()),
+                "session" => other.session_id = "session-b".into(),
+                _ => other.session_generation = "recreated-a".into(),
+            }
+            assert!(
+                !task_belongs_to_scope(&id, &other),
+                "scope mismatch: {field}"
+            );
+        }
+        TASKS.write().unwrap().get_mut(&id).unwrap().scope = None;
+        assert!(!task_belongs_to_scope(&id, &scope));
+        TASKS.write().unwrap().remove(&id);
+    }
+
+    #[test]
+    fn scope_rejects_partial_tenant_binding() {
+        let mut scope = test_scope();
+        scope.workspace_id = None;
+        assert!(!scope.is_valid());
+        scope.organization_id = None;
+        assert!(scope.is_valid());
+        scope.session_generation.clear();
+        assert!(!scope.is_valid());
+    }
+
     #[test]
     fn completed_task_retention_is_bounded_across_many_commands() {
         let mut tasks = HashMap::new();
         for index in 0..1024 {
             let id = format!("task-{index:04}");
             let task = BackgroundTask {
+                scope: None,
+                completion_sequence: 0,
                 id: id.clone(),
                 pid: None,
                 command: "x".repeat(4096),
@@ -1505,6 +1979,8 @@ mod tests {
     #[test]
     fn test_background_task_struct() {
         let task = BackgroundTask {
+            scope: None,
+            completion_sequence: 0,
             id: "test-id-123".to_string(),
             pid: Some(12345),
             command: "echo hello".to_string(),
@@ -1528,6 +2004,8 @@ mod tests {
     #[test]
     fn test_background_task_clone() {
         let task = BackgroundTask {
+            scope: None,
+            completion_sequence: 0,
             id: "clone-test".to_string(),
             pid: None,
             command: "sleep 10".to_string(),
@@ -1768,6 +2246,8 @@ mod tests {
         TASKS.write().unwrap().insert(
             id.to_string(),
             BackgroundTask {
+                scope: None,
+                completion_sequence: 0,
                 id: id.to_string(),
                 pid: None,
                 command: "test".to_string(),

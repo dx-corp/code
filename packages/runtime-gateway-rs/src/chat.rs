@@ -21,59 +21,10 @@ pub(crate) struct ChatRequest {
     pub(crate) tools: Vec<ClientToolDefinition>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ClientToolDefinition {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) parameters: Value,
-}
-
-pub(crate) fn validate_client_tool_names(chat: &ChatRequest) -> Result<(), String> {
-    if let Some(tool) = chat
-        .tools
-        .iter()
-        .find(|tool| is_session_messaging_tool(&tool.name.to_ascii_lowercase()))
-    {
-        return Err(format!(
-            "client tool name `{}` is reserved by the gateway",
-            tool.name
-        ));
-    }
-    Ok(())
-}
-
-fn client_tool_definitions(chat: &ChatRequest) -> (Vec<ToolDefinition>, HashSet<String>) {
-    let names = chat
-        .tools
-        .iter()
-        .map(|tool| tool.name.to_lowercase())
-        .collect::<HashSet<_>>();
-    let definitions = chat
-        .tools
-        .iter()
-        .map(|tool| ToolDefinition {
-            tool: Tool::new(&tool.name, &tool.description).with_schema(tool.parameters.clone()),
-            requires_approval: true,
-        })
-        .collect();
-    (definitions, names)
-}
-
-fn native_chat_terminal_status(event: &FromAgent) -> Option<Result<(), String>> {
-    match event {
-        FromAgent::TurnCompleted { .. } => Some(Ok(())),
-        FromAgent::TurnInterrupted { reason, .. } => Some(Err(reason.clone())),
-        FromAgent::ProviderError { kind, message } => {
-            Some(Err(format!("provider failure ({kind:?}): {message}")))
-        }
-        _ => None,
-    }
-}
-
-fn native_chat_acknowledges_peer_messages(event: &FromAgent) -> bool {
-    matches!(native_chat_terminal_status(event), Some(Ok(())))
-}
+pub(crate) use crate::chat_admission::{ClientToolDefinition, validate_client_tool_names};
+use crate::chat_admission::{
+    client_tool_definitions, native_chat_acknowledges_peer_messages, native_chat_terminal_status,
+};
 
 // The chat wire has status messages, while child tool events retain their
 // existing approval and execution semantics.
@@ -412,6 +363,16 @@ pub(crate) async fn record_chat_error(state: &AppState, session_id: Option<&str>
     };
     {
         let mut store = state.sessions.lock().await;
+        if crate::pull_request_watch::validate_append(
+            state,
+            store.sessions.get(session_id),
+            session_id,
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
         let Some(session) = store.sessions.get_mut(session_id) else {
             return;
         };
@@ -467,6 +428,12 @@ async fn append_session_message(
     auth: Option<&AuthContext>,
 ) -> Result<u64, String> {
     let mut sessions = state.sessions.lock().await;
+    crate::pull_request_watch::validate_append(
+        state,
+        sessions.sessions.get(session_id),
+        session_id,
+    )
+    .await?;
     let session = if sessions.sessions.contains_key(session_id) {
         let session = sessions
             .sessions
@@ -568,6 +535,18 @@ pub(crate) async fn handle_chat_endpoint(
             return Ok(());
         }
     };
+    Box::pin(run_authorized_chat(stream, chat, auth, state, false)).await
+}
+
+// Internal watch wakes carry the accepted principal in memory. There is no
+// header or public route that can bypass authentication or CSRF validation.
+pub(crate) async fn run_authorized_chat(
+    mut stream: TcpStream,
+    chat: ChatRequest,
+    auth: AuthContext,
+    state: AppState,
+    unattended: bool,
+) -> Result<(), String> {
     if let Err(error) = validate_client_tool_names(&chat) {
         stream
             .write_all(&json_response(400, &serde_json::json!({ "error": error })))
@@ -615,6 +594,7 @@ pub(crate) async fn handle_chat_endpoint(
     let system_prompt = system_prompt_from_chat(&chat);
 
     let session_id = chat.session_id.clone();
+    let _active_turn = state.pull_request_watches.enter(session_id.as_deref());
     let prepared_attachments = match prepare_chat_attachments(&chat, &state.config.cwd).await {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -695,6 +675,7 @@ pub(crate) async fn handle_chat_endpoint(
     // the loopback endpoints give a UI client. They are answered inline below
     // through the tool-response channel, under this turn's AuthContext.
     client_tools.extend(session_messaging_tool_definitions());
+    client_tools.extend(crate::pull_request_watch::tool_definitions());
     let thinking_enabled = chat
         .thinking_level
         .as_deref()
@@ -702,6 +683,12 @@ pub(crate) async fn handle_chat_endpoint(
         .unwrap_or(false);
     let config = NativeAgentConfig {
         model,
+        background_task_access: crate::background::access_for_session(
+            &state,
+            session_id.as_deref(),
+            &auth,
+        )
+        .await,
         external_tool_schema_policy: maestro_local_host::agent::ExternalToolSchemaPolicy::Deferred,
         cwd: state.config.cwd.to_string_lossy().to_string(),
         system_prompt,
@@ -995,7 +982,13 @@ pub(crate) async fn handle_chat_endpoint(
                     // the handler under this turn's AuthContext, and the sender is
                     // always this turn's session id, so the model cannot forge a
                     // different `from` session.
-                    if is_session_messaging_tool(&tool) {
+                    if crate::pull_request_watch::is_tool(&tool) {
+                        let mode = crate::pull_request_watch::unattended_approval_mode(&state, session_id.as_deref(), unattended).await;
+                        if let Some(event) = crate::watch_tool_approval::dispatch(&state, &auth, session_id.as_deref(), crate::watch_tool_approval::WatchToolRequest { call_id: &call_id, tool: &tool, args: &args }, agent.tool_response_sender(), &mode).await {
+                            pending_tool_call_ids.insert(call_id.clone());
+                            send_sse(&mut stream, &event).await?;
+                        }
+                    } else if is_session_messaging_tool(&tool) {
                         let result = handle_session_messaging_tool_call(
                             &state,
                             &auth,
@@ -1055,9 +1048,7 @@ pub(crate) async fn handle_chat_endpoint(
                         )
                         .await?;
                     } else if requires_approval {
-                        match approval_mode_for_session(&state, session_id.as_deref())
-                            .await
-                            .as_str()
+                        match crate::pull_request_watch::unattended_approval_mode(&state, session_id.as_deref(), unattended).await.as_str()
                         {
                             "auto" => {
                                 let _ = agent.tool_response_sender().send((
@@ -1596,6 +1587,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
     let system_prompt = system_prompt_from_chat(&chat);
 
     let session_id = chat.session_id.clone();
+    let _active_turn = state.pull_request_watches.enter(session_id.as_deref());
     let prepared_attachments = match prepare_chat_attachments(&chat, &state.config.cwd).await {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -1678,6 +1670,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
     // the loopback endpoints give a UI client. They are answered inline below
     // through the tool-response channel, under this turn's AuthContext.
     client_tools.extend(session_messaging_tool_definitions());
+    client_tools.extend(crate::pull_request_watch::tool_definitions());
     let thinking_enabled = chat
         .thinking_level
         .as_deref()
@@ -1685,6 +1678,12 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         .unwrap_or(false);
     let config = NativeAgentConfig {
         model,
+        background_task_access: crate::background::access_for_session(
+            &state,
+            session_id.as_deref(),
+            &auth,
+        )
+        .await,
         external_tool_schema_policy: maestro_local_host::agent::ExternalToolSchemaPolicy::Deferred,
         cwd: state.config.cwd.to_string_lossy().to_string(),
         system_prompt,
@@ -1953,7 +1952,13 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                     // the handler under this turn's AuthContext, and the sender is
                     // always this turn's session id, so the model cannot forge a
                     // different `from` session.
-                    if is_session_messaging_tool(&tool) {
+                    if crate::pull_request_watch::is_tool(&tool) {
+                        let mode = approval_mode_for_session(&state, session_id.as_deref()).await;
+                        if let Some(event) = crate::watch_tool_approval::dispatch(&state, &auth, session_id.as_deref(), crate::watch_tool_approval::WatchToolRequest { call_id: &call_id, tool: &tool, args: &args }, agent.tool_response_sender(), &mode).await {
+                            pending_tool_call_ids.insert(call_id.clone());
+                            send_ws_json(&mut stream, &event).await?;
+                        }
+                    } else if is_session_messaging_tool(&tool) {
                         let result = handle_session_messaging_tool_call(
                             &state,
                             &auth,
@@ -2728,17 +2733,19 @@ pub(crate) fn composer_assistant_message_with_tools(
         message["thinking"] = Value::String(thinking.to_string());
     }
     if let Some(usage) = usage {
+        let cost = usage.cost.filter(|cost| cost.is_finite());
         message["usage"] = serde_json::json!({
             "input": usage.input_tokens,
             "output": usage.output_tokens,
             "cacheRead": usage.cache_read_tokens,
             "cacheWrite": usage.cache_write_tokens,
+            "costSource": if cost.is_some() { "providerReported" } else { "unpriced" },
             "cost": {
-                "input": 0.0,
-                "output": 0.0,
-                "cacheRead": 0.0,
-                "cacheWrite": 0.0,
-                "total": usage.cost.unwrap_or(0.0)
+                "input": null,
+                "output": null,
+                "cacheRead": null,
+                "cacheWrite": null,
+                "total": cost
             }
         });
     }

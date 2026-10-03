@@ -156,6 +156,7 @@ impl SubagentManager {
             )
         };
         let config = NativeAgentConfig {
+            background_task_access: crate::tools::background_tasks::BackgroundTaskAccess::Legacy,
             model_capabilities: None,
             model_dynamics: crate::config::model_dynamics_config(),
             model,

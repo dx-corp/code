@@ -42,7 +42,9 @@ mod a2a_platform_registration;
 mod a2a_skill_catalog;
 mod auth;
 mod automations;
+mod background;
 mod chat;
+mod chat_admission;
 mod codex_bridge;
 mod codex_compat;
 mod codex_subagent_dispatch;
@@ -53,9 +55,14 @@ mod local;
 mod markitdown;
 mod migrations;
 mod model_catalog;
+mod pull_request_watch;
+mod pull_request_watch_http;
+mod pull_request_watch_state;
 mod session_messaging;
 mod sessions;
 mod turn_diffs;
+mod usage_cost;
+mod watch_tool_approval;
 
 #[allow(unused_imports)]
 pub(crate) use a2a::{
@@ -465,6 +472,7 @@ struct AppState {
     approval_modes: Arc<Mutex<HashMap<String, String>>>,
     pending_tool_responses: Arc<Mutex<HashMap<String, PendingToolResponseSender>>>,
     native_snapshot_registry: Arc<turn_diffs::NativeSnapshotRegistry>,
+    pull_request_watches: Arc<pull_request_watch::WatchRuntime>,
     // Maps a pending-request id to the session or authenticated principal that
     // owns the blocked agent turn. Sessionless client-tool turns retain a
     // resumable owner without weakening the cross-tenant resume check.
@@ -801,6 +809,7 @@ pub async fn serve_listener(
         approval_modes: Arc::new(Mutex::new(HashMap::new())),
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
+        pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         a2a_tasks: Arc::new(Mutex::new(a2a_tasks)),
@@ -815,6 +824,7 @@ pub async fn serve_listener(
         state.config.cwd.clone(),
         state.selected_model.clone(),
     );
+    pull_request_watch::spawn_scheduler(state.clone());
     maybe_spawn_a2a_platform_registration_loop(config.clone());
 
     let mut owner_loss = Box::pin(async move {

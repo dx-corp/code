@@ -114,6 +114,8 @@ pub(crate) fn provider_system_prompt(
 /// build its concrete executor.
 #[derive(Debug, Clone)]
 pub struct NativeAgentConfig {
+    /// Host-selected legacy, scoped, or denied access to background commands.
+    pub background_task_access: crate::tools::background_tasks::BackgroundTaskAccess,
     pub model: String,
     /// Headless sessions bind prompt receipts and provider rendering to one snapshot.
     pub model_capabilities: Option<maestro_runtime::agent::NativeModelCapabilities>,
@@ -138,6 +140,7 @@ impl Default for NativeAgentConfig {
     fn default() -> Self {
         let model = "gpt-5.1-codex-max".to_owned();
         Self {
+            background_task_access: crate::tools::background_tasks::BackgroundTaskAccess::Legacy,
             max_tokens: crate::model_catalog::default_max_output_tokens(&model),
             model,
             model_capabilities: None,
@@ -630,7 +633,8 @@ fn build_local_host(
 ) -> Result<NativeExecutionHostHandle> {
     let mut executor = ToolExecutor::with_credential_vault(&config.cwd, credential_vault)
         .with_code_authority()
-        .with_managed_mcp_policy(config.managed_mcp_policy.clone());
+        .with_managed_mcp_policy(config.managed_mcp_policy.clone())
+        .with_background_task_access(config.background_task_access.clone());
     if let Some(policy) = config.sandbox_policy.clone() {
         executor = executor.with_sandbox_policy(policy);
     }
