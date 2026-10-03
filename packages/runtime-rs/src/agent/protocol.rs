@@ -81,11 +81,53 @@ pub use crate::{
     ToolReceiptDetails, ToolResult,
 };
 
+/// Parent binding and terminal evidence from the script's ordinary tool owner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeModeChildProgress {
+    pub call_id: String,
+    pub tool: String,
+    pub status: Option<ExecutionStatus>,
+    pub duration_ms: Option<u64>,
+}
+
+impl CodeModeChildProgress {
+    #[must_use]
+    pub fn summary(children: &[Self]) -> String {
+        let mut completed = 0;
+        let mut attention = 0;
+        let mut pending = 0;
+        for child in children {
+            match child.status {
+                Some(ExecutionStatus::Succeeded) => completed += 1,
+                Some(_) => attention += 1,
+                None => pending += 1,
+            }
+        }
+        let mut parts = vec!["Script".to_owned()];
+        if completed > 0 {
+            parts.push(format!("{completed} completed"));
+        }
+        if pending > 0 {
+            parts.push(format!("{pending} running or waiting"));
+        }
+        if attention > 0 {
+            parts.push(format!("{attention} need attention"));
+        }
+        parts.join(" · ")
+    }
+}
+
 /// Typed internal result used by native execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecution {
     pub outcome: ToolOutcome,
     pub receipt: ExecutionReceipt,
+    /// Runtime-owned scratch commit; never provider content or receipt details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codemode_store: Option<maestro_runtime_contracts::tool_operation::CodeModeStoreCommit>,
+    /// Explicitly emitted media; projected as typed image blocks, never text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<maestro_runtime_contracts::tool_operation::CodeModeImage>,
 }
 
 impl ToolExecution {
@@ -108,6 +150,8 @@ impl ToolExecution {
     ) -> Self {
         let outcome = ToolOutcome::Denied { reason };
         Self {
+            codemode_store: None,
+            images: Vec::new(),
             outcome: outcome.clone(),
             receipt: ExecutionReceipt {
                 code_authority: None,
@@ -173,6 +217,8 @@ impl ToolExecution {
         };
 
         Self {
+            codemode_store: None,
+            images: Vec::new(),
             outcome: outcome.clone(),
             receipt: ExecutionReceipt {
                 code_authority: None,
@@ -202,6 +248,8 @@ impl ToolExecution {
     ) -> Self {
         let outcome = ToolOutcome::Cancelled { phase };
         Self {
+            codemode_store: None,
+            images: Vec::new(),
             outcome: outcome.clone(),
             receipt: ExecutionReceipt {
                 code_authority: None,
@@ -234,7 +282,9 @@ impl ToolExecution {
                 is_error,
             } => Some(serde_json::json!({"server": server, "tool": tool, "isError": is_error})),
             ToolReceiptDetails::Origin(origin) => Some(serde_json::json!({"origin": origin})),
-            ToolReceiptDetails::Cached | ToolReceiptDetails::None => None,
+            ToolReceiptDetails::ModelInference { .. }
+            | ToolReceiptDetails::Cached
+            | ToolReceiptDetails::None => None,
         };
         match &self.outcome {
             ToolOutcome::Succeeded { output } => ToolResult {
@@ -1062,6 +1112,12 @@ pub enum FromAgent {
         /// Typed execution evidence when the producer has it available.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         receipt: Option<ExecutionReceipt>,
+    },
+
+    /// One script group, without child args, raw results, or model authority.
+    CodeModeProgress {
+        call_id: String,
+        children: Vec<CodeModeChildProgress>,
     },
 
     /// Batch tool execution started

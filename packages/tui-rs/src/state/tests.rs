@@ -645,6 +645,8 @@ fn test_fail_tool_call() {
         thinking: String::new(),
         streaming: false,
         tool_calls: vec![ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-1".to_string(),
             tool: "bash".to_string(),
             args: serde_json::json!({"command": "ls"}),
@@ -675,6 +677,8 @@ fn test_fail_tool_call_with_existing_output() {
         thinking: String::new(),
         streaming: false,
         tool_calls: vec![ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-1".to_string(),
             tool: "bash".to_string(),
             args: serde_json::json!({}),
@@ -1140,6 +1144,8 @@ fn test_combining_characters() {
 #[test]
 fn test_tool_call_state_clone() {
     let tc = ToolCallState {
+        parent_call_id: None,
+        duration_ms: None,
         call_id: "call-1".to_string(),
         tool: "bash".to_string(),
         args: serde_json::json!({"command": "ls"}),
@@ -1350,4 +1356,50 @@ fn test_edit_after_paste_unfolds_display() {
     state.insert_char('!');
     assert!(state.textarea.paste_folds().is_empty());
     assert_eq!(state.textarea.display_text(), format!("{pasted}!"));
+}
+
+#[test]
+fn codemode_progress_groups_children_and_preserves_approval_status() {
+    let mut state = AppState::new();
+    state.handle_agent_message(FromAgent::ResponseStart {
+        response_id: "compose".into(),
+    });
+    state.busy = true;
+    state.handle_agent_message(FromAgent::ToolCall {
+        call_id: "script".into(),
+        tool: "codemode".into(),
+        args: serde_json::json!({"code":"opaque"}),
+        requires_approval: false,
+        approval_inline_env: None,
+    });
+    let progress: FromAgent = serde_json::from_value(serde_json::json!({"type":"code_mode_progress","call_id":"script","children":[{"call_id":"actual-child","tool":"read","status":null,"duration_ms":null}]})).expect("typed runtime progress");
+    state.handle_agent_message(progress);
+    state.handle_agent_message(FromAgent::ToolCall {
+        call_id: "actual-child".into(),
+        tool: "read".into(),
+        args: serde_json::json!({"path":"a"}),
+        requires_approval: true,
+        approval_inline_env: None,
+    });
+    assert_eq!(
+        crate::components::activity::active_tool_label(&state).as_deref(),
+        Some("Script · 1 awaiting approval")
+    );
+    let progress: FromAgent = serde_json::from_value(serde_json::json!({"type":"code_mode_progress","call_id":"script","children":[{"call_id":"actual-child","tool":"read","status":{"status":"succeeded"},"duration_ms":12}]})).unwrap();
+    state.handle_agent_message(progress);
+    assert_eq!(
+        crate::components::activity::active_tool_label(&state).as_deref(),
+        Some("Script · 1 awaiting approval"),
+        "grouped display progress cannot acknowledge an owner approval"
+    );
+    state.handle_agent_message(FromAgent::ToolEnd {
+        call_id: "actual-child".into(),
+        success: true,
+        result: None,
+        receipt: None,
+    });
+    assert_eq!(
+        crate::components::activity::active_tool_label(&state).as_deref(),
+        Some("Script · 1 completed")
+    );
 }

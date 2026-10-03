@@ -7,6 +7,9 @@ struct ToolCallLayoutKey {
     call_id: String,
     tool: String,
     output_len: usize,
+    parent_call_id: Option<String>,
+    duration_ms: Option<u64>,
+    status: crate::state::ToolCallStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +41,9 @@ impl MessageLayoutKey {
                     call_id: tool_call.call_id.clone(),
                     tool: tool_call.tool.clone(),
                     output_len: tool_call.output.len(),
+                    parent_call_id: tool_call.parent_call_id.clone(),
+                    duration_ms: tool_call.duration_ms,
+                    status: tool_call.status,
                 })
                 .collect(),
         }
@@ -60,6 +66,9 @@ impl MessageLayoutKey {
                     cached.call_id == current.call_id
                         && cached.tool == current.tool
                         && cached.output_len == current.output.len()
+                        && cached.parent_call_id == current.parent_call_id
+                        && cached.duration_ms == current.duration_ms
+                        && cached.status == current.status
                 })
     }
 }
@@ -207,6 +216,8 @@ mod tests {
     fn tool_message() -> Message {
         let mut message = message("tool-message");
         message.tool_calls.push(ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-one".to_string(),
             tool: "read".to_string(),
             args: serde_json::Value::Null,

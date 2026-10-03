@@ -5,6 +5,8 @@
 //! print mode, headless mode, and delegated subagents while composing the one
 //! concrete local execution host around that actor.
 
+#[cfg(test)]
+mod codemode_codex_tests;
 pub mod codex_app_server_turns;
 #[cfg(test)]
 pub mod harness;

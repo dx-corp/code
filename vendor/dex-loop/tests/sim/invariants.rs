@@ -70,6 +70,9 @@ fn kind_str(event: &Event) -> &'static str {
         Event::ModelStepCompleted { .. } => "model_step_completed",
         Event::ModelAttemptAbandoned { .. } => "model_attempt_abandoned",
         Event::ModelAttemptFailed { .. } => "model_attempt_failed",
+        Event::CodeModeStorePrepared { .. } => "code_mode_store_prepared",
+        Event::ModelUsageResolved { .. } => "model_usage_resolved",
+        Event::ModelUsageUnresolved { .. } => "model_usage_unresolved",
         Event::CodeModeCallsProposed { .. } => "code_mode_calls_proposed",
         Event::ToolStarted { .. } => "tool_started",
         Event::ToolProgress { .. } => "tool_progress",
@@ -236,6 +239,7 @@ fn by_call(events: &[(Cursor, Event)]) -> HashMap<CallId, CallHistory> {
                 let text = match output {
                     dex_loop::Output::Text(text) => text.clone(),
                     dex_loop::Output::Ref(reference) => reference.to_string(),
+                    dex_loop::Output::Blocks(_) => "selected media".into(),
                 };
                 calls
                     .entry(call.clone())

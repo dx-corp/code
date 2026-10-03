@@ -353,6 +353,8 @@ pub struct McpTool {
     /// Input schema (JSON Schema)
     #[serde(default)]
     pub input_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
     /// Optional tool annotations (read-only, destructive, etc.)
     #[serde(default)]
     pub annotations: Option<McpToolAnnotations>,
@@ -382,6 +384,9 @@ impl McpTool {
         let mut tool = crate::ai::Tool::new(&prefixed_name, &description);
         if let Some(schema) = &self.input_schema {
             tool = tool.with_schema(schema.clone());
+        }
+        if let Some(schema) = &self.output_schema {
+            tool = tool.with_output_schema(schema.clone());
         }
         tool
     }
@@ -819,6 +824,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn advertised_output_schema_does_not_change_the_native_mcp_text_result() {
+        let result: McpToolResult = serde_json::from_value(serde_json::json!({
+            "content":[{"type":"text","text":"next page is ready"}],
+            "structuredContent":{"cursor":"next"}, "isError":false
+        }))
+        .unwrap();
+        assert_eq!(result.as_string(), "next page is ready");
+        assert!(serde_json::from_str::<Value>(&result.as_string()).is_err());
+    }
+
+    #[test]
+    fn output_schema_survives_mcp_catalog_to_native_discovery() {
+        let tool: McpTool = serde_json::from_value(serde_json::json!({
+            "name":"pages", "inputSchema":{"type":"object"},
+            "outputSchema":{"type":"object","properties":{"cursor":{"type":"string"}}}
+        }))
+        .unwrap();
+        let native = serde_json::to_value(tool.to_tool("fixture")).unwrap();
+        assert_eq!(
+            native["output_schema"]["properties"]["cursor"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
     fn test_request_serialize() {
         let req = McpRequest::new(1, "test", None);
         let json = serde_json::to_string(&req).unwrap();
@@ -941,6 +971,7 @@ mod tests {
             name: "test_tool".to_string(),
             description: Some("A test tool".to_string()),
             input_schema: Some(serde_json::json!({"type": "object"})),
+            output_schema: None,
             annotations: None,
         };
         let tool = mcp_tool.to_tool("myserver");
@@ -978,6 +1009,7 @@ mod tests {
             name: "t".into(),
             description: None,
             input_schema: Some(serde_json::json!({"a": 1, "b": {"c": 2, "d": 3}})),
+            output_schema: None,
             annotations: None,
         };
         let b = McpTool {
@@ -993,6 +1025,7 @@ mod tests {
             name: "t".into(),
             description: None,
             input_schema: Some(serde_json::json!({"type": "object"})),
+            output_schema: None,
             annotations: None,
         };
         let b = McpTool {
@@ -1011,6 +1044,7 @@ mod tests {
             name: "t".into(),
             description: Some("reads a file".into()),
             input_schema: Some(serde_json::json!({"type": "object"})),
+            output_schema: None,
             annotations: None,
         };
         let b = McpTool {

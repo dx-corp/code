@@ -437,6 +437,8 @@ mod tests {
 
     fn tool_call(tool: &str, args: serde_json::Value, output: &str) -> ToolCallState {
         ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-1".to_string(),
             tool: tool.to_string(),
             args,

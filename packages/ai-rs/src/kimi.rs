@@ -242,14 +242,18 @@ impl KimiK3Client {
                 }
 
                 if let Some(usage) = chunk.usage {
-                    let _ = tx.send(StreamEvent::Usage {
-                        input_tokens: usage.prompt_tokens.unwrap_or(0),
-                        output_tokens: usage.completion_tokens.unwrap_or(0),
-                        cache_read_tokens: usage
-                            .prompt_tokens_details
-                            .and_then(|details| details.cached_tokens),
-                        cache_creation_tokens: None,
-                    });
+                    if let Some((input_tokens, output_tokens)) =
+                        usage.prompt_tokens.zip(usage.completion_tokens)
+                    {
+                        let _ = tx.send(StreamEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                            cache_read_tokens: usage
+                                .prompt_tokens_details
+                                .and_then(|details| details.cached_tokens),
+                            cache_creation_tokens: None,
+                        });
+                    }
                 }
             }
 
@@ -423,7 +427,9 @@ fn user_content_parts(blocks: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::Image { source } => {
                 let url = match source {
                     ImageSource::Url { url } => url.clone(),
-                    ImageSource::Base64 { media_type, data } => {
+                    ImageSource::Base64 {
+                        media_type, data, ..
+                    } => {
                         format!("data:{media_type};base64,{data}")
                     }
                 };
@@ -581,6 +587,42 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[tokio::test]
+    async fn kimi_partial_usage_does_not_emit_fabricated_usage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 8192];
+            let _ = stream.read(&mut request).unwrap();
+            let chunk = json!({"id":"id","model":"kimi-k3","choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":17}});
+            let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        });
+        let client = KimiK3Client::new("key", format!("http://{address}/v1")).unwrap();
+        let mut rx = client
+            .stream(
+                &[],
+                &RequestConfig {
+                    model: "moonshot/kimi-k3".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Usage { .. })),
+            "{events:?}"
+        );
+        server.join().unwrap();
+    }
 
     #[test]
     fn request_replays_reasoning_content_with_tool_calls() {

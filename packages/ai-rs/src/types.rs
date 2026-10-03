@@ -101,12 +101,26 @@ pub enum ContentBlock {
     },
 }
 
+/// Runtime-bound image projection identity, retained in checkpoints only.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ToolImageOwner {
+    pub call_id: String,
+    pub index: u32,
+}
+
 /// Image source for vision
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    Base64 { media_type: String, data: String },
-    Url { url: String },
+    Base64 {
+        media_type: String,
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<ToolImageOwner>,
+    },
+    Url {
+        url: String,
+    },
 }
 
 /// Tool definition
@@ -115,6 +129,9 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    /// Owner-declared result schema for discovery, never execution authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "ToolSchemaEnforcement::is_off")]
     pub schema_enforcement: ToolSchemaEnforcement,
 }
@@ -148,6 +165,7 @@ impl Tool {
                 "properties": {},
                 "required": []
             }),
+            output_schema: None,
             schema_enforcement: ToolSchemaEnforcement::Off,
         }
     }
@@ -155,6 +173,12 @@ impl Tool {
     #[must_use]
     pub fn with_schema(mut self, schema: serde_json::Value) -> Self {
         self.input_schema = schema;
+        self
+    }
+
+    #[must_use]
+    pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 

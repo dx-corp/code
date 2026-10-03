@@ -11,6 +11,7 @@ pub(super) fn validate_tools_with_host(
         for name in allowed_tools {
             let normalized = name.to_ascii_lowercase();
             if normalized != agent_codemode::TOOL_NAME
+                && normalized != classifier::TOOL_NAME
                 && (!host.has_native_tool(&normalized) || host.is_reserved_tool(name))
             {
                 return Err(anyhow::anyhow!("Unknown allowed tool `{name}`"));
@@ -29,6 +30,7 @@ pub(super) fn validate_tools_with_host(
             return Err(anyhow::anyhow!("External tool name must not be empty"));
         }
         if name == agent_codemode::TOOL_NAME
+            || name == classifier::TOOL_NAME
             || native_names.contains(&name)
             || host.is_mcp_tool(&name)
             || host.is_reserved_tool(&name)

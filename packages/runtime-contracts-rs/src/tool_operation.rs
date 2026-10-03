@@ -38,6 +38,41 @@ pub enum ToolReplayPolicy {
     Never,
 }
 
+/// Branch-local untrusted scratch snapshot, committed with the outer outcome.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeModeStoreCommit {
+    pub revision: u64,
+    pub values: BTreeMap<String, Value>,
+}
+
+impl CodeModeStoreCommit {
+    pub fn validate(&self) -> Result<(), ToolOperationError> {
+        if self.revision == 0
+            || self.values.len() > 128
+            || self.values.iter().any(|(key, value)| {
+                key.is_empty()
+                    || key.len() > 256
+                    || serde_json::to_vec(value).map_or(true, |bytes| bytes.len() > 65_536)
+            })
+            || serde_json::to_vec(&self.values).map_or(true, |bytes| bytes.len() > 262_144)
+        {
+            return Err(ToolOperationError::InvalidRecord(
+                "invalid or oversized script state snapshot".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Explicit media projection. Pixels are never included in text or receipts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeModeImage {
+    pub mime_type: String,
+    pub data: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolOperationOutcome {
@@ -45,6 +80,10 @@ pub struct ToolOperationOutcome {
     pub is_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<ExecutionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codemode_store: Option<CodeModeStoreCommit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<CodeModeImage>,
 }
 
 impl ToolOperationOutcome {
@@ -58,6 +97,8 @@ impl ToolOperationOutcome {
             content: content.into(),
             is_error,
             receipt,
+            codemode_store: None,
+            images: Vec::new(),
         }
     }
 }
@@ -254,6 +295,48 @@ impl ToolOperationRecord {
                 ));
             }
         }
+        if let Some(outcome) = &self.outcome {
+            if outcome.codemode_store.is_some() || !outcome.images.is_empty() {
+                if self.tool_name != "codemode"
+                    || self.projection_owner_call_id.is_some()
+                    || self.replay_policy != ToolReplayPolicy::Never
+                    || outcome.is_error
+                    || !outcome.receipt.as_ref().is_some_and(|receipt| {
+                        receipt.call_id == self.call_id
+                            && receipt.tool_name == "codemode"
+                            && receipt.source == crate::ExecutionSource::Native
+                            && receipt.status == crate::ExecutionStatus::Succeeded
+                    })
+                {
+                    return Err(ToolOperationError::InvalidRecord(
+                        "script state and media require a known successful native outer receipt"
+                            .into(),
+                    ));
+                }
+                if let Some(commit) = &outcome.codemode_store {
+                    commit.validate()?;
+                }
+                if outcome.images.len() > 4
+                    || outcome.images.iter().any(|image| {
+                        image.data.len() > 1_398_104
+                            || !matches!(
+                                image.mime_type.as_str(),
+                                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+                            )
+                    })
+                    || outcome
+                        .images
+                        .iter()
+                        .map(|image| image.data.len())
+                        .sum::<usize>()
+                        > 2_796_208
+                {
+                    return Err(ToolOperationError::InvalidRecord(
+                        "invalid or oversized script media".into(),
+                    ));
+                }
+            }
+        }
         let outcome_required = matches!(
             self.phase,
             ToolOperationPhase::OutcomeReady | ToolOperationPhase::Completed
@@ -377,6 +460,26 @@ impl ToolOperationLedger {
             return Err(ToolOperationError::OutcomeChanged {
                 call_id: record.call_id,
             });
+        }
+        if current.outcome.is_none() {
+            if let Some(commit) = record
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.codemode_store.as_ref())
+            {
+                if self
+                    .latest
+                    .values()
+                    .filter(|prior| prior.call_id != record.call_id)
+                    .filter_map(|prior| prior.outcome.as_ref())
+                    .filter_map(|outcome| outcome.codemode_store.as_ref())
+                    .any(|prior| prior.revision >= commit.revision)
+                {
+                    return Err(ToolOperationError::InvalidRecord(
+                        "script state revision must advance the branch ledger".into(),
+                    ));
+                }
+            }
         }
         if record.phase != current.phase && current.phase.next() != Some(record.phase) {
             return Err(ToolOperationError::InvalidTransition {

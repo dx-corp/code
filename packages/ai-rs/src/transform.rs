@@ -210,6 +210,17 @@ fn transform_block_for_target(
             content: content.clone(),
             is_error: *is_error,
         }),
+        ContentBlock::Image {
+            source: crate::ImageSource::Base64 {
+                media_type, data, ..
+            },
+        } => Some(ContentBlock::Image {
+            source: crate::ImageSource::Base64 {
+                media_type: media_type.clone(),
+                data: data.clone(),
+                owner: None,
+            },
+        }),
         other => Some(other.clone()),
     }
 }
@@ -494,6 +505,36 @@ pub fn transform_messages_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_projection_identity_is_private_to_checkpoints() {
+        let block = ContentBlock::Image {
+            source: crate::ImageSource::Base64 {
+                media_type: "image/png".into(),
+                data: "pixel".into(),
+                owner: Some(crate::ToolImageOwner {
+                    call_id: "script-owner".into(),
+                    index: 0,
+                }),
+            },
+        };
+        for target in [
+            OutboundTarget::Anthropic,
+            OutboundTarget::OpenAiChat,
+            OutboundTarget::OpenAiResponses,
+        ] {
+            let outbound = transform_block_for_target(&block, target).unwrap();
+            assert!(
+                serde_json::to_value(outbound).unwrap()["source"]
+                    .get("owner")
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(block).unwrap()["source"]["owner"]["call_id"],
+            "script-owner"
+        );
+    }
 
     #[test]
     fn gemini_context_is_only_retained_for_responses_wire_transform() {

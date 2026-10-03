@@ -546,6 +546,9 @@ impl TurnTelemetryRelay {
                 }
                 None
             }
+            // Grouped progress is presentation only. The child ToolCall/ToolEnd
+            // events already carry the authoritative telemetry observations.
+            FromAgent::CodeModeProgress { .. } => None,
             FromAgent::ToolOutput { .. }
             | FromAgent::LocalAssistantContent { .. }
             | FromAgent::ConversationSnapshot { .. }
@@ -1154,6 +1157,30 @@ mod tests {
         assert_eq!(relay.pending_output_bytes, 13);
         relay.submit(None);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn grouped_progress_does_not_duplicate_child_telemetry() {
+        let mut relay = disabled_relay();
+        assert!(
+            relay
+                .project(&FromAgent::CodeModeProgress {
+                    call_id: "parent".into(),
+                    children: vec![maestro_runtime::agent::protocol::CodeModeChildProgress {
+                        call_id: "child".into(),
+                        tool: "bash".into(),
+                        status: Some(ExecutionStatus::Succeeded),
+                        duration_ms: Some(12),
+                    }],
+                })
+                .is_none()
+        );
+        assert!(matches!(relay.project(&FromAgent::ToolEnd {
+            call_id: "child".into(),
+            success: true,
+            result: None,
+            receipt: None,
+        }), Some(TurnObservation::ToolEnd { call_id, success: true, .. }) if call_id.as_str() == "child"));
     }
 
     #[test]

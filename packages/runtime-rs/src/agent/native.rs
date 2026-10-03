@@ -434,8 +434,10 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
     })
 }
 mod attachments;
+mod budget_controls;
 mod builtin_read;
 mod cancellation;
+mod classifier;
 mod codemode;
 mod codex;
 mod commands;
@@ -447,6 +449,7 @@ mod deferred_tool_schemas;
 mod deferred_tool_tests;
 mod model_dynamics;
 mod provider_history;
+use provider_history::sanitize_semantic_conversation;
 mod provider_loop;
 mod provider_payload;
 mod read_only_tools;
@@ -1085,7 +1088,7 @@ enum AgentCommand {
     /// Replace conversation history (used by /rewind and /fork rebuilds).
     ReplaceHistory {
         messages: Vec<Message>,
-        continuation: Option<super::compaction::ContinuationRecord>,
+        continuation: Option<Box<super::compaction::ContinuationRecord>>,
     },
 
     /// Replace history for a delegated child resume without clearing the
@@ -1385,6 +1388,11 @@ impl NativeAgent {
             .map(|td| (td.tool.name.clone(), td))
             .collect();
         codemode::register(&mut tools, allowed_tools);
+        classifier::register(
+            &mut tools,
+            allowed_tools,
+            client.is_some() && !model_route.uses_app_server(),
+        );
         let external_tools = external_tool_definitions
             .iter()
             .map(|definition| definition.tool.name.to_lowercase())
@@ -1492,6 +1500,12 @@ impl NativeAgent {
             codemode_journaled: HashSet::new(),
             codemode_cancelled_calls: HashSet::new(),
             codemode_indeterminate: false,
+            codemode_store: Default::default(),
+            codemode_pending_store: None,
+            codemode_pending_operation: None,
+            codemode_pending_images: Vec::new(),
+            codemode_projected_images: Vec::new(),
+            codemode_progress: Default::default(),
             codex_current_prompt_started: false,
             managed_run_id: managed_run_id.clone(),
             next_managed_turn_id: 0,
@@ -1544,6 +1558,7 @@ impl NativeAgent {
             prompt_context: None,
             output_token_budget: None,
             output_tokens_spent: 0,
+            classifier_budget_uncertain: false,
             process_budget: None,
             queued_system_prompts: HashMap::new(),
             system_prompt_revision: 0,
@@ -1785,7 +1800,7 @@ impl NativeAgent {
     ) {
         let _ = self.command_tx.send(AgentCommand::ReplaceHistory {
             messages,
-            continuation,
+            continuation: continuation.map(Box::new),
         });
     }
 
@@ -1886,31 +1901,6 @@ impl NativeAgent {
         receiver
             .await
             .context("process budget admission was not acknowledged")?
-    }
-
-    /// Retire Process authority at an inactive, verified grant boundary.
-    /// Acknowledgement covers both budget removal and the ordinary system prompt.
-    pub async fn clear_process_budget(&self, system_prompt: String) -> Result<()> {
-        let (applied, receiver) = oneshot::channel();
-        self.command_tx
-            .send(AgentCommand::ClearProcessBudget {
-                system_prompt,
-                applied,
-            })
-            .map_err(|_| anyhow::anyhow!("process budget runner unavailable"))?;
-        receiver
-            .await
-            .context("process budget retirement was not acknowledged")?
-    }
-
-    /// Cap cumulative output tokens before the prompt they apply to.
-    pub fn set_output_token_budget(&self, max_total_output_tokens: u32) -> Result<()> {
-        self.command_tx
-            .send(AgentCommand::SetOutputTokenBudget {
-                max_total_output_tokens,
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to set output token budget: {e}"))?;
-        Ok(())
     }
 
     /// Stage a system prompt for the next queued prompt to start.
@@ -2266,7 +2256,7 @@ fn native_tool_requires_terminal_drain(
         // exhaustively proven read-only. Bash execution consumes shutdown
         // cancellation and reaps its process tree, so conservatively retain
         // its receipt-bearing terminal independent of approval-version pins.
-        "bash" => true,
+        "bash" | "classify" => true,
         "write" | "notebook_edit" | "todo" => true,
         "edit" => !args
             .get("dryRun")
@@ -2409,6 +2399,15 @@ struct NativeAgentRunner {
     codemode_journaled: HashSet<String>,
     codemode_cancelled_calls: HashSet<String>,
     codemode_indeterminate: bool,
+    codemode_store: maestro_runtime_contracts::tool_operation::CodeModeStoreCommit,
+    codemode_pending_store: Option<maestro_runtime_contracts::tool_operation::CodeModeStoreCommit>,
+    codemode_pending_operation: Option<maestro_runtime_contracts::ToolOperationRecord>,
+    codemode_pending_images: Vec<maestro_runtime_contracts::tool_operation::CodeModeImage>,
+    codemode_projected_images: Vec<(
+        maestro_ai::ToolImageOwner,
+        maestro_runtime_contracts::tool_operation::CodeModeImage,
+    )>,
+    codemode_progress: std::collections::BTreeMap<String, super::protocol::CodeModeChildProgress>,
 
     /// Cached model-facing tool schemas. The registry is immutable for the
     /// lifetime of a runner; only goal visibility and the IDE-tools flag can
@@ -2580,6 +2579,8 @@ struct NativeAgentRunner {
     /// Output tokens this runner has already spent against
     /// [`Self::output_token_budget`].
     output_tokens_spent: u64,
+    /// An accepted auxiliary request lacked final usage under a finite grant.
+    classifier_budget_uncertain: bool,
     process_budget: Option<Arc<std::sync::Mutex<super::process_budget::ProcessBudgetState>>>,
 
     /// System prompt staged for the next queued prompt to start, with the
@@ -4235,6 +4236,11 @@ impl NativeAgentRunner {
             })
             .collect::<HashMap<_, _>>();
         codemode::register(&mut tools, Some(allowed_tools));
+        classifier::register(
+            &mut tools,
+            Some(allowed_tools),
+            self.client.is_some() && !self.model_route.uses_app_server(),
+        );
         let external_tools = external_tool_definitions
             .iter()
             .map(|definition| definition.tool.name.to_ascii_lowercase())
@@ -4616,39 +4622,6 @@ fn conversation_snapshot_event_with_queue_ids(
 /// hidden reasoning or arbitrary tool output. Keep the tool IDs so restored
 /// histories preserve the call/result relationship while replacing the output
 /// body with a bounded marker.
-fn sanitize_semantic_conversation(messages: &[Message]) -> Vec<Message> {
-    messages
-        .iter()
-        .filter_map(|message| match &message.content {
-            MessageContent::Text(_) => Some(message.clone()),
-            MessageContent::Blocks(blocks) => {
-                let blocks: Vec<ContentBlock> = blocks
-                    .iter()
-                    .filter_map(|block| match block {
-                        ContentBlock::Text { .. } | ContentBlock::ToolUse { .. } => {
-                            Some(block.clone())
-                        }
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            is_error,
-                            ..
-                        } => Some(ContentBlock::ToolResult {
-                            tool_use_id: tool_use_id.clone(),
-                            content: "[tool result omitted from checkpoint]".to_string(),
-                            is_error: *is_error,
-                        }),
-                        ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => None,
-                    })
-                    .collect();
-                (!blocks.is_empty()).then_some(Message {
-                    role: message.role,
-                    content: MessageContent::Blocks(blocks),
-                })
-            }
-        })
-        .collect()
-}
-
 fn redact_semantic_snapshot_json(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Array(values) => serde_json::Value::Array(

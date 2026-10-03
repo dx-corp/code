@@ -15,16 +15,29 @@ loop {
     ModelStepCompleted { text, calls }        // commit point, before any policy
     no calls?  Final, return Done
     per call, in the model's order:
-        policy (under the call's principal) -> approval? park, return Parked
+        policy (under the call's principal) -> deny? record refusal, continue
+        NeedsApproval? record AutoApproved before dispatch
+        NeedsConfirmation? return preview as a refusal result; dispatch nothing
         read-only: join the parallel wave     // results enter history in call order
         mutation:  Effects claim -> ToolStarted -> run -> record -> ToolFinished
 }
 ```
 
-`Engine::run(&mut ctx, &cancel)` returns `Done`, `Parked(approval)`,
-`Asked(call)`, `Interrupted`, or `Failed`. After an approval or answer the
-host appends the decision and calls `run` again; the pending calls come from
-the log, not from memory.
+Ordinary `NeedsApproval` verdicts are granted immediately and recorded as
+`AutoApproved` before the effect. Deterministic denials and unavailable policy
+checks still deny. In the hosted `dex-tools` policy, guardian objections block
+connector writes and flag internal calls on their receipts. Major destructive
+connector actions require a typed confirmation bound to the exact call;
+headless turns deny them. Interactive calls carrying an explicit confirmation
+checkpoint also use that question path. See
+[`DexTools::policy`](../dex-tools/src/lib.rs) and
+[policy checks](../dex-tools/src/policy.rs).
+
+`Engine::run(&mut ctx, &cancel)` returns `Done`, `Asked(call)`,
+`AwaitingClientTool(call)`, `Interrupted`, or `Failed` on active paths.
+`Parked(approval)` remains a compatibility variant; ordinary approval verdicts
+do not park. After a question answer or client-tool result, the host appends
+the event and runs again; pending calls come from the log, not memory.
 
 ## Ports
 
@@ -47,7 +60,8 @@ Ingress (hosts write): `UserMessage`, `Steer`, `Interrupt`, `ApprovalDecided`,
 
 Engine: `StepStarted`, `TextDelta`, `Usage`, `ModelStepCompleted`,
 `ModelAttemptAbandoned`, `ToolStarted`, `ToolsExposed`, `ToolFinished`
-(`succeeded | failed | running | unknown`), `ApprovalRequested`, `Question`,
+(`succeeded | failed | running | unknown`), `AutoApproved`,
+`Question`, `ClientToolRequested`,
 `Compaction`, `Final`, `Error`, `Interrupted`.
 
 Interrupt cancels the model stream and running reads; a mutation that has
@@ -57,7 +71,7 @@ started completes, and the turn stops before the next effect.
 
 - Surface logic: no Slack, Teams, web or renderer code, and no per-surface
   behavior in the loop.
-- Coding concepts: no coding task kinds, validators or workflows. Coding is
+- Coding concepts: no coding task kinds, validation rules or workflows. Coding is
   tools run through this same loop.
 - Provider or service clients: no HTTP, SQL, model SDKs or `tokio::spawn`.
   Hosts implement the ports.

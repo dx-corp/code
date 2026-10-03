@@ -1550,6 +1550,7 @@ async fn upgraded_headless_turn_preserves_an_effect_completed_under_legacy_appro
         outcome: dex_loop::Outcome::Succeeded,
         output: dex_loop::Output::Text("legacy send receipt".into()),
         receipt: None,
+        summary: None,
     });
     let before = log.entries();
     let model = FakeModel::new(vec![vec![text("sent")]]);
@@ -2611,6 +2612,7 @@ async fn uncertain_mutation_guard_survives_compaction_and_a_new_turn_is_explicit
         outcome: dex_loop::Outcome::Unknown,
         output: dex_loop::Output::Text("lost result".into()),
         receipt: None,
+        summary: None,
     });
     log.host_append(Event::Compaction {
         covers_to_cursor: cursor,
@@ -2659,6 +2661,7 @@ async fn unknown_client_mutations_are_not_requested_again_and_unknown_reads_can_
             outcome: dex_loop::Outcome::Unknown,
             output: dex_loop::Output::Text("lost".into()),
             receipt: None,
+            summary: None,
         });
         let model = FakeModel::new(vec![
             vec![call("client.operation", json!({"key":"w"}))],
@@ -2699,6 +2702,7 @@ async fn uncertain_mutations_keep_their_principal_identity() {
         outcome: dex_loop::Outcome::Unknown,
         output: dex_loop::Output::Text("lost".into()),
         receipt: None,
+        summary: None,
     });
     log.host_append(Event::Steer {
         principal: bob(),

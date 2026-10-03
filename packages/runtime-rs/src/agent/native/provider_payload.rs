@@ -24,8 +24,8 @@ pub(super) fn vault_history(messages: &[Message], vault: &CredentialVault) -> Re
                             *url = vault.vault_in_text(url);
                         }
                         ContentBlock::Image {
-                            source: ImageSource::Base64 { .. },
-                        } => {}
+                            source: ImageSource::Base64 { owner, .. },
+                        } => *owner = None,
                     }
                 }
             }
@@ -85,7 +85,9 @@ pub(super) fn attest_history(
                             text(content)?;
                         }
                         ContentBlock::Image { source } => match source {
-                            ImageSource::Base64 { media_type, data } => {
+                            ImageSource::Base64 {
+                                media_type, data, ..
+                            } => {
                                 identifier(media_type)?;
                                 identifier(data)?;
                             }
@@ -227,6 +229,7 @@ mod tests {
                         source: ImageSource::Base64 {
                             media_type: "image/png".into(),
                             data: "aaaa".into(),
+                            owner: None,
                         },
                     },
                 ]),
@@ -252,6 +255,7 @@ mod tests {
                 description: "a".into(),
                 input_schema: serde_json::json!({"type":"object", "additionalProperties":false,
                     "required":["path"], "properties":{"path":{"type":"array", "items":{"type":"string"}}}}),
+                output_schema: None,
                 schema_enforcement: crate::ai::ToolSchemaEnforcement::Require,
             }]),
             ..RequestConfig::default()

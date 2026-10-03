@@ -98,14 +98,25 @@ impl NativeAgentRunner {
                 .filter(|mode| !mode.is_empty() && mode != "default" && mode != "inherit")
                 .or_else(|| codex_sandbox_mode(self.config.sandbox_policy.as_ref())),
         };
-        let dynamic_tools =
+        let mut dynamic_tools =
             crate::agent::codex_app_server_turns::dynamic_tools_from_native(&self.tools);
+        if let Some(script) = dynamic_tools
+            .iter_mut()
+            .find(|tool| tool.name == agent_codemode::TOOL_NAME)
+        {
+            script.description = format!(
+                "{}\n\n{}",
+                agent_codemode::DESCRIPTION,
+                agent_codemode::declaration_description(&self.codemode_catalog(), 3000)
+            );
+        }
         let provider_tools: Vec<Tool> = dynamic_tools
             .iter()
             .map(|tool| Tool {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
+                output_schema: None,
                 schema_enforcement: Default::default(),
             })
             .collect();
@@ -588,6 +599,7 @@ impl NativeAgentRunner {
     pub(super) async fn finalize_codex_tool_result(
         &mut self,
         outcome: CodexToolOutcome<'_>,
+        execution: Option<&mut ToolExecution>,
     ) -> (String, bool) {
         let CodexToolOutcome {
             tool_name,
@@ -629,7 +641,7 @@ impl NativeAgentRunner {
             text = format!("{text}\n\n[Eval gate rejected this result: {reason}]");
         }
         let reported_error = is_error || hook_outcome.rejected.is_some();
-        let (text, reported_error) = self.apply_tool_result_extensions(
+        let (mut text, mut reported_error) = self.apply_tool_result_extensions(
             call_id,
             tool_name,
             args,
@@ -638,6 +650,15 @@ impl NativeAgentRunner {
             reported_error,
             None,
         );
+        if let Some(execution) = execution {
+            if let Err(error) = self
+                .finalize_codemode_attachments(execution, reported_error)
+                .await
+            {
+                text = format!("{text}\n\n[Script output and state were not committed: {error}]");
+                reported_error = true;
+            }
+        }
         let safe_text = self.credential_vault.vault_in_text(&text);
         let response = opaque_codex_tool_result_for_wire(&safe_text);
         self.record_codex_tool_result(call_id, safe_text, reported_error);
@@ -930,16 +951,19 @@ impl NativeAgentRunner {
                         // A UI-supplied result was not executed here, so there
                         // is no interval this path can measure.
                         let (response, is_error) = self
-                            .finalize_codex_tool_result(CodexToolOutcome {
-                                tool_name: &registry_name,
-                                call_id: &call_id,
-                                args: &args,
-                                hook_output: &hook_output,
-                                result_text: vaulted_text,
-                                is_error,
-                                pre_hook_context: pre_hook_context.as_deref(),
-                                duration_ms: 0,
-                            })
+                            .finalize_codex_tool_result(
+                                CodexToolOutcome {
+                                    tool_name: &registry_name,
+                                    call_id: &call_id,
+                                    args: &args,
+                                    hook_output: &hook_output,
+                                    result_text: vaulted_text,
+                                    is_error,
+                                    pre_hook_context: pre_hook_context.as_deref(),
+                                    duration_ms: 0,
+                                },
+                                None,
+                            )
                             .await;
                         if is_error {
                             request.respond(tool_call_error_result(response));
@@ -958,28 +982,44 @@ impl NativeAgentRunner {
                     });
                 }
 
-                let execution = self
+                let mut execution = self
                     .execute_tool(&registry_name, &args, &call_id, None)
                     .await;
                 let is_error = execution.is_error();
                 let hook_output = execution.raw_content();
                 let duration_ms = execution.receipt.duration_ms.unwrap_or(0);
                 let (response, is_error) = self
-                    .finalize_codex_tool_result(CodexToolOutcome {
-                        tool_name: &registry_name,
-                        call_id: &call_id,
-                        args: &args,
-                        hook_output: &hook_output,
-                        result_text: execution.model_content(),
-                        is_error,
-                        pre_hook_context: pre_hook_context.as_deref(),
-                        duration_ms,
-                    })
+                    .finalize_codex_tool_result(
+                        CodexToolOutcome {
+                            tool_name: &registry_name,
+                            call_id: &call_id,
+                            args: &args,
+                            hook_output: &hook_output,
+                            result_text: execution.model_content(),
+                            is_error,
+                            pre_hook_context: pre_hook_context.as_deref(),
+                            duration_ms,
+                        },
+                        Some(&mut execution),
+                    )
                     .await;
+                if registry_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
+                    self.complete_tool_operation(&call_id).await;
+                }
                 if is_error {
                     request.respond(tool_call_error_result(response));
                 } else {
-                    request.respond(tool_call_success_result(response));
+                    let mut result = tool_call_success_result(response);
+                    if let Some(items) = result["contentItems"].as_array_mut() {
+                        for image in &execution.images {
+                            items.push(json!({"type":"inputImage","imageUrl":format!("data:{};base64,{}",image.mime_type,image.data)}));
+                        }
+                    }
+                    if !self.codemode_projected_images.is_empty() {
+                        self.project_codemode_images();
+                        self.emit_conversation_snapshot();
+                    }
+                    request.respond(result);
                 }
                 Ok(())
             }

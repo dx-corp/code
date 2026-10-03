@@ -111,11 +111,13 @@ fn convert_blocks(blocks: &[ContentBlock]) -> Vec<ai::ContentBlock> {
                         ai::ImageSource::Base64 {
                             media_type: source.media_type.clone(),
                             data: source.data.clone(),
+                            owner: source.owner.clone(),
                         }
                     } else {
                         ai::ImageSource::Base64 {
                             media_type: mime_type.clone()?,
                             data: data.clone()?,
+                            owner: None,
                         }
                     },
                 },

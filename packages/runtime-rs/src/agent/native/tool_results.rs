@@ -60,9 +60,22 @@ impl NativeAgentRunner {
         pending: maestro_runtime_contracts::ToolOperationRecord,
         execution: &ToolExecution,
     ) {
+        if let Err(error) = self
+            .try_record_tool_operation_outcome(pending, execution)
+            .await
+        {
+            self.tool_executor.report_diagnostic(error);
+        }
+    }
+
+    pub(super) async fn try_record_tool_operation_outcome(
+        &mut self,
+        pending: maestro_runtime_contracts::ToolOperationRecord,
+        execution: &ToolExecution,
+    ) -> Result<(), String> {
         // The outcome journal is durable and is written before model projection.
         let script_child = pending.projection_owner_call_id.is_some();
-        let outcome = maestro_runtime_contracts::ToolOperationOutcome::new(
+        let mut outcome = maestro_runtime_contracts::ToolOperationOutcome::new(
             self.credential_vault.vault_in_text(
                 &if self.codemode_cancel.is_some() || script_child {
                     execution.raw_content()
@@ -73,14 +86,15 @@ impl NativeAgentRunner {
             execution.is_error(),
             Some(execution.receipt.clone()),
         );
+        outcome.codemode_store = execution.codemode_store.clone();
+        outcome.images = execution.images.clone();
         let ready = match pending.outcome_ready(outcome, tool_operation_now_ms()) {
             Ok(ready) => ready,
             Err(error) => {
-                self.tool_executor.report_diagnostic(format!(
+                return Err(format!(
                     "tool operation outcome rejected for {}: {error}",
                     execution.receipt.call_id
                 ));
-                return;
             }
         };
         if self.codemode_cancel.is_some()
@@ -92,12 +106,20 @@ impl NativeAgentRunner {
             self.codemode_journaled
                 .insert(execution.receipt.call_id.clone());
         }
-        if let Err(error) = self.hooks.hook_record_tool_operation(&ready).await {
-            self.tool_executor.report_diagnostic(format!(
-                "tool operation outcome persistence failed for {}: {error}",
-                execution.receipt.call_id
-            ));
+        if let Some(child) = self.codemode_progress.get_mut(&execution.receipt.call_id) {
+            child.status = Some(execution.receipt.status);
+            child.duration_ms = execution.receipt.duration_ms;
+            self.emit_codemode_progress();
         }
+        self.hooks
+            .hook_record_tool_operation(&ready)
+            .await
+            .map_err(|error| {
+                format!(
+                    "tool operation outcome persistence failed for {}: {error}",
+                    execution.receipt.call_id
+                )
+            })
     }
 
     pub(super) async fn complete_tool_operation(&self, call_id: &str) {
@@ -491,6 +513,14 @@ impl NativeAgentRunner {
 
         if tool_name.eq_ignore_ascii_case(agent_codemode::TOOL_NAME) {
             let execution = Box::pin(self.execute_codemode(args, call_id)).await;
+            // The final hooks/extensions own projection admission. A crash
+            // before their verdict leaves a non-replayable pending operation.
+            self.codemode_pending_operation = Some(operation);
+            return execution;
+        }
+
+        if tool_name.eq_ignore_ascii_case(classifier::TOOL_NAME) {
+            let execution = Box::pin(self.execute_classifier(args, call_id)).await;
             self.record_tool_operation_outcome(operation, &execution)
                 .await;
             return execution;
@@ -623,7 +653,7 @@ impl NativeAgentRunner {
             );
         }
 
-        let result = result.unwrap_or_else(|| {
+        let mut result = result.unwrap_or_else(|| {
             if approved {
                 ToolExecution::from_legacy(
                     &call_id,
@@ -775,7 +805,7 @@ impl NativeAgentRunner {
         // Hand the finished call to the extensions. The `doom-loop` tenant
         // records it here, which is where `SafetyController::record_tool_call`
         // used to be called directly.
-        let (result_content, reported_error) = self.apply_tool_result_extensions(
+        let (mut result_content, mut reported_error) = self.apply_tool_result_extensions(
             &call_id,
             &tool_name,
             &safe_args,
@@ -784,6 +814,16 @@ impl NativeAgentRunner {
             reported_error,
             Some(&result.receipt),
         );
+
+        if let Err(error) = self
+            .finalize_codemode_attachments(&mut result, reported_error)
+            .await
+        {
+            result_content = format!(
+                "{result_content}\n\n[Script output and state were not committed: {error}]"
+            );
+            reported_error = true;
+        }
 
         self.complete_tool_operation(&call_id).await;
         ContentBlock::ToolResult {

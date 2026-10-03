@@ -3940,6 +3940,8 @@ fn push_tool_call_message(app: &mut App, output: String) {
         thinking: String::new(),
         streaming: false,
         tool_calls: vec![crate::state::ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-detail".to_string(),
             tool: "bash".to_string(),
             args: serde_json::json!({"command": "seq 1 120"}),
@@ -5795,6 +5797,8 @@ async fn dex_suggestion_acceptance_only_fills_composer_and_respects_dismissal() 
         .unwrap()
         .tool_calls
         .push(crate::state::ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "edit-1".into(),
             tool: "edit".into(),
             args: serde_json::json!({}),
@@ -7017,27 +7021,7 @@ fn catalog_typing_does_not_trigger_manager_actions() {
     });
 }
 
-#[tokio::test]
-async fn settings_experiments_opens_the_native_control_and_escape_closes_it() {
-    let mut app = new_test_app();
-    app.show_control_panel(crate::commands::ControlPanel::Settings);
-    assert_eq!(
-        app.command_palette.selected_resource().unwrap().id,
-        "preferences"
-    );
-    app.handle_command_palette_key(crossterm::event::KeyCode::Enter, false)
-        .await
-        .unwrap();
-    assert_eq!(app.active_modal, ActiveModal::Preferences);
-    assert!(app.config_selector.is_visible());
-    app.handle_key(
-        crossterm::event::KeyCode::Esc,
-        crossterm::event::KeyModifiers::NONE,
-    )
-    .await
-    .unwrap();
-    assert_eq!(app.active_modal, ActiveModal::None);
-    assert!(!app.config_selector.is_visible());
-}
+#[path = "tests/settings_experiments.rs"]
+mod settings_experiments;
 
 mod session_restore;

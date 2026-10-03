@@ -33,6 +33,32 @@ pub fn active_tool_label(state: &AppState) -> Option<String> {
     if !state.busy {
         return None;
     }
+    let all_calls = state
+        .messages
+        .iter()
+        .flat_map(|message| &message.tool_calls)
+        .collect::<Vec<_>>();
+    for (parent, children) in &state.codemode_progress {
+        if all_calls
+            .iter()
+            .any(|call| call.call_id == *parent && call.status == ToolCallStatus::Running)
+        {
+            let approvals = children
+                .iter()
+                .filter(|child| {
+                    all_calls.iter().any(|call| {
+                        call.call_id == child.call_id && call.status == ToolCallStatus::Pending
+                    })
+                })
+                .count();
+            if approvals > 0 {
+                return Some(format!("Script · {approvals} awaiting approval"));
+            }
+            return Some(
+                maestro_local_host::agent::protocol::CodeModeChildProgress::summary(children),
+            );
+        }
+    }
     let mut calls = state
         .messages
         .iter()
@@ -117,6 +143,8 @@ mod tests {
         let mut state = AppState::new();
         state.add_user_message("Check the code".into());
         state.messages[0].tool_calls.push(ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-1".into(),
             tool: "read".into(),
             args: serde_json::json!({}),
@@ -138,6 +166,8 @@ mod tests {
         let mut state = AppState::new();
         state.add_user_message("All tests passed".into());
         state.messages[0].tool_calls.push(ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "call-1".into(),
             tool: "bash".into(),
             args: serde_json::json!({}),

@@ -255,7 +255,7 @@ async fn approval_receipt_and_script_failure_preserve_completed_effect_and_parti
         outer_result(&log, "t1-1-0"),
         (
             Outcome::Failed,
-            "partial\nScript failed: after effect".into()
+            "partial\nScript failed: Error: after effect\n    at <anonymous> (codemode.js:1:77)\nNested calls (completed effects are not undone): update (Ok)".into()
         )
     );
     assert_eq!(tools.runs().len(), 1);
@@ -340,7 +340,7 @@ async fn unknown_mutation_remains_unknown_even_when_script_catches_it_and_retrie
     );
     assert_eq!(
         outer_result(&log, "t1-1-0"),
-        (Outcome::Unknown, "caught".into())
+        (Outcome::Unknown, "Outcome unknown: a nested tool may have taken effect; completed effects are not undone. Reconcile it before retrying.\ncaught".into())
     );
     assert_eq!(
         tools.0.runs().len(),
@@ -531,4 +531,83 @@ async fn nested_mutation_deadline_records_unknown_after_dispatch() {
     ));
     assert_eq!(outer_result(&log, "t1-1-0").0, Outcome::Unknown);
     assert_eq!(log.rehydrate(), ctx);
+}
+
+#[derive(Clone)]
+struct FailedChildReceipt(FakeEffects);
+
+impl dex_loop::Effects for FailedChildReceipt {
+    async fn claim(&self, call: &ProposedCall) -> Result<dex_loop::Claim, dex_loop::Fenced> {
+        dex_loop::Effects::claim(&self.0, call).await
+    }
+    async fn record(
+        &self,
+        call: &dex_loop::CallId,
+        result: &ToolResult,
+    ) -> Result<(), dex_loop::Fenced> {
+        if call.as_str() == "t1-1-0:codemode:0" {
+            return Err(dex_loop::Fenced::new(
+                "injected child completion write failure",
+            ));
+        }
+        dex_loop::Effects::record(&self.0, call, result).await
+    }
+}
+
+#[tokio::test]
+async fn failed_child_receipt_stops_script_and_recovery_never_repeats_its_effect() {
+    let log = FakeLog::default();
+    let effects = FakeEffects::default();
+    let tools = FakeTools::new(vec![write_tool("update")]).verdict("update", approval("gate"));
+    let model = FakeModel::new(vec![vec![script(
+        "await tools.update({key:'a'}); await tools.update({key:'b'});",
+    )]]);
+    let mut ctx = log.start_turn("t1", "compose");
+    let failed = Engine::new(
+        log.clone(),
+        model,
+        tools.clone(),
+        FailedChildReceipt(effects.clone()),
+        Lexicon::default(),
+        Budget::default(),
+    );
+    assert!(
+        failed
+            .run(&mut ctx, &CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tools.runs().len(),
+        1,
+        "the next effect never starts after a failed receipt"
+    );
+    assert_eq!(
+        effects.recorded(&dex_loop::CallId::new("t1-1-0:codemode:0")),
+        Some(None),
+        "the effect ran but its completion was not recorded"
+    );
+    assert!(!log.events().iter().any(|event| matches!(event, Event::ToolFinished { call, .. } if call.as_str() == "t1-1-0:codemode:0")));
+    assert!(log.events().iter().any(|event| matches!(event, Event::AutoApproved { call, .. } if call.as_str() == "t1-1-0:codemode:0")));
+    assert_eq!(ctx, log.rehydrate());
+
+    let restarted = FakeModel::new(vec![
+        vec![script("await tools.update({key:'a'});")],
+        vec![text("check outcome")],
+    ]);
+    let mut replay = log.rehydrate();
+    assert_eq!(
+        engine_with(&log, &restarted, &tools, &effects, Budget::default())
+            .run(&mut replay, &CancellationToken::new())
+            .await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(outer_result(&log, "t1-1-0").0, Outcome::Unknown);
+    assert!(outer_result(&log, "t1-2-0").1.contains("unknown outcome"));
+    assert_eq!(
+        tools.runs().len(),
+        1,
+        "neither replay nor a fresh script retries the unknown child"
+    );
+    assert_eq!(replay, log.rehydrate());
 }

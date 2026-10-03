@@ -19,6 +19,10 @@
 //! - `ApprovalMode::Fail` → deny immediately
 //! - `ApprovalMode::Prompt` / unset → wait for client `ToolResponse`
 
+#[path = "headless_server/runtime_env.rs"]
+mod runtime_env;
+use runtime_env::required_governed_runtime_env;
+
 use maestro_runtime_contracts::tool_wire;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
@@ -697,18 +701,6 @@ impl HeadlessState {
         self.ensure_agent()?;
         Ok(())
     }
-}
-
-fn required_governed_runtime_env(name: &str) -> Result<String> {
-    std::env::var(name)
-        .with_context(|| format!("governed code requires runtime-owned {name}"))
-        .and_then(|value| {
-            let value = value.trim();
-            if value.is_empty() {
-                anyhow::bail!("governed code requires non-empty runtime-owned {name}");
-            }
-            Ok(value.to_string())
-        })
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -3145,6 +3137,13 @@ async fn handle_agent_event(
             );
             emit(&FromAgentMessage::ProviderError { kind, message })?;
         }
+        FromAgent::CodeModeProgress { children, .. } => {
+            emit(&FromAgentMessage::Status {
+                message: maestro_runtime::agent::protocol::CodeModeChildProgress::summary(
+                    &children,
+                ),
+            })?;
+        }
         FromAgent::Status { message } => {
             emit_transcript(
                 meta,
@@ -5465,12 +5464,13 @@ const fs=require('fs');
 const log=process.env.MAESTRO_HEADLESS_STEER_LOG;
 function send(x){process.stdout.write(JSON.stringify(x)+'\n')}
 rl.on('line',line=>{const x=JSON.parse(line);fs.appendFileSync(log,JSON.stringify(x)+'\n');
-if(x.method==='initialize'){send({id:x.id,result:{protocolVersion:'2025-01-01',capabilities:{}}})}
+if(x.method==='initialize'){send({id:x.id,result:{protocolVersion:'2025-01-01',capabilities:{methods:['thread/start','thread/resume','turn/start','turn/steer','turn/interrupt'],notifications:['item/tool/call','item/agentMessage/delta','turn/completed']}}})}
 else if(x.method==='model/list'){send({id:x.id,result:{data:[{id:'gpt-5.5',model:'gpt-5.5',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'medium'},{reasoningEffort:'high'},{reasoningEffort:'xhigh'}]}],nextCursor:null}})}
 else if(x.method==='thread/start'){send({id:x.id,result:{thread:{id:'thread-headless'}}})}
 else if(x.method==='thread/resume'){send({id:x.id,result:{thread:{id:x.params.threadId}}})}
 else if(x.method==='turn/start'){send({id:x.id,result:{turn:{id:'turn-active'}}})}
 else if(x.method==='turn/steer'){send({id:x.id,result:{turn:{id:'turn-active'}}});setTimeout(()=>send({method:'turn/completed',params:{turnId:'turn-active'}}),10)}
+else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'turn/completed',params:{turnId:'turn-active',turn:{status:'interrupted'}}})}
 });",
         )
         .expect("app-server script");

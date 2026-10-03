@@ -181,3 +181,39 @@ pub(super) fn project_observation_history(
         Arc::clone(messages)
     }
 }
+
+pub(super) fn sanitize_semantic_conversation(messages: &[Message]) -> Vec<Message> {
+    messages
+        .iter()
+        .filter_map(|message| match &message.content {
+            MessageContent::Text(_) => Some(message.clone()),
+            MessageContent::Blocks(blocks) => {
+                let blocks: Vec<ContentBlock> = blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { .. } | ContentBlock::ToolUse { .. } => {
+                            Some(block.clone())
+                        }
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            is_error,
+                            ..
+                        } => Some(ContentBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: "[tool result omitted from checkpoint]".to_string(),
+                            is_error: *is_error,
+                        }),
+                        ContentBlock::Image {
+                            source: ImageSource::Base64 { owner: Some(_), .. },
+                        } => Some(block.clone()),
+                        ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => None,
+                    })
+                    .collect();
+                (!blocks.is_empty()).then_some(Message {
+                    role: message.role,
+                    content: MessageContent::Blocks(blocks),
+                })
+            }
+        })
+        .collect()
+}

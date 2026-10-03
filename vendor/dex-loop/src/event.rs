@@ -324,6 +324,8 @@ pub enum Output {
     /// A short note: a denial, an unknown tool, a user's answer, an outcome
     /// the engine could not recover.
     Text(String),
+    /// Bounded inline script projections, revalidated before provider transport.
+    Blocks(Vec<agent_codemode::OutputBlock>),
 }
 
 /// The outcome of one tool call.
@@ -671,6 +673,21 @@ pub enum Event {
         parent: CallId,
         calls: Vec<ProposedCall>,
     },
+    /// Internal scratch write-ahead record. Published only by matching known success.
+    CodeModeStorePrepared {
+        parent: CallId,
+        principal: PrincipalId,
+        writes: agent_codemode::StoreWrites,
+    },
+    /// Internal marker for an exact specialist usage receipt in this atomic batch.
+    ModelUsageResolved {
+        call: CallId,
+    },
+    /// Owner usage was unavailable after a billable call. Finite budgets fail closed.
+    ModelUsageUnresolved {
+        call: CallId,
+        reason: String,
+    },
     ToolStarted {
         call: CallId,
         tool: ToolName,
@@ -693,6 +710,9 @@ pub enum Event {
         outcome: Outcome,
         output: Output,
         receipt: Option<ReceiptId>,
+        /// Customer-safe owner template. Raw tool diagnostics never populate it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
     },
     /// Legacy: the turn was parked until an `ApprovalDecided` for this call
     /// arrived. Never emitted any more (policy grants at once and writes
@@ -965,6 +985,7 @@ mod tests {
                 outcome: Outcome::Unknown,
                 output: Output::Text("outcome unknown".into()),
                 receipt: None,
+                summary: None,
             },
             Event::Error {
                 class: None,

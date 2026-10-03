@@ -125,12 +125,16 @@ runs:
         # A copied rustup binary skips rustup-init, which normally creates env.
         # Recreate that file after clearing our tool root: a runner login profile
         # from an earlier install may still source this exact stable path.
-        cat > "$cargo_home/env" <<EOF
-        case ":\${PATH}:" in
-          *:"$cargo_home/bin":*) ;;
-          *) export PATH="$cargo_home/bin:\$PATH" ;;
-        esac
-        EOF
+        printf 'case ":${PATH}:" in\n  *:"%s":*) ;;\n  *) export PATH="%s:$PATH" ;;\nesac\n' \
+          "$cargo_home/bin" "$cargo_home/bin" > "$cargo_home/env"
+
+        # Earlier repository names left absolute Rust env sources in runner
+        # login profiles. Refresh only those owned entries to this active home.
+        if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+          bash .github/actions/setup-rust/repair-login-profile.sh \
+            "$cache_root" "$safe_toolchain" "$cargo_home" \
+            "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.zprofile"
+        fi
 
         echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
         echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"

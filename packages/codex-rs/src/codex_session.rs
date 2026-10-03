@@ -70,6 +70,10 @@ impl CodexSessionKey {
 pub struct CodexCapabilities {
     pub resume: bool,
     pub dynamic_tools: bool,
+    /// Maestro implements native steering; the provider must advertise it too.
+    /// Legacy manifests did not declare it and therefore cannot enable it.
+    #[serde(default)]
+    pub active_steering: bool,
 }
 
 impl Default for CodexCapabilities {
@@ -77,6 +81,7 @@ impl Default for CodexCapabilities {
         Self {
             resume: true,
             dynamic_tools: true,
+            active_steering: true,
         }
     }
 }
@@ -383,6 +388,20 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn legacy_capabilities_preserve_choices_without_claiming_active_steering() {
+        let capabilities: CodexCapabilities =
+            serde_json::from_str(r#"{"resume":false,"dynamic_tools":true}"#).unwrap();
+        let serialized = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(serialized["resume"], false);
+        assert_eq!(serialized["dynamic_tools"], true);
+        assert_eq!(serialized["active_steering"], false);
+        assert_eq!(
+            serde_json::from_value::<CodexCapabilities>(serialized).unwrap(),
+            capabilities
+        );
+    }
 
     #[test]
     fn exact_binding_round_trips_without_sensitive_fields() -> anyhow::Result<()> {

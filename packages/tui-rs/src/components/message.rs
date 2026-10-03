@@ -213,17 +213,39 @@ fn tool_phase(status: ToolCallStatus) -> ToolPhase {
     }
 }
 
+fn visible_script_child(
+    call: &crate::state::ToolCallState,
+    expanded: Option<&HashSet<String>>,
+) -> bool {
+    call.parent_call_id
+        .as_ref()
+        .is_none_or(|parent| expanded.is_some_and(|set| set.contains(parent)))
+        || matches!(
+            call.status,
+            ToolCallStatus::Pending
+                | ToolCallStatus::Failed
+                | ToolCallStatus::Blocked
+                | ToolCallStatus::Cancelled
+        )
+}
+
 fn tool_result_lines(
     tc: &crate::state::ToolCallState,
     expanded: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let summary = if tc.status == ToolCallStatus::Completed {
+    let summary = if tc.tool == "codemode" {
+        "Script".to_owned()
+    } else if tc.status == ToolCallStatus::Completed {
         summarize_tool_use(&tc.tool, &tc.args)
     } else {
         crate::tool_summary::summarize_tool_intent(&tc.tool, &tc.args)
     };
-    let arguments = get_tool_args_preview(&tc.tool, &tc.args, width.saturating_sub(20) as usize);
+    let arguments = if tc.tool == "codemode" && !expanded {
+        String::new()
+    } else {
+        get_tool_args_preview(&tc.tool, &tc.args, width.saturating_sub(20) as usize)
+    };
     let clamp = clamp_tool_output(&tc.output, tool_output_limits());
     let banner = format_tool_output_truncation(&clamp);
     ToolResult {
@@ -232,7 +254,14 @@ fn tool_result_lines(
         arguments: &arguments,
         output: &clamp.text,
         expanded,
-        detail: &format!("· {} #{}", tc.tool, tc.call_id),
+        detail: &format!(
+            "· {} #{}{}",
+            tc.tool,
+            tc.call_id,
+            tc.duration_ms
+                .map(|ms| format!(" · {ms} ms"))
+                .unwrap_or_default()
+        ),
         truncation: banner.as_deref(),
         theme: conversation_theme(),
     }
@@ -421,6 +450,9 @@ pub fn calculate_message_height(
 
     // Tool calls
     for (tool_index, tc) in message.tool_calls.iter().enumerate() {
+        if !visible_script_child(tc, Some(expanded_tools)) {
+            continue;
+        }
         let expanded = if compact_tool_outputs {
             expanded_tools.contains(&tc.call_id)
         } else {
@@ -790,6 +822,9 @@ impl Widget for MessageWidget<'_> {
 
         // Render tool calls in Codex style
         for (tool_index, tool_call) in self.message.tool_calls.iter().enumerate() {
+            if !visible_script_child(tool_call, self.expanded_tools) {
+                continue;
+            }
             if y >= max_y {
                 break;
             }
@@ -2859,6 +2894,8 @@ mod tests {
         );
         let mut message = polish_message("tool", "Done.");
         message.tool_calls.push(crate::state::ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "read-1".into(),
             tool: "read".into(),
             args: serde_json::json!({"path":"README.md"}),
@@ -2952,6 +2989,8 @@ mod tests {
             message.thinking = "界".repeat(60);
             message.thinking_expanded = expanded;
             message.tool_calls.push(crate::state::ToolCallState {
+                parent_call_id: None,
+                duration_ms: None,
                 call_id: "read-1".into(),
                 tool: "read".into(),
                 args: serde_json::json!({"path":"README.md"}),
@@ -3066,6 +3105,8 @@ mod tests {
     fn tool_identifiers_and_timestamps_are_details_only() {
         let mut message = polish_message("tool", "");
         message.tool_calls.push(crate::state::ToolCallState {
+            parent_call_id: None,
+            duration_ms: None,
             call_id: "read-private-id".into(),
             tool: "read".into(),
             args: serde_json::json!({"path":"README.md"}),
@@ -3533,6 +3574,8 @@ mod tests {
             thinking: String::new(),
             streaming: false,
             tool_calls: vec![crate::state::ToolCallState {
+                parent_call_id: None,
+                duration_ms: None,
                 call_id: "call-12345678".to_string(),
                 tool: "read".to_string(),
                 args: serde_json::json!({
@@ -3582,6 +3625,8 @@ mod tests {
             streaming: true,
             tool_calls: vec![
                 crate::state::ToolCallState {
+                    parent_call_id: None,
+                    duration_ms: None,
                     call_id: "call-complete".to_string(),
                     tool: "bash".to_string(),
                     args: serde_json::json!({ "command": "cargo test" }),
@@ -3589,6 +3634,8 @@ mod tests {
                     output: "finished".to_string(),
                 },
                 crate::state::ToolCallState {
+                    parent_call_id: None,
+                    duration_ms: None,
                     call_id: "call-failed".to_string(),
                     tool: "grep".to_string(),
                     args: serde_json::json!({ "pattern": "needle" }),
@@ -3596,6 +3643,8 @@ mod tests {
                     output: "not found".to_string(),
                 },
                 crate::state::ToolCallState {
+                    parent_call_id: None,
+                    duration_ms: None,
                     call_id: "call-running".to_string(),
                     tool: "read".to_string(),
                     args: serde_json::json!({ "file_path": "/tmp/live.rs" }),
@@ -3850,76 +3899,9 @@ mod boost_footer_tests {
 }
 
 #[cfg(test)]
-mod dex_notice_layout_tests {
-    use super::*;
-
-    #[test]
-    fn quiet_notice_does_not_overwrite_welcome_identity() {
-        let state = crate::state::AppState::new();
-        let area = Rect::new(0, 0, 60, 20);
-        let mut buffer = Buffer::empty(area);
-        ChatView::new(&state)
-            .with_dex_presentation(
-                crate::components::dex_companion::DexPersonality::Quiet,
-                false,
-            )
-            .with_dex_delight(
-                Default::default(),
-                Some("Welcome back. Your answer is needed"),
-                None,
-                None,
-            )
-            .render(area, &mut buffer);
-        let lines: Vec<String> = (0..area.height)
-            .map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect();
-        let notice = lines
-            .iter()
-            .position(|line| line.contains("Welcome back. Your answer is needed"))
-            .unwrap();
-        let status = lines
-            .iter()
-            .position(|line| line.contains(super::super::deixic_logo::PRODUCT_TITLE))
-            .unwrap();
-        assert_ne!(notice, status);
-    }
-}
+#[path = "message/footer_tests.rs"]
+mod footer_tests;
 
 #[cfg(test)]
-mod worker_badge_tests {
-    use super::*;
-    #[test]
-    fn worker_activity_is_visible_in_the_footer() {
-        let area = Rect::new(0, 0, 100, 1);
-        let mut buffer = Buffer::empty(area);
-        StatusBarWidget::new(None, None, None, None)
-            .with_worker_badge(Some("↗ 2 running · 1 need input /workers"))
-            .render(area, &mut buffer);
-        let text: String = (0..100).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(text.contains("↗ 2 running"), "{text}");
-        assert!(text.contains("/workers"), "{text}");
-    }
-}
-
-#[cfg(test)]
-mod transparent_theme_regression {
-    use super::*;
-    #[test]
-    fn transparent_high_contrast_uses_selected_palette() {
-        let theme = crate::themes::high_contrast_theme();
-        assert!(theme.canvas_style().bg.is_none());
-        let actual = conversation_theme_for(&theme);
-        let expected = theme.ui_theme();
-        assert_eq!(actual.text, expected.text);
-        assert_eq!(actual.muted, expected.muted);
-        assert_eq!(actual.focus, expected.focus);
-        assert_eq!(
-            semantic_color_for_theme(&theme, "md_link", Color::Blue),
-            theme.get_color("md_link").unwrap()
-        );
-        assert_eq!(
-            conversation_theme_for(&crate::themes::dark_theme()).text,
-            crate::themes::dark_theme().ui_theme().text
-        );
-    }
-}
+#[path = "message/codemode_tests.rs"]
+mod codemode_tests;

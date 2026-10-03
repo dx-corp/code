@@ -297,6 +297,7 @@ impl NativeAgentRunner {
                             source: ImageSource::Base64 {
                                 media_type: "image/jpeg".to_string(),
                                 data,
+                                owner: None,
                             },
                         }));
                     }
@@ -320,6 +321,7 @@ impl NativeAgentRunner {
                             source: ImageSource::Base64 {
                                 media_type: mime.to_string(),
                                 data,
+                                owner: None,
                             },
                         });
                     }

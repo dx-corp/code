@@ -434,6 +434,7 @@ where
                             outcome: result.outcome,
                             output: result.output,
                             receipt: result.receipt,
+                            summary: None,
                         }
                     })
                     .collect();
@@ -449,10 +450,7 @@ where
                 }
                 continue;
             }
-            if let Some(axis) = self
-                .budget
-                .exhausted(ctx.step(), ctx.usage(), started.elapsed())
-            {
+            if let Some(axis) = self.exhausted_budget(ctx, started.elapsed()) {
                 let message = self.budget_message(ctx, axis);
                 self.emit(
                     ctx,
@@ -491,10 +489,7 @@ where
             if ctx.interrupt_requested() || cancel.is_cancelled() {
                 return self.interrupt(ctx, &prefetch).await;
             }
-            if let Some(axis) = self
-                .budget
-                .exhausted(ctx.step(), ctx.usage(), started.elapsed())
-            {
+            if let Some(axis) = self.exhausted_budget(ctx, started.elapsed()) {
                 let message = self.budget_message(ctx, axis);
                 self.emit(
                     ctx,
@@ -845,7 +840,7 @@ where
         let Some(spec) = self.offered_spec(ctx, &call.tool) else {
             return Ok(());
         };
-        let eligible = spec.read_only
+        let eligible = self.replayable_read(&spec)
             && !ctx.client_tools().iter().any(|tool| tool.name == call.tool)
             && !matches!(spec.executor, ExecutorKind::User | ExecutorKind::Client)
             && validate_args(&spec, &call.args).is_ok()
@@ -1013,7 +1008,7 @@ where
                         continue;
                     }
                     match self.offered_spec(ctx, &call.tool) {
-                        Some(spec) if spec.read_only => None,
+                        Some(spec) if self.replayable_read(&spec) => None,
                         Some(_) => {
                             if self
                                 .flush(ctx, &calls, &mut wave, cancel, run_started, prefetch)
@@ -1034,6 +1029,19 @@ where
                 Some(CallState::Todo) => None,
             };
 
+            if !already_started
+                && ctx.has_specialist_usage()
+                && let Some(axis) = self.exhausted_budget(ctx, run_started.elapsed())
+            {
+                prefetch.reads.discard(index);
+                self.finish(
+                    ctx,
+                    call,
+                    ToolResult::error(format!("not executed: {}", self.budget_message(ctx, axis))),
+                )
+                .await?;
+                continue;
+            }
             // A historical Started mutation must settle through the ledger
             // above. This guard applies only before a fresh call can run.
             if !already_started && ctx.has_stalled_call(call) {
@@ -1219,7 +1227,7 @@ where
                 .await?;
                 return Ok(Some(Exit::Asked(call.id.clone())));
             }
-            if spec.read_only {
+            if self.replayable_read(&spec) {
                 wave.push(index);
             } else {
                 if self
@@ -1227,6 +1235,12 @@ where
                     .await?
                 {
                     break;
+                }
+                if self.tools.codemode_model_operation(&call.tool).is_some()
+                    && let Some(reason) = self.codemode_budget_refusal(ctx, call, run_started)
+                {
+                    self.finish(ctx, call, ToolResult::error(reason)).await?;
+                    continue;
                 }
                 self.run_mutation(ctx, call, cancel, run_started).await?;
             }
@@ -1266,7 +1280,7 @@ where
                 CallState::Started
                     if self
                         .offered_spec(ctx, &call.tool)
-                        .is_some_and(|spec| spec.read_only) =>
+                        .is_some_and(|spec| self.replayable_read(&spec)) =>
                 {
                     self.finish(ctx, &call, ToolResult::error(DEADLINE_READ))
                         .await?;
@@ -1313,7 +1327,7 @@ where
         call: &ProposedCall,
         spec: &ToolSpec,
     ) -> Result<bool, Fenced> {
-        if spec.read_only || !ctx.has_uncertain_call(call) {
+        if self.replayable_read(spec) || !ctx.has_uncertain_call(call) {
             return Ok(false);
         }
         self.finish(ctx, call, ToolResult::error(UNCERTAIN_REPEAT))
@@ -1702,10 +1716,9 @@ where
     /// `dex_tools::client::declare` for dex-runtime's host); the engine
     /// does not merge them in itself, so they are never offered twice.
     fn offered(&self, ctx: &Context) -> Vec<ToolSpec> {
-        // Search and the core tools come first, in catalog order, on every
-        // step. Exposed tools follow in the order they were exposed, so an
-        // exposure only appends: the prefix the provider cached last step is
-        // unchanged and only the new tail is uncached.
+        // Search and core tools come first; exposed tools follow admission
+        // order. The script declaration describes this exact admitted catalog
+        // and changes when discovery exposes another tool.
         let mut offered: Vec<ToolSpec> = std::iter::once(self.search.clone())
             .chain(std::iter::once(codemode::spec()))
             .chain(
@@ -1728,6 +1741,36 @@ where
                 offered.push(spec.clone());
             }
         }
+        let catalog: Vec<_> = offered
+            .iter()
+            .filter(|entry| {
+                entry.name.as_str() != CODEMODE
+                    && entry.name.as_str() != TOOLS_SEARCH
+                    && !matches!(entry.executor, ExecutorKind::Client | ExecutorKind::User)
+            })
+            .map(|entry| agent_codemode::Tool {
+                name: entry.name.to_string(),
+                description: entry.description.clone(),
+                schema: entry.schema.clone(),
+                output_schema: self.tools.codemode_output_schema(&entry.name),
+                namespace: entry
+                    .name
+                    .as_str()
+                    .rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_owned()),
+                model_operation: self.tools.codemode_model_operation(&entry.name),
+                model_binding: self.tools.codemode_model_binding(&entry.name),
+            })
+            .collect();
+        if let Some(wrapper) = offered
+            .iter_mut()
+            .find(|entry| entry.name.as_str() == CODEMODE)
+        {
+            let instructions = agent_codemode::DESCRIPTION;
+            let catalog_budget = 12_000usize.saturating_sub(instructions.len() + 2) / 4;
+            let declarations = agent_codemode::declaration_description(&catalog, catalog_budget);
+            wrapper.description = format!("{instructions}\n\n{declarations}");
+        }
         offered
     }
 
@@ -1745,7 +1788,24 @@ where
             .cloned()
     }
 
+    fn replayable_read(&self, spec: &ToolSpec) -> bool {
+        spec.read_only && self.tools.codemode_model_operation(&spec.name).is_none()
+    }
+
+    fn exhausted_budget(&self, ctx: &Context, elapsed: Duration) -> Option<BudgetAxis> {
+        if ctx.model_usage_unresolved() && self.budget.max_tokens != u64::MAX {
+            return Some(BudgetAxis::Tokens);
+        }
+        if ctx.model_usage_unresolved() && self.budget.max_cost_micros != u64::MAX {
+            return Some(BudgetAxis::Cost);
+        }
+        self.budget.exhausted(ctx.step(), ctx.usage(), elapsed)
+    }
+
     fn budget_message(&self, ctx: &Context, axis: BudgetAxis) -> String {
+        if ctx.model_usage_unresolved() && matches!(axis, BudgetAxis::Tokens | BudgetAxis::Cost) {
+            return "model usage is unavailable after an admitted call; remaining finite turn capacity cannot be verified".into();
+        }
         let budget = &self.budget;
         match axis {
             BudgetAxis::Steps => format!(
@@ -1772,7 +1832,46 @@ where
         call: &ProposedCall,
         result: ToolResult,
     ) -> Result<(), Fenced> {
-        self.emit(ctx, vec![finished(call, result)]).await
+        let mut events = Vec::new();
+        match self.tools.model_usage(ctx, call, &result).await {
+            Ok(Some(usage)) => {
+                events.push(Event::ModelUsageResolved {
+                    call: call.id.clone(),
+                });
+                events.push(Event::Usage(usage));
+            }
+            Err(reason) => events.push(Event::ModelUsageUnresolved {
+                call: call.id.clone(),
+                reason,
+            }),
+            Ok(None) => {}
+        }
+        // Public progress receives only host-owned templates. Script diagnostics
+        // remain in the provider result, never in the customer-safe summary.
+        let owner_summary = if call.tool.as_str() == CODEMODE {
+            match result.outcome {
+                Outcome::Failed => Some("The script stopped before completing. Review completed steps before changing its inputs and retrying.".into()),
+                Outcome::Unknown => Some("A tool may have taken effect. Check the action history before retrying.".into()),
+                _ => None,
+            }
+        } else {
+            self.tools.completion_summary(call, &result)
+        };
+        let summary = owner_summary.map(|text: String| {
+            let mut filter = self.sanitizer.filter();
+            let mut safe = filter.push(&text);
+            safe.push_str(&filter.finish());
+            safe.chars()
+                .filter(|character| *character != '\0')
+                .take(4096)
+                .collect()
+        });
+        let mut completion = finished(call, result);
+        if let Event::ToolFinished { summary: value, .. } = &mut completion {
+            *value = summary;
+        }
+        events.push(completion);
+        self.emit(ctx, events).await
     }
 
     fn client_timeout_millis(&self) -> i64 {
@@ -1794,7 +1893,7 @@ where
         raw: ToolResult,
     ) -> Result<(), Fenced> {
         match self.offered_spec(ctx, &call.tool) {
-            Some(spec) if !spec.read_only => {
+            Some(spec) if !self.replayable_read(&spec) => {
                 let result = match self.effects.claim(call).await? {
                     Claim::Existing(existing) => self.settle_claim(&call.id, existing).await?,
                     Claim::Granted => {
@@ -1828,7 +1927,7 @@ where
         call: &ProposedCall,
     ) -> Result<(), Fenced> {
         match self.offered_spec(ctx, &call.tool) {
-            Some(spec) if !spec.read_only => {
+            Some(spec) if !self.replayable_read(&spec) => {
                 let result = match self.effects.claim(call).await? {
                     Claim::Existing(existing) => self.settle_claim(&call.id, existing).await?,
                     Claim::Granted => {
@@ -2048,5 +2147,6 @@ fn finished(call: &ProposedCall, result: ToolResult) -> Event {
         outcome: result.outcome,
         output: result.output,
         receipt: result.receipt,
+        summary: None,
     }
 }

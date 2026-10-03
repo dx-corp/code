@@ -899,6 +899,9 @@ pub(crate) async fn run_a2a_native_turn(
                     break;
                 }
             }
+            // A2A persists child ToolCall/ToolEnd metadata above. The grouped
+            // UI summary is not task output or an additional owner receipt.
+            FromAgent::CodeModeProgress { .. } => {}
             FromAgent::CodexSessionState { .. }
             | FromAgent::CodexTurnState { .. }
             | FromAgent::CodexUsageState { .. }

@@ -545,7 +545,7 @@ impl App {
             // Clear screen
             KeyCode::Char('l') if ctrl => {
                 // Clear messages
-                self.state.messages.clear();
+                self.state.clear_conversation_messages();
                 self.state.clear_focus_turn_state();
                 self.state.scroll_offset = 0;
             }

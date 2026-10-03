@@ -138,6 +138,60 @@ mod tests {
         .unwrap()
     }
 
+    fn saved_script(call_id: &str, revision: u64, cursor: u64) -> Vec<ToolOperationRecord> {
+        let planned = ToolOperationRecord::planned(
+            call_id,
+            "codemode",
+            json!({"code":"opaque"}),
+            None,
+            ToolReplayPolicy::Never,
+            10,
+        )
+        .unwrap();
+        let pending = planned.clone().effect_pending(10).unwrap();
+        let outcome: ToolOperationOutcome = serde_json::from_value(json!({
+            "content":"saved", "isError":false,
+            "receipt":{"call_id":call_id,"tool_name":"codemode","source":"native","status":{"status":"succeeded"},"details":{"kind":"none"}},
+            "codemodeStore":{"revision":revision,"values":{"cursor":cursor}}
+        })).expect("typed successful script snapshot");
+        let ready = pending.clone().outcome_ready(outcome, 10).unwrap();
+        let completed = ready.clone().completed(10).unwrap();
+        vec![planned, pending, ready, completed]
+    }
+
+    #[test]
+    fn codemode_store_fork_and_rewind_preserve_only_branch_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.jsonl");
+        std::fs::write(&path, "{\"type\":\"session\",\"id\":\"source\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"cwd\":\"/tmp\"}\n").unwrap();
+        // IDs are deliberately reverse lexical order; timestamps are identical.
+        for record in saved_script("z-first", 1, 2) {
+            append_tool_operation(&path, &record).unwrap();
+        }
+        let cut = std::fs::metadata(&path).unwrap().len();
+        for record in saved_script("a-second", 2, 3) {
+            append_tool_operation(&path, &record).unwrap();
+        }
+        let fork = super::super::fork::fork_session_file(&path).unwrap();
+        let rewind = super::super::fork::fork_session_prefix(&path, Some(cut)).unwrap();
+        for record in saved_script("fork-only", 3, 4) {
+            append_tool_operation(&fork.path, &record).unwrap();
+        }
+        let snapshot = |path: &Path| {
+            let ledger = load_tool_operation_ledger(path).unwrap();
+            ledger
+                .latest_records()
+                .filter_map(|record| record.outcome.as_ref())
+                .map(|outcome| serde_json::to_value(outcome).unwrap()["codemodeStore"].clone())
+                .max_by_key(|value| value["revision"].as_u64().unwrap())
+                .unwrap()["values"]["cursor"]
+                .clone()
+        };
+        assert_eq!(snapshot(&path), 3);
+        assert_eq!(snapshot(&fork.path), 4);
+        assert_eq!(snapshot(&rewind.path), 2);
+    }
+
     #[test]
     fn append_and_reload_reduce_to_latest_valid_state() {
         let directory = tempfile::tempdir().unwrap();

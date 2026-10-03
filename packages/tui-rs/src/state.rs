@@ -232,6 +232,9 @@ pub struct ToolCallState {
     /// Unique identifier for this tool call.
     /// Used to match responses to requests.
     pub call_id: String,
+    /// Runtime-bound script parent; ordinary ID strings cannot claim grouping.
+    pub parent_call_id: Option<String>,
+    pub duration_ms: Option<u64>,
 
     /// Name of the tool (e.g., "bash", "read", "write").
     pub tool: String,
@@ -366,6 +369,10 @@ pub struct AppState {
     /// Ordered chronologically (oldest first).
     /// We use `Vec` because we frequently append and iterate, rarely remove.
     pub messages: Vec<Message>,
+    pub codemode_progress: std::collections::HashMap<
+        String,
+        Vec<maestro_local_host::agent::protocol::CodeModeChildProgress>,
+    >,
 
     /// Exact transcript heights reused across immutable Ratatui render passes.
     message_layout_cache: RefCell<MessageLayoutCache>,
@@ -570,6 +577,7 @@ impl AppState {
         Self {
             locale: crate::localization::Locale::default(),
             messages: Vec::new(), // Empty message list
+            codemode_progress: Default::default(),
             message_layout_cache: RefCell::new(MessageLayoutCache::default()),
             textarea: TextArea::new(), // Empty input area
             input_width: 1,            // Default width until first render
@@ -854,6 +862,20 @@ impl AppState {
                 }
             }
 
+            FromAgent::CodeModeProgress { call_id, children } => {
+                for message in &mut self.messages {
+                    for tool in &mut message.tool_calls {
+                        if children.iter().any(|child| child.call_id == tool.call_id) {
+                            tool.parent_call_id = Some(call_id.clone());
+                        }
+                    }
+                }
+                self.status = Some(
+                    maestro_local_host::agent::protocol::CodeModeChildProgress::summary(&children),
+                );
+                self.codemode_progress.insert(call_id, children);
+            }
+
             // Agent wants to call a tool
             FromAgent::ToolCall {
                 call_id,
@@ -870,7 +892,18 @@ impl AppState {
                     .rev()
                     .find(|m| m.is_assistant_reply())
                 {
+                    let parent_call_id =
+                        self.codemode_progress
+                            .iter()
+                            .find_map(|(parent, children)| {
+                                children
+                                    .iter()
+                                    .any(|child| child.call_id == call_id)
+                                    .then(|| parent.clone())
+                            });
                     msg.tool_calls.push(ToolCallState {
+                        parent_call_id,
+                        duration_ms: None,
                         call_id,
                         tool,
                         args,
@@ -909,6 +942,15 @@ impl AppState {
                 receipt,
                 ..
             } => {
+                for tool in self
+                    .messages
+                    .iter_mut()
+                    .flat_map(|message| &mut message.tool_calls)
+                {
+                    if tool.call_id == call_id {
+                        tool.duration_ms = receipt.as_ref().and_then(|receipt| receipt.duration_ms);
+                    }
+                }
                 self.update_tool_status(
                     &call_id,
                     if matches!(
@@ -987,6 +1029,9 @@ impl AppState {
                 cwd,
                 git_branch,
             } => {
+                if self.session_id != session_id {
+                    self.codemode_progress.clear();
+                }
                 self.session_id = session_id;
                 self.cwd = Some(cwd);
                 self.git_branch = git_branch;
@@ -1813,6 +1858,11 @@ impl AppState {
         self.focus_view
     }
 
+    pub fn clear_conversation_messages(&mut self) {
+        self.messages.clear();
+        self.codemode_progress.clear();
+    }
+
     pub fn clear_focus_turn_state(&mut self) {
         self.expanded_focus_turns.clear();
         self.focus_selected_turn = None;
@@ -2000,6 +2050,8 @@ mod focus_view_tests {
             thinking: String::new(),
             streaming: false,
             tool_calls: vec![ToolCallState {
+                parent_call_id: None,
+                duration_ms: None,
                 call_id: format!("call-{id}"),
                 tool: "read".to_string(),
                 args: serde_json::json!({ "file_path": "Cargo.toml" }),

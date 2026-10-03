@@ -69,6 +69,7 @@ pub struct CodexAppServerTurnSession {
     open_kind: CodexSessionOpen,
     profile: String,
     compatibility: CodexCompatibilityReport,
+    capabilities: CodexCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +306,7 @@ impl CodexAppServerTurnSession {
         instructions: Option<String>,
         restored_messages: &[Message],
     ) -> Result<Self> {
+        ensure_dynamic_tools_declared(&manifest.capabilities, dynamic_tools)?;
         let initialized = initialize_client(&client).await?;
         let compatibility = codex_compatibility_from_initialize(&initialized);
         ensure_codex_compatibility_ready(&compatibility)?;
@@ -331,6 +333,7 @@ impl CodexAppServerTurnSession {
             open_kind,
             profile,
             compatibility,
+            capabilities: manifest.capabilities,
         })
     }
 
@@ -417,6 +420,7 @@ impl CodexAppServerTurnSession {
             open_kind: CodexSessionOpen::Created,
             profile,
             compatibility,
+            capabilities: CodexCapabilities::default(),
         })
     }
 
@@ -559,6 +563,9 @@ impl CodexAppServerTurnSession {
         text: impl Into<String>,
         timeout_ms: Option<u64>,
     ) -> Result<String> {
+        if !self.capabilities.active_steering || !self.compatibility.steering {
+            bail!("Active steering is unavailable for this Codex session");
+        }
         use crate::codex_app_server::TurnSteerParams;
         let result = self
             .client
@@ -758,8 +765,9 @@ pub async fn open_persistent_thread(
     initialized: &Value,
     compatibility: &CodexCompatibilityReport,
 ) -> Result<CodexPersistentThreadOpen> {
+    ensure_dynamic_tools_declared(&manifest.capabilities, payload.dynamic_tools)?;
     let binding = CodexThreadBinding::load_at(state_root, &manifest.key)?;
-    if compatibility.resume {
+    if manifest.capabilities.resume && compatibility.resume {
         if let Some(binding) = binding.as_ref() {
             match client
                 .resume_thread(thread_resume_params(manifest, &binding.thread_id), None)
@@ -977,6 +985,16 @@ fn completed_assistant_text_from_notifications(notes: &[Notification]) -> String
         .iter()
         .filter_map(agent_message_completed_text)
         .collect::<String>()
+}
+
+fn ensure_dynamic_tools_declared(
+    capabilities: &CodexCapabilities,
+    tools: &[DynamicToolSpec],
+) -> Result<()> {
+    if !capabilities.dynamic_tools && !tools.is_empty() {
+        bail!("This Codex session does not support dynamic tools");
+    }
+    Ok(())
 }
 
 async fn initialize_client(client: &CodexAppServerClient) -> Result<Value> {
@@ -1248,8 +1266,13 @@ fn semantic_messages_to_codex_items(messages: &[Message]) -> Vec<Value> {
                             "call_id": tool_use_id,
                             "output": content,
                         })),
-                        // These blocks are excluded at checkpoint creation.
-                        ContentBlock::Image { .. } | ContentBlock::Thinking { .. } => {}
+                        ContentBlock::Image { source: maestro_ai::ImageSource::Base64 {media_type,data,..} } => items.push(json!({
+                            "type":"message","role":"user","content":[{"type":"input_image","image_url":format!("data:{media_type};base64,{data}")}]
+                        })),
+                        ContentBlock::Image { source: maestro_ai::ImageSource::Url {url} } => items.push(json!({
+                            "type":"message","role":"user","content":[{"type":"input_image","image_url":url}]
+                        })),
+                        ContentBlock::Thinking { .. } => {}
                     }
                 }
             }
@@ -1442,6 +1465,23 @@ pub fn approval_decision(accept: bool) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_restored_semantic_image_has_typed_content() {
+        let messages: Vec<Message> = serde_json::from_value(json!([{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"pixel","owner":{"call_id":"script-owner","index":0}}}]}])).unwrap();
+        let items = semantic_messages_to_codex_items(&messages);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["content"][0]["type"], "input_image");
+        assert_eq!(
+            items[0]["content"][0]["image_url"],
+            "data:image/png;base64,pixel"
+        );
+        assert!(
+            !serde_json::to_string(&items)
+                .unwrap()
+                .contains("script-owner")
+        );
+    }
 
     #[test]
     fn explicit_codex_provider_selects_app_server_turns() {
@@ -1672,6 +1712,133 @@ mod tests {
             data: None,
         });
         assert!(!is_thread_not_found_error(&broad_message));
+    }
+
+    #[tokio::test]
+    async fn declared_resume_false_starts_fresh_despite_provider_support() {
+        let state_root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let key = CodexSessionKey::new("work", workspace.path(), "gpt-5.5").unwrap();
+        CodexThreadBinding::new(key.clone(), "old-thread", None, 1)
+            .store_at(state_root.path())
+            .unwrap();
+        let capabilities = CodexCapabilities {
+            resume: false,
+            ..CodexCapabilities::default()
+        };
+        let manifest = CodexSessionManifest {
+            key,
+            approval_policy: "never".into(),
+            sandbox: "read-only".into(),
+            capabilities,
+        };
+        let (client, mock) = CodexAppServerClient::mock();
+        let task = tokio::spawn(async move {
+            open_persistent_thread(
+                &client,
+                &manifest,
+                state_root.path(),
+                CodexThreadPayload {
+                    dynamic_tools: &[],
+                    instructions: None,
+                    restored_messages: &[],
+                },
+                &json!({}),
+                &CodexCompatibilityReport {
+                    protocol_version: "fixture".into(),
+                    resume: true,
+                    steering: true,
+                    missing_required: vec![],
+                },
+            )
+            .await
+        });
+        let request = mock.next_request().await.unwrap();
+        assert_eq!(request["method"], "thread/start");
+        mock.respond(
+            request["id"].as_u64().unwrap(),
+            json!({"thread":{"id":"fresh-thread"}}),
+        );
+        assert_eq!(
+            task.await.unwrap().unwrap().open_kind,
+            CodexSessionOpen::Created
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_dynamic_tools_false_rejects_before_provider_io() {
+        let state_root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let capabilities = CodexCapabilities {
+            dynamic_tools: false,
+            ..CodexCapabilities::default()
+        };
+        let manifest = CodexSessionManifest {
+            key: CodexSessionKey::new("work", workspace.path(), "gpt-5.5").unwrap(),
+            approval_policy: "never".into(),
+            sandbox: "read-only".into(),
+            capabilities,
+        };
+        let (client, mock) = CodexAppServerClient::mock();
+        let tools = [DynamicToolSpec {
+            name: "read".into(),
+            description: "read".into(),
+            input_schema: json!({}),
+        }];
+        let result = CodexAppServerTurnSession::connect_with_client_and_manifest(
+            client,
+            manifest,
+            state_root.path(),
+            &tools,
+            None,
+            &[],
+        )
+        .await;
+        assert!(result.err().unwrap().to_string().contains("dynamic tools"));
+        assert!(!matches!(
+            tokio::time::timeout(Duration::from_millis(20), mock.next_request()).await,
+            Ok(Ok(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn steering_requires_adapter_declaration_and_provider_support() {
+        for (adapter_steering, provider_steering) in [(false, true), (true, false), (true, true)] {
+            let (client, mock) = CodexAppServerClient::mock();
+            let mut session = CodexAppServerTurnSession::from_started_thread(
+                client,
+                "thread-1".into(),
+                "gpt-5.5".into(),
+                &[],
+            )
+            .await
+            .unwrap();
+            session.capabilities = serde_json::from_value(json!({
+                "resume":true, "dynamic_tools":true, "active_steering":adapter_steering
+            }))
+            .unwrap();
+            session.compatibility.steering = provider_steering;
+            let task =
+                tokio::spawn(async move { session.steer_text("turn-1", "next", Some(1000)).await });
+            if adapter_steering && provider_steering {
+                let request = mock.next_request().await.unwrap();
+                assert_eq!(request["method"], "turn/steer");
+                mock.respond(request["id"].as_u64().unwrap(), json!({"turnId":"turn-1"}));
+                assert_eq!(task.await.unwrap().unwrap(), "turn-1");
+            } else {
+                assert!(
+                    task.await
+                        .unwrap()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("steering")
+                );
+                assert!(!matches!(
+                    tokio::time::timeout(Duration::from_millis(20), mock.next_request()).await,
+                    Ok(Ok(_))
+                ));
+            }
+        }
     }
 
     #[test]

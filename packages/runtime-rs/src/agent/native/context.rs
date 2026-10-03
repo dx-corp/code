@@ -34,6 +34,37 @@ impl NativeAgentRunner {
                 return;
             }
         };
+        for image in records
+            .iter()
+            .filter_map(|record| record.outcome.as_ref())
+            .flat_map(|outcome| &outcome.images)
+        {
+            if agent_codemode::image_block(
+                json!({"type":"image","mime_type":image.mime_type,"data":image.data}),
+            )
+            .is_err()
+            {
+                let _ = self.event_tx.send(FromAgent::Error {
+                    message: "Durable script image failed validation".into(),
+                    fatal: true,
+                    terminal: false,
+                    retryable: false,
+                });
+                return;
+            }
+        }
+        self.codemode_store = Default::default();
+        for record in &records {
+            if let Some(commit) = record
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.codemode_store.as_ref())
+            {
+                if commit.revision > self.codemode_store.revision {
+                    self.codemode_store = commit.clone();
+                }
+            }
+        }
         records.sort_by(|left, right| left.call_id.cmp(&right.call_id));
         let mut recovered = Vec::new();
         let mut complete_after_projection = Vec::new();
@@ -41,6 +72,11 @@ impl NativeAgentRunner {
             // Projection ownership was bound by the runtime before dispatch
             // and is immutable in the ledger. IDs and tool args cannot claim it.
             let projects_into_conversation = record.projection_owner_call_id.is_none();
+            if projects_into_conversation {
+                if let Some(outcome) = &record.outcome {
+                    self.queue_codemode_images(&record.call_id, &outcome.images);
+                }
+            }
             match (record.phase, record.replay_policy) {
                 (maestro_runtime_contracts::ToolOperationPhase::OutcomeReady, _) => {
                     let Some(outcome) = record.outcome.as_ref() else {
@@ -134,11 +170,15 @@ impl NativeAgentRunner {
                 ) => {}
             }
         }
+        let has_projection = !recovered.is_empty() || !self.codemode_projected_images.is_empty();
         if !recovered.is_empty() {
             self.messages_mut().push(Message {
                 role: Role::User,
                 content: MessageContent::Blocks(recovered),
             });
+        }
+        if has_projection {
+            self.project_codemode_images();
             self.emit_conversation_snapshot();
         }
         for call_id in complete_after_projection {
@@ -318,6 +358,11 @@ impl NativeAgentRunner {
         owns_persistent_tool_spills: bool,
         preserve_compacted_checkpoint: bool,
     ) {
+        self.codemode_store = Default::default();
+        self.codemode_pending_store = None;
+        self.codemode_pending_operation = None;
+        self.codemode_pending_images.clear();
+        self.codemode_projected_images.clear();
         self.owns_persistent_tool_spills = owns_persistent_tool_spills && session_id.is_some();
         let previous_session = self.hooks.hook_session_id().await;
         if previous_session == session_id {
@@ -475,6 +520,30 @@ impl NativeAgentRunner {
                     .cloned()
                     .collect(),
             )
+        };
+        let tools = if tools
+            .iter()
+            .any(|tool| tool.name == agent_codemode::TOOL_NAME)
+        {
+            let description = format!(
+                "{}\n\n{}",
+                agent_codemode::DESCRIPTION,
+                agent_codemode::declaration_description(&self.codemode_catalog(), 3000)
+            );
+            Arc::new(
+                tools
+                    .iter()
+                    .cloned()
+                    .map(|mut tool| {
+                        if tool.name == agent_codemode::TOOL_NAME {
+                            tool.description = description.clone();
+                        }
+                        tool
+                    })
+                    .collect(),
+            )
+        } else {
+            tools
         };
         let tools = vault_provider_tools(&tools, &self.credential_vault)?;
         self.tool_executor.set_subagent_parent_model(

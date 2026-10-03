@@ -33,7 +33,8 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use super::types::{
-    ContentBlock, Message, MessageContent, RequestConfig, Role, StopReason, StreamEvent,
+    ContentBlock, ImageSource, Message, MessageContent, RequestConfig, Role, StopReason,
+    StreamEvent,
 };
 use super::{AiProvider, provider_model_name};
 
@@ -244,6 +245,17 @@ impl VertexAiClient {
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::Text { text } => Some(Part::Text { text: text.clone() }),
+                    ContentBlock::Image {
+                        source:
+                            ImageSource::Base64 {
+                                media_type, data, ..
+                            },
+                    } => Some(Part::InlineData {
+                        inline_data: InlineData {
+                            mime_type: media_type.clone(),
+                            data: data.clone(),
+                        },
+                    }),
                     ContentBlock::Thinking { thinking, .. } => Some(Part::Text {
                         text: format!("<thinking>{thinking}</thinking>"),
                     }),
@@ -327,8 +339,8 @@ async fn stream_vertex_response(
     let mut stream = response.bytes_stream();
 
     let mut buffer = Vec::new();
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
     let mut cache_read_tokens = None;
     let mut next_block_index = 0usize;
     let mut terminal_stop_reason = None;
@@ -362,11 +374,11 @@ async fn stream_vertex_response(
     }
 
     // Send final usage
-    let _ = tx.send(super::google::cache_usage_event(
-        input_tokens,
-        output_tokens,
-        cache_read_tokens,
-    ));
+    if let Some(event) =
+        super::google::optional_cache_usage_event(input_tokens, output_tokens, cache_read_tokens)
+    {
+        let _ = tx.send(event);
+    }
     if terminal_stop_reason.is_some() {
         let _ = tx.send(StreamEvent::MessageStop {
             stop_reason: terminal_stop_reason,
@@ -380,8 +392,8 @@ fn emit_vertex_response(
     response: VertexResponse,
     tx: &mpsc::UnboundedSender<StreamEvent>,
     next_block_index: &mut usize,
-    input_tokens: &mut u64,
-    output_tokens: &mut u64,
+    input_tokens: &mut Option<u64>,
+    output_tokens: &mut Option<u64>,
     cache_read_tokens: &mut Option<u64>,
     terminal_stop_reason: &mut Option<StopReason>,
 ) {
@@ -442,8 +454,8 @@ fn emit_vertex_response(
     }
 
     if let Some(metadata) = response.usage_metadata {
-        *input_tokens = metadata.prompt_token_count.unwrap_or(*input_tokens);
-        *output_tokens = metadata.candidates_token_count.unwrap_or(*output_tokens);
+        *input_tokens = metadata.prompt_token_count.or(*input_tokens);
+        *output_tokens = metadata.candidates_token_count.or(*output_tokens);
         *cache_read_tokens = metadata.cached_content_token_count.or(*cache_read_tokens);
     }
 }
@@ -521,6 +533,10 @@ struct Content {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum Part {
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: InlineData,
+    },
     Text {
         text: String,
     },
@@ -532,6 +548,13 @@ enum Part {
         #[serde(rename = "functionResponse")]
         function_response: FunctionResponse,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -606,9 +629,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn script_image_reaches_prepared_provider_payload() {
+        let client = VertexAiClient::new("test", "us-central1", Some("key".to_string()), None);
+        let messages: Vec<Message> = serde_json::from_value(json!([{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"pixel","owner":{"call_id":"script-owner","index":0}}}]}])).unwrap();
+        let request = serde_json::to_value(
+            client
+                .build_request(&messages, &RequestConfig::default())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            request["contents"][0]["parts"][0]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(
+            request["contents"][0]["parts"][0]["inlineData"]["data"],
+            "pixel"
+        );
+        assert!(!request.to_string().contains("script-owner"));
+    }
+
+    #[test]
     fn provider_cache_usage_survives_partial_stream_updates() {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let (mut input, mut output, mut index) = (0, 0, 0);
+        let (mut input, mut output, mut index) = (None, None, 0);
         let (mut cached, mut stop) = (None, None);
         for metadata in [
             serde_json::json!({"promptTokenCount":100,"cachedContentTokenCount":80}),
@@ -631,7 +675,8 @@ mod tests {
             output_tokens,
             cache_read_tokens,
             ..
-        } = super::super::google::cache_usage_event(input, output, cached)
+        } = super::super::google::optional_cache_usage_event(input, output, cached)
+            .expect("complete fixture usage")
         else {
             panic!("expected usage")
         };
@@ -1118,8 +1163,8 @@ mod tests {
             .expect("Vertex response");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut next_block_index = 0;
-        let mut input_tokens = 0;
-        let mut output_tokens = 0;
+        let mut input_tokens = None;
+        let mut output_tokens = None;
         let mut terminal_stop_reason = None;
         emit_vertex_response(
             response,
@@ -1180,8 +1225,8 @@ mod tests {
                 .expect("response event");
             let (tx, mut rx) = mpsc::unbounded_channel();
             let mut next_block_index = 0;
-            let mut input_tokens = 0;
-            let mut output_tokens = 0;
+            let mut input_tokens = None;
+            let mut output_tokens = None;
             let mut terminal_stop_reason = None;
             emit_vertex_response(
                 response,
@@ -1214,8 +1259,8 @@ mod tests {
         let mut buffer = stream.as_bytes().to_vec();
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut next_block_index = 0;
-        let mut input_tokens = 0;
-        let mut output_tokens = 0;
+        let mut input_tokens = None;
+        let mut output_tokens = None;
         let mut terminal_stop_reason = None;
         let mut decode_error = None;
 

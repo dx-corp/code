@@ -55,30 +55,92 @@ where
                 name: entry.name.to_string(),
                 description: entry.description,
                 schema: entry.schema,
+                output_schema: self.tools.codemode_output_schema(&entry.name),
+                namespace: entry
+                    .name
+                    .as_str()
+                    .rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_owned()),
+                model_operation: self.tools.codemode_model_operation(&entry.name),
+                model_binding: self.tools.codemode_model_binding(&entry.name),
             })
             .collect();
         let deadline = self
             .call_expires_at(run_started)
             .min(Instant::now() + Duration::from_secs(60));
-        let mut session = agent_codemode::Session::start(
+        let mut session = agent_codemode::Session::start_with_store(
             code.to_owned(),
             catalog,
             cancel,
             deadline.saturating_duration_since(Instant::now()),
+            ctx.codemode_store(&parent.principal),
         );
         let mut uncertain = false;
         while let Some(event) = session.next().await {
             match event {
                 agent_codemode::Event::Done(report) => {
-                    let content = report.content();
-                    // A script may catch an error but cannot turn an uncertain
-                    // effect into success. Keep that state in the outer ledger.
-                    return Ok(if uncertain {
-                        ToolResult::unknown(content)
+                    let mut filter = self.sanitizer.filter();
+                    let mut content = filter.push(&report.content());
+                    content.push_str(&filter.finish());
+                    let outcome = if uncertain {
+                        Outcome::Unknown
                     } else if report.error.is_some() {
-                        ToolResult::error(content)
+                        Outcome::Failed
                     } else {
-                        ToolResult::text(content)
+                        Outcome::Succeeded
+                    };
+                    if outcome == Outcome::Unknown {
+                        content = format!(
+                            "Outcome unknown: a nested tool may have taken effect; completed effects are not undone. Reconcile it before retrying.\n{content}"
+                        );
+                    }
+                    let images: Vec<_> = report
+                        .blocks
+                        .iter()
+                        .filter(|block| matches!(block, crate::OutputBlock::Image { .. }))
+                        .cloned()
+                        .collect();
+                    let output = if images.is_empty() {
+                        Output::Text(content)
+                    } else {
+                        let mut blocks = vec![crate::OutputBlock::Text { text: content }];
+                        blocks.extend(images);
+                        if let Err(reason) = crate::validate_codemode_blocks(&blocks) {
+                            return Ok(if uncertain {
+                                ToolResult::unknown(reason)
+                            } else {
+                                ToolResult::error(reason)
+                            });
+                        }
+                        Output::Blocks(blocks)
+                    };
+                    if outcome == Outcome::Succeeded && !report.store_writes.is_empty() {
+                        let mut writes = report.store_writes;
+                        if let Err(reason) = sanitize_writes(
+                            &mut writes,
+                            &ctx.codemode_store(&parent.principal),
+                            &self.sanitizer,
+                        ) {
+                            return Ok(ToolResult::error(reason));
+                        }
+                        if let Err(reason) = ctx.validate_codemode_store(&parent.principal, &writes)
+                        {
+                            return Ok(ToolResult::error(reason));
+                        }
+                        self.emit(
+                            ctx,
+                            vec![Event::CodeModeStorePrepared {
+                                parent: parent.id.clone(),
+                                principal: parent.principal.clone(),
+                                writes,
+                            }],
+                        )
+                        .await?;
+                    }
+                    return Ok(ToolResult {
+                        outcome,
+                        output,
+                        receipt: None,
                     });
                 }
                 agent_codemode::Event::Calls { calls, reply } => {
@@ -129,19 +191,27 @@ where
                         };
                         // Reads before an effect complete first. This also lets
                         // owner policy consult evidence from the previous wave.
-                        if !entry.read_only {
+                        let model_operation =
+                            self.tools.codemode_model_operation(&call.tool).is_some();
+                        if !entry.read_only || model_operation {
                             self.codemode_reads(ctx, &mut reads, &mut responses, cancel, deadline)
                                 .await?;
                         }
                         let refusal = if cancel.is_cancelled() || Instant::now() >= deadline {
                             Some(ToolResult::error(NOT_RUN_INTERRUPTED))
+                        } else if let Some(reason) =
+                            self.codemode_budget_refusal(ctx, call, run_started)
+                        {
+                            Some(ToolResult::error(reason))
                         } else if let Err(reason) = validate_args(&entry, &call.args) {
                             Some(ToolResult::error(reason))
                         } else if ctx.has_stalled_call(call) {
                             Some(ToolResult::error(
                                 "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
                             ))
-                        } else if !entry.read_only && ctx.has_uncertain_call(call) {
+                        } else if (!entry.read_only || model_operation)
+                            && ctx.has_uncertain_call(call)
+                        {
                             Some(ToolResult::error(UNCERTAIN_REPEAT))
                         } else {
                             None
@@ -194,7 +264,7 @@ where
                                 self.codemode_response(ctx, call, result, cancel, deadline)
                                     .await,
                             ));
-                        } else if entry.read_only {
+                        } else if entry.read_only && !model_operation {
                             reads.push((request.index, call.clone(), entry));
                         } else {
                             let result = self
@@ -219,6 +289,41 @@ where
         Ok(ToolResult::unknown(
             "script ended before its final result was recorded",
         ))
+    }
+
+    pub(super) fn codemode_budget_refusal(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        started: Instant,
+    ) -> Option<String> {
+        if let Some(axis) = self.exhausted_budget(ctx, started.elapsed()) {
+            return Some(format!("not executed: {}", self.budget_message(ctx, axis)));
+        }
+        if self.tools.codemode_model_operation(&call.tool).is_some() {
+            if self.budget.max_cost_micros != u64::MAX
+                && self.tools.model_cost_bound(&call.tool).is_none_or(|bound| {
+                    bound
+                        > self
+                            .budget
+                            .max_cost_micros
+                            .saturating_sub(ctx.usage().cost_micros)
+                })
+            {
+                return Some("not executed: this model operation has no owner reservation within the remaining turn cost budget".into());
+            }
+            if self.budget.max_tokens != u64::MAX
+                && self
+                    .tools
+                    .model_token_bound(&call.tool)
+                    .is_none_or(|bound| {
+                        bound > self.budget.max_tokens.saturating_sub(ctx.usage().tokens())
+                    })
+            {
+                return Some("not executed: this model operation has no owner reservation within the remaining turn token budget".into());
+            }
+        }
+        None
     }
 
     async fn codemode_response(
@@ -326,10 +431,77 @@ fn response(result: ToolResult) -> Result<Value, String> {
     let value = match result.output {
         Output::Text(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
         Output::Ref(reference) => serde_json::json!({"output_ref": reference.as_str()}),
+        Output::Blocks(blocks) => {
+            serde_json::to_value(blocks).map_err(|error| error.to_string())?
+        }
     };
     if result.outcome == Outcome::Succeeded {
         Ok(value)
     } else {
         Err(value.to_string())
     }
+}
+
+fn sanitize_text<S: Sanitizer>(text: &str, sanitizer: &S) -> String {
+    let mut filter = sanitizer.filter();
+    let mut safe = filter.push(text);
+    safe.push_str(&filter.finish());
+    safe
+}
+
+fn sanitize_writes<S: Sanitizer>(
+    writes: &mut agent_codemode::StoreWrites,
+    current: &agent_codemode::Store,
+    sanitizer: &S,
+) -> Result<(), String> {
+    // Unchanged keys survive the delta: a renamed key must not silently
+    // overwrite one of them even when no other new key collides.
+    let mut seen: std::collections::HashSet<_> = current
+        .keys()
+        .filter(|key| !writes.set.contains_key(*key) && !writes.delete.contains(*key))
+        .cloned()
+        .collect();
+    let mut safe = std::collections::BTreeMap::new();
+    for (key, mut value) in std::mem::take(&mut writes.set) {
+        let key = sanitize_text(&key, sanitizer);
+        if !seen.insert(key.clone()) {
+            return Err("Script state keys collide after sanitization".into());
+        }
+        sanitize_value(&mut value, sanitizer)?;
+        safe.insert(key, value);
+    }
+    let mut deleted = Vec::new();
+    for key in &writes.delete {
+        let key = sanitize_text(key, sanitizer);
+        if !seen.insert(key.clone()) {
+            return Err("Script state keys collide after sanitization".into());
+        }
+        deleted.push(key);
+    }
+    writes.set = safe;
+    writes.delete = deleted;
+    Ok(())
+}
+
+fn sanitize_value<S: Sanitizer>(value: &mut Value, sanitizer: &S) -> Result<(), String> {
+    match value {
+        Value::String(text) => *text = sanitize_text(text, sanitizer),
+        Value::Array(values) => {
+            for value in values {
+                sanitize_value(value, sanitizer)?;
+            }
+        }
+        Value::Object(values) => {
+            let mut safe = serde_json::Map::new();
+            for (key, mut value) in std::mem::take(values) {
+                sanitize_value(&mut value, sanitizer)?;
+                if safe.insert(sanitize_text(&key, sanitizer), value).is_some() {
+                    return Err("Script state keys collide after sanitization".into());
+                }
+            }
+            *values = safe;
+        }
+        _ => {}
+    }
+    Ok(())
 }

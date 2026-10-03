@@ -1507,7 +1507,7 @@ impl NativeAgentRunner {
                     messages,
                     continuation,
                 } => {
-                    self.semantic_continuation = continuation;
+                    self.semantic_continuation = continuation.map(|record| *record);
                     self.reset_tool_response_state();
                     self.reset_user_note_consumption();
                     let restored_prefix_len = messages.len();

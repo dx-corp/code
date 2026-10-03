@@ -311,6 +311,7 @@ mod tests {
                 outcome: Outcome::Succeeded,
                 output: Output::Text("result".into()),
                 receipt: None,
+                summary: None,
             },
         );
     }
@@ -733,6 +734,7 @@ mod cut_tests {
             outcome: Outcome::Succeeded,
             output: Output::Text("z".repeat(BIG)),
             receipt: None,
+            summary: None,
         }
     }
 

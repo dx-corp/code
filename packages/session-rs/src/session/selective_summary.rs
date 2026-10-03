@@ -175,12 +175,18 @@ pub(super) fn display_messages(history: &[Message]) -> Vec<AppMessage> {
                     gemini_context,
                 },
                 ContentBlock::Image {
-                    source: ImageSource::Base64 { media_type, data },
+                    source:
+                        ImageSource::Base64 {
+                            media_type,
+                            data,
+                            owner,
+                        },
                 } => super::ContentBlock::Image {
                     source: Some(super::ImageSource {
                         source_type: "base64".into(),
                         media_type,
                         data,
+                        owner,
                     }),
                     data: None,
                     mime_type: None,
@@ -353,6 +359,23 @@ mod tests {
     use maestro_context::render_context_summary;
     use maestro_runtime_contracts::ToolCallContract;
     use std::io::Write;
+
+    #[test]
+    fn script_image_checkpoint_retains_projection_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jsonl");
+        source(&path);
+        let fork = super::super::fork_session_file(&path).unwrap();
+        let history: Vec<Message> = serde_json::from_value(serde_json::json!([
+            {"role":"user", "content":[{"type":"image", "source":{"type":"base64","media_type":"image/png","data":"pixel","owner":{"call_id":"script-owner","index":0}}}]}
+        ])).unwrap();
+        append_selective_summary_checkpoint(&fork.path, &history).unwrap();
+        let restored = SessionReader::read_file(&fork.path).unwrap();
+        assert_eq!(
+            serde_json::to_value(super::super::model_history(&restored)).unwrap(),
+            serde_json::to_value(&history).unwrap()
+        );
+    }
 
     #[test]
     fn selective_summary_oversized_checkpoint_leaves_fork_readable() {
