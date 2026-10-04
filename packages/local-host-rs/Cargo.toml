@@ -10,6 +10,11 @@ name = "embedding"
 path = "examples/embedding.rs"
 
 [[example]]
+name = "compaction-eval"
+path = "examples/compaction_eval/main.rs"
+test = true
+
+[[example]]
 name = "embedding-test-kit"
 path = "examples/embedding_test_kit.rs"
 required-features = ["test-support"]

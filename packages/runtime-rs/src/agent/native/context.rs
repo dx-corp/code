@@ -995,10 +995,18 @@ impl NativeAgentRunner {
             .await?;
             request.ensure_current(&self.credential_vault)?;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            let retry_observer: maestro_ai::StreamObserver = Arc::new({
+                let event_tx = self.event_tx.clone();
+                move |observation| {
+                    if observation == maestro_ai::StreamObservation::Retry {
+                        let _ = event_tx.send(FromAgent::StreamObservation { observation });
+                    }
+                }
+            });
             let mut stream = tokio::select! {
                 () = cancellation.cancelled() => anyhow::bail!("Summary cancelled"),
                 () = self.shutdown_token.cancelled() => anyhow::bail!("Summary cancelled"),
-                result = tokio::time::timeout_at(deadline, client.stream_owned_config(&request.messages, request.config)) => result.context("Summary timed out")?.map_err(|_| anyhow::anyhow!("Summary provider request failed"))?,
+                result = tokio::time::timeout_at(deadline, client.stream_owned_config_shared_messages_observed(Arc::clone(&request.messages), request.config, Some(retry_observer))) => result.context("Summary timed out")?.map_err(|_| anyhow::anyhow!("Summary provider request failed"))?,
             };
             loop {
                 let event = tokio::select! {
