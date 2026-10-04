@@ -16,6 +16,9 @@ service DeixicPublicService {
   rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
   rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
   rpc SubmitTask(SubmitTaskRequest) returns (SubmitTaskResponse);
+  // Explicit voice requests use a distinct method so older servers refuse them.
+  rpc SubmitVoicedTask(SubmitVoicedTaskRequest) returns (SubmitVoicedTaskResponse);
+  rpc GetVoiceCatalog(GetVoiceCatalogRequest) returns (GetVoiceCatalogResponse);
   rpc InterruptTask(InterruptTaskRequest) returns (InterruptTaskResponse);
   rpc RespondToRequest(RespondToRequestRequest) returns (RespondToRequestResponse);
   rpc GetReceipt(GetReceiptRequest) returns (GetReceiptResponse);
@@ -605,4 +608,46 @@ message ResolveReceiptActionRequest {
 
 message ResolveReceiptActionResponse {
   Receipt receipt = 1;
+}
+
+// IDs select Settings-owned voices. Clients never supply trusted guidance.
+enum VoiceMode {
+  VOICE_MODE_UNSPECIFIED = 0;
+  VOICE_MODE_WORKSPACE_DEFAULT = 1;
+  VOICE_MODE_BRAND_VOICE = 2;
+  VOICE_MODE_NEUTRAL = 3;
+}
+enum VoiceTone {
+  VOICE_TONE_UNSPECIFIED = 0;
+  VOICE_TONE_CONCISE = 1;
+  VOICE_TONE_FORMAL = 2;
+  VOICE_TONE_WARMER = 3;
+}
+message VoiceSelection {
+  VoiceMode mode = 1;
+  // Up to four distinct active IDs. The first is lead; later IDs support it.
+  repeated string voice_ids = 2;
+  repeated VoiceTone tone_adjustments = 3;
+}
+message SubmitVoicedTaskRequest {
+  SubmitTaskRequest task = 1;
+  VoiceSelection voice_selection = 2;
+}
+message SubmitVoicedTaskResponse {
+  SubmitTaskResponse result = 1;
+}
+message GetVoiceCatalogRequest {
+  Scope scope = 1;
+}
+message BrandVoice {
+  string voice_id = 1;
+  string name = 2;
+  string description = 3;
+  uint64 version = 4;
+}
+message GetVoiceCatalogResponse {
+  Scope scope = 1;
+  bool enabled = 2;
+  string default_voice_id = 3;
+  repeated BrandVoice voices = 4;
 }
