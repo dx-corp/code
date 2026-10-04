@@ -98,7 +98,7 @@ pub fn preview(messages: &[Message]) -> Result<SelectiveSummaryPreview> {
 }
 
 /// Reject orphaned, duplicate and boundary-crossing tool exchanges.
-pub(crate) fn validate_groups(messages: &[Message]) -> Result<()> {
+pub fn validate_groups(messages: &[Message]) -> Result<()> {
     let mut pending = HashSet::new();
     let mut seen = HashSet::new();
     for message in messages {

@@ -9,6 +9,9 @@
 mod codemode_codex_tests;
 pub mod codex_app_server_turns;
 #[cfg(test)]
+#[path = "../../examples/compaction_eval/provider_tests.rs"]
+mod compaction_eval_provider_tests;
+#[cfg(test)]
 pub mod harness;
 #[cfg(test)]
 mod native_admission_tests;

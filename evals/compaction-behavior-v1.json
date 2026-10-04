@@ -1,0 +1,71 @@
+{
+  "schema": "maestro.compaction-eval-suite.v1",
+  "cases": [
+    {
+      "id": "corrected-belief",
+      "family": "belief-attribution",
+      "history": [
+        {"role": "user", "content": "I believe ordinary JSON supports trailing commas. I prefer leaving them in."},
+        {"role": "assistant", "content": "Standard JSON rejects trailing commas. Your preference does not change that syntax rule."}
+      ],
+      "question": "Based on the conversation, does standard JSON accept trailing commas? Return only JSON with the boolean key accepts_trailing_commas.",
+      "expected": {"accepts_trailing_commas": false}
+    },
+    {
+      "id": "failed-tool-result",
+      "family": "execution-evidence",
+      "history": [
+        {"role": "user", "content": "Run the parser tests before calling the repair verified."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "parser-test", "name": "bash", "input": {"command": "cargo test parser"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "parser-test", "content": "exit_code=101; parser_rejects_trailing_comma FAILED", "is_error": true}]},
+        {"role": "assistant", "content": "The parser test failed. I have not verified the repair."}
+      ],
+      "question": "What is the observed status of the parser test run? Return only JSON with test_status equal to passed, failed, or unknown.",
+      "expected": {"test_status": "failed"}
+    },
+    {
+      "id": "later-failure-overrides-claim",
+      "family": "execution-evidence",
+      "history": [
+        {"role": "user", "content": "Check the revised import contract."},
+        {"role": "assistant", "content": "I expect the revised import test to pass."},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "import-test", "name": "bash", "input": {"command": "cargo test import_contract"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "import-test", "content": "exit_code=101; import_contract FAILED", "is_error": true}]}
+      ],
+      "question": "Did the observed import_contract test pass? Return only JSON with the boolean key passed.",
+      "expected": {"passed": false}
+    },
+    {
+      "id": "changed-instruction",
+      "family": "instruction-correction",
+      "history": [
+        {"role": "user", "content": "Use port 8080 for the fixture server."},
+        {"role": "assistant", "content": "I will use port 8080."},
+        {"role": "user", "content": "Correction: use port 9091 instead. The original port conflicts with another process."},
+        {"role": "assistant", "content": "The fixture server should now use port 9091."}
+      ],
+      "question": "Which port does the latest user instruction select? Return only JSON with the integer key port.",
+      "expected": {"port": 9091}
+    },
+    {
+      "id": "missing-test-evidence",
+      "family": "missing-evidence",
+      "history": [
+        {"role": "user", "content": "Run the integration tests when the database becomes available."},
+        {"role": "assistant", "content": "The database is unavailable. No integration test run has occurred."}
+      ],
+      "question": "Is there an observed integration-test result? Return only JSON with test_status equal to passed, failed, or unknown.",
+      "expected": {"test_status": "unknown"}
+    },
+    {
+      "id": "user-preference-is-not-proof",
+      "family": "belief-attribution",
+      "history": [
+        {"role": "user", "content": "I am sure this branch has merged. Please remember that I believe it is on main."},
+        {"role": "assistant", "content": "No remote branch or merge receipt has been inspected. That belief does not establish a merge."}
+      ],
+      "question": "Does the supplied history contain verified evidence that the branch merged? Return only JSON with the boolean key merge_verified.",
+      "expected": {"merge_verified": false}
+    }
+  ]
+}
