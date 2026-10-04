@@ -371,3 +371,171 @@ fn failed_provider_install_does_not_commit_generation_or_poison_retry() {
         .expect("committed request is idempotent");
     assert!(replay.is_idempotent());
 }
+
+#[test]
+fn busy_staging_and_replay_report_current_revision_until_safe_activation() {
+    let mut activation = WorkspaceCapabilityActivation::new("base prompt".to_string());
+    let first = request(1, "First reviewed config.");
+    let next = request(2, "Next reviewed config.");
+    let installed = activation
+        .apply(
+            first.clone(),
+            &binding(),
+            &resident_context(),
+            "runner-1",
+            false,
+        )
+        .unwrap();
+    assert_eq!(installed.current_activation_generation, Some(1));
+    assert_eq!(
+        installed.current_catalog_digest.as_deref(),
+        Some(first.capability_set_digest.as_str())
+    );
+    for _ in 0..2 {
+        let staged = activation
+            .apply(
+                next.clone(),
+                &binding(),
+                &resident_context(),
+                "runner-1",
+                true,
+            )
+            .unwrap();
+        assert!(staged.staged_for_next_turn);
+        assert_eq!(staged.activation_generation, 2);
+        assert_eq!(staged.current_activation_generation, Some(1));
+        assert_eq!(
+            staged.current_catalog_digest.as_deref(),
+            Some(first.capability_set_digest.as_str())
+        );
+        assert!(
+            activation
+                .current_prompt()
+                .contains("First reviewed config.")
+        );
+    }
+    let before = activation.current_receipt(&binding()).unwrap();
+    assert_eq!(before.activation_generation, 1);
+    let invalid = request(1, "Conflicting reviewed config.");
+    assert!(
+        activation
+            .apply(invalid, &binding(), &resident_context(), "runner-1", false)
+            .is_err()
+    );
+    assert_eq!(activation.current_receipt(&binding()).unwrap(), before);
+    activation.activate_staged_for_next_turn();
+    let active = activation.current_receipt(&binding()).unwrap();
+    assert_eq!(active.activation_generation, 2);
+    assert_eq!(active.current_activation_generation, Some(2));
+    assert_eq!(
+        active.current_catalog_digest.as_deref(),
+        Some(next.capability_set_digest.as_str())
+    );
+    assert!(!active.staged_for_next_turn);
+    assert!(
+        activation
+            .current_prompt()
+            .contains("Next reviewed config.")
+    );
+}
+
+#[test]
+fn staged_without_current_has_no_installed_revision_and_old_receipts_still_decode() {
+    let mut activation = WorkspaceCapabilityActivation::new("base".to_string());
+    let staged = activation
+        .apply(
+            request(1, "staged"),
+            &binding(),
+            &resident_context(),
+            "runner-1",
+            true,
+        )
+        .expect("stage first revision");
+    assert_eq!(staged.current_activation_generation, None);
+    assert_eq!(staged.current_catalog_digest, None);
+    assert!(activation.current_receipt(&binding()).is_none());
+    let mut legacy = serde_json::to_value(&staged).expect("receipt JSON");
+    legacy
+        .as_object_mut()
+        .expect("object")
+        .remove("current_activation_generation");
+    legacy
+        .as_object_mut()
+        .expect("object")
+        .remove("current_catalog_digest");
+    let decoded: super::workspace_capabilities::WorkspaceCapabilitySetApplied =
+        serde_json::from_value(legacy.clone()).expect("old receipt still decodes");
+    assert_eq!(decoded.current_activation_generation, None);
+    assert_eq!(
+        serde_json::to_value(decoded).expect("old receipt roundtrip"),
+        legacy
+    );
+    activation.activate_staged_for_next_turn();
+    assert_eq!(
+        activation
+            .current_receipt(&binding())
+            .expect("installed")
+            .current_activation_generation,
+        Some(1)
+    );
+}
+
+#[test]
+fn activation_observation_survives_consumed_admission_without_granting_a_new_set() {
+    let mut activation = WorkspaceCapabilityActivation::new("base".to_string());
+    let target = request(2, "next revision");
+    let staged = activation
+        .apply(
+            target.clone(),
+            &binding(),
+            &resident_context(),
+            "runner-1",
+            true,
+        )
+        .expect("stage");
+    let mut pending = HashMap::from([(staged.replay_cursor.clone(), target.clone())]);
+    let mut accepted = None;
+    assert!(accept_workspace_capability_receipt(
+        &mut pending,
+        &mut accepted,
+        &staged
+    ));
+    assert!(pending.is_empty());
+    activation.activate_staged_for_next_turn();
+    let observed = activation
+        .current_receipt(&binding())
+        .expect("installed observation");
+    assert!(
+        accept_workspace_capability_receipt(&mut pending, &mut accepted, &observed),
+        "installed observation must reach native replay state after admission is consumed"
+    );
+    assert_eq!(accepted, Some(target));
+    for invalid in [
+        {
+            let mut value = observed.clone();
+            value.workspace_id = "another-workspace".into();
+            value
+        },
+        {
+            let mut value = observed.clone();
+            value.accepted_entry_digests.clear();
+            value
+        },
+        {
+            let mut value = observed.clone();
+            value.current_activation_generation = Some(3);
+            value
+        },
+        {
+            let mut value = observed.clone();
+            value.staged_for_next_turn = true;
+            value
+        },
+    ] {
+        assert!(!accept_workspace_capability_receipt(
+            &mut pending,
+            &mut accepted,
+            &invalid
+        ));
+    }
+}

@@ -1524,3 +1524,148 @@ async fn native_loop_retains_gemini_context_without_passing_it_to_tool_execution
             if context.thought_signature.as_deref() == Some("opaque-signature"))))));
     agent.shutdown().await;
 }
+
+#[tokio::test]
+async fn queued_prompt_observes_its_config_only_at_the_native_turn_boundary() {
+    use maestro_runtime::agent::PromptKind;
+    use sha2::{Digest, Sha256};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        requests.push(read_provider_request(&mut stream).await);
+        started_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        for index in 0..2 {
+            let body = final_text_sse(&format!("queued-{index}"), "done");
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+            if index == 0 {
+                (stream, _) = listener.accept().await.unwrap();
+                requests.push(read_provider_request(&mut stream).await);
+            }
+        }
+        requests
+    });
+    let workspace = tempfile::tempdir().unwrap();
+    let client = UnifiedClient::OpenAI(
+        OpenAiClient::with_base_url("fixture-key", format!("http://{address}/v1")).unwrap(),
+    );
+    let host = FixtureHost::new(
+        workspace.path(),
+        client.clone(),
+        &[],
+        ExecutionMode::Immediate,
+    );
+    let mut cfg = config(workspace.path(), "openai/gpt-4o", ApprovalMode::Yolo);
+    cfg.system_prompt = Some("FIRST_PINNED_CONFIG".to_owned());
+    let (agent, mut events) = start_agent(cfg, host, client, Vec::new(), None).unwrap();
+    agent.prompt("first".to_owned(), Vec::new()).await.unwrap();
+    tokio::time::timeout(TURN_TIMEOUT, started_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    agent
+        .set_system_prompt_for_queued_prompt(43, "CANCELED_CONFIG".to_owned())
+        .unwrap();
+    agent
+        .prompt_with_kind(
+            "discard this".to_owned(),
+            Vec::new(),
+            PromptKind::FollowUp,
+            Some(43),
+        )
+        .await
+        .unwrap();
+    agent.cancel_queued(43);
+    agent
+        .set_system_prompt_for_queued_prompt(42, "SECOND_PINNED_CONFIG".to_owned())
+        .unwrap();
+    agent
+        .prompt_with_kind(
+            "second".to_owned(),
+            Vec::new(),
+            PromptKind::FollowUp,
+            Some(42),
+        )
+        .await
+        .unwrap();
+    let mut discarded_ids = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let FromAgent::QueuedPromptConfiguration {
+            queue_ids,
+            system_prompt_sha256: None,
+        } = &event
+        {
+            discarded_ids.extend(queue_ids.iter().copied());
+        }
+        assert!(
+            !matches!(
+                event,
+                FromAgent::QueuedPromptConfiguration {
+                    system_prompt_sha256: Some(_),
+                    ..
+                }
+            ),
+            "enqueue must not claim activation"
+        );
+    }
+    release_tx.send(()).unwrap();
+    let requests = tokio::time::timeout(TURN_TIMEOUT, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        requests[0]["messages"]
+            .to_string()
+            .contains("FIRST_PINNED_CONFIG")
+    );
+    assert!(
+        !requests[0]["messages"]
+            .to_string()
+            .contains("SECOND_PINNED_CONFIG")
+    );
+    assert!(
+        requests[1]["messages"]
+            .to_string()
+            .contains("SECOND_PINNED_CONFIG")
+    );
+    let expected = format!("sha256:{:x}", Sha256::digest(b"SECOND_PINNED_CONFIG"));
+    let mut installed = Vec::new();
+    tokio::time::timeout(TURN_TIMEOUT, async {
+        while let Some(event) = events.recv().await {
+            if let FromAgent::QueuedPromptConfiguration {
+                queue_ids,
+                system_prompt_sha256,
+            } = &event
+            {
+                if system_prompt_sha256.is_some() {
+                    installed.push((queue_ids.clone(), system_prompt_sha256.clone()));
+                } else {
+                    discarded_ids.extend(queue_ids.iter().copied());
+                }
+            }
+            if matches!(event, FromAgent::TurnCompleted { .. }) && !installed.is_empty() {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(installed, vec![(vec![42], Some(expected))]);
+    assert_eq!(discarded_ids, vec![43]);
+    assert!(
+        !requests[1]["messages"]
+            .to_string()
+            .contains("CANCELED_CONFIG")
+    );
+    agent.shutdown().await;
+}

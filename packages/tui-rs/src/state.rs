@@ -713,7 +713,9 @@ impl AppState {
     pub fn handle_agent_message(&mut self, msg: FromAgent) {
         match msg {
             // Private durable provider state is not interactive UI state.
-            FromAgent::LocalAssistantContent { .. } | FromAgent::ConversationSnapshot { .. } => {}
+            FromAgent::LocalAssistantContent { .. }
+            | FromAgent::QueuedPromptConfiguration { .. }
+            | FromAgent::ConversationSnapshot { .. } => {}
             // Managed receipts are forwarded to headless consumers but carry
             // no interactive UI content.
             FromAgent::ManagedGatewayReceipt { .. } => {}

@@ -316,6 +316,8 @@ mod tests {
                     controller_binding_sha256: "sha256:binding".into(),
                     provider_prompt_sha256: "sha256:prompt".into(),
                     staged_for_next_turn: false,
+                    current_activation_generation: None,
+                    current_catalog_digest: None,
                     idempotent: false,
                 },
             },

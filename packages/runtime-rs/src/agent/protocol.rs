@@ -791,6 +791,14 @@ pub enum FromAgent {
         response_id: String,
         content: Vec<maestro_ai::ContentBlock>,
     },
+    /// In-process queue boundary. The digest describes the raw installed
+    /// configuration, not provider projection or authority. None consumes a
+    /// discarded prompt without claiming activation.
+    #[serde(skip)]
+    QueuedPromptConfiguration {
+        queue_ids: Vec<u64>,
+        system_prompt_sha256: Option<String>,
+    },
     /// Private durable checkpoint of the compacted provider conversation.
     ConversationSnapshot {
         protocol_version: String,

@@ -130,6 +130,14 @@ struct RuntimeMeta {
     client_tool_bindings: HashMap<String, ClientToolBinding>,
     pending_client_tools: HashMap<String, PendingClientTool>,
     emitted_client_tool_terminals: HashSet<String>,
+    /// Exact raw prompt hashes and admitted receipts awaiting a native queue boundary.
+    queued_workspace_receipts: HashMap<
+        u64,
+        (
+            String,
+            crate::headless::workspace_capabilities::WorkspaceCapabilitySetApplied,
+        ),
+    >,
     conversation_snapshot: Option<Vec<maestro_ai::Message>>,
     process_budget: Option<Arc<Mutex<crate::agent::process_budget::ProcessBudgetState>>>,
     turn_active: bool,
@@ -154,6 +162,32 @@ struct RuntimeMeta {
     /// before the process exits. Shared behind an `Arc` because `RuntimeMeta`
     /// is `Clone` and every clone must observe the same registry.
     receipt_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl RuntimeMeta {
+    fn take_queued_workspace_receipts(
+        &mut self,
+        queue_ids: &[u64],
+        installed_hash: Option<&str>,
+    ) -> Vec<crate::headless::workspace_capabilities::WorkspaceCapabilitySetApplied> {
+        let mut seen = HashSet::new();
+        queue_ids
+            .iter()
+            .filter_map(|id| {
+                let (expected_hash, mut receipt) = self.queued_workspace_receipts.remove(id)?;
+                if installed_hash != Some(expected_hash.as_str())
+                    || !seen.insert(receipt.replay_cursor.clone())
+                {
+                    return None;
+                }
+                receipt.staged_for_next_turn = false;
+                receipt.idempotent = true;
+                receipt.current_activation_generation = Some(receipt.activation_generation);
+                receipt.current_catalog_digest = Some(receipt.effective_catalog_digest.clone());
+                Some(receipt)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +306,7 @@ impl HeadlessState {
                 client_tool_bindings: HashMap::new(),
                 pending_client_tools: HashMap::new(),
                 emitted_client_tool_terminals: HashSet::new(),
+                queued_workspace_receipts: HashMap::new(),
                 conversation_snapshot: None,
                 process_budget: None,
                 turn_active: false,
@@ -1316,10 +1351,27 @@ async fn submit_prompt_with_kind(
             .map_err(|_| anyhow::anyhow!("runtime metadata poisoned"))?
             .process_budget = Some(budget);
     }
+    let pending_receipt = turn_active
+        .then(|| {
+            state
+                .controller_binding
+                .as_ref()
+                .and_then(|binding| state.workspace_capabilities.next_turn_receipt(binding))
+        })
+        .flatten();
+    let pending_meta = Arc::clone(&state.meta);
     match state.agent_mut() {
         Ok(agent) => {
             if turn_active {
                 agent.set_system_prompt_for_queued_prompt(queue_id, workspace_prompt.clone())?;
+                if let Some(receipt) = pending_receipt {
+                    let hash = format!("sha256:{:x}", Sha256::digest(workspace_prompt.as_bytes()));
+                    pending_meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .queued_workspace_receipts
+                        .insert(queue_id, (hash, receipt));
+                }
             } else {
                 agent.set_system_prompt(workspace_prompt)?;
             }
@@ -1334,6 +1386,11 @@ async fn submit_prompt_with_kind(
                 )
                 .await
             {
+                pending_meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .queued_workspace_receipts
+                    .remove(&queue_id);
                 emit(&FromAgentMessage::Error {
                     request_id: None,
                     message: format!("Failed to send prompt: {err:#}"),
@@ -1344,6 +1401,17 @@ async fn submit_prompt_with_kind(
             } else {
                 if staged_workspace_prompt {
                     state.workspace_capabilities.activate_staged_for_next_turn();
+                    // Idle admission installs the prompt before the turn.
+                    // Queued prompts report their exact native configuration
+                    // at their own boundary, without changing the active turn.
+                    if !turn_active {
+                        let receipt = state.controller_binding.as_ref().and_then(|binding| {
+                            state.workspace_capabilities.current_receipt(binding)
+                        });
+                        if let Some(receipt) = receipt {
+                            emit(&FromAgentMessage::WorkspaceCapabilitySetApplied { receipt })?;
+                        }
+                    }
                 }
                 state
                     .meta
@@ -2763,6 +2831,18 @@ async fn handle_agent_event(
     match msg {
         FromAgent::ManagedAuthorizationRequest { request_id } => {
             emit(&FromAgentMessage::ManagedAuthorizationRequest { request_id })?;
+        }
+        FromAgent::QueuedPromptConfiguration {
+            queue_ids,
+            system_prompt_sha256,
+        } => {
+            let receipts = meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take_queued_workspace_receipts(&queue_ids, system_prompt_sha256.as_deref());
+            for receipt in receipts {
+                emit(&FromAgentMessage::WorkspaceCapabilitySetApplied { receipt })?;
+            }
         }
         FromAgent::LocalAssistantContent { .. } => return Ok(()),
         FromAgent::ConversationSnapshot {
@@ -5647,6 +5727,7 @@ else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'tur
                 binding_sha256: "sha256:binding".to_string(),
                 controller_context: context.clone(),
             };
+            state.controller_binding = Some(binding.clone());
             let body = "Always apply the retry checklist.";
             let mut request =
                 crate::headless::workspace_capabilities::ApplyWorkspaceCapabilitySet {
@@ -5694,6 +5775,8 @@ else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'tur
                 .apply(request, &binding, &context, "runner-1", true)
                 .expect("stage capability generation");
             assert!(receipt.staged_for_next_turn);
+            assert_eq!(receipt.current_activation_generation, None);
+            let target_digest = receipt.effective_catalog_digest.clone();
 
             let quarantine_blocker = home.join("codex/thread-bindings/quarantine");
             std::fs::write(&quarantine_blocker, b"block retirement")
@@ -5710,6 +5793,14 @@ else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'tur
             assert!(
                 state.workspace_capabilities.has_staged_set(),
                 "failed retirement must preserve the staged generation"
+            );
+
+            assert!(
+                state
+                    .workspace_capabilities
+                    .current_receipt(&binding)
+                    .is_none(),
+                "failed provider rotation must not claim installation"
             );
 
             std::fs::remove_file(&quarantine_blocker).expect("remove quarantine blocker");
@@ -5733,6 +5824,15 @@ else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'tur
                     .count()
                     >= 2,
                 "retry must install a replacement provider thread"
+            );
+            let active = state
+                .workspace_capabilities
+                .current_receipt(&binding)
+                .expect("installed receipt");
+            assert_eq!(active.current_activation_generation, Some(2));
+            assert_eq!(
+                active.current_catalog_digest.as_deref(),
+                Some(target_digest.as_str())
             );
             if let Some(agent) = state.agent.take() {
                 agent.shutdown().await;
@@ -5797,6 +5897,24 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
             "fixture stdout: {}; fixture stderr: {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+        let receipts: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["type"] == "workspace_capability_set_applied")
+            .collect();
+        assert_eq!(
+            receipts.len(),
+            1,
+            "failed rotation emits no activation; successful retry emits one"
+        );
+        let active = &receipts[0]["receipt"];
+        assert_eq!(active["staged_for_next_turn"], false);
+        assert_eq!(active["activation_generation"], 2);
+        assert_eq!(active["current_activation_generation"], 2);
+        assert_eq!(
+            active["current_catalog_digest"],
+            active["effective_catalog_digest"]
         );
         let calls = std::fs::read_to_string(&log).expect("provider log");
         assert_eq!(calls.matches(r#""method":"thread/start""#).count(), 2);
@@ -6145,142 +6263,6 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
             bindings[0].key.session_id.as_deref(),
             Some("maestro-session-1"),
             "replacement binding must remain scoped to the resident Maestro session"
-        );
-    }
-
-    #[test]
-    fn native_server_capabilities_match_the_registry_and_request_surface() {
-        let capabilities = crate::headless::native_server_capabilities();
-        assert_eq!(
-            capabilities.utility_operations,
-            vec![
-                crate::headless::UtilityOperation::CommandExec,
-                crate::headless::UtilityOperation::FileSearch,
-                crate::headless::UtilityOperation::FileRead,
-                crate::headless::UtilityOperation::FileWatch,
-            ]
-        );
-        assert!(capabilities.raw_agent_events);
-        assert_eq!(
-            capabilities.server_requests,
-            vec![
-                crate::headless::ServerRequestType::Approval,
-                crate::headless::ServerRequestType::ClientTool,
-                crate::headless::ServerRequestType::UserInput,
-                crate::headless::ServerRequestType::ToolRetry,
-            ]
-        );
-
-        let mut expected = crate::tools::ToolRegistry::new()
-            .tools()
-            .map(|definition| {
-                let name = definition.tool.name.clone();
-                crate::headless::NativeToolCapability {
-                    name: name.clone(),
-                    requires_approval: definition.requires_approval,
-                    version: crate::tools::versions::is_version_managed(&name)
-                        .then(|| "current".to_string()),
-                }
-            })
-            .collect::<Vec<_>>();
-        expected.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-        assert_eq!(capabilities.native_tools, expected);
-
-        let bash = capabilities
-            .native_tools
-            .iter()
-            .find(|tool| tool.name == "bash")
-            .expect("registry must advertise bash");
-        assert!(bash.requires_approval);
-        assert_eq!(bash.version.as_deref(), Some("current"));
-    }
-
-    #[test]
-    fn coarser_transcripts_coalesce_text_and_drop_thinking() {
-        let mut chunks = vec![
-            ("reasoning".to_string(), true),
-            ("hello ".to_string(), false),
-            ("world".to_string(), false),
-        ];
-        assert_eq!(coalesce_response_chunks(&mut chunks), "hello world");
-        assert!(chunks.is_empty());
-    }
-
-    #[tokio::test]
-    async fn native_semantic_snapshot_keeps_processed_queue_ids_on_headless_wire() {
-        const FIXTURE: &str = "MAESTRO_HEADLESS_SNAPSHOT_IDS_FIXTURE";
-        if std::env::var_os(FIXTURE).is_some() {
-            let meta = Arc::new(Mutex::new(RuntimeMeta::default()));
-            let (tool_tx, _tool_rx) = mpsc::unbounded_channel();
-            handle_agent_event(
-                FromAgent::ConversationSnapshot {
-                    protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
-                        .to_owned(),
-                    messages: vec![],
-                    processed_queue_ids: vec![7, 9],
-                },
-                &meta,
-                &tool_tx,
-                "test-model",
-                None,
-            )
-            .await
-            .expect("emit snapshot");
-            return;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("headless_server::tests::native_semantic_snapshot_keeps_processed_queue_ids_on_headless_wire")
-            .args(["--exact", "--nocapture", "--format", "terse"])
-            .env(FIXTURE, "1")
-            .output().expect("run snapshot fixture");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let snapshot = String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .find(|event| event["type"] == "conversation_snapshot")
-            .expect("private snapshot on headless wire");
-        assert_eq!(snapshot["processed_queue_ids"], serde_json::json!([7, 9]));
-    }
-
-    #[test]
-    fn client_tool_content_preserves_text_and_images() {
-        let result = client_content_to_agent_result(
-            vec![
-                ClientToolResultContent::Text {
-                    text: "done".to_string(),
-                },
-                ClientToolResultContent::Image {
-                    data: "AAAA".to_string(),
-                    mime_type: "image/png".to_string(),
-                },
-            ],
-            false,
-        );
-        assert!(result.success);
-        assert_eq!(result.output, "done\ndata:image/png;base64,AAAA");
-        assert_eq!(result.error, None);
-    }
-
-    #[test]
-    fn request_resolution_maps_each_response_shape() {
-        assert_eq!(
-            server_request_resolution(ServerRequestType::Approval, Some(false), None, None, None,),
-            ServerRequestResolutionStatus::Denied
-        );
-        assert_eq!(
-            server_request_resolution(
-                ServerRequestType::ToolRetry,
-                None,
-                None,
-                None,
-                Some(ToolRetryDecisionAction::Skip),
-            ),
-            ServerRequestResolutionStatus::Skipped
         );
     }
 
@@ -7575,3 +7557,7 @@ fn headless_receipt_model_does_not_automatically_boost_or_fallback() {
     assert_eq!(config.light, Some(choice));
     assert_eq!(config.summary_model.as_deref(), Some("openai/gpt-5-mini"));
 }
+
+#[cfg(test)]
+#[path = "headless_server/workspace_observation_tests.rs"]
+mod workspace_observation_tests;

@@ -174,6 +174,7 @@ impl NativeAgentRunner {
                     self.clear_pending_on_cancel = clear_pending;
                     if clear_pending {
                         let cleared = self.pending_messages.clear();
+                        self.discard_all_queued_configurations();
                         let cleared_stashed = clear_stashed_prompts(&mut self.deferred_commands);
                         let cleared_count = cleared.len() + cleared_stashed;
                         if cleared_count != 0 {
@@ -186,10 +187,9 @@ impl NativeAgentRunner {
                     cancelled = true;
                 }
                 AgentCommand::CancelQueued { id } => {
-                    // The staged system prompt is not keyed by id and stays
-                    // staged: the skills it carries are still active in the UI,
-                    // so the next message to start should see them.
+                    // A removed prompt cannot report its configuration installed.
                     if let Some(removed) = self.pending_messages.remove_by_id(id) {
+                        self.discard_queued_configurations(vec![id]);
                         let _ = self.event_tx.send(FromAgent::Status {
                             message: format!(
                                 "Removed queued {} #{}",
@@ -1257,6 +1257,7 @@ impl NativeAgentRunner {
                     if clear_pending {
                         // Also clear any pending messages on cancel
                         let cleared = self.pending_messages.clear();
+                        self.discard_all_queued_configurations();
                         if !cleared.is_empty() {
                             let _ = self.event_tx.send(FromAgent::Status {
                                 message: format!("Cleared {} pending message(s)", cleared.len()),
@@ -1266,10 +1267,9 @@ impl NativeAgentRunner {
                     self.reject_pending_tool_responses_on_cancel();
                 }
                 AgentCommand::CancelQueued { id } => {
-                    // The staged system prompt is not keyed by id and stays
-                    // staged: the skills it carries are still active in the UI,
-                    // so the next message to start should see them.
+                    // A removed prompt cannot report its configuration installed.
                     if let Some(removed) = self.pending_messages.remove_by_id(id) {
+                        self.discard_queued_configurations(vec![id]);
                         let _ = self.event_tx.send(FromAgent::Status {
                             message: format!(
                                 "Removed queued {} #{}",
@@ -1499,7 +1499,7 @@ impl NativeAgentRunner {
                     self.codex_current_prompt_started = false;
                     self.pending_messages.clear();
                     // The prompts it was staged for are gone with the queue.
-                    self.queued_system_prompts.clear();
+                    self.discard_all_queued_configurations();
                     self.notify_extensions_user_turn_start();
                     self.credential_vault.clear();
                 }
@@ -1519,7 +1519,7 @@ impl NativeAgentRunner {
                     self.compact_codex_history_for_boundary();
                     self.pending_messages.clear();
                     // The prompts it was staged for are gone with the queue.
-                    self.queued_system_prompts.clear();
+                    self.discard_all_queued_configurations();
                     self.notify_extensions_user_turn_start();
                     // Replacing history is used for session restore. References
                     // from the previous active session must not cross that boundary.
@@ -1540,7 +1540,7 @@ impl NativeAgentRunner {
                     self.compact_codex_history_for_boundary();
                     self.pending_messages.clear();
                     // The prompts it was staged for are gone with the queue.
-                    self.queued_system_prompts.clear();
+                    self.discard_all_queued_configurations();
                     self.notify_extensions_user_turn_start();
                 }
                 AgentCommand::Continue => {
