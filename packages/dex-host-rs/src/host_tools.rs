@@ -258,6 +258,64 @@ impl HostTools {
         }
     }
 
+    /// Adds tools the caller's session runs itself (`ExecutorKind::Client`).
+    /// The engine parks on each call until the host appends its
+    /// `ClientToolResult`; nothing here runs them, and the host's policy
+    /// does not judge them, because the caller owns their execution.
+    #[must_use]
+    pub fn with_client_tools(mut self, tools: impl IntoIterator<Item = ToolSpec>) -> Self {
+        let mut catalog = self.catalog.to_vec();
+        for mut spec in tools {
+            if catalog.iter().any(|existing| existing.name == spec.name) {
+                continue;
+            }
+            spec.executor = ExecutorKind::Client;
+            catalog.push(spec);
+        }
+        self.catalog = Arc::from(catalog);
+        self
+    }
+
+    /// Keeps only the tools named in `allowed`; `user.ask` stays only when
+    /// named. An empty set leaves a model with no tools at all.
+    #[must_use]
+    pub fn only(mut self, allowed: &std::collections::HashSet<String>) -> Self {
+        let catalog: Vec<ToolSpec> = self
+            .catalog
+            .iter()
+            .filter(|spec| allowed.contains(spec.name.as_str()))
+            .cloned()
+            .collect();
+        self.catalog = Arc::from(catalog);
+        self
+    }
+
+    /// Hands the named host tools to the caller to run (`ExecutorKind::Client`),
+    /// for a caller with its own executor and policy for them.
+    #[must_use]
+    pub fn delegate(mut self, names: &std::collections::HashSet<String>) -> Self {
+        let catalog: Vec<ToolSpec> = self
+            .catalog
+            .iter()
+            .cloned()
+            .map(|mut spec| {
+                if names.contains(spec.name.as_str()) {
+                    spec.executor = ExecutorKind::Client;
+                }
+                spec
+            })
+            .collect();
+        self.catalog = Arc::from(catalog);
+        self
+    }
+
+    /// The tools the caller's session runs itself.
+    pub fn client_specs(&self) -> impl Iterator<Item = &ToolSpec> {
+        self.catalog
+            .iter()
+            .filter(|spec| spec.executor == ExecutorKind::Client)
+    }
+
     fn firewall(&self, name: &str, args: &Value) -> NativeFirewallVerdict {
         let snapshot = self
             .workflow
@@ -299,6 +357,9 @@ impl Tools for HostTools {
         let Some(spec) = self.spec(&call.tool) else {
             return Verdict::Deny(format!("unknown tool: {}", call.tool));
         };
+        if spec.executor == ExecutorKind::Client {
+            return Verdict::Allow;
+        }
         if call.tool.as_str() == USER_ASK {
             return match question_binding(ctx, call, self) {
                 Ok(()) => Verdict::Allow,

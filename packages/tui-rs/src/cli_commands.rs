@@ -113,12 +113,18 @@ pub async fn run_cli_command(args: &[String]) -> Result<i32> {
         "login" if args.get(1).is_some_and(|arg| is_help(arg)) => {
             println!(
                 "{}",
-                crate::localization::cli_locale()
-                    .format("Usage: {0}", &["maestro login".to_string()])
+                crate::localization::cli_locale().format(
+                    "Usage: {0}",
+                    &["maestro login [--device-auth | --browser]".to_string()]
+                )
             );
             Ok(0)
         }
-        "login" => crate::evalops_cli::run_evalops(&["login".to_owned()]).await,
+        "login" => {
+            let mut forwarded = vec!["login".to_owned()];
+            forwarded.extend(args[1..].iter().cloned());
+            crate::evalops_cli::run_evalops(&forwarded).await
+        }
         "evalops" => crate::evalops_cli::run_evalops(&args[1..]).await,
         "openai" => crate::openai_cli::run_openai(&args[1..]).await,
         "computer" | "orb" => crate::orb_cli::run_orb(&args[1..]).await,

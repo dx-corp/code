@@ -3,9 +3,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
-use maestro_local_host::agent::{
-    FromAgent, NativeAgentConfig, ToolDefinition, ToolResponseMessage,
-};
+use maestro_local_host::agent::{ToolDefinition, ToolResponseMessage};
 use maestro_local_host::ai::Tool;
 use maestro_runtime::{
     ExecutionSource, TelemetryConfig, TelemetryGuard, TokenUsage, ToolResult, TraceHeaders,
@@ -48,6 +46,7 @@ mod chat_admission;
 mod codex_bridge;
 mod codex_compat;
 mod codex_subagent_dispatch;
+mod dex_chat;
 mod extended;
 mod hosted_threads;
 mod http;
@@ -104,11 +103,10 @@ pub(crate) use chat::{
     ChatAttachment, ChatMessage, ChatRequest, ExtractAttachmentRequest, ExtractDocumentOutput,
     PreparedAttachments, approval_blocked_tool_event, build_prompt_from_chat,
     composer_assistant_message, composer_assistant_message_with_tools, composer_text_content,
-    finish_client_tool_metadata, finish_tool_metadata, handle_chat_endpoint,
-    handle_chat_websocket_endpoint, is_chat_endpoint, is_chat_websocket_endpoint,
-    prepare_chat_attachments, record_chat_user_message, record_tool_call_metadata, send_sse,
-    send_ws_json, sse_headers, strip_data_url_prefix, try_parse_websocket_text_message,
-    update_tool_metadata_status, websocket_accept_key,
+    finish_tool_metadata, handle_chat_endpoint, handle_chat_websocket_endpoint, is_chat_endpoint,
+    is_chat_websocket_endpoint, prepare_chat_attachments, record_chat_user_message,
+    record_tool_call_metadata, send_sse, send_ws_json, sse_headers, strip_data_url_prefix,
+    try_parse_websocket_text_message, update_tool_metadata_status, websocket_accept_key,
 };
 pub(crate) use codex_bridge::*;
 use extended::{ExtendedApiState, handle_extended_endpoint, is_extended_endpoint};

@@ -892,6 +892,14 @@ impl AppState {
                     .rev()
                     .find(|m| m.is_assistant_reply())
                 {
+                    // Native providers can reuse the response id after tools. Keep
+                    // the following answer separate from pre-tool commentary.
+                    if !msg.content.is_empty() && !msg.content.ends_with("\n\n") {
+                        if !msg.content.ends_with('\n') {
+                            msg.content.push('\n');
+                        }
+                        msg.content.push('\n');
+                    }
                     let parent_call_id =
                         self.codemode_progress
                             .iter()

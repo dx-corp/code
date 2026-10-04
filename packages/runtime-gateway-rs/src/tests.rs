@@ -1993,6 +1993,7 @@ rl.on("line", (line) => {
       tools_summary: { tools_used: ["write"], calls_succeeded: 1, calls_failed: 0 },
       duration_ms: 1
     });
+    send({ type: "turn_completed", response_id: "response-1" });
   } else if (msg.type === "shutdown") {
     process.exit(0);
   }
@@ -2120,6 +2121,7 @@ rl.on("line", (line) => {
     send({ type: "response_start", response_id: "response-1" });
     send({ type: "response_chunk", response_id: "response-1", content: "websocket output", is_thinking: false });
     send({ type: "response_end", response_id: "response-1", duration_ms: 1 });
+    send({ type: "turn_completed", response_id: "response-1" });
   } else if (msg.type === "shutdown") {
     process.exit(0);
   }
@@ -2215,7 +2217,7 @@ while IFS= read -r line; do
     *'"type":"prompt"'*)
       printf '%s\n' '{"type":"server_request","request_id":"approval-wait","request_type":"approval","call_id":"approval-wait","tool":"write","args":{"path":"file.txt"},"reason":"Need approval"}' ;;
     *'"type":"server_request_response"'*)
-      printf '%s\n' '{"type":"response_start","response_id":"response-1"}' '{"type":"response_chunk","response_id":"response-1","content":"waited output","is_thinking":false}' '{"type":"response_end","response_id":"response-1","duration_ms":1}' ;;
+      printf '%s\n' '{"type":"response_start","response_id":"response-1"}' '{"type":"response_chunk","response_id":"response-1","content":"waited output","is_thinking":false}' '{"type":"response_end","response_id":"response-1","duration_ms":1}' '{"type":"turn_completed","response_id":"response-1"}' ;;
     *'"type":"shutdown"'*) exit 0 ;;
   esac
 done
@@ -2242,6 +2244,7 @@ rl.on("line", (line) => {
     send({ type: "response_start", response_id: "response-1" });
     send({ type: "response_chunk", response_id: "response-1", content: "waited output", is_thinking: false });
     send({ type: "response_end", response_id: "response-1", duration_ms: 1 });
+    send({ type: "turn_completed", response_id: "response-1" });
   } else if (msg.type === "shutdown") {
     process.exit(0);
   }
@@ -2377,6 +2380,7 @@ rl.on("line", (line) => {
       tools_summary: { tools_used: [], calls_succeeded: 0, calls_failed: 0 },
       duration_ms: 1
     });
+    send({ type: "turn_completed", response_id: "response-1" });
   } else if (msg.type === "shutdown") {
     process.exit(7);
   }
@@ -2438,6 +2442,7 @@ rl.on("line", (line) => {
     send({ type: "response_start", response_id: "response-1" });
     send({ type: "response_chunk", response_id: "response-1", content: "kept after broken pipe", is_thinking: false });
     send({ type: "response_end", response_id: "response-1", duration_ms: 1 });
+    send({ type: "turn_completed", response_id: "response-1" });
     process.stdin.destroy();
     setTimeout(() => process.exit(0), 10);
   } else if (msg.type === "shutdown") {
@@ -2503,6 +2508,7 @@ rl.on("line", (line) => {
     send({ type: "response_start", response_id: "response-1" });
     send({ type: "response_chunk", response_id: "response-1", content: "bounded output", is_thinking: false });
     send({ type: "response_end", response_id: "response-1", duration_ms: 1 });
+    send({ type: "turn_completed", response_id: "response-1" });
   } else if (msg.type === "shutdown") {
     setInterval(() => {}, 1000);
   }
@@ -13404,41 +13410,6 @@ fn failed_tool_metadata_is_marked_error_for_replay() {
 }
 
 #[test]
-fn client_owned_tool_metadata_is_completed_at_terminal_response() {
-    let mut tools = Vec::new();
-    record_tool_call_metadata(
-        &mut tools,
-        "client-tool-1",
-        "send_final",
-        serde_json::json!({ "text": "done" }),
-    );
-    let client_tool_results = HashMap::from([("client-tool-1".to_string(), true)]);
-
-    finish_client_tool_metadata(&mut tools, &client_tool_results);
-
-    assert_eq!(tools[0]["status"], "completed");
-    assert_eq!(tools[0]["result"]["success"], true);
-}
-
-#[test]
-fn failed_client_owned_tool_metadata_preserves_error_status() {
-    let mut tools = Vec::new();
-    record_tool_call_metadata(
-        &mut tools,
-        "client-tool-1",
-        "send_final",
-        serde_json::json!({ "text": "done" }),
-    );
-    let client_tool_results = HashMap::from([("client-tool-1".to_string(), false)]);
-
-    finish_client_tool_metadata(&mut tools, &client_tool_results);
-
-    assert_eq!(tools[0]["status"], "error");
-    assert_eq!(tools[0]["result"]["success"], false);
-    assert_eq!(tools[0]["result"]["isError"], true);
-}
-
-#[test]
 fn chat_request_accepts_client_owned_tool_definitions() {
     let chat: ChatRequest = serde_json::from_value(serde_json::json!({
         "messages": [{ "role": "user", "content": "hello" }],
@@ -14572,3 +14543,6 @@ fn desktop_headless_handshake_uses_the_native_owner_protocol() {
     assert_eq!(hello["role"], "controller");
     assert_eq!(hello["capabilities"]["server_requests"][0], "approval");
 }
+
+#[path = "tests/native_headless_contract.rs"]
+mod native_headless_contract;

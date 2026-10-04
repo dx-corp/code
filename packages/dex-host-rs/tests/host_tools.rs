@@ -434,3 +434,6 @@ async fn a_headless_turn_refuses_a_gated_command() {
             if text.contains(HEADLESS_GATED)
     )));
 }
+
+#[path = "host_tools/fuzz.rs"]
+mod fuzz;

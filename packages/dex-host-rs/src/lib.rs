@@ -22,16 +22,22 @@
 
 mod effects;
 mod host_tools;
+mod host_turn;
 mod lease;
 mod log;
 mod model;
+mod observed;
+mod prompt_hooks;
 mod tools;
 mod turn;
 
 pub use effects::LocalEffects;
 pub use host_tools::{CONFIRMATION_FIELD, HEADLESS_GATED, HostTools, USER_ASK};
+pub use host_turn::{HostTurn, HostTurnRun, Park, Step, turn_dir};
 pub use log::{LocalLog, LogError};
 pub use model::AiRsModel;
+pub use observed::{Observed, ObservedLog};
+pub use prompt_hooks::{AdmittedPrompt, admit_prompt};
 pub use tools::{LocalTools, READ_FILE, WRITE_FILE};
 pub use turn::{LocalTurnOutcome, LocalTurnRequest, UNATTENDED_ANSWER, run_local_turn};
 
