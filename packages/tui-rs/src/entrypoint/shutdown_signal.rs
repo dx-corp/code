@@ -905,11 +905,11 @@ mod tests {
     /// with buffered, unflushed entries, and a real child process is
     /// registered in the *actual* global `process_registry`. A real
     /// `SIGTERM` is self-sent; this asserts the buffered entry lands on
-    /// disk (via the cancellation drop cascade) and the child is reaped
+    /// disk (via the cancellation drop cascade) and its Child owner reaps it
     /// -- the two failure modes this regression protects.
     ///
     /// The registry is process-global and tests run in parallel, so the
-    /// reaping step uses `process_registry::cleanup_one(child_pid)`
+    /// termination step uses `process_registry::cleanup_one(child_pid)`
     /// (the per-PID variant of the production `cleanup_all` path) rather
     /// than draining the whole registry: a full drain could kill another
     /// concurrently-running test's registered child and make that test's
@@ -954,11 +954,12 @@ mod tests {
 
         // A real background child, registered exactly the way the bash
         // tool's `run_in_background` does.
-        let mut child = std::process::Command::new("sleep")
+        let mut child = tokio::process::Command::new("sleep")
             .arg("300")
+            .kill_on_drop(true)
             .spawn()
             .expect("spawn background child");
-        let child_pid = child.id();
+        let child_pid = child.id().expect("PID of newly spawned background child");
         crate::tools::process_registry::register(child_pid);
 
         /// Stands in for `App::run(self)`: owns the manager and suspends
@@ -976,7 +977,8 @@ mod tests {
             assert_eq!(result, 0, "self-kill(SIGTERM) failed");
         });
 
-        let reaped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let shutdown_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let terminated = tokio::time::timeout_at(shutdown_deadline, async {
             tokio::select! {
                 biased;
                 signal = monitor.recv() => {
@@ -990,17 +992,22 @@ mod tests {
         .expect("shutdown race did not resolve within 5s of a real SIGTERM");
 
         assert!(
-            reaped,
+            terminated,
             "expected the registered child to be cleaned up by cleanup_one"
         );
 
-        // The child process tree must actually be gone, not just
-        // unregistered.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let wait_result = child.try_wait().expect("try_wait");
-        assert!(
-            wait_result.is_some(),
-            "background child {child_pid} was not reaped by cleanup_background_processes"
+        // The registry requests termination; the Child owner must await and
+        // reap it, as the production Bash watcher does. A fixed sleep followed
+        // by try_wait races process exit under concurrent workspace load.
+        let status = tokio::time::timeout_at(shutdown_deadline, child.wait())
+            .await
+            .expect("background child was not reaped within the shutdown deadline")
+            .expect("wait for background child");
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "cleanup_one must terminate the registered background child"
         );
 
         // The buffered entry must be on disk: this only happens because
