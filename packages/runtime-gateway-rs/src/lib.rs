@@ -3,7 +3,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
-use maestro_local_host::agent::{ToolDefinition, ToolResponseMessage};
+use maestro_local_host::agent::{FromAgent, ToolDefinition, ToolResponseMessage};
 use maestro_local_host::ai::Tool;
 use maestro_runtime::{
     ExecutionSource, TelemetryConfig, TelemetryGuard, TokenUsage, ToolResult, TraceHeaders,
@@ -43,6 +43,7 @@ mod automations;
 mod background;
 mod chat;
 mod chat_admission;
+mod chat_output;
 mod codex_bridge;
 mod codex_compat;
 mod codex_subagent_dispatch;
@@ -54,10 +55,14 @@ mod local;
 mod markitdown;
 mod migrations;
 mod model_catalog;
+mod native_turns;
 mod pull_request_watch;
 mod pull_request_watch_http;
 mod pull_request_watch_state;
+mod session_context;
+mod session_fork;
 mod session_messaging;
+mod session_search;
 mod sessions;
 mod turn_diffs;
 mod usage_cost;
@@ -471,6 +476,7 @@ struct AppState {
     pending_tool_responses: Arc<Mutex<HashMap<String, PendingToolResponseSender>>>,
     native_snapshot_registry: Arc<turn_diffs::NativeSnapshotRegistry>,
     pull_request_watches: Arc<pull_request_watch::WatchRuntime>,
+    native_turns: Arc<native_turns::NativeTurnRuntime>,
     // Maps a pending-request id to the session or authenticated principal that
     // owns the blocked agent turn. Sessionless client-tool turns retain a
     // resumable owner without weakening the cross-tenant resume check.
@@ -808,6 +814,7 @@ pub async fn serve_listener(
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
+        native_turns: Arc::new(native_turns::NativeTurnRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         a2a_tasks: Arc::new(Mutex::new(a2a_tasks)),
@@ -836,6 +843,7 @@ pub async fn serve_listener(
         let accepted = tokio::select! {
             reason = &mut owner_loss => {
                 eprintln!("runtime-gateway owner lost: {reason}");
+                state.native_turns.shutdown();
                 write_daemon_exit_receipt(&reason).await?;
                 return Ok(());
             }
@@ -1042,6 +1050,7 @@ fn is_local_endpoint(head: &RequestHead) -> bool {
         // not-yet-migrated response.
         || is_session_messaging_endpoint(head)
         || is_pending_request_resume_endpoint(head)
+        || native_turns::is_native_turn_endpoint(head)
 }
 
 fn is_session_endpoint(head: &RequestHead) -> bool {
@@ -1056,7 +1065,7 @@ fn is_session_endpoint(head: &RequestHead) -> bool {
                 || session_path_from_path(&head.path)
                     .and_then(|path| path.tail)
                     .map(|tail| {
-                        matches!(tail, "share" | "export")
+                        matches!(tail, "share" | "export" | "fork")
                             || session_attachment_extract_id(tail).is_some()
                     })
                     .unwrap_or(false)
@@ -1127,6 +1136,9 @@ async fn handle_local_endpoint(
     if let Err(response) = validate_csrf(&head, &state.config) {
         return response;
     }
+    if native_turns::is_native_turn_endpoint(&head) {
+        return native_turns::handle_native_turn_endpoint(stream, initial, &head, state).await;
+    }
     if head.method == "GET" && shared_session_path_from_path(&head.path).is_some() {
         return handle_session_endpoint(stream, initial, &head, state).await;
     }
@@ -1166,7 +1178,7 @@ async fn handle_local_endpoint(
             }
             json_response(
                 200,
-                &serde_json::json!({ "models": available_models(&state.config).await.models }),
+                &serde_json::json!({ "models": available_models(&state.config).await.models, "nativeTurnCapabilities": {"maxRequestBytes": native_turns::MAX_REQUEST_BYTES, "attachments": true} }),
             )
         }
         ("GET", "/api/model") => {

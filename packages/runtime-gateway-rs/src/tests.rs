@@ -2719,6 +2719,8 @@ pub(super) fn test_session_record(id: &str) -> SessionRecord {
         background_read_cursor: 0,
         messages: Vec::new(),
         last_turn_error: None,
+        native_context: None,
+        forked_from: None,
     }
 }
 
@@ -2749,6 +2751,7 @@ pub(super) fn test_app_state_with_sessions(sessions: HashMap<String, SessionReco
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
+        native_turns: Arc::new(native_turns::NativeTurnRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13217,6 +13220,8 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         background_read_cursor: 0,
         messages: Vec::new(),
         last_turn_error: None,
+        native_context: None,
+        forked_from: None,
     };
     let state = AppState {
         config: Arc::new(Config {
@@ -13265,6 +13270,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
+        native_turns: Arc::new(native_turns::NativeTurnRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),
@@ -13358,6 +13364,7 @@ async fn invalid_session_store_is_left_untouched_and_future_writes_are_blocked()
         pending_tool_responses: Arc::new(Mutex::new(HashMap::new())),
         native_snapshot_registry: Arc::new(turn_diffs::NativeSnapshotRegistry::default()),
         pull_request_watches: Arc::new(pull_request_watch::WatchRuntime::default()),
+        native_turns: Arc::new(native_turns::NativeTurnRuntime::default()),
         pending_tool_response_sessions: Arc::new(Mutex::new(HashMap::new())),
         completed_client_tool_results: Arc::new(Mutex::new(HashMap::new())),
         extended_api: Arc::new(Mutex::new(ExtendedApiState::default())),

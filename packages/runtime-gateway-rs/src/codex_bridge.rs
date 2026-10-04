@@ -1,8 +1,6 @@
+use crate::chat_output::ChatEventWriter;
 use crate::model_catalog::{available_models, resolve_model};
-use crate::{
-    AppState, ChatRequest, PendingToolResponseOwner, now_millis, now_rfc3339, send_sse,
-    send_ws_json,
-};
+use crate::{AppState, ChatRequest, PendingToolResponseOwner, now_millis, now_rfc3339};
 use maestro_runtime::{TokenUsage, ToolResult};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -13,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 
@@ -1047,7 +1044,10 @@ pub(crate) fn codex_bridge_temp_dir(cwd: &Path) -> PathBuf {
     sandbox_visible_temp_dir(cwd, "maestro-codex-bridge", &CODEX_BRIDGE_TEMP_COUNTER)
 }
 
-async fn run_codex_bridge_command(mut command: Command) -> Result<std::process::Output, String> {
+async fn run_codex_bridge_command(
+    mut command: Command,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<std::process::Output, String> {
     command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1072,7 +1072,17 @@ async fn run_codex_bridge_command(mut command: Command) -> Result<std::process::
         stderr.read_to_end(&mut bytes).await.map(|_| bytes)
     });
 
-    let status = match tokio::time::timeout(codex_app_server_timeout(), child.wait()).await {
+    let waited = tokio::select! {
+        result = tokio::time::timeout(codex_app_server_timeout(), child.wait()) => result,
+        _ = async { match cancel { Some(cancel) => cancel.cancelled().await, None => std::future::pending().await } } => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err("Codex turn stopped by its authenticated owner".to_string());
+        }
+    };
+    let status = match waited {
         Ok(status) => status
             .map_err(|error| format!("failed to wait for Codex app-server bridge: {error}"))?,
         Err(_) => {
@@ -1129,12 +1139,25 @@ pub(crate) async fn prepare_codex_bridge_prompt(
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn run_codex_app_server_cli(
     cwd: &Path,
     model: &str,
     approval_mode: &str,
     prompt: &str,
     attachment_paths: &[String],
+) -> Result<CodexBridgeOutput, String> {
+    run_codex_app_server_cli_cancellable(cwd, model, approval_mode, prompt, attachment_paths, None)
+        .await
+}
+
+pub(crate) async fn run_codex_app_server_cli_cancellable(
+    cwd: &Path,
+    model: &str,
+    approval_mode: &str,
+    prompt: &str,
+    attachment_paths: &[String],
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<CodexBridgeOutput, String> {
     let cli_path = codex_app_server_cli_path();
     if !cli_path.exists() {
@@ -1172,7 +1195,7 @@ pub(crate) async fn run_codex_app_server_cli(
             bridge_prompt.temp_dir.join("usage.json"),
         );
 
-    let output_result = run_codex_bridge_command(command).await;
+    let output_result = run_codex_bridge_command(command, cancel).await;
     let _ = tokio::fs::remove_dir_all(&bridge_prompt.temp_dir).await;
     let output = output_result?;
 
@@ -1201,18 +1224,15 @@ pub(crate) enum CodexBridgeTransport {
 }
 
 pub(crate) async fn send_codex_bridge_event(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     transport: CodexBridgeTransport,
     value: &Value,
 ) -> Result<(), String> {
-    match transport {
-        CodexBridgeTransport::Sse => send_sse(stream, value).await,
-        CodexBridgeTransport::WebSocket => send_ws_json(stream, value).await,
-    }
+    stream.send_event(transport, value).await
 }
 
 pub(crate) async fn send_codex_bridge_tool_event(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     transport: CodexBridgeTransport,
     event: &CodexBridgeToolEvent,
 ) -> Result<(), String> {
@@ -1365,7 +1385,7 @@ pub(crate) fn codex_headless_pending_request_id(
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_codex_headless_approval_request(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     transport: CodexBridgeTransport,
     state: &AppState,
     session_id: Option<&str>,
@@ -1439,7 +1459,14 @@ async fn handle_codex_headless_approval_request(
     )
     .await?;
 
-    let Some((_call_id, approved, result, _source, _consumed)) = receiver.recv().await else {
+    let owner = stream.native_turn();
+    let decision = tokio::select! {
+        decision = receiver.recv() => decision,
+        _ = async { match &owner { Some(owner) => owner.cancel.cancelled().await, None => std::future::pending().await } } => {
+            return Err("Codex turn stopped while awaiting its existing approval owner".to_string());
+        }
+    };
+    let Some((_call_id, approved, result, _source, _consumed)) = decision else {
         return Err("Codex headless approval request closed before decision".to_string());
     };
     let response = if native_tool_call {
@@ -1495,7 +1522,7 @@ pub(crate) fn codex_headless_hello() -> Value {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_app_server_headless_cli(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     transport: CodexBridgeTransport,
     state: &AppState,
     session_id: Option<&str>,
@@ -1562,6 +1589,7 @@ pub(crate) async fn run_codex_app_server_headless_cli(
     let request_timeout = codex_app_server_timeout();
     let shutdown_timeout = codex_app_server_shutdown_timeout();
     let mut lines = BufReader::new(stdout).lines();
+    let native_owner = stream.native_turn();
 
     let request_result = async {
         write_codex_headless_message(&mut stdin, &codex_headless_hello()).await?;
@@ -1588,7 +1616,13 @@ pub(crate) async fn run_codex_app_server_headless_cli(
         let mut tool_events = Vec::new();
         let mut tool_contexts: HashMap<String, CodexBridgeToolContext> = HashMap::new();
         loop {
-            let line = match tokio::time::timeout(request_timeout, lines.next_line()).await {
+            let next_line = tokio::select! {
+                result = tokio::time::timeout(request_timeout, lines.next_line()) => result,
+                _ = async { match &native_owner { Some(owner) => owner.cancel.cancelled().await, None => std::future::pending().await } } => {
+                    return Err("Codex turn stopped by its authenticated owner".to_string());
+                }
+            };
+            let line = match next_line {
                 Ok(Ok(Some(line))) => line,
                 Ok(Ok(None)) => break,
                 Ok(Err(error)) => {

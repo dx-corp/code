@@ -60,6 +60,10 @@ pub(super) struct SessionRecord {
     pub(super) messages: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) last_turn_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) native_context: Option<crate::session_context::NativeContextSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) forked_from: Option<crate::session_fork::ForkOrigin>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -106,6 +110,9 @@ pub(super) async fn handle_session_endpoint(
         .await;
     }
     match head.method.as_str() {
+        "GET" if head.path == "/api/sessions/search" => {
+            crate::session_search::response(state, &auth, &head.query).await
+        }
         "GET" if head.path == "/api/sessions" => json_response(
             200,
             &serde_json::json!({ "sessions": session_summaries(state, &auth).await }),
@@ -154,6 +161,17 @@ pub(super) async fn handle_session_endpoint(
                 return json_response(404, &serde_json::json!({ "error": "Not found" }));
             };
             match session_path.tail {
+                Some("fork") => {
+                    crate::session_fork::handle(
+                        stream,
+                        initial,
+                        head,
+                        state,
+                        &auth,
+                        session_path.id,
+                    )
+                    .await
+                }
                 Some("share") => {
                     handle_session_share_post(stream, initial, head, state, session_path, &auth)
                         .await
@@ -275,6 +293,18 @@ pub(super) async fn handle_session_endpoint(
                 return json_response(404, &serde_json::json!({ "error": "Session not found" }));
             }
             let removed_session = session.clone();
+            if crate::native_turns::session_has_active_native_turn(
+                state,
+                session_path.id,
+                &session.created_at,
+            )
+            .await
+            {
+                return json_response(
+                    409,
+                    &serde_json::json!({ "error": "Stop the active turn before deleting this session" }),
+                );
+            }
             sessions.sessions.remove(session_path.id);
             let session_snapshot = sessions.clone();
             if let Err(error) = persist_session_store_snapshot(state, &session_snapshot).await {
@@ -549,6 +579,8 @@ pub(super) fn create_session_record(title: Option<String>, owner: Option<String>
         log_group_id: None,
         messages: Vec::new(),
         last_turn_error: None,
+        native_context: None,
+        forked_from: None,
     }
 }
 
@@ -717,6 +749,10 @@ pub(super) async fn handle_session_get(
         }
         return match session_page_value(session, &head.query) {
             Ok(value) => json_response(200, &value),
+            Err("Session generation changed") => json_response(
+                409,
+                &serde_json::json!({ "error": "Session generation changed" }),
+            ),
             Err(error) => json_response(400, &serde_json::json!({ "error": error })),
         };
     }
@@ -736,6 +772,7 @@ pub(super) async fn handle_session_get(
 
     match session_path.tail {
         None => json_response(200, &session_full_value(&session)),
+        Some("context") => crate::session_context::response(&session, &head.query),
         Some("turn-diff") => {
             crate::turn_diffs::session_turn_diff_response(head, state, &session).await
         }
@@ -1930,6 +1967,9 @@ pub(super) fn session_summary_value(session: &SessionRecord) -> Value {
     if let Some(log_group_id) = &session.log_group_id {
         value["logGroupId"] = Value::String(log_group_id.clone());
     }
+    if let Some(origin) = &session.forked_from {
+        value["forkedFrom"] = serde_json::json!(origin);
+    }
     value
 }
 
@@ -1953,10 +1993,16 @@ const SESSION_PAGE_MAX_MESSAGES: usize = 100;
 const SESSION_PAGE_MAX_BYTES: usize = 256 * 1024;
 const SESSION_PAGE_MESSAGE_MAX_BYTES: usize = 32 * 1024;
 
-fn session_page_value(
+pub(super) fn session_page_value(
     session: &SessionRecord,
     query: &HashMap<String, String>,
 ) -> Result<Value, &'static str> {
+    if query
+        .get("sourceCreatedAt")
+        .is_some_and(|generation| generation != &session.created_at)
+    {
+        return Err("Session generation changed");
+    }
     let limit = match query.get("limit") {
         Some(limit) => limit
             .parse::<usize>()
@@ -1965,22 +2011,38 @@ fn session_page_value(
             .ok_or("invalid page limit")?,
         None => SESSION_PAGE_MESSAGE_LIMIT,
     };
-    let end = match query.get("cursor") {
-        Some(cursor) => {
-            if cursor.len() > 4096 {
-                return Err("invalid page cursor");
+    if query.contains_key("messageIndex")
+        && (query.contains_key("cursor") || !query.contains_key("sourceCreatedAt"))
+    {
+        return Err("Message anchor requires a session generation and no cursor");
+    }
+    let end = if let Some(index) = query.get("messageIndex") {
+        let index = index
+            .parse::<usize>()
+            .ok()
+            .filter(|index| *index < session.messages.len())
+            .ok_or("Invalid message anchor")?;
+        // Put the anchor at the end so the byte budget can never discard it.
+        index + 1
+    } else {
+        match query.get("cursor") {
+            Some(cursor) => {
+                if cursor.len() > 4096 {
+                    return Err("invalid page cursor");
+                }
+                let decoded = URL_SAFE_NO_PAD
+                    .decode(cursor)
+                    .map_err(|_| "invalid page cursor")?;
+                let (version, id, index): (u8, String, usize) =
+                    serde_json::from_slice(&decoded).map_err(|_| "invalid page cursor")?;
+                if version != 1 || id != session.id || index == 0 || index > session.messages.len()
+                {
+                    return Err("invalid page cursor");
+                }
+                index
             }
-            let decoded = URL_SAFE_NO_PAD
-                .decode(cursor)
-                .map_err(|_| "invalid page cursor")?;
-            let (version, id, index): (u8, String, usize) =
-                serde_json::from_slice(&decoded).map_err(|_| "invalid page cursor")?;
-            if version != 1 || id != session.id || index == 0 || index > session.messages.len() {
-                return Err("invalid page cursor");
-            }
-            index
+            None => session.messages.len(),
         }
-        None => session.messages.len(),
     };
     let mut start = end;
     let mut bytes = 0;
@@ -2029,7 +2091,7 @@ fn session_page_value(
     Ok(value)
 }
 
-fn bounded_public_session_message(message: &Value) -> Value {
+pub(super) fn bounded_public_session_message(message: &Value) -> Value {
     let public = public_session_message(message);
     if serde_json::to_vec(&public).is_ok_and(|bytes| bytes.len() <= SESSION_PAGE_MESSAGE_MAX_BYTES)
     {

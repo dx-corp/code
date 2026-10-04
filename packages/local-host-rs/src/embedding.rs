@@ -497,6 +497,20 @@ impl EmbeddedAgent {
         self.inner.prompt(content.into(), attachments).await
     }
 
+    /// Steer the active native turn at its next supported interruption point.
+    /// The native actor owns consumption; this never restarts the original prompt.
+    #[cfg(feature = "runtime-gateway-bridge")]
+    pub async fn steer(&self, content: String) -> Result<()> {
+        self.inner
+            .prompt_with_kind(
+                content,
+                Vec::new(),
+                maestro_runtime::agent::PromptKind::Steer,
+                None,
+            )
+            .await
+    }
+
     /// Associate subsequent host hooks with a caller-owned session.
     ///
     /// The embedding does not take ownership of persisted tool spill cleanup.

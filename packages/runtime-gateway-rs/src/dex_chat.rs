@@ -18,8 +18,11 @@
 
 use super::*;
 use crate::chat::{
-    managed_gateway_receipt_status, record_chat_assistant_message, record_chat_error,
+    annotate_completed_turn, managed_gateway_receipt_status, record_chat_assistant_message,
+    record_chat_error,
 };
+use crate::chat_output::ChatEventWriter;
+use crate::native_turns::{NativeTurn, NativeTurnCommand};
 use crate::turn_diffs::{ChatSnapshot, finish_chat_snapshot};
 use maestro_dex_host::dex_loop::{
     ApprovalMode as TurnMode, Event, ExecutorKind, Exit, GovernanceClass, Outcome, Output,
@@ -351,10 +354,10 @@ pub(crate) enum Wire {
 }
 
 impl Wire {
-    async fn send(self, stream: &mut TcpStream, value: &Value) -> Result<(), String> {
+    fn transport(self) -> CodexBridgeTransport {
         match self {
-            Self::Sse => send_sse(stream, value).await,
-            Self::WebSocket => send_ws_json(stream, value).await,
+            Self::Sse => CodexBridgeTransport::Sse,
+            Self::WebSocket => CodexBridgeTransport::WebSocket,
         }
     }
 }
@@ -375,32 +378,62 @@ pub(crate) struct DexChatTurn<'a> {
     pub thinking_enabled: bool,
     pub usage_provider: String,
     pub usage_model: String,
+    /// The session generation a context observation is recorded against;
+    /// `None` leaves the session's context meter untouched.
+    pub context_generation: Option<String>,
 }
 
 /// A chat stream that detaches instead of failing: once the client is gone
 /// nothing more is written, and the turn is cancelled but still driven to its
 /// exit, because a started mutation must never be dropped mid-flight.
-struct Sink<'s> {
+struct Sink<'s, W: ChatEventWriter> {
     wire: Wire,
-    stream: &'s mut TcpStream,
+    stream: &'s mut W,
     detached: bool,
 }
 
-impl Sink<'_> {
+impl<W: ChatEventWriter> Sink<'_, W> {
     async fn send(&mut self, value: Value) {
-        if !self.detached && self.wire.send(self.stream, &value).await.is_err() {
+        if !self.detached
+            && self
+                .stream
+                .send_event(self.wire.transport(), &value)
+                .await
+                .is_err()
+        {
             self.detached = true;
         }
     }
 }
 
+/// Resolves when the native turn that owns this run is stopped; never for an
+/// observer-only stream.
+async fn owner_cancelled(owner: Option<&Arc<NativeTurn>>) {
+    match owner {
+        Some(owner) => owner.cancel.cancelled().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The next control a native turn's owner sends; never without one.
+async fn next_command(
+    controls: Option<&mut mpsc::Receiver<NativeTurnCommand>>,
+) -> Option<NativeTurnCommand> {
+    match controls {
+        Some(receiver) => receiver.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Waits for the decision on one pending request, registered under `id` so
-/// the resume endpoint can deliver it and owner checks still apply.
+/// the resume endpoint can deliver it and owner checks still apply. A native
+/// owner's stop ends the wait with no decision.
 async fn await_pending(
     state: &AppState,
     auth: &AuthContext,
     session_id: Option<&str>,
     id: &str,
+    owner: Option<&Arc<NativeTurn>>,
 ) -> Option<(bool, Option<ToolResult>)> {
     let (sender, mut receiver) = mpsc::unbounded_channel();
     state
@@ -415,12 +448,15 @@ async fn await_pending(
             .await
             .insert(id.to_owned(), owner);
     }
-    let decision = receiver.recv().await.map(|(_, approved, result, _, ack)| {
-        if let Some(ack) = ack {
-            let _ = ack.send(ToolResponseConsumption::Accepted);
-        }
-        (approved, result)
-    });
+    let decision = tokio::select! {
+        received = receiver.recv() => received.map(|(_, approved, result, _, ack)| {
+            if let Some(ack) = ack {
+                let _ = ack.send(ToolResponseConsumption::Accepted);
+            }
+            (approved, result)
+        }),
+        () = owner_cancelled(owner) => None,
+    };
     state.pending_tool_responses.lock().await.remove(id);
     state.pending_tool_response_sessions.lock().await.remove(id);
     decision
@@ -430,7 +466,7 @@ async fn await_pending(
 /// whether the turn completed (the caller acknowledges peer messages then).
 pub(crate) async fn run_dex_chat(
     wire: Wire,
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     turn: DexChatTurn<'_>,
     snapshot: &mut Option<ChatSnapshot>,
 ) -> Result<bool, String> {
@@ -454,8 +490,8 @@ pub(crate) async fn run_dex_chat(
     }
 }
 
-async fn drive(
-    sink: &mut Sink<'_>,
+async fn drive<W: ChatEventWriter>(
+    sink: &mut Sink<'_, W>,
     turn: &DexChatTurn<'_>,
     snapshot: &mut Option<ChatSnapshot>,
     dir: &Path,
@@ -525,12 +561,41 @@ async fn drive(
     sink.send(serde_json::json!({ "type": "turn_start" })).await;
 
     let mut transcript = Transcript::default();
+    // A native-owned turn is stopped by its owner, not by its observers; the
+    // kernel keeps driving a started mutation to its exit either way.
+    let native_owner = sink.stream.native_turn();
+    let mut controls = native_owner
+        .as_ref()
+        .and_then(|owner| owner.take_commands());
+    let mut stop_requested = false;
     let exit = loop {
         if sink.detached {
             run.cancel();
         }
         let step = tokio::select! {
             step = run.next() => step?,
+            () = owner_cancelled(native_owner.as_ref()), if !stop_requested => {
+                stop_requested = true;
+                run.cancel();
+                continue;
+            }
+            command = next_command(controls.as_mut()) => {
+                match command {
+                    // The dex-loop kernel has no mid-turn steering input, so
+                    // the owner hears that plainly instead of timing out.
+                    Some(NativeTurnCommand::Steer { content, reply }) => {
+                        tracing::debug!(
+                            bytes = content.len(),
+                            "steering refused: the dex-loop kernel takes no mid-turn input"
+                        );
+                        let _ = reply.send(Err(
+                            "Steering is not available for this runtime".to_owned(),
+                        ));
+                    }
+                    None => controls = None,
+                }
+                continue;
+            }
             Some(receipt) = receipts.recv() => {
                 sink.send(managed_gateway_receipt_status(
                     receipt.request_id,
@@ -544,6 +609,23 @@ async fn drive(
         };
         match step {
             Step::Observed(observed) => {
+                if let (Some(generation), Observed::Event(_, event)) =
+                    (turn.context_generation.as_deref(), &observed)
+                {
+                    if let Event::Usage(usage) = event.as_ref() {
+                        // Each model call reports its whole prompt, cached or
+                        // not: the latest one is the session's context in use.
+                        crate::session_context::record_observed_input(
+                            state,
+                            turn.session_id.as_deref(),
+                            generation,
+                            usage.input_tokens,
+                            &turn.usage_provider,
+                            &turn.usage_model,
+                        )
+                        .await;
+                    }
+                }
                 for frame in transcript.apply(observed) {
                     sink.send(frame).await;
                 }
@@ -583,6 +665,7 @@ async fn drive(
                             turn.auth,
                             turn.session_id.as_deref(),
                             question.as_str(),
+                            native_owner.as_ref(),
                         )
                         .await
                         {
@@ -631,12 +714,15 @@ async fn drive(
                             .remove(call.as_str());
                         break Exit::Interrupted;
                     }
-                    let result = results
-                        .recv()
-                        .await
-                        .and_then(|(_, approved, result, _, _)| {
-                            approved.then_some(result).flatten()
-                        });
+                    let (result, stopped) = tokio::select! {
+                        received = results.recv() => (
+                            received.and_then(|(_, approved, result, _, _)| {
+                                approved.then_some(result).flatten()
+                            }),
+                            false,
+                        ),
+                        () = owner_cancelled(native_owner.as_ref()) => (None, true),
+                    };
                     state
                         .pending_tool_responses
                         .lock()
@@ -652,6 +738,9 @@ async fn drive(
                         .lock()
                         .await
                         .remove(call.as_str());
+                    if stopped {
+                        break Exit::Interrupted;
+                    }
                     result
                 } else if is_session_messaging_tool(tool.as_str()) {
                     Some(
@@ -678,8 +767,14 @@ async fn drive(
                     if sink.detached {
                         break Exit::Interrupted;
                     }
-                    match await_pending(state, turn.auth, turn.session_id.as_deref(), call.as_str())
-                        .await
+                    match await_pending(
+                        state,
+                        turn.auth,
+                        turn.session_id.as_deref(),
+                        call.as_str(),
+                        native_owner.as_ref(),
+                    )
+                    .await
                     {
                         Some((_, result)) => result,
                         None => break Exit::Interrupted,
@@ -728,6 +823,7 @@ async fn drive(
                 &transcript.tools,
             );
             finish_chat_snapshot(snapshot, &mut message).await;
+            annotate_completed_turn(&mut message);
             record_chat_assistant_message(state, turn.session_id.as_deref(), message.clone()).await;
             sink.send(serde_json::json!({ "type": "message_end", "message": message }))
                 .await;

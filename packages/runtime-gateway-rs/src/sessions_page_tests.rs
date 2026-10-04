@@ -191,3 +191,61 @@ async fn sessions_page_preserves_structured_excerpts_and_removes_all_inline_atta
         assert!(!serialized.contains(private));
     }
 }
+
+#[tokio::test]
+async fn sessions_page_message_anchor_stays_in_byte_budget_and_rejects_reused_generation() {
+    let mut session = tenant_session("paged", "owner", "org", "workspace");
+    let generation = session.created_at.clone();
+    session.messages=(0..150).map(|index|serde_json::json!({"role":"user","content":format!("message {index} {}","😀".repeat(20_000))})).collect();
+    let state = test_app_state_with_sessions(HashMap::from([("paged".into(), session)]));
+    let auth = tenant_auth("owner", "org", "workspace");
+    let mut head = page_head(None);
+    head.query = HashMap::from([
+        ("messageIndex".into(), "75".into()),
+        ("sourceCreatedAt".into(), generation),
+    ]);
+    let response = handle_session_get(
+        &head,
+        &state,
+        SessionPath {
+            id: "paged",
+            tail: Some("page"),
+        },
+        &auth,
+    )
+    .await;
+    let page = page_json(&response);
+    let start = page["startIndex"].as_u64().unwrap();
+    let messages = page["messages"].as_array().unwrap();
+    assert_eq!(start + messages.len() as u64, 76);
+    assert!(
+        messages.last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("message 75")
+    );
+    assert!(serde_json::to_vec(&page).unwrap().len() <= 256 * 1024 + 16 * 1024);
+    state
+        .sessions
+        .lock()
+        .await
+        .sessions
+        .get_mut("paged")
+        .unwrap()
+        .created_at = "replacement".into();
+    let rejected = handle_session_get(
+        &head,
+        &state,
+        SessionPath {
+            id: "paged",
+            tail: Some("page"),
+        },
+        &auth,
+    )
+    .await;
+    assert!(
+        std::str::from_utf8(&rejected)
+            .unwrap()
+            .starts_with("HTTP/1.1 409")
+    );
+}

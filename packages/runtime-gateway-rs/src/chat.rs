@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat_output::{ChatEventWriter, send_chat_event};
 use crate::dex_chat::{DexChatTurn, Wire, run_dex_chat};
 use crate::turn_diffs::{begin_chat_snapshot, finish_chat_snapshot};
 
@@ -10,7 +11,7 @@ pub(crate) fn is_chat_websocket_endpoint(head: &RequestHead) -> bool {
     head.method == "GET" && head.path == "/api/chat/ws"
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatRequest {
     pub(crate) model: Option<String>,
@@ -42,7 +43,7 @@ pub(crate) fn managed_gateway_receipt_status(
     })
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatMessage {
     pub(crate) role: String,
@@ -53,7 +54,7 @@ pub(crate) struct ChatMessage {
     pub(crate) extra: Map<String, Value>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatAttachment {
     pub(crate) id: Option<String>,
@@ -97,7 +98,7 @@ impl Drop for PreparedAttachments {
     }
 }
 
-async fn selected_chat_model(chat: &ChatRequest, state: &AppState) -> String {
+pub(crate) async fn selected_chat_model(chat: &ChatRequest, state: &AppState) -> String {
     if let Some(model) = chat
         .model
         .as_deref()
@@ -154,7 +155,7 @@ pub(crate) async fn handle_codex_app_server_chat_transport(
 }
 
 async fn handle_codex_app_server_chat_transport_scoped(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     state: &AppState,
     session_id: Option<&str>,
     model: &str,
@@ -185,6 +186,7 @@ async fn handle_codex_app_server_chat_transport_scoped(
     )
     .await?;
 
+    let native_owner = stream.native_turn();
     let assistant_output_result = if approval_mode == "prompt" {
         run_codex_app_server_headless_cli(
             stream,
@@ -198,12 +200,13 @@ async fn handle_codex_app_server_chat_transport_scoped(
         )
         .await
     } else {
-        run_codex_app_server_cli(
+        run_codex_app_server_cli_cancellable(
             &state.config.cwd,
             model,
             approval_mode,
             prompt,
             attachment_paths,
+            native_owner.as_ref().map(|owner| &owner.cancel),
         )
         .await
     };
@@ -245,6 +248,7 @@ async fn handle_codex_app_server_chat_transport_scoped(
         .await?;
     }
     finish_chat_snapshot(&mut turn_snapshot, &mut message).await;
+    annotate_completed_turn(&mut message);
     record_chat_assistant_message(state, session_id, message.clone()).await;
     record_usage_entry(
         state,
@@ -285,7 +289,7 @@ async fn handle_codex_app_server_chat_transport_scoped(
 }
 
 async fn handle_codex_app_server_chat_ws(
-    stream: &mut TcpStream,
+    stream: &mut impl ChatEventWriter,
     state: &AppState,
     session_id: Option<&str>,
     model: &str,
@@ -303,6 +307,13 @@ async fn handle_codex_app_server_chat_ws(
         (CodexBridgeTransport::WebSocket, scope),
     )
     .await
+}
+
+pub(crate) fn annotate_completed_turn(message: &mut Value) {
+    if let Some(index) = message.get("fileSnapshotTurnIndex").cloned() {
+        message["turnIndex"] = index;
+        message["turnCompleted"] = Value::Bool(true);
+    }
 }
 
 pub(crate) async fn record_chat_user_message(
@@ -686,6 +697,7 @@ pub(crate) async fn run_authorized_chat(
                 .is_some_and(|level| !matches!(level, "off" | "none" | "disabled")),
             usage_provider,
             usage_model,
+            context_generation: None,
         },
         &mut turn_snapshot,
     )
@@ -788,68 +800,85 @@ pub(crate) async fn handle_chat_websocket_endpoint(
             return Ok(());
         }
     };
+    execute_chat_websocket_turn(&mut stream, chat, auth, state).await
+}
+
+pub(crate) async fn execute_chat_websocket_turn(
+    stream: &mut impl ChatEventWriter,
+    chat: ChatRequest,
+    auth: AuthContext,
+    state: AppState,
+) -> Result<(), String> {
     if let Err(error) = validate_client_tool_names(&chat) {
-        send_ws_json(
-            &mut stream,
+        send_chat_event(
+            stream,
             &serde_json::json!({ "type": "error", "message": error }),
         )
         .await?;
-        send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-        send_ws_close(&mut stream).await?;
-        let _ = stream.shutdown().await;
+        send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+        stream.close().await?;
         return Ok(());
     }
 
     let Some(latest) = chat.messages.last() else {
-        send_ws_json(
-            &mut stream,
+        send_chat_event(
+            stream,
             &serde_json::json!({ "type": "error", "message": "No messages supplied" }),
         )
         .await?;
-        send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-        send_ws_close(&mut stream).await?;
-        let _ = stream.shutdown().await;
+        send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+        stream.close().await?;
         return Ok(());
     };
     if latest.role != "user" {
-        send_ws_json(
-            &mut stream,
+        send_chat_event(
+            stream,
             &serde_json::json!({ "type": "error", "message": "Last message must be a user message" }),
         )
         .await?;
-        send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-        send_ws_close(&mut stream).await?;
-        let _ = stream.shutdown().await;
+        send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+        stream.close().await?;
         return Ok(());
     }
 
     if !chat_message_has_input(latest) {
-        send_ws_json(
-            &mut stream,
+        send_chat_event(
+            stream,
             &serde_json::json!({ "type": "error", "message": "User message cannot be empty" }),
         )
         .await?;
-        send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-        send_ws_close(&mut stream).await?;
-        let _ = stream.shutdown().await;
+        send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+        stream.close().await?;
         return Ok(());
     }
-    let mut prompt = build_prompt_from_chat(&chat);
+    let native_owner = stream.native_turn();
+    let mut prompt = if native_owner.is_some() {
+        build_native_prompt_from_chat(&chat)
+    } else {
+        build_prompt_from_chat(&chat)
+    };
     let system_prompt = system_prompt_from_chat(&chat);
 
     let session_id = chat.session_id.clone();
+    let session_created_at = {
+        let sessions = state.sessions.lock().await;
+        session_id
+            .as_ref()
+            .and_then(|id| sessions.sessions.get(id))
+            .map(|session| session.created_at.clone())
+            .unwrap_or_default()
+    };
     let _active_turn = state.pull_request_watches.enter(session_id.as_deref());
     let prepared_attachments = match prepare_chat_attachments(&chat, &state.config.cwd).await {
         Ok(attachments) => attachments,
         Err(error) => {
-            send_ws_json(
-                &mut stream,
+            send_chat_event(
+                stream,
                 &serde_json::json!({ "type": "error", "message": error }),
             )
             .await?;
-            send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-            send_ws_close(&mut stream).await?;
-            let _ = stream.shutdown().await;
+            send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+            stream.close().await?;
             return Ok(());
         }
     };
@@ -857,14 +886,13 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         Ok(turn_scope) => turn_scope,
         Err(error) => {
             cleanup_prepared_attachments(prepared_attachments).await;
-            send_ws_json(
-                &mut stream,
+            send_chat_event(
+                stream,
                 &serde_json::json!({ "type": "error", "message": error }),
             )
             .await?;
-            send_ws_json(&mut stream, &serde_json::json!({ "type": "done" })).await?;
-            send_ws_close(&mut stream).await?;
-            let _ = stream.shutdown().await;
+            send_chat_event(stream, &serde_json::json!({ "type": "done" })).await?;
+            stream.close().await?;
             return Ok(());
         }
     };
@@ -874,8 +902,8 @@ pub(crate) async fn handle_chat_websocket_endpoint(
     let model = selected_chat_model(&chat, &state).await;
     if let Some(codex_model) = codex_app_server_model_id(&model) {
         if let Some(session_id) = session_id.as_deref() {
-            send_ws_json(
-                &mut stream,
+            send_chat_event(
+                stream,
                 &serde_json::json!({
                     "type": "status",
                     "status": "session",
@@ -885,7 +913,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
             .await?;
         }
         let prompt_succeeded = handle_codex_app_server_chat_ws(
-            &mut stream,
+            stream,
             &state,
             session_id.as_deref(),
             &codex_model,
@@ -903,8 +931,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
             )
             .await;
         }
-        send_ws_close(&mut stream).await?;
-        let _ = stream.shutdown().await;
+        stream.close().await?;
         cleanup_prepared_attachments(prepared_attachments).await;
         return Ok(());
     }
@@ -924,7 +951,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
     client_tools.extend(crate::pull_request_watch::tool_definitions());
     let completed = run_dex_chat(
         Wire::WebSocket,
-        &mut stream,
+        stream,
         DexChatTurn {
             state: &state,
             auth: &auth,
@@ -942,6 +969,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
                 .is_some_and(|level| !matches!(level, "off" | "none" | "disabled")),
             usage_provider,
             usage_model,
+            context_generation: Some(session_created_at),
         },
         &mut turn_snapshot,
     )
@@ -956,8 +984,7 @@ pub(crate) async fn handle_chat_websocket_endpoint(
         )
         .await;
     }
-    send_ws_close(&mut stream).await?;
-    let _ = stream.shutdown().await;
+    stream.close().await?;
     completed.map(|_| ())
 }
 
@@ -1053,6 +1080,21 @@ async fn cleanup_prepared_attachments(mut attachments: PreparedAttachments) {
     if let Some(temp_dir) = attachments.temp_dir.take() {
         let _ = tokio::fs::remove_dir_all(temp_dir).await;
     }
+}
+
+// Native-owned attachments have a separate provider/temporary-file path.
+// Raw bytes are not prompt text. Extracted document text and immutable file
+// metadata remain in the portable transcript passed to both native providers.
+pub(crate) fn build_native_prompt_from_chat(chat: &ChatRequest) -> String {
+    let mut projected = chat.clone();
+    for message in &mut projected.messages {
+        for attachment in &mut message.attachments {
+            if attachment.content.take().is_some() {
+                attachment.content_omitted = Some(true);
+            }
+        }
+    }
+    build_prompt_from_chat(&projected)
 }
 
 pub(crate) fn build_prompt_from_chat(chat: &ChatRequest) -> String {
@@ -1325,7 +1367,7 @@ async fn write_ws_text_frame(stream: &mut TcpStream, payload: &[u8]) -> Result<(
         .map_err(|error| error.to_string())
 }
 
-async fn send_ws_close(stream: &mut TcpStream) -> Result<(), String> {
+pub(crate) async fn send_ws_close(stream: &mut TcpStream) -> Result<(), String> {
     stream
         .write_all(&[0x88, 0x00])
         .await
