@@ -436,17 +436,30 @@ export function fetchRequiredStatusChecks(repo, branch, queryGh = ghJson) {
 	if (!branch) {
 		return null;
 	}
+	const encoded = encodeURIComponent(branch);
 	try {
-		const data = queryGh([
-			"api",
-			`repos/${repo}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`,
-		]);
-		return Array.from(
-			new Set([
+		let classic = [];
+		try {
+			const data = queryGh([
+				"api",
+				`repos/${repo}/branches/${encoded}/protection/required_status_checks`,
+			]);
+			classic = [
 				...(data.contexts ?? []),
 				...(data.checks ?? []).map((check) => check.context).filter(Boolean),
-			]),
-		);
+			];
+		} catch (error) {
+			if (!/HTTP 404/.test(`${error?.message ?? ""}${error?.stderr ?? ""}`)) {
+				throw error;
+			}
+		}
+		const rules = queryGh(["api", `repos/${repo}/rules/branches/${encoded}`]);
+		const ruleset = rules
+			.filter((rule) => rule.type === "required_status_checks")
+			.flatMap((rule) => rule.parameters?.required_status_checks ?? [])
+			.map((check) => check.context)
+			.filter(Boolean);
+		return Array.from(new Set([...classic, ...ruleset]));
 	} catch {
 		return null;
 	}

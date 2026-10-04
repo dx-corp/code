@@ -30,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::budget::{Budget, BudgetAxis};
 use crate::compaction::{Compactor, NoCompaction};
+use crate::content_policy::{AuthoredContent, ContentPolicyScope, evaluate_content_policy};
 use crate::context::{CallState, Context, Decision, Status};
 use crate::event::{
     AUTO_APPROVER, ApprovalId, CallId, Cursor, ErrorCode, Event, Outcome, PrincipalId,
@@ -548,6 +549,13 @@ where
         let mut filter = self.sanitizer.filter();
         let mut thinking = Thinking::new(self.sanitizer.filter());
         let mut text = String::new();
+        let content_policy = ctx
+            .voice()
+            .and_then(|voice| voice.policy.as_ref())
+            .filter(|policy| policy.has_deterministic_controls())
+            .cloned();
+        let mut visible_thinking = Vec::new();
+        let mut controlled_bytes = 0usize;
         let mut calls = Vec::new();
         let mut failure = None;
         let mut wall_exceeded = false;
@@ -604,22 +612,46 @@ where
                         None => StreamStep::Ended,
                     },
                 };
+                if content_policy.is_some()
+                    && let StreamStep::Chunk(Ok(
+                        ModelChunk::Text(delta) | ModelChunk::Thinking(delta),
+                    )) = &outcome
+                {
+                    controlled_bytes = controlled_bytes.saturating_add(delta.len());
+                    if controlled_bytes > MAX_CONTROLLED_PROSE_BYTES {
+                        failure = Some(ModelError {
+                            class: crate::ErrorClass::Rejected,
+                            message: "content_policy_output_too_large: Controlled prose exceeds the validation buffer limit.".into(),
+                        });
+                        break;
+                    }
+                }
                 match outcome {
                     StreamStep::Chunk(Ok(ModelChunk::Thinking(delta))) => {
                         if let Some(summary) = thinking.push(&delta, !text.is_empty()) {
-                            let event = [Event::ThinkingDelta { text: summary }];
-                            prefetch.reads.drive(self.log.append(&event)).await?;
+                            if content_policy.is_some() {
+                                visible_thinking.push(summary);
+                            } else {
+                                let event = [Event::ThinkingDelta { text: summary }];
+                                prefetch.reads.drive(self.log.append(&event)).await?;
+                            }
                         }
                     }
                     StreamStep::Chunk(Ok(ModelChunk::Text(delta))) => {
                         if let Some(summary) = thinking.flush() {
-                            let event = [Event::ThinkingDelta { text: summary }];
-                            prefetch.reads.drive(self.log.append(&event)).await?;
+                            if content_policy.is_some() {
+                                visible_thinking.push(summary);
+                            } else {
+                                let event = [Event::ThinkingDelta { text: summary }];
+                                prefetch.reads.drive(self.log.append(&event)).await?;
+                            }
                         }
                         let safe = filter.push(&delta);
                         if !safe.is_empty() {
                             text.push_str(&safe);
-                            prefetch.reads.drive(self.log.append_text(safe)).await?;
+                            if content_policy.is_none() {
+                                prefetch.reads.drive(self.log.append_text(safe)).await?;
+                            }
                         }
                     }
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
@@ -679,17 +711,51 @@ where
             }
             if failure.is_none() && !wall_exceeded {
                 if let Some(summary) = thinking.flush() {
-                    let event = [Event::ThinkingDelta { text: summary }];
-                    prefetch.reads.drive(self.log.append(&event)).await?;
+                    if content_policy.is_some() {
+                        visible_thinking.push(summary);
+                    } else {
+                        let event = [Event::ThinkingDelta { text: summary }];
+                        prefetch.reads.drive(self.log.append(&event)).await?;
+                    }
                 }
                 let tail = filter.finish();
                 if !tail.is_empty() {
                     text.push_str(&tail);
-                    prefetch.reads.drive(self.log.append_text(tail)).await?;
+                    if content_policy.is_none() {
+                        prefetch.reads.drive(self.log.append_text(tail)).await?;
+                    }
                 }
             }
         }
 
+        if failure.is_none()
+            && !wall_exceeded
+            && !cancel.is_cancelled()
+            && let Some(policy) = &content_policy
+        {
+            let progress = evaluate_content_policy(
+                policy,
+                &AuthoredContent::from_text(&visible_thinking.concat()),
+                ContentPolicyScope::Progress,
+            );
+            let scope = if calls.is_empty() {
+                ContentPolicyScope::Response
+            } else {
+                ContentPolicyScope::Progress
+            };
+            let response =
+                evaluate_content_policy(policy, &AuthoredContent::from_text(&text), scope);
+            if let Some(violation) = progress
+                .violations
+                .first()
+                .or_else(|| response.violations.first())
+            {
+                failure = Some(ModelError {
+                    class: crate::ErrorClass::Rejected,
+                    message: format!("{}: {}", violation.code, violation.message),
+                });
+            }
+        }
         for (cursor, event) in std::mem::take(&mut prefetch.unobserved) {
             ctx.observe(cursor, &event);
         }
@@ -711,7 +777,11 @@ where
             self.emit(ctx, events).await?;
             return Ok(Some(Exit::Failed));
         }
-        if failure.is_some() && !text.is_empty() && !cancel.is_cancelled() {
+        if content_policy.is_none()
+            && failure.is_some()
+            && !text.is_empty()
+            && !cancel.is_cancelled()
+        {
             // The customer already read this text. Keep it as the
             // answer, visibly marked as cut off, instead of withdrawing
             // it: a long answer that loses its stream near the end (a
@@ -753,6 +823,9 @@ where
             return Ok(Some(Exit::Failed));
         }
         if cancel.is_cancelled() {
+            if content_policy.is_some() {
+                text.clear();
+            }
             // Keep what the customer saw; calls from a cut stream never run,
             // so their continuation state is not kept either.
             let mut events = pending_usage;
@@ -766,6 +839,21 @@ where
             });
             self.emit(ctx, events).await?;
             return self.interrupt(ctx, prefetch).await.map(Some);
+        }
+        if content_policy.is_some() {
+            let events: Vec<_> = visible_thinking
+                .into_iter()
+                .map(|text| Event::ThinkingDelta { text })
+                .collect();
+            if !events.is_empty() {
+                prefetch.reads.drive(self.log.append(&events)).await?;
+            }
+            if !text.is_empty() {
+                prefetch
+                    .reads
+                    .drive(self.log.append_text(text.clone()))
+                    .await?;
+            }
         }
         if !calls.is_empty() && self.budget.answer_only(step.saturating_sub(1)) {
             // Asked for a tool on the call that offered none. Nothing can run
@@ -2009,6 +2097,8 @@ fn search_spec() -> ToolSpec {
 
 /// Most thinking summary one attempt shows; the rest is dropped.
 const MAX_THINKING_BYTES: usize = 16 * 1024;
+/// A policy-controlled step may not retain unbounded unvalidated model prose.
+const MAX_CONTROLLED_PROSE_BYTES: usize = 256 * 1024;
 /// Held thinking is written once it reaches this size (the first piece is
 /// written at once, so progress appears as soon as the model starts).
 const THINKING_FLUSH_BYTES: usize = 240;
