@@ -22,6 +22,9 @@ pub struct TurnVoice {
 }
 
 impl TurnVoice {
+    /// Maximum serialized snapshot size, shared by admission and runtime ingress.
+    pub const MAX_JSON_BYTES: usize = 64 * 1024;
+
     /// True when there is nothing to render for the turn.
     pub fn is_empty(&self) -> bool {
         self.policy.is_none() && self.tone.is_empty()
@@ -65,6 +68,9 @@ pub enum TurnVoiceChoice {
     /// A workspace brand voice: the workspace default, or one the sender
     /// picked.
     Brand(TurnBrandVoice),
+    /// Ordered immutable blend. The first voice leads; supporting voices add
+    /// compatible traits without overriding workspace content rules.
+    Blend { voices: Vec<TurnBrandVoice> },
 }
 
 /// One workspace brand voice, copied at the version admitted for the turn.

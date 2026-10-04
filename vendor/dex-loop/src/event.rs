@@ -937,6 +937,27 @@ mod tests {
     }
 
     #[test]
+    fn accepted_voice_blend_survives_durable_event_replay() {
+        let input = serde_json::json!({
+            "type": "user_message", "turn": "turn-1", "principal": "user-1",
+            "text": "hello", "attachments": [],
+            "voice": { "policy": { "guide_version": 9, "voice": {
+                "kind": "blend", "voices": [
+                    {"voice_id": "exec", "name": "Executive", "guidance": "Decision first", "version": 2, "explicit": true},
+                    {"voice_id": "care", "name": "Care", "guidance": "Warm and patient", "version": 4, "explicit": true}
+                ]
+            } } }
+        });
+        let event: Event = serde_json::from_value(input.clone()).unwrap();
+        let encoded = serde_json::to_string(&event).unwrap();
+        let replay: Event = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(replay).unwrap()["voice"]["policy"]["voice"],
+            input["voice"]["policy"]["voice"]
+        );
+    }
+
+    #[test]
     fn model_attempt_failed_round_trips_as_snake_case_json() {
         let event = Event::ModelAttemptFailed {
             step: 2,
