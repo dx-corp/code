@@ -817,6 +817,9 @@ message WorkspaceCapabilitySetAppliedMessage {
   string provider_prompt_sha256 = 13;
   bool staged_for_next_turn = 14;
   bool idempotent = 15;
+  // Installed config for admitted turns; active turns retain their pinned prompt.
+  optional uint64 current_activation_generation = 16;
+  optional string current_catalog_digest = 17;
 }
 
 message RawAgentEventMessage {

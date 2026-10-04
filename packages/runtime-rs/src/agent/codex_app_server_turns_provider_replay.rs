@@ -145,6 +145,11 @@ struct ReplayProcess {
 }
 
 async fn replay_process(phase: &str, workspace: &Path, audit_root: &Path) -> ReplayProcess {
+    // Session keys normalize aliases before the real client sends cwd. The
+    // provider fixture must expect that same wire path, including on macOS.
+    let workspace = CodexSessionKey::new("fixture-profile", workspace, "gpt-5.5")
+        .expect("canonical fixture workspace")
+        .workspace;
     let audit = audit_root.join(format!("{phase}.ndjson"));
     let completion = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -478,6 +483,50 @@ async fn provider_replay_resume_failure_preserves_binding_without_replacement() 
     })
     .await
     .expect("bounded provider failure replay");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_replay_accepts_workspace_symlink_without_replacing_binding() {
+    let state = tempfile::tempdir().expect("state");
+    let workspace = tempfile::tempdir().expect("workspace");
+    let alias = state.path().join("workspace-alias");
+    std::os::unix::fs::symlink(workspace.path(), &alias).expect("workspace symlink");
+    let manifest = manifest(&alias, "parent-session");
+    assert_ne!(manifest.key.workspace, alias);
+    let binding = CodexThreadBinding::new(
+        manifest.key.clone(),
+        "thread-parent",
+        Some("2025-01-01".to_owned()),
+        1,
+    );
+    binding.store_at(state.path()).expect("store binding");
+    let process = replay_process("resume_unavailable", &alias, state.path()).await;
+    let error = CodexAppServerTurnSession::connect_with_client_and_manifest(
+        process.client,
+        manifest.clone(),
+        state.path(),
+        &[],
+        None,
+        &[],
+    )
+    .await
+    .err()
+    .expect("provider resume must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("Provider temporarily unavailable")
+    );
+    assert_eq!(
+        CodexThreadBinding::load_at(state.path(), &manifest.key).expect("load binding"),
+        Some(binding)
+    );
+    let frames = completed_audit(process.completion, &process.audit).await;
+    assert_eq!(
+        frames[2]["params"]["cwd"],
+        manifest.key.workspace.to_string_lossy().as_ref()
+    );
 }
 
 #[tokio::test]

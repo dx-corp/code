@@ -189,18 +189,32 @@ impl NativeAgentRunner {
             .and_then(|message| message.managed_inference_authorization.clone());
         let mut next_prompt_context: Option<String> = None;
         let mut appended = false;
+        let all_ids: Vec<_> = pending
+            .iter()
+            .map(|message| message.id)
+            .filter(|id| *id != 0)
+            .collect();
+        let mut accepted_ids = Vec::new();
         for pending_message in pending {
-            if let Some((message, prompt_context)) =
-                self.prepare_pending_message(&pending_message).await?
-            {
+            let prepared = match self.prepare_pending_message(&pending_message).await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.discard_queued_configurations(all_ids);
+                    return Err(error);
+                }
+            };
+            if let Some((message, prompt_context)) = prepared {
                 self.messages_mut().push(message);
                 if pending_message.id != 0 {
                     self.processed_prompt_queue_ids.insert(pending_message.id);
+                    accepted_ids.push(pending_message.id);
                 }
                 if let Some(context) = prompt_context {
                     Self::merge_prompt_context(&mut next_prompt_context, context);
                 }
                 appended = true;
+            } else {
+                self.discard_queued_configurations(vec![pending_message.id]);
             }
         }
         self.prompt_context = next_prompt_context;
@@ -212,7 +226,36 @@ impl NativeAgentRunner {
                 );
             }
         }
+        if !accepted_ids.is_empty() {
+            let system_prompt_sha256 = self
+                .config
+                .system_prompt
+                .as_ref()
+                .map(|prompt| format!("sha256:{:x}", Sha256::digest(prompt.as_bytes())));
+            let _ = self.event_tx.send(FromAgent::QueuedPromptConfiguration {
+                queue_ids: accepted_ids,
+                system_prompt_sha256,
+            });
+        }
         Ok(appended)
+    }
+
+    pub(super) fn discard_queued_configurations(&mut self, queue_ids: Vec<u64>) {
+        let queue_ids: Vec<_> = queue_ids.into_iter().filter(|id| *id != 0).collect();
+        for id in &queue_ids {
+            self.queued_system_prompts.remove(id);
+        }
+        if !queue_ids.is_empty() {
+            let _ = self.event_tx.send(FromAgent::QueuedPromptConfiguration {
+                queue_ids,
+                system_prompt_sha256: None,
+            });
+        }
+    }
+
+    pub(super) fn discard_all_queued_configurations(&mut self) {
+        let ids = self.queued_system_prompts.keys().copied().collect();
+        self.discard_queued_configurations(ids);
     }
     pub(super) async fn load_attachment_blocks(&self, raw_paths: &[String]) -> Vec<ContentBlock> {
         if raw_paths.is_empty() {

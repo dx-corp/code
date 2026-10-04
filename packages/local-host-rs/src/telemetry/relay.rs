@@ -551,6 +551,7 @@ impl TurnTelemetryRelay {
             FromAgent::CodeModeProgress { .. } => None,
             FromAgent::ToolOutput { .. }
             | FromAgent::LocalAssistantContent { .. }
+            | FromAgent::QueuedPromptConfiguration { .. }
             | FromAgent::ConversationSnapshot { .. }
             | FromAgent::ManagedAuthorizationRequest { .. }
             | FromAgent::ManagedGatewayReceipt { .. }

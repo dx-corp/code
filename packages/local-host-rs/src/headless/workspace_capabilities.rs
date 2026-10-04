@@ -76,6 +76,12 @@ pub struct WorkspaceCapabilitySetApplied {
     pub provider_prompt_sha256: String,
     pub staged_for_next_turn: bool,
     pub idempotent: bool,
+    /// Installed prompt configuration for admitted turns, never a claim that an
+    /// already-running turn switched its pinned prompt. Older peers omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_activation_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_catalog_digest: Option<String>,
 }
 
 /// A runtime receipt may become reconnect authority only for the complete
@@ -85,7 +91,18 @@ pub(crate) fn accept_workspace_capability_receipt(
     last_accepted: &mut Option<ApplyWorkspaceCapabilitySet>,
     receipt: &WorkspaceCapabilitySetApplied,
 ) -> bool {
-    let Some(request) = pending.get(&receipt.replay_cursor) else {
+    let from_pending = pending.contains_key(&receipt.replay_cursor);
+    let Some(request) = pending.get(&receipt.replay_cursor).or_else(|| {
+        // A safe-boundary observation can follow a consumed admission. It
+        // may only describe the already accepted set, never install a new
+        // reconnect grant or promote a staged receipt as current.
+        last_accepted.as_ref().filter(|accepted| {
+            !receipt.staged_for_next_turn
+                && receipt.current_activation_generation == Some(accepted.activation_generation)
+                && receipt.current_catalog_digest.as_deref()
+                    == Some(accepted.capability_set_digest.as_str())
+        })
+    }) else {
         return false;
     };
     let matches = receipt.schema_version == PROMPT_CAPABILITY_SCHEMA_VERSION
@@ -114,6 +131,9 @@ pub(crate) fn accept_workspace_capability_receipt(
         });
     if !matches {
         return false;
+    }
+    if !from_pending {
+        return true;
     }
     let accepted = pending
         .remove(&receipt.replay_cursor)
@@ -296,14 +316,14 @@ impl WorkspaceCapabilityActivation {
             let staged_for_next_turn = self.staged.as_ref().is_some_and(|staged| {
                 staged.effective_catalog_digest == existing.effective_catalog_digest
             });
-            return receipt(&existing, binding, staged_for_next_turn, true);
+            return self.observed_receipt(&existing, binding, staged_for_next_turn, true);
         }
         let PreparedWorkspaceCapabilitySet::New(candidate) = prepared else {
             unreachable!("idempotent capability set returned above")
         };
         if turn_active {
             self.staged = Some(candidate);
-            receipt(
+            self.observed_receipt(
                 self.staged.as_ref().expect("staged set"),
                 binding,
                 true,
@@ -312,13 +332,51 @@ impl WorkspaceCapabilityActivation {
         } else {
             self.current = Some(candidate);
             self.staged = None;
-            receipt(
+            self.observed_receipt(
                 self.current.as_ref().expect("current set"),
                 binding,
                 false,
                 false,
             )
         }
+    }
+
+    fn observed_receipt(
+        &self,
+        set: &AcceptedCapabilitySet,
+        binding: &ControllerBindingReceipt,
+        staged_for_next_turn: bool,
+        idempotent: bool,
+    ) -> WorkspaceCapabilitySetApplied {
+        let mut observed = receipt(set, binding, staged_for_next_turn, idempotent);
+        observed.current_activation_generation = self
+            .current
+            .as_ref()
+            .map(|set| set.request.activation_generation);
+        observed.current_catalog_digest = self
+            .current
+            .as_ref()
+            .map(|set| set.effective_catalog_digest.clone());
+        observed
+    }
+
+    pub(crate) fn current_receipt(
+        &self,
+        binding: &ControllerBindingReceipt,
+    ) -> Option<WorkspaceCapabilitySetApplied> {
+        self.current
+            .as_ref()
+            .map(|set| self.observed_receipt(set, binding, false, true))
+    }
+
+    pub(crate) fn next_turn_receipt(
+        &self,
+        binding: &ControllerBindingReceipt,
+    ) -> Option<WorkspaceCapabilitySetApplied> {
+        self.staged
+            .as_ref()
+            .or(self.current.as_ref())
+            .map(|set| self.observed_receipt(set, binding, self.staged.is_some(), true))
     }
 
     /// Promotes a set staged while a native turn was active at the next boundary.
@@ -556,6 +614,8 @@ fn receipt(
         provider_prompt_sha256: set.provider_prompt_sha256.clone(),
         staged_for_next_turn,
         idempotent,
+        current_activation_generation: None,
+        current_catalog_digest: None,
     }
 }
 
