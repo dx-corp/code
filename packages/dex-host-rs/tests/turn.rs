@@ -86,6 +86,7 @@ async fn read_then_write_then_done_with_no_approval() {
         turn: TurnId::new("t1"),
         message_id: None,
         model_binding: None,
+        voice: None,
         principal: alice(),
         text: "read notes.txt, then write out.txt".into(),
         attachments: Vec::new(),
