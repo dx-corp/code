@@ -14,6 +14,7 @@ pub mod contracts;
 pub mod default_models;
 pub mod delegation;
 mod launch_spec;
+pub mod native_code;
 pub mod operation_observation;
 pub mod passport;
 pub mod protocol;

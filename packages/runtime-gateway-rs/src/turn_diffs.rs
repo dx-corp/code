@@ -40,13 +40,13 @@ pub(super) struct NativeSnapshotRegistry {
     active: std::sync::Mutex<Vec<std::sync::Weak<std::sync::atomic::AtomicBool>>>,
 }
 
-struct CaptureLease {
+pub(super) struct CaptureLease {
     registry: Arc<NativeSnapshotRegistry>,
     ambiguous: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl NativeSnapshotRegistry {
-    fn acquire(self: &Arc<Self>) -> CaptureLease {
+    pub(super) fn acquire(self: &Arc<Self>) -> CaptureLease {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mut active = self.active.lock().expect("snapshot registry lock");
         active.retain(|entry| entry.strong_count() > 0);
@@ -63,6 +63,9 @@ impl NativeSnapshotRegistry {
 }
 
 impl CaptureLease {
+    pub(super) fn ambiguous(&self) -> bool {
+        self.ambiguous.load(std::sync::atomic::Ordering::SeqCst)
+    }
     fn complete(&self) -> bool {
         let mut active = self.registry.active.lock().expect("snapshot registry lock");
         let this = Arc::downgrade(&self.ambiguous);
@@ -190,6 +193,12 @@ pub(super) async fn session_turn_diff_response(
                 return json_response(400, &serde_json::json!({"error": "Invalid turn index"}));
             }
         },
+        None if state.config.native_code_hosted => session
+            .messages
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .count()
+            .checked_sub(1),
         None => session
             .messages
             .iter()
@@ -207,6 +216,19 @@ pub(super) async fn session_turn_diff_response(
         return json_response(
             400,
             &serde_json::json!({"error": "Turn range is unavailable"}),
+        );
+    }
+    if state.config.native_code_hosted {
+        let saved = turn_index.and_then(|index| crate::governed_changes::saved(session, index));
+        let changes = saved.as_ref().map(|receipt| &receipt["changes"]);
+        return json_response(
+            200,
+            &serde_json::json!({
+                "sessionId":session.id,"workspacePath":state.config.cwd,"turnIndex":turn_index,
+                "availability":changes.map(|changes| &changes["availability"]).unwrap_or(&Value::Null).as_str().unwrap_or("unavailable"),
+                "files":changes.map(|changes| changes["files"].clone()).unwrap_or_else(|| serde_json::json!([])),
+                "receipt":saved,
+            }),
         );
     }
     let completed_snapshot = turn_index.is_some_and(|index| {

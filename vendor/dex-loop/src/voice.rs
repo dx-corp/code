@@ -68,6 +68,10 @@ pub enum TurnVoiceChoice {
     /// A workspace brand voice: the workspace default, or one the sender
     /// picked.
     Brand(TurnBrandVoice),
+    /// The authenticated sender acknowledged omitting workspace writing
+    /// guidelines at policy.guide_version. The snapshot is retained for replay;
+    /// it grants no additional authority.
+    GuidelinesOff,
     /// Ordered immutable blend. The first voice leads; supporting voices add
     /// compatible traits without overriding workspace content rules.
     Blend { voices: Vec<TurnBrandVoice> },

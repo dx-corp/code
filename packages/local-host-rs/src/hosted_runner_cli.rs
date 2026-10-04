@@ -564,7 +564,7 @@ async fn start_resolved_hosted_runner_cli_runtime(
             causal_receipt_id,
         ),
     );
-    let handle = match start_prepared_hosted_runner(prepared, executor) {
+    let handle = match start_prepared_hosted_runner(prepared, executor).await {
         Ok(handle) => handle,
         Err(error) => {
             shutdown_shared_supervisor(supervisor).await?;

@@ -49,12 +49,15 @@ mod codex_compat;
 mod codex_subagent_dispatch;
 mod dex_chat;
 mod extended;
+mod governed_changes;
+mod governed_native;
 mod hosted_threads;
 mod http;
 mod local;
 mod markitdown;
 mod migrations;
 mod model_catalog;
+mod native_credentials;
 mod native_turns;
 mod pull_request_watch;
 mod pull_request_watch_http;
@@ -294,6 +297,7 @@ pub(crate) fn host_header_allowed(head: &RequestHead, config: &Config) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeGatewayConfig {
+    native_code_hosted: bool,
     listen_host: String,
     listen_port: u16,
     api_key: Option<String>,
@@ -317,8 +321,32 @@ pub struct RuntimeGatewayConfig {
 
 pub(crate) type Config = RuntimeGatewayConfig;
 
+/// Private authentication shared only by a hosted runner and its loopback companion.
+pub fn generate_native_proxy_token() -> anyhow::Result<String> {
+    let mut entropy = [0u8; 32];
+    getrandom::fill(&mut entropy)
+        .map_err(|_| anyhow::anyhow!("native companion authentication randomness unavailable"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy))
+}
+
+/// Unpack the private bootstrap descriptor before hosted model resolution.
+pub fn prepare_native_code_gateway_credential() -> anyhow::Result<PathBuf> {
+    native_credentials::prepare_gateway().map_err(anyhow::Error::msg)?;
+    Ok(native_credentials::gateway_path())
+}
+
+/// Validate the private descriptor against canonical hosted launch identity.
+pub fn validate_native_code_credential_owner(
+    org: &str,
+    workspace: &str,
+    runner: &str,
+) -> anyhow::Result<()> {
+    native_credentials::validate_owner(org, workspace, runner).map_err(anyhow::Error::msg)
+}
+
 impl RuntimeGatewayConfig {
     pub fn from_env() -> Self {
+        let native_code_hosted = env::var("MAESTRO_NATIVE_CODE_COMPANION").as_deref() == Ok("1");
         let listen_port = env_u16("PORT", 8080);
         let listen_host = env::var("MAESTRO_CONTROL_HOST").unwrap_or_else(|_| "127.0.0.1".into());
         let listen_host_is_loopback = host_is_loopback(&listen_host);
@@ -328,26 +356,33 @@ impl RuntimeGatewayConfig {
         // only honored for loopback binds; on any other bind address auth stays
         // on and `validate_startup` refuses to start, so the switch can never
         // silently expose an unauthenticated agent runtime to the network.
-        let require_key = !listen_host_is_loopback
+        let require_key = native_code_hosted
+            || !listen_host_is_loopback
             || env::var("MAESTRO_WEB_REQUIRE_KEY")
                 .map(|value| value != "0")
                 .unwrap_or(false);
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let csrf_token = trimmed_env("MAESTRO_WEB_CSRF_TOKEN");
-        let require_csrf = csrf_token.is_some()
-            || (prod_profile() && env::var("MAESTRO_WEB_REQUIRE_CSRF").as_deref() != Ok("0"));
+        let require_csrf = !native_code_hosted
+            && (csrf_token.is_some()
+                || (prod_profile() && env::var("MAESTRO_WEB_REQUIRE_CSRF").as_deref() != Ok("0")));
         let llm_gateway_models_url = llm_gateway_models_url();
         let openrouter_models = llm_gateway_models_url
             .as_deref()
             .is_some_and(is_openrouter_models_url);
 
         Self {
+            native_code_hosted,
             listen_host,
             listen_port,
-            api_key: env::var("MAESTRO_WEB_API_KEY")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
+            api_key: if native_code_hosted {
+                None
+            } else {
+                env::var("MAESTRO_WEB_API_KEY")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            },
             allowed_hosts: parse_allowed_hosts(env::var("MAESTRO_WEB_ALLOWED_HOSTS").ok()),
             require_key,
             require_key_explicitly_disabled,
@@ -395,6 +430,7 @@ impl RuntimeGatewayConfig {
             std::process::id()
         ));
         Self {
+            native_code_hosted: false,
             listen_host: "127.0.0.1".into(),
             listen_port: 0,
             api_key: None,
@@ -431,6 +467,16 @@ impl RuntimeGatewayConfig {
     }
 
     fn validate_startup(&self) -> anyhow::Result<()> {
+        if self.native_code_hosted {
+            if !self.listen_host_is_loopback()
+                || trimmed_env("MAESTRO_WEB_TRUST_PROXY_AUTH_TOKEN").is_none()
+            {
+                anyhow::bail!(
+                    "Native hosted code requires loopback and a private authenticated proxy"
+                );
+            }
+            return Ok(());
+        }
         if self.require_key_explicitly_disabled && !self.listen_host_is_loopback() {
             anyhow::bail!(
                 "MAESTRO_WEB_REQUIRE_KEY=0 is only honored for loopback binds, but MAESTRO_CONTROL_HOST={} exposes the runtime gateway beyond localhost; remove MAESTRO_WEB_REQUIRE_KEY=0 and configure auth (MAESTRO_WEB_API_KEY, MAESTRO_JWT_SECRET, MAESTRO_JWT_JWKS_URL, or MAESTRO_WEB_TRUST_PROXY_AUTH_TOKEN), or bind to 127.0.0.1",
@@ -493,6 +539,11 @@ struct AppState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PendingToolResponseOwner {
     Session(String),
+    NativeTurn {
+        session_id: String,
+        session_created_at: String,
+        turn_id: String,
+    },
     Principal {
         subject: String,
         organization_id: Option<String>,
@@ -1008,6 +1059,7 @@ fn is_local_endpoint(head: &RequestHead) -> bool {
                 | "/readyz"
                 | "/api/status"
                 | "/api/models"
+                | "/api/native/capabilities"
                 | "/api/model"
                 | "/api/files"
                 | "/api/commands"
@@ -1172,6 +1224,45 @@ async fn handle_local_endpoint(
     match (head.method.as_str(), head.path.as_str()) {
         ("GET", "/healthz") => text_response(200, "ok\n"),
         ("GET", "/readyz") => json_response(200, &serde_json::json!({ "status": "ready" })),
+        ("GET", "/api/native/capabilities") => {
+            let auth = match authorized_context(&head, &state.config) {
+                Ok(auth) => auth,
+                Err(response) => return response,
+            };
+            // Remote attachment needs a verified person and both tenant
+            // coordinates, including on loopback. Legacy local routes retain
+            // their existing static-key and development behavior.
+            if auth.subject.is_none()
+                || auth.organization_id.is_none()
+                || auth.workspace_id.is_none()
+            {
+                return json_response(
+                    403,
+                    &serde_json::json!({"error":"A tenant-bound principal is required for remote attachment"}),
+                );
+            }
+            let model = state.selected_model.lock().await.clone();
+            let model_id = format!("{}/{}", model.provider, model.id);
+            let mut modes = Vec::new();
+            if codex_app_server_model_id(&model_id).is_none() {
+                modes.push("discuss");
+            }
+            if !state.config.native_code_hosted
+                || (codex_app_server_model_id(&model_id).is_none()
+                    && governed_native::Client::from_env().is_ok())
+            {
+                modes.push("implement");
+            }
+            json_response(
+                200,
+                &serde_json::json!({
+                    "version":1, "workspacePath":state.config.cwd,
+                    "gatewayEpoch":state.native_turns.gateway_epoch(),
+                    "modelId":model_id, "interactionModes":modes,
+                    "principal":{"subject":auth.subject,"organizationId":auth.organization_id,"workspaceId":auth.workspace_id}
+                }),
+            )
+        }
         ("GET", "/api/models") => {
             if let Err(response) = authorize(&head, &state.config) {
                 return response;

@@ -20,6 +20,7 @@ fn watch_owner_future_sizes_stay_bounded() {
         crate::chat::run_authorized_chat(
             stream,
             ChatRequest {
+                interaction_mode: crate::chat::InteractionMode::Implement,
                 model: None,
                 thinking_level: None,
                 session_id: Some("s".into()),
@@ -86,6 +87,7 @@ fn same_id_with_a_new_generation_is_a_different_watch_owner() {
 fn client_cannot_shadow_gateway_watch_tools() {
     for name in [START, STOP, LIST] {
         let chat = ChatRequest {
+            interaction_mode: crate::chat::InteractionMode::Implement,
             model: None,
             thinking_level: None,
             session_id: Some("s".into()),

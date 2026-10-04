@@ -23,6 +23,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::{future::Future, pin::Pin};
 
 use base64::Engine as _;
 
@@ -42,10 +43,14 @@ use maestro_runtime::agent::managed_turn_lineage_id;
 const ANTHROPIC_THINKING: &str = "anthropic.messages.v1";
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+type ClientFuture = Pin<Box<dyn Future<Output = Result<UnifiedClient, String>> + Send>>;
+type ClientRefresh = Arc<dyn Fn() -> ClientFuture + Send + Sync>;
+
 /// Wraps one `maestro_ai::UnifiedClient` as a `dex_loop::Model`.
 #[derive(Clone)]
 pub struct AiRsModel {
     client: UnifiedClient,
+    client_refresh: Option<ClientRefresh>,
     model: String,
     max_tokens: u32,
     system: Option<String>,
@@ -61,6 +66,7 @@ impl AiRsModel {
     pub fn new(client: UnifiedClient, model: impl Into<String>, max_tokens: u32) -> Self {
         Self {
             client,
+            client_refresh: None,
             model: model.into(),
             max_tokens,
             system: None,
@@ -84,6 +90,18 @@ impl AiRsModel {
         receipts: tokio::sync::mpsc::UnboundedSender<ManagedGatewayReceipt>,
     ) -> Self {
         self.receipts = Some(receipts);
+        self
+    }
+
+    /// Refresh a private provider client before each model request while
+    /// retaining this turn's lineage, configuration and receipts.
+    #[must_use]
+    pub fn with_client_refresh<F, Fut>(mut self, refresh: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<UnifiedClient, String>> + Send + 'static,
+    {
+        self.client_refresh = Some(Arc::new(move || Box::pin(refresh())));
         self
     }
 
@@ -520,6 +538,7 @@ impl dex_loop::Model for AiRsModel {
         let mut translator = ChunkTranslator::new(tools, &self.model);
         let receipts = self.receipts.clone();
         let mut client = self.client.clone();
+        let refresh = self.client_refresh.clone();
         let lineage = client
             .managed_gateway_scope()
             .filter(|_| client.is_managed_gateway())
@@ -532,11 +551,23 @@ impl dex_loop::Model for AiRsModel {
                     ctx.turn().map_or("turn", |turn| turn.as_str()),
                 )
             });
-        if lineage.is_some() {
-            client.set_managed_request_lineage(lineage);
-        }
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
+            if let Some(refresh) = refresh {
+                match refresh().await {
+                    Ok(current) => client = current,
+                    Err(message) => {
+                        let _ = tx.send(Err(ModelError {
+                            class: dex_loop::ErrorClass::Unknown,
+                            message,
+                        }));
+                        return;
+                    }
+                }
+            }
+            if lineage.is_some() {
+                client.set_managed_request_lineage(lineage);
+            }
             let messages = match messages {
                 Ok(messages) => messages,
                 Err(error) => {
@@ -586,6 +617,46 @@ mod tests {
     use dex_loop::{Model as _, PrincipalId, ThreadId};
     use futures_util::StreamExt;
     use maestro_ai::{ScriptedBlock, ScriptedClient, ScriptedResponse};
+
+    #[tokio::test]
+    async fn refreshes_the_client_before_every_model_call_and_fails_closed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let initial = UnifiedClient::Scripted(ScriptedClient::new(
+            "initial",
+            vec![ScriptedResponse::stream_error("stale client used")],
+        ));
+        let model = AiRsModel::new(initial, "scripted", 1024).with_client_refresh(move || {
+            let index = observed.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if index == 2 {
+                    return Err("credential refresh rejected".into());
+                }
+                Ok(UnifiedClient::Scripted(ScriptedClient::new(
+                    "fresh",
+                    vec![ScriptedResponse {
+                        blocks: vec![ScriptedBlock::Text(format!("fresh {index}"))],
+                        stop_reason: maestro_ai::StopReason::EndTurn,
+                        error: None,
+                    }],
+                )))
+            }
+        });
+        let context = dex_loop::rehydrate(thread(), &[]);
+        for index in 0..2 {
+            let chunks = model.stream(&context, &[]).collect::<Vec<_>>().await;
+            assert!(chunks.iter().any(|chunk| matches!(chunk, Ok(ModelChunk::Text(text)) if text == &format!("fresh {index}"))));
+            assert!(chunks.iter().all(Result::is_ok));
+        }
+        let chunks = model.stream(&context, &[]).collect::<Vec<_>>().await;
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].as_ref().unwrap_err().message,
+            "credential refresh rejected"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
 
     fn thread() -> ThreadId {
         ThreadId {

@@ -95,6 +95,7 @@ pub(crate) struct NativeTurn {
     id: String,
     binding: TurnBinding,
     original_request: String,
+    platform_admission: StdMutex<Option<crate::governed_native::Admission>>,
     auth: AuthContext,
     steering_supported: bool,
     accepted_at: Instant,
@@ -104,7 +105,70 @@ pub(crate) struct NativeTurn {
     command_receiver: StdMutex<Option<mpsc::Receiver<NativeTurnCommand>>>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct NativeApprovalBinding {
+    pub(crate) gateway_epoch: Option<String>,
+    pub(crate) session_id: String,
+    pub(crate) session_created_at: String,
+    pub(crate) turn_id: String,
+    pub(crate) generation: u64,
+}
+
 impl NativeTurn {
+    pub(crate) fn platform_admission(&self) -> Option<crate::governed_native::Admission> {
+        self.platform_admission
+            .lock()
+            .expect("native admission lock")
+            .clone()
+    }
+    fn bind_platform_admission(
+        &self,
+        admission: Option<crate::governed_native::Admission>,
+    ) -> Result<(), TurnError> {
+        let mut current = self
+            .platform_admission
+            .lock()
+            .expect("native admission lock");
+        if let Some(existing) = current.as_ref() {
+            if admission.as_ref().map(|value| &value.admission_id) != Some(&existing.admission_id) {
+                return Err(TurnError::conflict(
+                    "Accepted native turn admission cannot change",
+                ));
+            }
+        } else {
+            *current = admission;
+        }
+        Ok(())
+    }
+    pub(crate) fn pending_request_owner(&self) -> PendingToolResponseOwner {
+        PendingToolResponseOwner::NativeTurn {
+            session_id: self.binding.session_id.clone(),
+            session_created_at: self.binding.session_created_at.clone(),
+            turn_id: self.id.clone(),
+        }
+    }
+    pub(crate) fn dispatch_bound_approval<T>(
+        &self,
+        generation: u64,
+        request_id: &str,
+        dispatch: impl FnOnce() -> T,
+    ) -> Result<T, Vec<u8>> {
+        let data = self.data.lock().expect("native turn lock");
+        check_generation(&data, generation).map_err(TurnError::response)?;
+        if data.state != TurnState::Running
+            || self.cancel.is_cancelled()
+            || !data.approvals.contains_key(request_id)
+        {
+            return Err(
+                TurnError::conflict("Approval is no longer pending on this running turn")
+                    .response(),
+            );
+        }
+        // Stop and terminal transitions use the same lock. Keep this generation
+        // valid through dispatch rather than checking and then awaiting a send.
+        Ok(dispatch())
+    }
     pub(crate) fn take_commands(&self) -> Option<mpsc::Receiver<NativeTurnCommand>> {
         self.command_receiver
             .lock()
@@ -186,6 +250,13 @@ impl NativeTurn {
                 data.approvals.remove(id);
             }
         }
+        if kind == "action_approval_resolved" {
+            if let Some(id) = event["requestId"].as_str() {
+                data.approvals.remove(id);
+                data.projection
+                    .retain(|value| value["request"]["id"].as_str() != Some(id));
+            }
+        }
         // Latest message/status plus per-tool lifecycle and receipts reconstruct
         // presentation when the sequence ring has rolled over. Approval channels
         // remain in the existing native approval owner, never this projection.
@@ -238,6 +309,7 @@ impl NativeTurn {
 
     fn snapshot(&self, epoch: &str, after: u64, queued: Vec<Value>) -> Value {
         let data = self.data.lock().expect("native turn lock");
+        let admission = self.platform_admission();
         let oldest = data
             .replay
             .front()
@@ -246,12 +318,14 @@ impl NativeTurn {
         let reset = after > data.sequence || after.saturating_add(1) < oldest;
         serde_json::json!({
             "gatewayEpoch":epoch,"turnId":self.id,"sessionId":self.binding.session_id,
+            "platformAdmissionId":admission.as_ref().map(|owner| &owner.admission_id),
+            "acceptedRequestSha256":admission.as_ref().map(|owner| &owner.request_sha256),
             "sessionCreatedAt":self.binding.session_created_at,"generation":data.generation,
             "state":data.state,"sequence":data.sequence,"resetRequired":reset,
             "events":if reset { Vec::<Value>::new() } else { data.replay.iter().filter(|entry| entry.0 > after).map(|(sequence,event,_)| serde_json::json!({"sequence":sequence,"event":event})).collect() },
             "message":data.message,"projectionEvents":data.projection,"projectionTruncated":data.projection_truncated,
             "pendingApprovals":data.approvals.values().collect::<Vec<_>>(),"error":data.error,
-            "prompt":latest_prompt(&data.request),"steeringSupported":self.steering_supported,"queued":queued
+            "prompt":latest_prompt(&data.request),"interactionMode":data.request.interaction_mode,"steeringSupported":self.steering_supported,"queued":queued
         })
     }
 
@@ -350,7 +424,7 @@ fn latest_prompt(request: &ChatRequest) -> String {
 }
 fn request_identity(request: &ChatRequest) -> String {
     let tools = request.tools.iter().map(|tool| serde_json::json!({"name":tool.name,"description":tool.description,"parameters":tool.parameters})).collect::<Vec<_>>();
-    serde_json::json!({"model":request.model,"thinkingLevel":request.thinking_level,"sessionId":request.session_id,"messages":request.messages,"tools":tools}).to_string()
+    serde_json::json!({"model":request.model,"thinkingLevel":request.thinking_level,"sessionId":request.session_id,"interactionMode":request.interaction_mode,"messages":request.messages,"tools":tools}).to_string()
 }
 fn check_generation(data: &TurnData, generation: u64) -> Result<(), TurnError> {
     if generation == data.generation {
@@ -391,6 +465,9 @@ struct AcceptedTurn {
 }
 
 impl NativeTurnRuntime {
+    pub(crate) fn gateway_epoch(&self) -> &str {
+        &self.epoch
+    }
     fn accept(
         &self,
         binding: TurnBinding,
@@ -482,6 +559,7 @@ impl NativeTurnRuntime {
             id,
             binding: binding.clone(),
             original_request,
+            platform_admission: StdMutex::new(None),
             auth,
             steering_supported,
             accepted_at: Instant::now(),
@@ -578,7 +656,7 @@ impl NativeTurnRuntime {
             (data.state == TurnState::Queued).then(|| {
                 let prompt=latest_prompt(&data.request);
                 let excerpt=prompt.chars().take(1024).collect::<String>();
-                serde_json::json!({"turnId":turn.id,"generation":data.generation,"promptTruncated":excerpt.len()<prompt.len(),"prompt":excerpt,"state":"queued"})
+                serde_json::json!({"turnId":turn.id,"generation":data.generation,"interactionMode":data.request.interaction_mode,"promptTruncated":excerpt.len()<prompt.len(),"prompt":excerpt,"state":"queued"})
             })
         }).collect()
     }
@@ -665,7 +743,9 @@ impl std::fmt::Debug for TurnError {
 mod control;
 #[cfg(test)]
 use control::execution_request;
-pub(crate) use control::{handle_native_turn_endpoint, is_native_turn_endpoint};
+pub(crate) use control::{
+    bound_approval_turn, handle_native_turn_endpoint, is_native_turn_endpoint,
+};
 
 pub(crate) async fn session_has_active_native_turn(
     state: &AppState,

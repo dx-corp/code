@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use maestro_workspace::git;
+pub mod native_effect;
 
 /// Maximum number of checkpoints retained per session (FIFO eviction).
 pub const MAX_CHECKPOINTS_PER_SESSION: usize = 20;
@@ -264,6 +265,7 @@ impl Checkpoint {
 /// Pre-turn snapshot awaiting turn completion.
 pub struct PendingTurn {
     cleanup: PendingDirectory,
+    excluded_root: Option<String>,
     pub user_turn_index: Option<usize>,
     store: CheckpointStore,
     id: String,
@@ -299,7 +301,7 @@ pub fn begin_turn(
     session_id: &str,
     prompt: &str,
 ) -> Option<PendingTurn> {
-    begin_turn_inner(cwd, sessions_dir, session_id, prompt, false)
+    begin_turn_inner(cwd, sessions_dir, session_id, prompt, false, None)
 }
 
 /// Bounded native review capture. Unreadable/oversized preimages invalidate the
@@ -311,7 +313,7 @@ pub fn begin_turn_snapshot(
     session_id: &str,
     prompt: &str,
 ) -> Option<PendingTurn> {
-    begin_turn_inner(cwd, sessions_dir, session_id, prompt, true)
+    begin_turn_inner(cwd, sessions_dir, session_id, prompt, true, None)
 }
 
 fn begin_turn_inner(
@@ -320,10 +322,12 @@ fn begin_turn_inner(
     session_id: &str,
     prompt: &str,
     bounded: bool,
+    excluded_root: Option<String>,
 ) -> Option<PendingTurn> {
     let repo_root = dunce::canonicalize(git::repo_root(cwd)?).ok()?;
     let head = git_text(&repo_root, &["rev-parse", "--verify", "HEAD"]);
     let mut status = status_snapshot(&repo_root)?;
+    filter_native_state(&mut status, excluded_root.as_deref());
     if bounded {
         status.untracked = expand_native_untracked(&repo_root, &status.untracked)?;
         status.dirty.extend(status.untracked.iter().cloned());
@@ -387,6 +391,7 @@ fn begin_turn_inner(
 
     Some(PendingTurn {
         cleanup: PendingDirectory(Some(cp_dir)),
+        excluded_root,
         user_turn_index: None,
         store,
         id,
@@ -423,6 +428,7 @@ fn finalize_turn_inner(
         return Ok(None);
     };
 
+    filter_native_state(&mut post, pending.excluded_root.as_deref());
     if retain_empty {
         post.untracked = expand_native_untracked(&pending.repo_root, &post.untracked)
             .ok_or_else(|| io::Error::other("Untracked file list exceeds review limit"))?;
@@ -474,6 +480,13 @@ fn finalize_turn_inner(
     };
     candidates.extend(committed_paths.iter().map(String::as_str));
     for path in candidates {
+        if pending
+            .excluded_root
+            .as_deref()
+            .is_some_and(|root| internal_path(path, root))
+        {
+            continue;
+        }
         if pending.unreadable.contains(path) {
             continue;
         }
@@ -1073,6 +1086,19 @@ pub fn checkpoints_for_turns(
 }
 
 // --- git helpers ---------------------------------------------------------
+
+fn internal_path(path: &str, root: &str) -> bool {
+    path.trim_end_matches('/') == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+fn filter_native_state(status: &mut StatusSnapshot, root: Option<&str>) {
+    if let Some(root) = root {
+        status.dirty.retain(|path| !internal_path(path, root));
+        status.untracked.retain(|path| !internal_path(path, root));
+    }
+}
 
 struct StatusSnapshot {
     /// Repo-relative paths of dirty tracked files (staged and/or unstaged).

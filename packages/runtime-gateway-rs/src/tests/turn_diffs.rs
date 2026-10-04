@@ -379,3 +379,45 @@ async fn native_sessionless_turns_invalidate_overlapping_session_snapshots() {
     crate::turn_diffs::finish_chat_snapshot(&mut alone, &mut message).await;
     assert_eq!(message["fileSnapshotAvailable"], true);
 }
+
+#[tokio::test]
+async fn hosted_changes_reads_saved_receipt_without_git_and_never_substitutes_an_older_turn() {
+    let root = TestDir::new("hosted-immutable-changes");
+    let mut state = test_app_state_with_sessions(HashMap::new());
+    let mut config = (*state.config).clone();
+    config.native_code_hosted = true;
+    // Deliberately not a Git repository: this endpoint must need no commands.
+    config.cwd = root.path().to_path_buf();
+    state.config = Arc::new(config);
+    let mut session = create_session_record(None, Some("owner".into()));
+    session.organization_id = Some("org".into());
+    session.workspace_id = Some("ws".into());
+    session.messages = vec![
+        serde_json::json!({"role":"user","content":"edit","governedChanges":{
+            "toolExecutionId":"execution","platformAdmissionId":"admission","nativeCheckpointKey":"checkpoint",
+            "changes":{"availability":"ready","files":[{"path":"new.txt","kind":"created","availability":"patch","beforeContent":"","afterContent":"saved bytes"}]}
+        }}),
+    ];
+    std::fs::write(root.path().join("new.txt"), "later mutation").unwrap();
+    let mut head = csrf_head_for_path("GET", "/api/sessions/example/turn-diff", None);
+    let response = crate::turn_diffs::session_turn_diff_response(&head, &state, &session).await;
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.contains("saved bytes"));
+    assert!(response.contains("execution"));
+    assert!(!response.contains("later mutation"));
+    session
+        .messages
+        .push(serde_json::json!({"role":"user","content":"next discuss"}));
+    let response = crate::turn_diffs::session_turn_diff_response(&head, &state, &session).await;
+    let response = String::from_utf8(response).unwrap();
+    assert!(response.contains("unavailable"));
+    assert!(!response.contains("saved bytes"));
+    head.query.insert("turnIndex".into(), "0".into());
+    let response = crate::turn_diffs::session_turn_diff_response(&head, &state, &session).await;
+    assert!(String::from_utf8(response).unwrap().contains("saved bytes"));
+    session.messages[0]["governedChanges"]["changes"]["files"][0]["path"] =
+        serde_json::json!("../secret");
+    let response = crate::turn_diffs::session_turn_diff_response(&head, &state, &session).await;
+    assert!(String::from_utf8(response).unwrap().contains("unavailable"));
+}
