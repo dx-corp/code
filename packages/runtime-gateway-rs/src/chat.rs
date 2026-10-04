@@ -14,12 +14,41 @@ pub(crate) fn is_chat_websocket_endpoint(head: &RequestHead) -> bool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChatRequest {
+    #[serde(default)]
+    pub(crate) interaction_mode: InteractionMode,
     pub(crate) model: Option<String>,
     pub(crate) messages: Vec<ChatMessage>,
     pub(crate) thinking_level: Option<String>,
     pub(crate) session_id: Option<String>,
     #[serde(default)]
     pub(crate) tools: Vec<ClientToolDefinition>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum InteractionMode {
+    Discuss,
+    #[default]
+    Implement,
+}
+
+pub(crate) fn validate_interaction_model(chat: &ChatRequest, model: &str) -> Result<(), String> {
+    if chat.interaction_mode == InteractionMode::Discuss
+        && codex_app_server_model_id(model).is_some()
+    {
+        return Err("Discuss is unavailable for the Codex app-server model route; choose Implement or another model".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_execution_owner(chat: &ChatRequest, config: &Config) -> Result<(), String> {
+    if config.native_code_hosted && chat.interaction_mode == InteractionMode::Implement {
+        return Err(
+            "Hosted Implement is unavailable until its governed tool execution owner is connected"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 use crate::chat_admission::client_tool_definitions;
@@ -330,6 +359,10 @@ pub(crate) async fn record_chat_user_message(
     let mut message = chat_message_prompt_value(latest);
     if let Value::Object(object) = &mut message {
         object.insert("timestamp".to_string(), Value::String(now_rfc3339()));
+        object.insert(
+            "interactionMode".to_string(),
+            serde_json::json!(chat.interaction_mode),
+        );
     }
     if !latest.attachments.is_empty() {
         message["attachments"] = serde_json::json!(latest.attachments);
@@ -548,7 +581,11 @@ pub(crate) async fn run_authorized_chat(
     state: AppState,
     unattended: bool,
 ) -> Result<(), String> {
-    if let Err(error) = validate_client_tool_names(&chat) {
+    let model = selected_chat_model(&chat, &state).await;
+    if let Err(error) = validate_client_tool_names(&chat)
+        .and_then(|()| validate_execution_owner(&chat, &state.config))
+        .and_then(|()| validate_interaction_model(&chat, &model))
+    {
         stream
             .write_all(&json_response(400, &serde_json::json!({ "error": error })))
             .await
@@ -627,7 +664,6 @@ pub(crate) async fn run_authorized_chat(
         .await
         .map_err(|error| error.to_string())?;
 
-    let model = selected_chat_model(&chat, &state).await;
     if let Some(codex_model) = codex_app_server_model_id(&model) {
         if let Some(session_id) = session_id.as_deref() {
             send_sse(
@@ -663,13 +699,19 @@ pub(crate) async fn run_authorized_chat(
         cleanup_prepared_attachments(prepared_attachments).await;
         return Ok(());
     }
-    let mut turn_snapshot = begin_chat_snapshot(
-        &state,
-        session_id.as_deref(),
-        &prompt,
-        turn_scope.as_deref(),
-    )
-    .await;
+    let mut turn_snapshot = if chat.interaction_mode == InteractionMode::Implement
+        && !state.config.native_code_hosted
+    {
+        begin_chat_snapshot(
+            &state,
+            session_id.as_deref(),
+            &prompt,
+            turn_scope.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
     let (usage_provider, usage_model) = usage_provider_model(&chat, &state, &model).await;
     let (mut client_tools, _) = client_tool_definitions(&chat);
     // Gateway-handled session-messaging tools give an agent turn the same reach
@@ -690,6 +732,7 @@ pub(crate) async fn run_authorized_chat(
             system_prompt,
             prompt,
             client_tools,
+            interaction_mode: chat.interaction_mode,
             attachments: prepared_attachments.paths.clone(),
             thinking_enabled: chat
                 .thinking_level
@@ -809,7 +852,20 @@ pub(crate) async fn execute_chat_websocket_turn(
     auth: AuthContext,
     state: AppState,
 ) -> Result<(), String> {
-    if let Err(error) = validate_client_tool_names(&chat) {
+    let model = selected_chat_model(&chat, &state).await;
+    if let Err(error) = validate_client_tool_names(&chat)
+        .and_then(|()| {
+            if stream
+                .native_turn()
+                .is_some_and(|turn| turn.platform_admission().is_some())
+            {
+                Ok(())
+            } else {
+                validate_execution_owner(&chat, &state.config)
+            }
+        })
+        .and_then(|()| validate_interaction_model(&chat, &model))
+    {
         send_chat_event(
             stream,
             &serde_json::json!({ "type": "error", "message": error }),
@@ -899,7 +955,6 @@ pub(crate) async fn execute_chat_websocket_turn(
     let pending_peer_message_ids =
         prepend_pending_peer_messages(&state, session_id.as_deref(), &auth, &mut prompt).await;
 
-    let model = selected_chat_model(&chat, &state).await;
     if let Some(codex_model) = codex_app_server_model_id(&model) {
         if let Some(session_id) = session_id.as_deref() {
             send_chat_event(
@@ -935,13 +990,19 @@ pub(crate) async fn execute_chat_websocket_turn(
         cleanup_prepared_attachments(prepared_attachments).await;
         return Ok(());
     }
-    let mut turn_snapshot = begin_chat_snapshot(
-        &state,
-        session_id.as_deref(),
-        &prompt,
-        turn_scope.as_deref(),
-    )
-    .await;
+    let mut turn_snapshot = if chat.interaction_mode == InteractionMode::Implement
+        && !state.config.native_code_hosted
+    {
+        begin_chat_snapshot(
+            &state,
+            session_id.as_deref(),
+            &prompt,
+            turn_scope.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
     let (usage_provider, usage_model) = usage_provider_model(&chat, &state, &model).await;
     let (mut client_tools, _) = client_tool_definitions(&chat);
     // Gateway-handled session-messaging tools give an agent turn the same reach
@@ -962,6 +1023,7 @@ pub(crate) async fn execute_chat_websocket_turn(
             system_prompt,
             prompt,
             client_tools,
+            interaction_mode: chat.interaction_mode,
             attachments: prepared_attachments.paths.clone(),
             thinking_enabled: chat
                 .thinking_level
@@ -1019,7 +1081,11 @@ pub(crate) async fn prepare_chat_attachments(
         })?;
 
         if temp_dir.is_none() {
-            let dir = chat_attachment_temp_dir(cwd);
+            let dir = if chat.interaction_mode == InteractionMode::Discuss {
+                chat_attachment_temp_dir(&env::temp_dir())
+            } else {
+                chat_attachment_temp_dir(cwd)
+            };
             tokio::fs::create_dir_all(&dir)
                 .await
                 .map_err(|error| format!("failed to create attachment temp directory: {error}"))?;

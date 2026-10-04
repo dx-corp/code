@@ -11,20 +11,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener as StdTcpListener;
 
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+pub(crate) static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
-#[test]
-fn plan_endpoint_is_not_registered() {
-    for method in ["GET", "POST"] {
-        let head = RequestHead {
-            method: method.to_string(),
-            path: "/api/plan".to_string(),
-            query: HashMap::new(),
-            headers: HashMap::new(),
-        };
-        assert!(!is_extended_endpoint(&head));
-    }
-}
+#[path = "interaction_mode_tests.rs"]
+mod interaction_mode_tests;
+
 const A2A_PLATFORM_ENV_NAMES: &[&str] = &[
     "MAESTRO_A2A_PLATFORM_REGISTER",
     "MAESTRO_A2A_PLATFORM_AUTO_REGISTER",
@@ -2621,6 +2612,7 @@ setTimeout(() => {
 
 fn auth_test_config() -> Config {
     Config {
+        native_code_hosted: false,
         listen_host: "127.0.0.1".to_string(),
         listen_port: 0,
         api_key: Some("api-key".to_string()),
@@ -11754,6 +11746,7 @@ async fn chat_user_message_rejects_unowned_existing_session() {
         ..AuthContext::default()
     };
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: Some("session-1".to_string()),
@@ -11782,6 +11775,7 @@ async fn chat_user_message_preserves_requested_id_when_creating_session() {
         ..AuthContext::default()
     };
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: Some("requested-session".to_string()),
@@ -12446,6 +12440,7 @@ fn openrouter_catalog_requires_explicit_configuration() {
 #[test]
 fn chat_prompt_preserves_structured_history() {
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: None,
@@ -13046,6 +13041,7 @@ async fn run_script_response_rejects_pnpm_runner_without_executing() {
 #[test]
 fn keeps_attachment_only_prompt_non_empty() {
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: None,
@@ -13075,6 +13071,7 @@ fn keeps_attachment_only_prompt_non_empty() {
 #[test]
 fn separates_system_messages_from_user_prompt() {
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: None,
@@ -13109,6 +13106,7 @@ fn separates_system_messages_from_user_prompt() {
 #[tokio::test]
 async fn prepared_attachments_drop_cleans_temp_dir() {
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: None,
@@ -13152,6 +13150,7 @@ async fn prepared_attachments_use_workspace_for_docker_sandbox() {
     env::set_var("MAESTRO_CODEX_APP_SERVER_SANDBOX", "docker");
     env::remove_var("MAESTRO_SANDBOX_MODE");
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: None,

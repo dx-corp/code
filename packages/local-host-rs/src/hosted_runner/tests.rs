@@ -1,3 +1,4 @@
+mod request_routing;
 use maestro_runtime_contracts::tool_wire;
 use reqwest::StatusCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3699,26 +3700,6 @@ async fn connected_supervisor_for_script(script_path: &Path) -> Arc<Mutex<AgentS
     Arc::new(Mutex::new(supervisor))
 }
 
-#[tokio::test]
-async fn route_rejects_connection_prefix_without_separator() {
-    let workspace = tempdir().expect("workspace");
-    let shared = SharedRunner::new(test_config(workspace.path().to_path_buf()));
-    let request = HttpRequest {
-        method: "POST".to_string(),
-        path: "/api/headless/connections-extra".to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-        body: b"{}".to_vec(),
-    };
-
-    let error = match route_request(request, shared, "127.0.0.1:4567".parse().unwrap()).await {
-        Ok(_) => panic!("unexpected route match"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, HostedRunnerErrorCode::NotFound);
-}
-
 #[test]
 fn supervisor_executor_reports_runtime_not_ready_until_connected() {
     let workspace = tempdir().expect("workspace");
@@ -4764,7 +4745,9 @@ fn controller_subscribe_returns_only_current_raw_pending_executable_events() {
             assert_eq!(status, 200);
             body
         }
-        ResponseBody::Sse { .. } => panic!("expected JSON subscription response"),
+        ResponseBody::Bytes { .. } | ResponseBody::Sse { .. } => {
+            panic!("expected JSON subscription response")
+        }
     };
 
     let viewer = response_json(
@@ -5584,32 +5567,6 @@ async fn loopback_drain_allows_prestop_without_auth_token() {
 
     assert_eq!(drain.status(), StatusCode::OK);
     handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn remote_drain_requires_auth_token_when_configured() {
-    let workspace = tempdir().expect("workspace");
-    let shared = SharedRunner::new(
-        test_config(workspace.path().to_path_buf()).with_auth_token("secret-token"),
-    );
-    let request = HttpRequest {
-        method: "POST".to_string(),
-        path: HOSTED_RUNNER_DRAIN_PATH.to_string(),
-        query: HashMap::new(),
-        headers: HashMap::new(),
-        body: serde_json::to_vec(
-            &json!({"reason": "remote", "requested_by": "platform", "export_paths": ["."]}),
-        )
-        .expect("drain request"),
-    };
-
-    let error = match route_request(request, shared, "203.0.113.10:4567".parse().unwrap()).await {
-        Ok(_) => panic!("remote drain without token should be rejected"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.status, StatusCode::FORBIDDEN.as_u16());
-    assert_eq!(error.code, HostedRunnerErrorCode::AccessDenied);
 }
 
 #[test]
@@ -11025,7 +10982,9 @@ async fn response_messages_cover_input_client_tool_retry_and_persist_idempotency
     .expect("replayed retry response");
     let replay_json = match replay {
         ResponseBody::Json { body, .. } => body,
-        ResponseBody::Sse { .. } => panic!("unexpected SSE response"),
+        ResponseBody::Bytes { .. } | ResponseBody::Sse { .. } => {
+            panic!("unexpected non-JSON response")
+        }
     };
     assert_eq!(replay_json["replayed"], true);
     let conflict = match handle_message(
@@ -14574,7 +14533,9 @@ async fn initial_action_test_runner(
         sandbox_id: Uuid::nil(),
         placement_generation: 0,
     });
-    start_prepared_hosted_runner(prepared, executor).expect("start initial-action runner")
+    start_prepared_hosted_runner(prepared, executor)
+        .await
+        .expect("start initial-action runner")
 }
 
 fn initial_action_test_payload() -> serde_json::Value {

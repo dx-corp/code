@@ -77,6 +77,8 @@ fn prepare(
                     "codexThreadId",
                     "providerThreadId",
                     "nativeThreadId",
+                    "governedChanges",
+                    "governedChangesTurnIndex",
                 ] {
                     object.remove(key);
                 }
@@ -186,7 +188,10 @@ mod session_fork_tests {
     }
     #[test]
     fn session_fork_copies_exact_completed_prefix_and_native_prompt_uses_it() {
-        let (source, auth, request) = fixture();
+        let (mut source, auth, request) = fixture();
+        source.messages[0]["governedChanges"] =
+            serde_json::json!({"toolExecutionId":"original-execution"});
+        source.messages[0]["governedChangesTurnIndex"] = serde_json::json!(0);
         let target = prepare(&source, &auth, &request).unwrap();
         assert_ne!(target.id, source.id);
         assert_eq!(target.owner, source.owner);
@@ -194,6 +199,8 @@ mod session_fork_tests {
         assert_eq!(target.message_count, 2);
         assert_eq!(target.messages[1]["fileSnapshotAvailable"], false);
         assert!(target.messages[1].get("usage").is_none());
+        assert!(target.messages[0].get("governedChanges").is_none());
+        assert!(target.messages[0].get("governedChangesTurnIndex").is_none());
         assert_eq!(target.messages[0]["attachments"][0]["contentOmitted"], true);
         let mut messages = target.messages.clone();
         messages.push(serde_json::json!({"role":"user","content":"new continuation"}));

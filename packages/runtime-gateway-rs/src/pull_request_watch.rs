@@ -668,6 +668,7 @@ pub(super) async fn wake_native(
         outcome.result()
     });
     let chat = ChatRequest {
+        interaction_mode: crate::chat::InteractionMode::Implement,
         model: None,
         thinking_level: None,
         session_id: Some(id.into()),

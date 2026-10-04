@@ -5,14 +5,26 @@ use crate::chat_admission::validate_client_tool_names;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AcceptRequest {
+    platform_admission_id: Option<String>,
+    gateway_epoch: Option<String>,
     turn_id: String,
     session_id: String,
     session_created_at: String,
     request: ChatRequest,
 }
+
+fn validate_gateway_epoch(input: Option<&str>, state: &AppState) -> Result<(), TurnError> {
+    if input.is_some_and(|epoch| epoch != state.native_turns.gateway_epoch()) {
+        return Err(TurnError::conflict(
+            "The gateway restarted; this pending prompt cannot be accepted on a different execution owner",
+        ));
+    }
+    Ok(())
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ControlRequest {
+    gateway_epoch: Option<String>,
     session_id: String,
     session_created_at: String,
     generation: u64,
@@ -55,6 +67,21 @@ async fn binding_for(
         source: auth.source,
         cwd: state.config.cwd.clone(),
     })
+}
+
+pub(crate) async fn bound_approval_turn(
+    state: &AppState,
+    auth: &AuthContext,
+    input: &NativeApprovalBinding,
+) -> Result<Arc<NativeTurn>, Vec<u8>> {
+    validate_gateway_epoch(input.gateway_epoch.as_deref(), state).map_err(TurnError::response)?;
+    let binding = binding_for(state, auth, &input.session_id, &input.session_created_at)
+        .await
+        .map_err(TurnError::response)?;
+    state
+        .native_turns
+        .find(&binding, &input.turn_id)
+        .ok_or_else(|| TurnError::not_found().response())
 }
 fn validate_request(request: &ChatRequest, id: &str) -> Result<(), TurnError> {
     if request
@@ -194,13 +221,56 @@ async fn handle_endpoint(
             .map_err(|message| TurnError::bad(&message))?;
         let input: AcceptRequest = serde_json::from_slice(&bytes)
             .map_err(|error| TurnError::bad(&format!("Invalid acceptance request: {error}")))?;
+        validate_gateway_epoch(input.gateway_epoch.as_deref(), state)?;
         if !valid_turn_id(&input.turn_id) {
             return Err(TurnError::bad("Invalid native turn identity"));
         }
         validate_request(&input.request, &input.session_id)?;
+        let admission = if state.config.native_code_hosted
+            && input.request.interaction_mode == crate::chat::InteractionMode::Implement
+        {
+            if !input.request.tools.is_empty() {
+                return Err(TurnError::bad(
+                    "Hosted Implement accepts only its governed tool catalog",
+                ));
+            }
+            let id = input.platform_admission_id.as_deref().ok_or_else(|| {
+                TurnError::bad("Hosted Implement requires a Platform turn admission")
+            })?;
+            let client = crate::governed_native::Client::from_env()
+                .map_err(|message| TurnError::bad(&message))?;
+            let admission = client
+                .admission(id, &auth)
+                .await
+                .map_err(|message| TurnError::bad(&message))?;
+            let original: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| TurnError::bad("Invalid original turn request"))?;
+            let digest = maestro_runtime_contracts::native_code::turn_request_digest(&original);
+            admission
+                .validate(
+                    id,
+                    &auth,
+                    crate::governed_native::ExpectedTurn {
+                        epoch: state.native_turns.gateway_epoch(),
+                        session: &input.session_id,
+                        created_at: &input.session_created_at,
+                        turn: &input.turn_id,
+                        digest: &digest,
+                    },
+                )
+                .map_err(|message| TurnError::bad(&message))?;
+            Some(admission)
+        } else {
+            None
+        };
         let binding =
             binding_for(state, &auth, &input.session_id, &input.session_created_at).await?;
         if state.native_turns.find(&binding, &input.turn_id).is_some() {
+            state
+                .native_turns
+                .find(&binding, &input.turn_id)
+                .expect("existing turn")
+                .bind_platform_admission(admission)?;
             let accepted = state.native_turns.accept(
                 binding.clone(),
                 input.turn_id,
@@ -216,6 +286,13 @@ async fn handle_endpoint(
             ));
         }
         let model = crate::chat::selected_chat_model(&input.request, state).await;
+        crate::chat::validate_interaction_model(&input.request, &model)
+            .map_err(|message| TurnError::bad(&message))?;
+        if state.config.native_code_hosted && model.starts_with("openai-codex/") {
+            return Err(TurnError::bad(
+                "Hosted Code requires the governed generic model runtime",
+            ));
+        }
         validate_attachments(&input.request, state, &model).await?;
         // Neither runtime a native turn runs on accepts input mid-turn: the
         // Codex app server never did, and the dex-loop kernel has no steering
@@ -229,6 +306,7 @@ async fn handle_endpoint(
             steering_supported,
             Some(model),
         )?;
+        accepted.turn.bind_platform_admission(admission)?;
         let snapshot = accepted.turn.snapshot(
             &state.native_turns.epoch,
             0,
@@ -293,6 +371,7 @@ async fn handle_endpoint(
             .map_err(|message| TurnError::bad(&message))?;
         let input: ControlRequest = serde_json::from_slice(&bytes)
             .map_err(|error| TurnError::bad(&format!("Invalid turn control: {error}")))?;
+        validate_gateway_epoch(input.gateway_epoch.as_deref(), state)?;
         if input
             .turn_id
             .as_deref()
@@ -310,6 +389,11 @@ async fn handle_endpoint(
             "stop" => turn.stop(input.generation)?,
             "remove" => turn.remove(input.generation)?,
             "edit" => {
+                if turn.platform_admission().is_some() {
+                    return Err(TurnError::conflict(
+                        "An admitted hosted prompt requires a new turn instead of editing its immutable input",
+                    ));
+                }
                 let mut request = turn.data.lock().expect("native turn lock").request.clone();
                 let content = input
                     .content

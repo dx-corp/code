@@ -54,6 +54,75 @@ fn accepted_retry_joins_one_owner_and_changed_payload_conflicts() {
 }
 
 #[test]
+fn accepted_retry_cannot_change_discuss_into_implement() {
+    let runtime = NativeTurnRuntime::default();
+    let discuss: ChatRequest = serde_json::from_value(serde_json::json!({
+        "messages":[{"role":"user","content":"change the file"}],
+        "sessionId":"session-1", "interactionMode":"discuss"
+    }))
+    .unwrap();
+    runtime
+        .accept(
+            binding(),
+            "turn-discuss".into(),
+            discuss,
+            AuthContext::default(),
+            false,
+            None,
+        )
+        .unwrap();
+    let changed = runtime.accept(
+        binding(),
+        "turn-discuss".into(),
+        request("change the file"),
+        AuthContext::default(),
+        false,
+        None,
+    );
+    assert!(
+        changed.is_err(),
+        "a retry must retain the admitted interaction mode"
+    );
+}
+
+#[test]
+fn bound_approval_rejects_stale_generation_and_other_request_without_dispatch() {
+    let runtime = NativeTurnRuntime::default();
+    let turn = accept(&runtime, "turn-approval", "implement").turn;
+    runtime.next(&binding().lane()).unwrap();
+    turn.publish(
+        serde_json::json!({"type":"action_approval_required","request":{"id":"approval-1"}}),
+    );
+    let generation = turn.snapshot(&runtime.epoch, 0, Vec::new())["generation"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        turn.dispatch_bound_approval(generation + 1, "approval-1", || panic!(
+            "stale approval dispatched"
+        ))
+        .is_err()
+    );
+    assert!(
+        turn.dispatch_bound_approval(generation, "another-approval", || panic!(
+            "another approval dispatched"
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        turn.dispatch_bound_approval(generation, "approval-1", || "delivered")
+            .unwrap(),
+        "delivered"
+    );
+    turn.stop(generation).unwrap();
+    assert!(
+        turn.dispatch_bound_approval(generation, "approval-1", || panic!(
+            "stopped approval dispatched"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn principal_tenant_workspace_and_session_generation_are_exact() {
     let runtime = NativeTurnRuntime::default();
     accept(&runtime, "turn-1", "hello");

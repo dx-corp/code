@@ -54,8 +54,12 @@ use crate::headless_server::{GovernedGrantVerificationContext, verify_governed_t
 mod config;
 mod env_aliases;
 mod handle;
+mod http_types;
 mod initial_actions;
 mod manifests;
+mod native_code;
+mod native_code_credentials;
+use http_types::{HttpRequest, ResponseBody, read_request};
 pub mod rendezvous_carrier;
 pub mod rendezvous_protocol;
 pub mod rendezvous_runtime;
@@ -1669,14 +1673,6 @@ fn json_string_value<T: Serialize>(value: &T) -> String {
         .unwrap_or_default()
 }
 
-struct HttpRequest {
-    method: String,
-    path: String,
-    query: HashMap<String, String>,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-}
-
 #[derive(Debug)]
 struct HostedError {
     status: u16,
@@ -1745,7 +1741,7 @@ pub async fn start_hosted_runner_with_message_executor(
 ) -> io::Result<HostedRunnerHandle> {
     validate_message_executor_startup_runtime_receipt_binding(message_executor.as_ref())?;
     let prepared = prepare_hosted_runner(config).await?;
-    start_prepared_hosted_runner(prepared, message_executor)
+    start_prepared_hosted_runner(prepared, message_executor).await
 }
 
 #[cfg(test)]
@@ -1761,6 +1757,7 @@ async fn start_hosted_runner_with_message_executor_and_maintenance_interval(
         message_executor,
         maintenance_interval,
     )
+    .await
 }
 
 pub(crate) async fn prepare_hosted_runner(
@@ -1889,7 +1886,7 @@ pub(crate) async fn prepare_hosted_runner(
     })
 }
 
-pub(crate) fn start_prepared_hosted_runner(
+pub(crate) async fn start_prepared_hosted_runner(
     prepared: PreparedHostedRunner,
     message_executor: Arc<dyn HostedRunnerHeadlessMessageExecutor>,
 ) -> io::Result<HostedRunnerHandle> {
@@ -1898,9 +1895,10 @@ pub(crate) fn start_prepared_hosted_runner(
         message_executor,
         MAINTENANCE_PUMP_INTERVAL,
     )
+    .await
 }
 
-fn start_prepared_hosted_runner_with_maintenance_interval(
+async fn start_prepared_hosted_runner_with_maintenance_interval(
     prepared: PreparedHostedRunner,
     message_executor: Arc<dyn HostedRunnerHeadlessMessageExecutor>,
     maintenance_interval: Duration,
@@ -1928,6 +1926,16 @@ fn start_prepared_hosted_runner_with_maintenance_interval(
         message_executor,
         restore_manifest,
     )?;
+    if let Some((_, _, client_identity, workload)) = identity_runtime.as_ref() {
+        native_code_credentials::start(
+            &shared,
+            client_identity.as_ref(),
+            shared.config.rendezvous.as_ref(),
+            workload,
+            shutdown.clone(),
+        )
+        .await?;
+    }
     shared.start_event_pump(maintenance_interval);
     let server_shared = shared.clone();
     let (task, identity_task, tls) =
@@ -2568,7 +2576,7 @@ async fn serve(listener: TcpListener, shared: SharedRunner, shutdown: Cancellati
                 };
                 let shared = shared.clone();
                 tokio::spawn(async move {
-                    let _ = handle_socket(socket, shared, peer_addr).await;
+                    let _ = handle_socket(socket, shared, peer_addr, false).await;
                 });
             }
         }
@@ -2620,7 +2628,7 @@ async fn serve_mtls(
                     tokio::select! {
                         () = connection_shutdown.cancelled() => workload_identity::log_connection_exit("http_exchange", "server_shutdown"),
                         () = identity_changed.cancelled() => workload_identity::log_connection_exit("http_exchange", "identity_changed"),
-                        result = handle_socket(socket, shared, peer_addr) => {
+                        result = handle_socket(socket, shared, peer_addr, true) => {
                             if let Err(error) = result {
                                 tracing::warn!(
                                     target: "maestro.hosted",
@@ -2642,6 +2650,7 @@ async fn handle_socket<S>(
     mut socket: S,
     shared: SharedRunner,
     peer_addr: SocketAddr,
+    verified_mtls: bool,
 ) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -2650,11 +2659,20 @@ where
         return Ok(());
     };
 
-    let response = route_request(request, shared, peer_addr).await;
+    let response = if request.path.starts_with("/api/native-code/") {
+        native_code::proxy(request, &shared, verified_mtls).await
+    } else {
+        route_request(request, shared, peer_addr).await
+    };
     match response {
         Ok(ResponseBody::Json { status, body }) => {
             write_json_value(&mut socket, status, body).await
         }
+        Ok(ResponseBody::Bytes {
+            status,
+            content_type,
+            body,
+        }) => write_response(&mut socket, status, &content_type, &body).await,
         Ok(ResponseBody::Sse {
             replay,
             rx,
@@ -2674,24 +2692,6 @@ where
         }
         Err(error) => write_error(&mut socket, error).await,
     }
-}
-
-enum ResponseBody {
-    Json {
-        status: u16,
-        body: serde_json::Value,
-    },
-    Sse {
-        replay: Vec<StreamEnvelope>,
-        rx: broadcast::Receiver<StreamEnvelope>,
-        // Keep the common JSON response representation small. `SharedRunner`
-        // owns the runtime state and event-pump handles, so storing it inline
-        // makes this enum unnecessarily large even though only SSE responses
-        // need it.
-        shared: Box<SharedRunner>,
-        filter: Box<TranscriptStreamFilter>,
-        controller_authorization: Option<ControllerStreamAuthorization>,
-    },
 }
 
 struct ControllerStreamAuthorization {
@@ -2912,7 +2912,7 @@ async fn route_request(
         .instrument(span.clone())
         .await;
     match &result {
-        Ok(ResponseBody::Json { status, .. }) => {
+        Ok(ResponseBody::Json { status, .. } | ResponseBody::Bytes { status, .. }) => {
             span.record("http.response.status_code", i64::from(*status));
             record_outcome(
                 &span,
@@ -5747,89 +5747,6 @@ fn json_response<T: Serialize>(status: u16, body: T) -> HostedResult<ResponseBod
         HostedError::new(HostedRunnerErrorCode::RuntimeFailed, error.to_string())
     })?;
     Ok(ResponseBody::Json { status, body })
-}
-
-async fn read_request<S>(socket: &mut S) -> io::Result<Option<HttpRequest>>
-where
-    S: AsyncRead + Unpin,
-{
-    let mut buffer = Vec::new();
-    let mut header_end = None;
-    loop {
-        let mut chunk = [0_u8; 1024];
-        let read = socket.read(&mut chunk).await?;
-        if read == 0 {
-            if buffer.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if let Some(position) = find_header_end(&buffer) {
-            header_end = Some(position);
-            break;
-        }
-        if buffer.len() > 64 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request headers too large",
-            ));
-        }
-    }
-    let Some(header_end) = header_end else {
-        return Ok(None);
-    };
-    let headers_text = String::from_utf8_lossy(&buffer[..header_end]);
-    let mut lines = headers_text.split("\r\n");
-    let Some(request_line) = lines.next() else {
-        return Ok(None);
-    };
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or("").to_string();
-    let target = request_parts.next().unwrap_or("/");
-    let (path, query) = parse_target(target);
-    let mut headers = HashMap::new();
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-        }
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let body_start = header_end + 4;
-    let mut body = buffer[body_start..].to_vec();
-    while body.len() < content_length {
-        let mut chunk = vec![0_u8; content_length - body.len()];
-        let read = socket.read(&mut chunk).await?;
-        if read == 0 {
-            break;
-        }
-        body.extend_from_slice(&chunk[..read]);
-    }
-    body.truncate(content_length);
-    Ok(Some(HttpRequest {
-        method,
-        path,
-        query,
-        headers,
-        body,
-    }))
-}
-
-fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn parse_target(target: &str) -> (String, HashMap<String, String>) {
-    let (path, raw_query) = target.split_once('?').unwrap_or((target, ""));
-    let mut query = HashMap::new();
-    for pair in raw_query.split('&').filter(|pair| !pair.is_empty()) {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        query.insert(key.to_string(), value.to_string());
-    }
-    (path.to_string(), query)
 }
 
 async fn write_json_value<S>(socket: &mut S, status: u16, body: serde_json::Value) -> io::Result<()>

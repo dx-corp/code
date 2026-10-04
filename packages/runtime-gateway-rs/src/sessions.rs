@@ -387,22 +387,72 @@ pub(super) async fn handle_pending_request_resume_endpoint(
             }
         }
     };
-    let Some(sender) = state
-        .pending_tool_responses
-        .lock()
-        .await
-        .remove(&request_id)
-    else {
-        return json_response(
-            404,
-            &serde_json::json!({ "error": format!("No active pending request: {request_id}") }),
-        );
+    if let Some(native_turn) = payload.get("nativeTurn") {
+        let input: crate::native_turns::NativeApprovalBinding =
+            match serde_json::from_value(native_turn.clone()) {
+                Ok(input) => input,
+                Err(_) => {
+                    return json_response(
+                        400,
+                        &serde_json::json!({"error":"Invalid native turn approval binding"}),
+                    );
+                }
+            };
+        if payload.get("kind").and_then(Value::as_str) != Some("approval")
+            || !matches!(
+                payload.get("decision").and_then(Value::as_str),
+                Some("approved" | "denied")
+            )
+        {
+            return json_response(
+                400,
+                &serde_json::json!({"error":"Bound native approvals require an explicit approval decision"}),
+            );
+        }
+        let turn = match crate::native_turns::bound_approval_turn(state, auth, &input).await {
+            Ok(turn) => turn,
+            Err(response) => return response,
+        };
+        let mut senders = state.pending_tool_responses.lock().await;
+        let mut owners = state.pending_tool_response_sessions.lock().await;
+        return turn.dispatch_bound_approval(input.generation, &request_id, || {
+            if owners.get(&request_id) != Some(&turn.pending_request_owner()) {
+                return json_response(404, &serde_json::json!({"error":"Pending request does not belong to this session"}));
+            }
+            let Some(sender) = senders.remove(&request_id) else {
+                return json_response(404, &serde_json::json!({"error":"Pending request is no longer active"}));
+            };
+            owners.remove(&request_id);
+            let approved = payload["decision"] == "approved";
+            if sender.send((request_id.clone(), approved, None, ExecutionSource::RemoteClient, None)).is_err() {
+                return json_response(409, &serde_json::json!({"error":"Pending request is no longer active"}));
+            }
+            json_response(200, &pending_request_resume_value(&request_id, &payload))
+        }).unwrap_or_else(|response| response);
+    }
+    let sender = {
+        let mut senders = state.pending_tool_responses.lock().await;
+        let mut owners = state.pending_tool_response_sessions.lock().await;
+        // Native approvals always carry their generation. Omitting the
+        // binding must not turn a stale native decision into a legacy send.
+        if matches!(
+            owners.get(&request_id),
+            Some(PendingToolResponseOwner::NativeTurn { .. })
+        ) {
+            return json_response(
+                409,
+                &serde_json::json!({"error":"A native turn binding is required for this approval"}),
+            );
+        }
+        let Some(sender) = senders.remove(&request_id) else {
+            return json_response(
+                404,
+                &serde_json::json!({"error":format!("No active pending request: {request_id}")}),
+            );
+        };
+        owners.remove(&request_id);
+        sender
     };
-    state
-        .pending_tool_response_sessions
-        .lock()
-        .await
-        .remove(&request_id);
     let (approved, result) = pending_tool_response_from_payload(&payload);
     let completed_client_tool_result = result.as_ref().map(|result| result.success);
     if let Some(success) = completed_client_tool_result {
@@ -629,6 +679,19 @@ pub(crate) async fn pending_request_owner_visible(
         .get(request_id)
         .cloned();
     match owner_session {
+        Some(PendingToolResponseOwner::NativeTurn {
+            session_id,
+            session_created_at,
+            ..
+        }) => state
+            .sessions
+            .lock()
+            .await
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| {
+                session.created_at == session_created_at && session_visible_to_auth(session, auth)
+            }),
         Some(PendingToolResponseOwner::Session(session_id)) => state
             .sessions
             .lock()

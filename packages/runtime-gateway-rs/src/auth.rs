@@ -159,6 +159,7 @@ fn is_chat_websocket_request(head: &RequestHead) -> bool {
 fn runtime_tenant_resource_path(path: &str) -> bool {
     path.starts_with("/api/chat")
         || path == "/api/native/turns"
+        || path == "/api/native/capabilities"
         || path.starts_with("/api/native/turns/")
         || path.starts_with("/api/hosted-threads/")
         || path.starts_with("/api/sessions")
@@ -209,8 +210,7 @@ pub(crate) fn authorized_context(
     let capability = RuntimeCapability::for_request(head);
     // Loopback development keeps subject-only legacy cookies usable; every
     // network-facing or hosted deployment requires a tenant-bound principal.
-    let require_tenant =
-        capability.requires_tenant() && (!config.listen_host_is_loopback() || strict_jwt_profile());
+    let require_tenant = capability.requires_tenant() && tenant_enforcement_active(config);
     if auth.permits(capability, require_tenant) {
         Ok(auth)
     } else if require_tenant && capability.requires_tenant() && !auth.has_tenant_binding() {
@@ -255,7 +255,7 @@ fn extended_path_requires_admin_role(head: &RequestHead) -> bool {
 // that add their own per-resource authorization (for example the pending-request
 // resume ownership check) gate it on this so local development is not disrupted.
 pub(crate) fn tenant_enforcement_active(config: &Config) -> bool {
-    !config.listen_host_is_loopback() || strict_jwt_profile()
+    config.native_code_hosted || !config.listen_host_is_loopback() || strict_jwt_profile()
 }
 
 // Authorization for the extended API surface. Layers the administrator-role
@@ -282,6 +282,12 @@ pub(crate) fn authorize_extended(
 }
 
 pub(crate) fn auth_context(head: &RequestHead, config: &Config) -> Option<AuthContext> {
+    if config.native_code_hosted {
+        // This companion is reached only through the authenticated hosted
+        // proxy. Neither a resident static key nor a vendor JWT substitutes
+        // for the proxy's verified person and tenant coordinates.
+        return trusted_proxy_auth_context(head);
+    }
     let bearer = head
         .headers
         .get("authorization")
@@ -883,6 +889,11 @@ mod native_turn_auth_tests {
     fn native_turn_reads_and_controls_require_explicit_tenant_scope() {
         for (method, path, capability) in [
             ("GET", "/api/native/turns", RuntimeCapability::TenantRead),
+            (
+                "GET",
+                "/api/native/capabilities",
+                RuntimeCapability::TenantRead,
+            ),
             (
                 "GET",
                 "/api/native/turns/turn-1",

@@ -1,6 +1,9 @@
 use anyhow::Result;
 use maestro::{Command, classify};
-use maestro_runtime_gateway::{RuntimeGatewayConfig, serve};
+use maestro_runtime_gateway::{RuntimeGatewayConfig, serve, serve_listener};
+
+mod hosted_companion;
+mod native_effect;
 
 // Process hardening must run before `main` — and therefore before the Tokio
 // runtime spawns worker threads — so the prctl/setrlimit calls and the
@@ -24,12 +27,52 @@ fn sync_command_output(command: &Command) -> Option<&'static str> {
 
 fn main() -> Result<()> {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
+    if raw_args.get(1).and_then(|value| value.to_str()) == Some("native-code-effect") {
+        std::process::exit(native_effect::run(&raw_args)?);
+    }
     let command = classify(raw_args.iter().skip(1).cloned()).map_err(anyhow::Error::msg)?;
 
     if let Some(output) = sync_command_output(&command) {
         println!("{output}");
         return Ok(());
     }
+
+    let serve_config = if let Command::Serve {
+        port,
+        parent_pid,
+        liveness_fd,
+    } = &command
+    {
+        if let Some(port) = port {
+            std::env::set_var("PORT", port.to_string());
+        }
+        if let Some(parent_pid) = parent_pid {
+            std::env::set_var("MAESTRO_PARENT_PID", parent_pid.to_string());
+        }
+        if let Some(liveness_fd) = liveness_fd {
+            std::env::set_var("MAESTRO_LIVENESS_FD", liveness_fd.to_string());
+        }
+        Some(RuntimeGatewayConfig::from_env())
+    } else {
+        None
+    };
+    let companion = if command == Command::Forward
+        && hosted_companion::requested(
+            &raw_args,
+            std::env::var("MAESTRO_NATIVE_CODE_ENABLED").ok().as_deref(),
+        ) {
+        let companion = hosted_companion::Companion::prepare(&raw_args)?;
+        companion.publish();
+        Some(companion)
+    } else {
+        None
+    };
+
+    let inherited_listener = serve_config
+        .as_ref()
+        .map(hosted_companion::inherited_listener)
+        .transpose()?
+        .flatten();
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -40,23 +83,17 @@ fn main() -> Result<()> {
         .build()?
         .block_on(async move {
             match command {
-                Command::Serve {
-                    port,
-                    parent_pid,
-                    liveness_fd,
-                } => {
-                    if let Some(port) = port {
-                        std::env::set_var("PORT", port.to_string());
+                Command::Serve { .. } => {
+                    let config = serve_config.expect("serve prepared before runtime startup");
+                    match inherited_listener {
+                        Some(listener) => serve_listener(tokio::net::TcpListener::from_std(listener)?, config).await,
+                        None => serve(config).await,
                     }
-                    if let Some(parent_pid) = parent_pid {
-                        std::env::set_var("MAESTRO_PARENT_PID", parent_pid.to_string());
-                    }
-                    if let Some(liveness_fd) = liveness_fd {
-                        std::env::set_var("MAESTRO_LIVENESS_FD", liveness_fd.to_string());
-                    }
-                    serve(RuntimeGatewayConfig::from_env()).await
-                }
-                Command::Forward => maestro_tui::run_cli(raw_args).await,
+                },
+                Command::Forward => match companion {
+                    Some(companion) => companion.run(maestro_tui::run_cli(raw_args)).await,
+                    None => maestro_tui::run_cli(raw_args).await,
+                },
                 Command::Help | Command::Version => unreachable!("handled before runtime startup"),
             }
         })

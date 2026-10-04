@@ -25,6 +25,7 @@ async fn delete_session_subpath_returns_404_without_removing_session() {
     };
     let state = AppState {
         config: Arc::new(Config {
+            native_code_hosted: false,
             listen_host: "127.0.0.1".to_string(),
             listen_port: 8080,
             api_key: Some("api-key".to_string()),
@@ -116,6 +117,7 @@ async fn invalid_session_store_is_left_untouched_and_future_writes_are_blocked()
 
     let state = AppState {
         config: Arc::new(Config {
+            native_code_hosted: false,
             listen_host: "127.0.0.1".to_string(),
             listen_port: 8080,
             api_key: None,

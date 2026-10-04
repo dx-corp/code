@@ -48,7 +48,7 @@ impl HostedRunnerHandle {
             ResponseBody::Json { status, body } => Err(io::Error::other(format!(
                 "hosted runner drain returned status {status}: {body}"
             ))),
-            ResponseBody::Sse { .. } => Err(io::Error::other(
+            ResponseBody::Bytes { .. } | ResponseBody::Sse { .. } => Err(io::Error::other(
                 "hosted runner drain returned an unexpected stream response",
             )),
         }

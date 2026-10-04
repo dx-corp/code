@@ -497,7 +497,52 @@ fn zero_model_cost() -> ModelCost {
 
 pub(crate) async fn default_model(config: &Config) -> ModelInfo {
     let registry = available_models(config).await;
+    if config.native_code_hosted {
+        if let Some(model) = env::var("MAESTRO_DEFAULT_MODEL")
+            .ok()
+            .and_then(|input| resolve_hosted_model(&input, &registry))
+        {
+            return model;
+        }
+    }
     default_model_from_registry(&registry)
+}
+
+fn resolve_hosted_model(input: &str, registry: &ModelRegistry) -> Option<ModelInfo> {
+    if let Some(model) = resolve_model(input, registry) {
+        return Some(model);
+    }
+    // The canonical hosted launch owns the managed route and credentials.
+    // Retain that route even when it has no public vendor catalog entry;
+    // never replace a managed invocation with the emergency Codex default.
+    let (provider, id) = input.trim().split_once('/')?;
+    let descriptor = ProviderRegistry::descriptor(provider)?;
+    if descriptor.protocol != maestro_local_host::ai::ProviderProtocol::Managed
+        || id.is_empty()
+        || id.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    let shipped = shared_catalog::MANAGED_MODELS
+        .iter()
+        .find(|entry| entry.id == id);
+    Some(ModelInfo {
+        id: id.into(),
+        provider: provider.into(),
+        name: shipped.map(|entry| entry.name).unwrap_or(id).into(),
+        api: "managed-gateway".into(),
+        context_window: shipped.map(|entry| entry.context_tokens).unwrap_or(0),
+        max_tokens: 0,
+        reasoning: false,
+        cost: zero_model_cost(),
+        capabilities: ModelCapabilities {
+            streaming: true,
+            tools: false,
+            vision: false,
+            reasoning: false,
+            attachments: true,
+        },
+    })
 }
 
 pub(crate) fn default_model_from_registry(registry: &ModelRegistry) -> ModelInfo {
@@ -902,4 +947,19 @@ mod tests {
         assert_eq!(model.provider, "vertex-ai");
         assert_eq!(model.id, "gemini-2.5-pro");
     }
+}
+#[test]
+fn hosted_managed_model_preserves_canonical_route_without_vendor_catalog() {
+    let registry = ModelRegistry {
+        models: vec![],
+        aliases: HashMap::new(),
+    };
+    let model = resolve_hosted_model("evalops/accounts/fireworks/models/glm-5p3", &registry)
+        .expect("managed hosted route");
+    assert_eq!(model.provider, "evalops");
+    assert_eq!(model.id, "accounts/fireworks/models/glm-5p3");
+    assert_eq!(model.api, "managed-gateway");
+    assert!(!model.capabilities.tools);
+    assert!(resolve_hosted_model("unknown/anything", &registry).is_none());
+    assert!(resolve_hosted_model("evalops/with spaces", &registry).is_none());
 }

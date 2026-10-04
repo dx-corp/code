@@ -1426,18 +1426,21 @@ async fn handle_codex_headless_approval_request(
         .unwrap_or("Tool execution requires approval")
         .to_string();
     let (sender, mut receiver) = mpsc::unbounded_channel();
-    state
-        .pending_tool_responses
-        .lock()
-        .await
-        .insert(external_request_id.clone(), sender);
-    if let Some(session_id) = session_id {
-        // Record the owning session so the resume endpoint can verify the caller
-        // may see it before delivering the approval decision.
-        state.pending_tool_response_sessions.lock().await.insert(
-            external_request_id.clone(),
-            PendingToolResponseOwner::Session(session_id.to_string()),
-        );
+    {
+        // Publish sender and owner together, so a concurrent legacy resume
+        // cannot deliver a native approval before its binding is visible.
+        let mut senders = state.pending_tool_responses.lock().await;
+        let mut owners = state.pending_tool_response_sessions.lock().await;
+        senders.insert(external_request_id.clone(), sender);
+        if let Some(session_id) = session_id {
+            owners.insert(
+                external_request_id.clone(),
+                stream.native_turn().map_or_else(
+                    || PendingToolResponseOwner::Session(session_id.to_string()),
+                    |turn| turn.pending_request_owner(),
+                ),
+            );
+        }
     }
     pending_approval_ids
         .lock()

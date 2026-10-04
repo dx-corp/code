@@ -28,10 +28,13 @@ test-support = ["maestro-tui/test-support"]
 anyhow.workspace = true
 ctor.workspace = true
 maestro-runtime-gateway.workspace = true
+maestro-local-host.workspace = true
 maestro-runtime.workspace = true
 maestro-tui.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time", "net", "io-util"] }
 
 [dev-dependencies]
+dunce.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+maestro-runtime-contracts.workspace = true
