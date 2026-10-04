@@ -565,7 +565,7 @@ pub enum Event {
         /// resolved by the authenticated host. Prompt data only; grants no
         /// authority. Older turns carry none and render no voice.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        voice: Option<crate::TurnVoice>,
+        voice: Option<Box<crate::TurnVoice>>,
     },
     /// Control: becomes a user message from `principal` before the next model
     /// call. Calls the model then proposes act under `principal`.
@@ -903,6 +903,8 @@ mod tests {
             "voice": {
                 "policy": {
                     "guide_version": 3,
+                    "response_guidance": "Use observed execution evidence",
+                    "required_terms": ["Deixic"],
                     "voice": {"kind": "neutral"}
                 },
                 "tone": ["formal"]
@@ -920,6 +922,14 @@ mod tests {
         );
         let replay = serde_json::to_value(event).expect("durable event");
         assert_eq!(replay["voice"]["tone"], input["voice"]["tone"]);
+        assert_eq!(
+            replay["voice"]["policy"]["response_guidance"],
+            input["voice"]["policy"]["response_guidance"]
+        );
+        assert_eq!(
+            replay["voice"]["policy"]["required_terms"],
+            input["voice"]["policy"]["required_terms"]
+        );
         assert_eq!(
             replay["voice"]["policy"]["voice"],
             input["voice"]["policy"]["voice"]

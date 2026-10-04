@@ -622,7 +622,7 @@ impl Context {
                     authorized_tools: authorized_tools.clone(),
                     approval_mode: *approval_mode,
                     model_binding: model_binding.clone(),
-                    voice: voice.clone(),
+                    voice: voice.as_deref().cloned(),
                 };
                 if self.status == Status::Running {
                     // This message's cursor landed while the current turn was

@@ -3178,6 +3178,7 @@ mod tests {
 
     #[test]
     fn a_pasted_callback_address_is_held_to_the_listener_checks() {
+        let _guard = crate::config::test_process_env_lock();
         let port = callback_port();
         let pasted = |address: String| pasted_callback(&address, "expected");
         let callback = pasted(format!(
