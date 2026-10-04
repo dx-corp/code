@@ -367,7 +367,7 @@ impl Context {
     }
 
     /// The current turn's host-resolved writing policy and voice choice, as
-    /// logged on its `UserMessage`. Prompt data only.
+    /// logged on its `UserMessage`. Writing rules grant no execution authority.
     pub fn voice(&self) -> Option<&crate::TurnVoice> {
         self.voice.as_ref()
     }

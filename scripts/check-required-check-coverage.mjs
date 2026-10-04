@@ -125,20 +125,32 @@ export function assertGhOk(result, endpoint) {
 }
 
 export function fetchRequiredContexts(repo, branch) {
-	const endpoint = `repos/${repo}/branches/${encodeURIComponent(branch)}/protection`;
-	const result = spawnSync(
-		"gh",
-		["api", endpoint, "--jq", "[.required_status_checks.checks[]?.context]"],
-		{ encoding: "utf8" },
-	);
-	const stdout = assertGhOk(result, endpoint);
-	try {
-		return JSON.parse(stdout);
-	} catch {
-		throw new CoverageBlindSpotError(
-			`gh api ${endpoint} returned invalid JSON`,
-		);
-	}
+	const branchPath = `repos/${repo}/branches/${encodeURIComponent(branch)}`;
+	const read = (endpoint, jq) => {
+		const result = spawnSync("gh", ["api", endpoint, "--jq", jq], {
+			encoding: "utf8",
+		});
+		const stdout = assertGhOk(result, endpoint);
+		try {
+			return JSON.parse(stdout);
+		} catch {
+			throw new CoverageBlindSpotError(
+				`gh api ${endpoint} returned invalid JSON`,
+			);
+		}
+	};
+	return [
+		...new Set([
+			...read(
+				`${branchPath}/protection`,
+				"[.required_status_checks.checks[]?.context]",
+			),
+			...read(
+				`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`,
+				'[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]',
+			),
+		]),
+	];
 }
 
 /**

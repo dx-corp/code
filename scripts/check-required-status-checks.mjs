@@ -68,18 +68,21 @@ function parseArgs(argv) {
 	return args;
 }
 
-function fetchRequiredContexts(repo, branch, { strict = false } = {}) {
+export function fetchRequiredContexts(
+	repo,
+	branch,
+	{ strict = false, run = spawnSync } = {},
+) {
 	const endpoint = `repos/${repo}/branches/${encodeURIComponent(branch)}/protection`;
-	const result = spawnSync(
-		"gh",
-		["api", endpoint, "--jq", "[.required_status_checks.checks[]?.context]"],
-		{ encoding: "utf8" },
-	);
-	if (result.error) {
-		throw new Error(`failed to run gh: ${result.error.message}`);
-	}
-	if (result.status !== 0) {
-		const detail = (result.stderr || "").trim() || "unknown error";
+	const rulesEndpoint = `repos/${repo}/rules/branches/${encodeURIComponent(branch)}`;
+	const gh = (path, jq) => {
+		const result = run("gh", ["api", path, "--jq", jq], { encoding: "utf8" });
+		if (result.error) {
+			throw new Error(`failed to run gh: ${result.error.message}`);
+		}
+		return result;
+	};
+	const unreadable = (detail) => {
 		// A token without Administration read on branch protection gets 403/404.
 		// In strict mode (the repo whose invariant this is) that must fail the
 		// job: the whole point of this check is to prove required checks
@@ -87,26 +90,54 @@ function fetchRequiredContexts(repo, branch, { strict = false } = {}) {
 		// must not let it go green silently. Non-strict callers (forks/other
 		// repos that can't hold the token or grant) still degrade to a
 		// warning + pass.
-		if (/HTTP (403|404)/.test(detail)) {
-			if (strict) {
-				throw new Error(
-					`gh api ${endpoint} failed: ${detail}. The token cannot read branch ` +
-						"protection (needs Administration read) on a repository where this " +
-						"invariant runs in --strict mode; it must fail closed rather than " +
-						"silently skip.",
-				);
-			}
-			console.warn(
-				`::warning::INVARIANT NOT VERIFIED: gh api ${endpoint} failed: ${detail}. ` +
-					"The token cannot read branch protection (needs Administration read), so " +
-					"required contexts could not be enumerated. This job passing does NOT mean " +
-					"required checks are reportable.",
+		if (strict) {
+			throw new Error(
+				`gh api ${endpoint} failed: ${detail}. The token cannot read branch ` +
+					"protection (needs Administration read) on a repository where this " +
+					"invariant runs in --strict mode; it must fail closed rather than " +
+					"silently skip.",
 			);
-			return null;
 		}
-		throw new Error(`gh api ${endpoint} failed: ${detail}`);
+		console.warn(
+			`::warning::INVARIANT NOT VERIFIED: gh api ${endpoint} failed: ${detail}. ` +
+				"The token cannot read branch protection (needs Administration read), so " +
+				"required contexts could not be enumerated. This job passing does NOT mean " +
+				"required checks are reportable.",
+		);
+		return null;
+	};
+
+	const classic = gh(endpoint, "[.required_status_checks.checks[]?.context]");
+	let classicContexts = [];
+	let classicNotFound = false;
+	if (classic.status === 0) {
+		classicContexts = JSON.parse(classic.stdout);
+	} else {
+		const detail = (classic.stderr || "").trim() || "unknown error";
+		if (/HTTP 404/.test(detail)) {
+			classicNotFound = true;
+		} else if (/HTTP 403/.test(detail)) {
+			return unreadable(detail);
+		} else {
+			throw new Error(`gh api ${endpoint} failed: ${detail}`);
+		}
 	}
-	return JSON.parse(result.stdout);
+
+	const rules = gh(
+		rulesEndpoint,
+		'[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]',
+	);
+	if (rules.status !== 0) {
+		const detail = (rules.stderr || "").trim() || "unknown error";
+		throw new Error(`gh api ${rulesEndpoint} failed: ${detail}`);
+	}
+	const contexts = [
+		...new Set([...classicContexts, ...JSON.parse(rules.stdout)]),
+	];
+	if (classicNotFound && contexts.length === 0) {
+		return unreadable("HTTP 404 and no ruleset required_status_checks");
+	}
+	return contexts;
 }
 
 function stripComment(line) {

@@ -23,6 +23,7 @@ mod budget;
 mod codemode_output;
 mod codemode_state;
 mod compaction;
+mod content_policy;
 mod context;
 mod engine;
 mod event;
@@ -34,6 +35,10 @@ mod voice;
 pub use budget::{Budget, BudgetAxis, RemainingBudget};
 pub use compaction::{
     Compaction, CompactionPlan, Compactor, NoCompaction, Summarize, Summary, Threshold,
+};
+pub use content_policy::{
+    AuthoredContent, ContentPolicyEvaluation, ContentPolicyScope, ContentPolicyViolation,
+    evaluate_content_policy,
 };
 pub use context::{
     AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message, TOOL_EVIDENCE_LIMIT,

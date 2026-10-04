@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { evaluateRequiredStatusChecks } from "./check-required-status-checks.mjs";
+import {
+	evaluateRequiredStatusChecks,
+	fetchRequiredContexts,
+} from "./check-required-status-checks.mjs";
 
 function withWorkflows(files, contexts) {
 	const root = mkdtempSync(join(tmpdir(), "required-checks-"));
@@ -116,4 +119,46 @@ jobs:
 	const { failures } = withWorkflows({ "release.yml": workflow }, ["release"]);
 	assert.equal(failures.length, 1);
 	assert.match(failures[0], /never runs on pull_request/u);
+});
+
+test("fetchRequiredContexts unions classic protection and ruleset contexts", () => {
+	const ok = (stdout) => ({ status: 0, stdout, stderr: "" });
+	const run = (_cmd, args) =>
+		args[1].includes("/rules/")
+			? ok('["validate","platform-ci"]')
+			: ok('["validate","legacy"]');
+	assert.deepEqual(
+		fetchRequiredContexts("dx-corp/mono", "main", { strict: true, run }),
+		["validate", "legacy", "platform-ci"],
+	);
+});
+
+test("fetchRequiredContexts treats classic 404 as empty and reads the ruleset", () => {
+	const run = (_cmd, args) =>
+		args[1].includes("/rules/")
+			? { status: 0, stdout: '["validate","semgrep"]', stderr: "" }
+			: { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+	assert.deepEqual(
+		fetchRequiredContexts("dx-corp/mono", "main", { strict: true, run }),
+		["validate", "semgrep"],
+	);
+});
+
+test("fetchRequiredContexts strict still fails on classic 404 with no ruleset checks", () => {
+	const run = (_cmd, args) =>
+		args[1].includes("/rules/")
+			? { status: 0, stdout: "[]", stderr: "" }
+			: { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+	assert.throws(
+		() => fetchRequiredContexts("dx-corp/mono", "main", { strict: true, run }),
+		/fail closed/u,
+	);
+});
+
+test("fetchRequiredContexts strict still fails on classic 403", () => {
+	const run = () => ({ status: 1, stdout: "", stderr: "gh: Forbidden (HTTP 403)" });
+	assert.throws(
+		() => fetchRequiredContexts("dx-corp/mono", "main", { strict: true, run }),
+		/fail closed/u,
+	);
 });

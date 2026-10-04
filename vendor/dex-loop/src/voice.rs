@@ -2,8 +2,9 @@
 //! with the sender's voice choice already applied by the authenticated host.
 //!
 //! This is prompt data, never authority. It grants no tool, connector, or
-//! model access, and the loop never reads it: the model port renders it into
-//! the turn's stored context. Logged on the turn's `UserMessage`, so every
+//! model access. The model port renders guidance into stored context; the loop
+//! checks deterministic writing rules before exposing model prose. Logged on
+//! the turn's `UserMessage`, so every
 //! step, resume, and replica of the turn writes under the same policy even if
 //! the workspace edits its style guide mid-turn.
 
