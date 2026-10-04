@@ -364,6 +364,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         },
         Event::StepStarted {
@@ -961,6 +962,7 @@ async fn crash_mid_stream_abandons_the_attempt_and_reissues_it() {
         client_tools: vec![],
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
     log.host_append(Event::StepStarted {
@@ -1180,6 +1182,7 @@ async fn same_turn_id_in_two_threads_dispatches_under_distinct_threads() {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         });
         let model = FakeModel::new(vec![vec![call("update", json!({}))], vec![text("done")]]);
@@ -2220,6 +2223,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 1
     log.host_append(Event::Interrupt { principal: alice() }); // cursor 2 -- excluded from the suffix below
@@ -2233,6 +2237,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 4
 
@@ -2278,6 +2283,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 1 -- excluded from the suffix below
     log.host_append(Event::Steer {
@@ -2296,6 +2302,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 4
 

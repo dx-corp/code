@@ -273,6 +273,7 @@ mod tests {
             client_tools: vec![],
             authorized_tools: vec![],
             model_binding: None,
+            voice: None,
             approval_mode: ApprovalMode::Interactive,
         }
     }
@@ -697,6 +698,7 @@ mod cut_tests {
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: ApprovalMode::Interactive,
         }
     }

@@ -210,6 +210,7 @@ pub struct Context {
     authorized_tools: Vec<ToolName>,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
+    voice: Option<crate::TurnVoice>,
     /// Last completed serving route in this turn, derived from existing events.
     /// Kept outside compactable history so recovery does not retry a failed primary.
     last_served: Option<ServedBy>,
@@ -260,6 +261,7 @@ struct PendingTurn {
     authorized_tools: Vec<ToolName>,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
+    voice: Option<crate::TurnVoice>,
 }
 
 impl Context {
@@ -287,6 +289,7 @@ impl Context {
             authorized_tools: Vec::new(),
             approval_mode: ApprovalMode::Interactive,
             model_binding: None,
+            voice: None,
             last_served: None,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
@@ -361,6 +364,12 @@ impl Context {
     /// The current turn's exact host-resolved provider coordinates.
     pub fn model_binding(&self) -> Option<&crate::ManagedInferenceProviderBinding> {
         self.model_binding.as_ref()
+    }
+
+    /// The current turn's host-resolved writing policy and voice choice, as
+    /// logged on its `UserMessage`. Prompt data only.
+    pub fn voice(&self) -> Option<&crate::TurnVoice> {
+        self.voice.as_ref()
     }
 
     /// The last completed model step's route in the current turn. New turns
@@ -601,6 +610,7 @@ impl Context {
                 authorized_tools,
                 approval_mode,
                 model_binding,
+                voice,
             } => {
                 let next = PendingTurn {
                     turn: turn.clone(),
@@ -612,6 +622,7 @@ impl Context {
                     authorized_tools: authorized_tools.clone(),
                     approval_mode: *approval_mode,
                     model_binding: model_binding.clone(),
+                    voice: voice.clone(),
                 };
                 if self.status == Status::Running {
                     // This message's cursor landed while the current turn was
@@ -1116,6 +1127,7 @@ impl Context {
             authorized_tools,
             approval_mode,
             model_binding,
+            voice,
         } = next;
         self.turn = Some(turn.clone());
         self.acting = Some(principal.clone());
@@ -1139,6 +1151,7 @@ impl Context {
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;
         self.model_binding = model_binding;
+        self.voice = voice;
         self.last_served = None;
         self.authorized_principal = Some(principal.clone());
         self.push(

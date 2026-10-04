@@ -55,6 +55,7 @@ fn log_up_to_model_step(log: &FakeLog, call: &ProposedCall) {
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
     log.host_append(Event::StepStarted {
