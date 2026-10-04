@@ -561,6 +561,11 @@ pub enum Event {
         /// never credential values, and grants no Gateway authority.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_binding: Option<crate::ManagedInferenceProviderBinding>,
+        /// The workspace writing policy and the sender's voice choice,
+        /// resolved by the authenticated host. Prompt data only; grants no
+        /// authority. Older turns carry none and render no voice.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voice: Option<crate::TurnVoice>,
     },
     /// Control: becomes a user message from `principal` before the next model
     /// call. Calls the model then proposes act under `principal`.
@@ -884,6 +889,41 @@ mod tests {
         let event: Event = serde_json::from_value(input.clone()).expect("accepted message");
         let replay = serde_json::to_value(event).expect("durable event");
         assert_eq!(replay["model_binding"], input["model_binding"]);
+        assert!(
+            replay.get("voice").is_none(),
+            "older rows stay byte-identical"
+        );
+    }
+
+    #[test]
+    fn accepted_turn_voice_survives_event_round_trip() {
+        let input = serde_json::json!({
+            "type": "user_message", "turn": "turn-1", "principal": "user-1",
+            "text": "hello", "attachments": [],
+            "voice": {
+                "policy": {
+                    "guide_version": 3,
+                    "voice": {"kind": "neutral"}
+                },
+                "tone": ["formal"]
+            }
+        });
+        let event: Event = serde_json::from_value(input.clone()).expect("accepted message");
+        let Event::UserMessage { voice, .. } = &event else {
+            panic!("user message");
+        };
+        let voice = voice.as_ref().expect("voice");
+        assert_eq!(voice.tone, vec![crate::ToneAdjustment::Formal]);
+        assert_eq!(
+            voice.policy.as_ref().map(|policy| &policy.voice),
+            Some(&crate::TurnVoiceChoice::Neutral)
+        );
+        let replay = serde_json::to_value(event).expect("durable event");
+        assert_eq!(replay["voice"]["tone"], input["voice"]["tone"]);
+        assert_eq!(
+            replay["voice"]["policy"]["voice"],
+            input["voice"]["policy"]["voice"]
+        );
     }
 
     #[test]
@@ -923,6 +963,7 @@ mod tests {
                 attachments: vec![ArtifactRef::new("a1")],
                 authorized_tools: Vec::new(),
                 model_binding: None,
+                voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 client_tools: vec![ClientToolSpec {
                     name: ToolName::new("browser.read_tab"),
@@ -1036,6 +1077,7 @@ mod tests {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: ApprovalMode::Interactive,
         };
         let json = serde_json::to_string(&event).expect("serialize");
@@ -1065,6 +1107,7 @@ mod tests {
                 client_tools: vec![],
                 authorized_tools: Vec::new(),
                 model_binding: None,
+                voice: None,
                 approval_mode: ApprovalMode::Interactive,
             }
         );

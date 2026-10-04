@@ -126,6 +126,7 @@ impl FakeLog {
             client_tools,
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         });
         self.rehydrate()
@@ -148,6 +149,7 @@ impl FakeLog {
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode,
         });
         self.rehydrate()
@@ -880,6 +882,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         },
         Event::StepStarted {

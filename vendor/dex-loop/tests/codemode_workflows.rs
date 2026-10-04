@@ -170,6 +170,7 @@ async fn scratch_state_is_partitioned_by_the_accepted_principal() {
         client_tools: vec![],
         authorized_tools: vec![],
         model_binding: None,
+        voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
     ctx = log.rehydrate();
