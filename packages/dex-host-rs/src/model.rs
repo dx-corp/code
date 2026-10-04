@@ -1,18 +1,30 @@
 //! A `dex_loop::Model` adapter over `maestro-ai`'s `UnifiedClient::stream`.
 //!
-//! First real port of `docs/design/maestro-on-dex-loop.md`'s cutover step 2
-//! ("Build the real `Model` adapter over `ai_rs::AiClient::stream`"). Scope
-//! matches the rest of this crate's "first slice" framing: one call at a
-//! time, no retries beyond what `UnifiedClient::stream` already does, no
-//! prompt caching, no thinking-block translation, and cost is not yet
-//! attributed (`Usage::cost_micros` is always `0` -- `maestro-ai` reports
-//! cost as a separate `StreamEvent::ProviderCost`, not on the `Usage` event
-//! this adapter reads). None of that is a correctness bug for the local
-//! `run_local_turn` consumer this backs; it is exactly what "first slice"
-//! means, called out here the way the crate doc comment calls out the rest.
+//! The port of `docs/design/maestro-on-dex-loop.md`'s cutover step 2. One
+//! call at a time, no retries beyond what `UnifiedClient::stream` already
+//! does, and no prompt caching. What a request carries matches the native
+//! actor's provider path:
+//!
+//! - Tools are declared under `dex_loop::model_tool_name` (providers reject
+//!   dots) with their model-facing description, and a returned call is mapped
+//!   back to its registry name.
+//! - Extended thinking streams as `ModelChunk::Thinking`. Its signed blocks
+//!   return as `ModelChunk::Reasoning` and are replayed on later steps, which
+//!   Anthropic requires to continue a turn after a tool call.
+//! - Provider cost (`StreamEvent::ProviderCost`) is charged on the step's
+//!   `Usage`, which is sent once after a clean terminal, after `Reasoning`.
+//! - A managed-gateway client gets one lineage per dex-loop turn
+//!   (`managed_turn_lineage_id`), as the native actor gets one per prompt.
+//! - Managed-gateway receipts, the governance evidence for a managed call,
+//!   have no `ModelChunk`; they go to the host on a side channel
+//!   (`with_receipts`) so it can show them as the native actor does.
+//! - Image attachments on a user message are local files (the host's
+//!   `ArtifactRef` is the path) sent as image blocks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+use base64::Engine as _;
 
 use dex_loop::{
     Context, Entry, Message as LoopMessage, ModelChunk, ModelError, Outcome, Output, OutputBlock,
@@ -20,9 +32,14 @@ use dex_loop::{
 };
 use futures_util::Stream;
 use maestro_ai::{
-    ContentBlock as AiContentBlock, ImageSource, Message as AiMessage, MessageContent,
-    RequestConfig, Role, StreamEvent, Tool as AiTool, UnifiedClient,
+    ContentBlock as AiContentBlock, ImageSource, ManagedGatewayReceipt, Message as AiMessage,
+    MessageContent, RequestConfig, Role, StreamEvent, ThinkingConfig, Tool as AiTool,
+    UnifiedClient,
 };
+use maestro_runtime::agent::managed_turn_lineage_id;
+
+/// `ProviderReasoning::format` for Anthropic thinking blocks.
+const ANTHROPIC_THINKING: &str = "anthropic.messages.v1";
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Wraps one `maestro_ai::UnifiedClient` as a `dex_loop::Model`.
@@ -32,6 +49,11 @@ pub struct AiRsModel {
     model: String,
     max_tokens: u32,
     system: Option<String>,
+    thinking_budget: Option<u32>,
+    receipts: Option<tokio::sync::mpsc::UnboundedSender<ManagedGatewayReceipt>>,
+    /// Distinguishes this model's turns from another process's in a
+    /// managed lineage id.
+    run_id: String,
 }
 
 impl AiRsModel {
@@ -42,7 +64,34 @@ impl AiRsModel {
             model: model.into(),
             max_tokens,
             system: None,
+            thinking_budget: None,
+            receipts: None,
+            run_id: format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or_default()
+            ),
         }
+    }
+
+    /// Sends each managed-gateway receipt to `receipts` as it arrives.
+    #[must_use]
+    pub fn with_receipts(
+        mut self,
+        receipts: tokio::sync::mpsc::UnboundedSender<ManagedGatewayReceipt>,
+    ) -> Self {
+        self.receipts = Some(receipts);
+        self
+    }
+
+    /// Requests extended thinking with `budget` tokens.
+    #[must_use]
+    pub fn with_thinking(mut self, budget: u32) -> Self {
+        self.thinking_budget = Some(budget);
+        self
     }
 
     #[must_use]
@@ -57,6 +106,13 @@ impl AiRsModel {
             max_tokens: self.max_tokens,
             system: self.system.clone(),
             tools: Arc::new(tools),
+            thinking: self.thinking_budget.map(ThinkingConfig::enabled),
+            // Temperature must be omitted while thinking.
+            temperature: if self.thinking_budget.is_some() {
+                None
+            } else {
+                Some(0.7)
+            },
             ..RequestConfig::default()
         }
     }
@@ -111,25 +167,51 @@ fn flush_tool_images(messages: &mut Vec<AiMessage>, images: &mut Vec<AiContentBl
 
 fn to_ai_message(message: &LoopMessage) -> Option<AiMessage> {
     match message {
-        LoopMessage::User { text, .. } | LoopMessage::Summary { text } => Some(AiMessage {
+        LoopMessage::User {
+            text, attachments, ..
+        } => {
+            let images: Vec<AiContentBlock> = attachments
+                .iter()
+                .filter_map(|attachment| image_block(attachment.as_str()))
+                .collect();
+            if images.is_empty() {
+                return Some(AiMessage {
+                    role: Role::User,
+                    content: MessageContent::text(text.clone()),
+                });
+            }
+            let mut blocks = vec![AiContentBlock::Text { text: text.clone() }];
+            blocks.extend(images);
+            Some(AiMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(blocks),
+            })
+        }
+        LoopMessage::Summary { text } => Some(AiMessage {
             role: Role::User,
             content: MessageContent::text(text.clone()),
         }),
-        LoopMessage::Assistant { text, calls, .. } => {
-            if calls.is_empty() {
+        LoopMessage::Assistant {
+            text,
+            calls,
+            reasoning,
+            ..
+        } => {
+            let thinking = thinking_blocks(reasoning.as_ref());
+            if calls.is_empty() && thinking.is_empty() {
                 return Some(AiMessage {
                     role: Role::Assistant,
                     content: MessageContent::text(text.clone()),
                 });
             }
-            let mut blocks = Vec::with_capacity(calls.len() + 1);
+            let mut blocks = thinking;
             if !text.is_empty() {
                 blocks.push(AiContentBlock::Text { text: text.clone() });
             }
             for call in calls {
                 blocks.push(AiContentBlock::ToolUse {
                     id: call.id.as_str().to_owned(),
-                    name: call.tool.as_str().to_owned(),
+                    name: dex_loop::model_tool_name(call.tool.as_str()),
                     input: call.args.clone(),
                     gemini_context: None,
                 });
@@ -174,13 +256,64 @@ fn to_ai_message(message: &LoopMessage) -> Option<AiMessage> {
     }
 }
 
+/// A local image file as an image block; anything else stays a note in the
+/// message text.
+fn image_block(path: &str) -> Option<AiContentBlock> {
+    let extension = std::path::Path::new(path)
+        .extension()?
+        .to_str()?
+        .to_ascii_lowercase();
+    let media_type = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => return None,
+    };
+    let bytes = std::fs::read(path).ok()?;
+    Some(AiContentBlock::Image {
+        source: ImageSource::Base64 {
+            media_type: media_type.to_owned(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            owner: None,
+        },
+    })
+}
+
+/// The signed thinking blocks a step returned, to send back unchanged.
+fn thinking_blocks(reasoning: Option<&dex_loop::ProviderReasoning>) -> Vec<AiContentBlock> {
+    let Some(reasoning) = reasoning.filter(|reasoning| reasoning.format == ANTHROPIC_THINKING)
+    else {
+        return Vec::new();
+    };
+    reasoning
+        .payload
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|block| {
+            Some(AiContentBlock::Thinking {
+                thinking: block.get("thinking")?.as_str()?.to_owned(),
+                signature: block
+                    .get("signature")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
 fn to_ai_tools(tools: &[&ToolSpec]) -> Vec<AiTool> {
     tools
         .iter()
         .map(|spec| AiTool {
             namespace_instructions: None,
-            name: spec.name.as_str().to_owned(),
-            description: spec.label.clone(),
+            name: dex_loop::model_tool_name(spec.name.as_str()),
+            description: if spec.description.is_empty() {
+                spec.label.clone()
+            } else {
+                spec.description.clone()
+            },
             input_schema: spec.schema.clone(),
             output_schema: None,
             schema_enforcement: Default::default(),
@@ -195,12 +328,98 @@ fn to_ai_tools(tools: &[&ToolSpec]) -> Vec<AiTool> {
 #[derive(Default)]
 struct ChunkTranslator {
     pending_tools: BTreeMap<usize, (String, String)>, // index -> (tool name, json buffer)
+    /// Model-facing tool name -> registry name.
+    names: HashMap<String, ToolName>,
+    model: String,
+    /// index -> (thinking text, signature)
+    thinking: BTreeMap<usize, (String, Option<String>)>,
+    usage: Option<Usage>,
+    cost_micros: u64,
+    failed: bool,
 }
 
 impl ChunkTranslator {
+    fn new(tools: &[&ToolSpec], model: &str) -> Self {
+        Self {
+            names: tools
+                .iter()
+                .map(|spec| {
+                    (
+                        dex_loop::model_tool_name(spec.name.as_str()),
+                        spec.name.clone(),
+                    )
+                })
+                .collect(),
+            model: model.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    fn tool_name(&self, name: String) -> ToolName {
+        self.names
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| ToolName::new(name))
+    }
+
+    /// What a clean terminal commits, in the engine's order: the step's
+    /// reasoning, then its usage with any provider cost charged.
+    fn finish(&mut self) -> Vec<Result<ModelChunk, ModelError>> {
+        if self.failed {
+            return Vec::new();
+        }
+        let mut chunks = Vec::new();
+        if !self.thinking.is_empty() {
+            let payload = std::mem::take(&mut self.thinking)
+                .into_values()
+                .map(|(thinking, signature)| {
+                    serde_json::json!({ "thinking": thinking, "signature": signature })
+                })
+                .collect();
+            chunks.push(Ok(ModelChunk::Reasoning(dex_loop::ProviderReasoning {
+                format: ANTHROPIC_THINKING.to_owned(),
+                model: self.model.clone(),
+                payload: serde_json::Value::Array(payload),
+            })));
+        }
+        if let Some(mut usage) = self.usage.take() {
+            usage.cost_micros = usage.cost_micros.saturating_add(self.cost_micros);
+            chunks.push(Ok(ModelChunk::Usage(usage)));
+        }
+        chunks
+    }
+
     fn translate(&mut self, event: StreamEvent) -> Vec<Result<ModelChunk, ModelError>> {
+        let chunks = self.translate_event(event);
+        if chunks.iter().any(Result::is_err) {
+            self.failed = true;
+        }
+        chunks
+    }
+
+    fn translate_event(&mut self, event: StreamEvent) -> Vec<Result<ModelChunk, ModelError>> {
         match event {
             StreamEvent::TextDelta { text, .. } => vec![Ok(ModelChunk::Text(text))],
+            StreamEvent::ThinkingDelta { index, thinking } => {
+                self.thinking
+                    .entry(index)
+                    .or_default()
+                    .0
+                    .push_str(&thinking);
+                vec![Ok(ModelChunk::Thinking(thinking))]
+            }
+            StreamEvent::ThinkingSignature { index, signature } => {
+                self.thinking.entry(index).or_default().1 = Some(signature);
+                Vec::new()
+            }
+            StreamEvent::ProviderCost { cost_usd } => {
+                if cost_usd.is_finite() && cost_usd > 0.0 {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let micros = (cost_usd * 1_000_000.0).round() as u64;
+                    self.cost_micros = self.cost_micros.saturating_add(micros);
+                }
+                Vec::new()
+            }
             StreamEvent::ContentBlockStart {
                 index,
                 block: AiContentBlock::ToolUse { name, .. },
@@ -217,7 +436,15 @@ impl ChunkTranslator {
                 }
                 Vec::new()
             }
-            StreamEvent::ContentBlockStop { index, .. } => {
+            StreamEvent::ContentBlockStop {
+                index,
+                thinking_signature,
+            } => {
+                if let (Some(signature), Some(block)) =
+                    (thinking_signature, self.thinking.get_mut(&index))
+                {
+                    block.1 = Some(signature);
+                }
                 let Some((name, buffer)) = self.pending_tools.remove(&index) else {
                     return Vec::new();
                 };
@@ -237,7 +464,7 @@ impl ChunkTranslator {
                     }
                 };
                 vec![Ok(ModelChunk::ToolCall {
-                    name: ToolName::new(name),
+                    name: self.tool_name(name),
                     args,
                 })]
             }
@@ -246,14 +473,17 @@ impl ChunkTranslator {
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
-            } => vec![Ok(ModelChunk::Usage(Usage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens: cache_read_tokens.unwrap_or_default(),
-                cache_creation_input_tokens: cache_creation_tokens.unwrap_or_default(),
-                // Not attributed here; see the module doc comment.
-                cost_micros: 0,
-            }))],
+            } => {
+                // Sent by `finish`, after any reasoning, with cost charged.
+                self.usage = Some(Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens: cache_read_tokens.unwrap_or_default(),
+                    cache_creation_input_tokens: cache_creation_tokens.unwrap_or_default(),
+                    cost_micros: 0,
+                });
+                Vec::new()
+            }
             StreamEvent::ProviderError { kind, message } => {
                 use maestro_ai::ProviderStreamErrorKind;
                 let class = match kind {
@@ -287,7 +517,24 @@ impl dex_loop::Model for AiRsModel {
     ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a {
         let messages = to_ai_messages(ctx.history());
         let config = self.request_config(to_ai_tools(tools));
-        let client = self.client.clone();
+        let mut translator = ChunkTranslator::new(tools, &self.model);
+        let receipts = self.receipts.clone();
+        let mut client = self.client.clone();
+        let lineage = client
+            .managed_gateway_scope()
+            .filter(|_| client.is_managed_gateway())
+            .map(|(organization, workspace)| {
+                managed_turn_lineage_id(
+                    organization,
+                    workspace,
+                    &ctx.thread().thread,
+                    &self.run_id,
+                    ctx.turn().map_or("turn", |turn| turn.as_str()),
+                )
+            });
+        if lineage.is_some() {
+            client.set_managed_request_lineage(lineage);
+        }
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             let messages = match messages {
@@ -299,12 +546,21 @@ impl dex_loop::Model for AiRsModel {
             };
             match client.stream(&messages, &config).await {
                 Ok(mut source) => {
-                    let mut translator = ChunkTranslator::default();
                     while let Some(event) = source.recv().await {
+                        if let (StreamEvent::ManagedGatewayReceipt(receipt), Some(receipts)) =
+                            (&event, &receipts)
+                        {
+                            let _ = receipts.send(receipt.clone());
+                        }
                         for chunk in translator.translate(event) {
                             if tx.send(chunk).is_err() {
                                 return;
                             }
+                        }
+                    }
+                    for chunk in translator.finish() {
+                        if tx.send(chunk).is_err() {
+                            return;
                         }
                     }
                 }
@@ -377,22 +633,30 @@ mod tests {
 
     #[test]
     fn retains_provider_reported_cache_usage() {
-        let chunks = ChunkTranslator::default().translate(StreamEvent::Usage {
-            input_tokens: 10,
-            output_tokens: 3,
-            cache_read_tokens: Some(20),
-            cache_creation_tokens: Some(7),
-        });
+        let mut translator = ChunkTranslator::default();
+        assert!(
+            translator
+                .translate(StreamEvent::Usage {
+                    input_tokens: 10,
+                    output_tokens: 3,
+                    cache_read_tokens: Some(20),
+                    cache_creation_tokens: Some(7),
+                })
+                .is_empty()
+        );
+        let chunks = translator.finish();
         assert!(matches!(&chunks[0], Ok(ModelChunk::Usage(usage))
             if usage.input_tokens == 10 && usage.output_tokens == 3
                 && usage.cache_read_input_tokens == 20
                 && usage.cache_creation_input_tokens == 7));
-        let absent = ChunkTranslator::default().translate(StreamEvent::Usage {
+        let mut translator = ChunkTranslator::default();
+        translator.translate(StreamEvent::Usage {
             input_tokens: 10,
             output_tokens: 3,
             cache_read_tokens: None,
             cache_creation_tokens: None,
         });
+        let absent = translator.finish();
         assert!(matches!(&absent[0], Ok(ModelChunk::Usage(usage))
             if usage.cache_read_input_tokens == 0 && usage.cache_creation_input_tokens == 0));
     }
@@ -460,6 +724,106 @@ mod tests {
                 if name.as_str() == "fs.read_file" && args["path"] == "a.txt"
         ));
         assert!(matches!(&chunks[2], ModelChunk::Usage(_)));
+    }
+
+    #[test]
+    fn thinking_streams_then_commits_signed_reasoning_before_costed_usage() {
+        let spec = ToolSpec {
+            description: "Ask".into(),
+            name: ToolName::new("user.ask"),
+            label: "Confirm an action".into(),
+            schema: serde_json::json!({"type": "object"}),
+            read_only: true,
+            core: true,
+            governance: dex_loop::GovernanceClass::Plain,
+            executor: dex_loop::ExecutorKind::User,
+        };
+        let mut translator = ChunkTranslator::new(&[&spec], "claude");
+        let mut chunks = Vec::new();
+        for event in [
+            StreamEvent::ThinkingDelta {
+                index: 0,
+                thinking: "consider".into(),
+            },
+            StreamEvent::ThinkingSignature {
+                index: 0,
+                signature: "sig".into(),
+            },
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block: AiContentBlock::ToolUse {
+                    id: "p1".into(),
+                    name: "user_ask".into(),
+                    input: serde_json::json!({}),
+                    gemini_context: None,
+                },
+            },
+            StreamEvent::InputJsonDelta {
+                index: 1,
+                partial_json: r#"{"question":"ok?"}"#.into(),
+            },
+            StreamEvent::ContentBlockStop {
+                index: 1,
+                thinking_signature: None,
+            },
+            StreamEvent::Usage {
+                input_tokens: 5,
+                output_tokens: 2,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            },
+            StreamEvent::ProviderCost { cost_usd: 0.0125 },
+        ] {
+            chunks.extend(translator.translate(event));
+        }
+        chunks.extend(translator.finish());
+        let chunks: Vec<ModelChunk> = chunks.into_iter().map(Result::unwrap).collect();
+        assert!(matches!(&chunks[0], ModelChunk::Thinking(text) if text == "consider"));
+        assert!(
+            matches!(&chunks[1], ModelChunk::ToolCall { name, .. } if name.as_str() == "user.ask")
+        );
+        let ModelChunk::Reasoning(reasoning) = &chunks[2] else {
+            panic!("reasoning after the last call: {chunks:?}");
+        };
+        assert!(matches!(&chunks[3], ModelChunk::Usage(usage) if usage.cost_micros == 12_500));
+        let replay = thinking_blocks(Some(reasoning));
+        assert!(matches!(
+            replay.as_slice(),
+            [AiContentBlock::Thinking { thinking, signature: Some(signature) }]
+                if thinking == "consider" && signature == "sig"
+        ));
+    }
+
+    #[test]
+    fn tools_are_declared_under_provider_safe_names_with_their_description() {
+        let spec = ToolSpec {
+            description: "Ask the person".into(),
+            name: ToolName::new("user.ask"),
+            label: "Confirm an action".into(),
+            schema: serde_json::json!({"type": "object"}),
+            read_only: true,
+            core: true,
+            governance: dex_loop::GovernanceClass::Plain,
+            executor: dex_loop::ExecutorKind::User,
+        };
+        let declared = to_ai_tools(&[&spec]);
+        assert_eq!(declared[0].name, "user_ask");
+        assert_eq!(declared[0].description, "Ask the person");
+    }
+
+    #[test]
+    fn an_image_attachment_becomes_an_image_block() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let image = dir.path().join("shot.png");
+        std::fs::write(&image, [0x89, b'P', b'N', b'G']).expect("write image");
+        let note = dir.path().join("notes.txt");
+        std::fs::write(&note, "text").expect("write note");
+        assert!(matches!(
+            image_block(image.to_str().expect("utf-8")),
+            Some(AiContentBlock::Image { source: ImageSource::Base64 { media_type, .. } })
+                if media_type == "image/png"
+        ));
+        assert!(image_block(note.to_str().expect("utf-8")).is_none());
     }
 
     #[tokio::test]

@@ -18,8 +18,9 @@ use serde_json::Value;
 use url::Url;
 
 use crate::init_cli::{
-    EvalOpsCredentialSnapshot, has_evalops_credentials, load_evalops_snapshot,
-    perform_evalops_login, perform_evalops_logout,
+    DeviceSignInUnavailable, EvalOpsCredentialSnapshot, has_evalops_credentials,
+    load_evalops_snapshot, perform_evalops_device_login, perform_evalops_login,
+    perform_evalops_logout,
 };
 
 mod ci_auth;
@@ -105,7 +106,21 @@ pub async fn run_evalops(args: &[String]) -> Result<i32> {
             println!("{}", evalops_help());
             Ok(0)
         }
-        Some("login") => login().await,
+        Some("login") => match &args[1..] {
+            [] => login(LoginMode::Auto).await,
+            [flag] if flag == "--device-auth" => login(LoginMode::Device).await,
+            [flag] if flag == "--browser" => login(LoginMode::Browser).await,
+            _ => {
+                eprintln!(
+                    "{}",
+                    crate::localization::cli_locale().format(
+                        "Usage: {0}",
+                        &["maestro login [--device-auth | --browser]".to_string()]
+                    )
+                );
+                Ok(2)
+            }
+        },
         Some("logout") => logout().await,
         Some("status") => status(),
         Some("hosted-computer-smoke-credential" | "hosted-orb-smoke-credential") => {
@@ -220,12 +235,42 @@ fn hosted_orb_smoke_credential(
     })
 }
 
-async fn login() -> Result<i32> {
+/// How `maestro login` signs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoginMode {
+    /// A one-time code approved in any browser, falling back to the browser
+    /// callback where Identity does not offer device sign-in.
+    Auto,
+    /// Only the one-time code (`--device-auth`).
+    Device,
+    /// Only the browser callback on this machine (`--browser`).
+    Browser,
+}
+
+async fn sign_in(mode: LoginMode) -> Result<()> {
+    match mode {
+        LoginMode::Browser => perform_evalops_login().await,
+        LoginMode::Device => perform_evalops_device_login().await,
+        LoginMode::Auto => match perform_evalops_device_login().await {
+            Err(error) if error.is::<DeviceSignInUnavailable>() => {
+                eprintln!(
+                    "{}",
+                    crate::localization::cli_locale()
+                        .format("Device sign-in is not available here ({0}); continuing with browser sign-in.", &[error.to_string()])
+                );
+                perform_evalops_login().await
+            }
+            result => result,
+        },
+    }
+}
+
+async fn login(mode: LoginMode) -> Result<i32> {
     println!(
         "{}",
         crate::localization::cli_locale().format("Deixic Code EvalOps Login", &[])
     );
-    match perform_evalops_login().await {
+    match sign_in(mode).await {
         Ok(()) => {
             println!(
                 "{}",

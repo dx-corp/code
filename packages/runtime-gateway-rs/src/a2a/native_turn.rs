@@ -1,9 +1,12 @@
+use crate::dex_chat::{KernelRequest, Transcript, TurnDir, compose, host_turn};
 use chrono::{DateTime, Utc};
+use maestro_dex_host::dex_loop::{ApprovalMode as TurnMode, Exit};
+use maestro_dex_host::{HostTools, HostTurnRun, Park, Step, turn_dir};
 use maestro_local_host::SandboxPolicy;
-use maestro_local_host::agent::{CredentialVault, FromAgent, NativeAgent, NativeAgentConfig};
-use maestro_local_host::state::ApprovalMode;
+use maestro_local_host::agent::CredentialVault;
 use maestro_local_host::tools::ToolExecutor;
-use maestro_runtime::{ExecutionSource, TokenUsage, ToolResult};
+use maestro_runtime::agent::native_host::ApprovalMode as HostApprovalMode;
+use maestro_runtime::{TokenUsage, ToolResult};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -15,20 +18,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::ValidatedSubagentTaskCapsule;
 use crate::{
-    A2A_DEFAULT_TURN_TIMEOUT_MS, A2ACancelReceiver, AppState, env_bool, env_u64,
-    finish_tool_metadata, record_tool_call_metadata, trimmed_env,
+    A2A_DEFAULT_TURN_TIMEOUT_MS, A2ACancelReceiver, AppState, env_bool, env_u64, trimmed_env,
 };
-
-fn a2a_explicit_terminal(event: &FromAgent) -> Option<Result<(), String>> {
-    match event {
-        FromAgent::TurnCompleted { .. } => Some(Ok(())),
-        FromAgent::TurnInterrupted { reason, .. } => Some(Err(reason.clone())),
-        FromAgent::ProviderError { kind, message } => {
-            Some(Err(format!("provider failure ({kind:?}): {message}")))
-        }
-        _ => None,
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct A2ASubagentExecutionPolicy {
@@ -733,182 +724,119 @@ pub(crate) async fn run_a2a_native_turn(
         .map_or(base_system_prompt.clone(), |policy| {
             format!("{base_system_prompt}\n\n{}", policy.guidance)
         });
-    let config = NativeAgentConfig {
+    let prompt = execution_policy.as_ref().map_or(prompt.clone(), |policy| {
+        format!("{}\n\nDelegated request:\n{prompt}", policy.guidance)
+    });
+    let kernel = compose(KernelRequest {
         model,
         cwd: execution_policy.as_ref().map_or_else(
             || state.config.cwd.to_string_lossy().to_string(),
             |policy| policy.cwd.to_string_lossy().to_string(),
         ),
         system_prompt: Some(system_prompt),
-        thinking_enabled: env_bool("MAESTRO_A2A_THINKING").unwrap_or(false),
-        thinking_budget: env::var("MAESTRO_A2A_THINKING_BUDGET")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(10_000),
-        approval_mode: execution_policy
-            .as_ref()
-            .map_or_else(ApprovalMode::default, |_| ApprovalMode::Safe),
+        prompt,
+        attachments: Vec::new(),
+        background_task_access:
+            maestro_local_host::tools::background_tasks::BackgroundTaskAccess::Legacy,
+        thinking_budget: env_bool("MAESTRO_A2A_THINKING").unwrap_or(false).then(|| {
+            env::var("MAESTRO_A2A_THINKING_BUDGET")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(10_000)
+        }),
         sandbox_policy: execution_policy
             .as_ref()
             .map(|policy| policy.sandbox_policy.clone()),
-        ..NativeAgentConfig::default()
-    };
-    let capsule_allowed_tools = execution_policy
-        .as_ref()
-        .map(|policy| policy.allowed_tools.iter().cloned().collect::<HashSet<_>>());
-    let (agent, mut events) = if execution_policy.is_some() {
-        NativeAgent::new_with_allowed_tools_and_credential_vault(
-            config,
-            capsule_allowed_tools
-                .as_ref()
-                .expect("capsule tool set should exist"),
-            CredentialVault::new(),
-        )
-    } else {
-        NativeAgent::new(config)
-    }
-    .map_err(|error| error.to_string())?;
-    agent
-        .set_session_context(Some(session_id.to_owned()), "a2a", false)
-        .map_err(|error| error.to_string())?;
-    let prompt = execution_policy.as_ref().map_or(prompt.clone(), |policy| {
-        format!("{}\n\nDelegated request:\n{prompt}", policy.guidance)
-    });
-    agent
-        .prompt(prompt, Vec::new())
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let timeout = execution_policy
-        .as_ref()
-        .map_or(global_timeout, |policy| policy.turn_timeout);
+    })
+    .await?;
     let approval_mode = trimmed_env("MAESTRO_A2A_TOOL_APPROVAL")
         .unwrap_or_else(|| "fail".to_string())
         .to_ascii_lowercase();
     let auto_approve_tools = matches!(approval_mode.as_str(), "auto" | "approve" | "approved");
-    let mut output = A2ATurnOutput::default();
+    // A governed capsule runs each allowed tool through its own executor and
+    // policy; the kernel parks on the call and the capsule answers it.
+    // Otherwise the turn is headless: a gated call is refused unless the
+    // operator approved tools for A2A, which runs them as Yolo does.
+    let tools = match execution_policy.as_ref() {
+        Some(policy) => {
+            let allowed: HashSet<String> = policy.allowed_tools.iter().cloned().collect();
+            HostTools::new(kernel.host.clone(), HostApprovalMode::Selective)
+                .only(&allowed)
+                .delegate(&allowed)
+        }
+        None if auto_approve_tools => HostTools::new(kernel.host.clone(), HostApprovalMode::Yolo),
+        None => HostTools::new(kernel.host.clone(), HostApprovalMode::Selective),
+    };
+    let timeout = execution_policy
+        .as_ref()
+        .map_or(global_timeout, |policy| policy.turn_timeout);
+    let dir = TurnDir(turn_dir("maestro-dex-a2a"));
+    let request = host_turn(session_id, &dir.0, &kernel, TurnMode::Headless);
+    let mut run = HostTurnRun::start(&dir.0, kernel.model, tools, request).await?;
+    let mut transcript = Transcript::default();
     let mut last_error: Option<String> = None;
     let mut turn_completed = false;
     let turn_timeout = tokio::time::sleep(timeout);
     tokio::pin!(turn_timeout);
 
     loop {
-        let event = tokio::select! {
+        let step = tokio::select! {
             _ = &mut turn_timeout => {
-                agent.cancel();
+                run.cancel();
                 return Err("A2A native TUI turn timed out".to_string());
             }
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
-                    agent.cancel();
+                    run.cancel();
                     return Ok(A2ATurnResult::Canceled);
                 }
                 continue;
             }
-            event = events.recv() => event.ok_or_else(||
-                "A2A native TUI turn stream ended before an explicit terminal".to_string()
-            )?,
+            step = run.next() => step?,
         };
-        if let Some(terminal) = a2a_explicit_terminal(&event) {
-            match terminal {
-                Ok(()) => turn_completed = true,
-                Err(message) => last_error = Some(message),
+        match step {
+            Step::Observed(observed) => {
+                transcript.apply(observed);
             }
-            break;
-        }
-        match event {
-            FromAgent::ResponseStart { .. } => {}
-            FromAgent::ResponseChunk {
-                content,
-                is_thinking,
-                ..
-            } => {
-                if is_thinking {
-                    output.thinking_text.push_str(&content);
-                } else {
-                    output.assistant_text.push_str(&content);
-                }
-            }
-            FromAgent::ResponseEnd { usage, .. } => {
-                output.usage = usage;
-            }
-            FromAgent::ToolCall {
-                call_id,
-                tool,
-                args,
-                requires_approval,
-                ..
-            } => {
-                record_tool_call_metadata(&mut output.tools, &call_id, &tool, args.clone());
-                if let Some(policy) = execution_policy.as_ref() {
-                    let result = policy
-                        .execute_tool_call(&tool, &args, &call_id, cancel_rx.clone())
-                        .await;
-                    let success = result.success;
-                    let _ = agent.tool_response_sender().send((
-                        call_id.clone(),
-                        true,
-                        Some(result),
-                        ExecutionSource::Native,
-                        None,
-                    ));
-                    if !success {
-                        finish_tool_metadata(&mut output.tools, &call_id, false);
-                    }
-                } else if requires_approval {
-                    let _ = agent.tool_response_sender().send((
-                        call_id.clone(),
-                        auto_approve_tools,
-                        None,
-                        ExecutionSource::RemoteClient,
-                        None,
-                    ));
-                    if !auto_approve_tools {
-                        finish_tool_metadata(&mut output.tools, &call_id, false);
-                    }
-                }
-            }
-            FromAgent::ToolEnd {
-                call_id, success, ..
-            } => {
-                finish_tool_metadata(&mut output.tools, &call_id, success);
-            }
-            FromAgent::HookBlocked {
-                call_id,
-                tool,
-                reason,
-            } => {
-                if !output
-                    .tools
-                    .iter()
-                    .any(|entry| entry.get("id").and_then(Value::as_str) == Some(&call_id))
-                {
-                    record_tool_call_metadata(&mut output.tools, &call_id, &tool, Value::Null);
-                }
-                finish_tool_metadata(&mut output.tools, &call_id, false);
-                last_error = Some(reason);
-            }
-            FromAgent::Error {
-                message,
-                fatal,
-                terminal,
-                ..
-            } => {
-                last_error = Some(message);
-                if fatal || terminal {
+            Step::Park(Park::ClientTool { call, tool, args }) => {
+                let Some(policy) = execution_policy.as_ref() else {
+                    last_error = Some(format!("{tool} has no executor for this A2A turn"));
                     break;
-                }
+                };
+                transcript.client_call(call.as_str(), tool.as_str(), &args);
+                let result = policy
+                    .execute_tool_call(tool.as_str(), &args, call.as_str(), cancel_rx.clone())
+                    .await;
+                transcript.client_result(call.as_str(), result.success);
+                let output = if result.success {
+                    result.output
+                } else {
+                    result.error.unwrap_or(result.output)
+                };
+                run.client_result(call, result.success, output).await?;
             }
-            // A2A persists child ToolCall/ToolEnd metadata above. The grouped
-            // UI summary is not task output or an additional owner receipt.
-            FromAgent::CodeModeProgress { .. } => {}
-            FromAgent::CodexSessionState { .. }
-            | FromAgent::CodexTurnState { .. }
-            | FromAgent::CodexUsageState { .. }
-            | FromAgent::CodexCompatibility { .. } => {}
-            _ => {}
+            // A headless turn refuses gated calls, so it never asks.
+            Step::Park(Park::Confirm { .. }) => {
+                last_error = Some("an A2A turn has nobody to confirm an action".to_string());
+                break;
+            }
+            Step::Exit(Exit::Done) => {
+                turn_completed = true;
+                break;
+            }
+            Step::Exit(_) => {
+                last_error = transcript.error.clone();
+                break;
+            }
         }
     }
+    let mut output = A2ATurnOutput {
+        assistant_text: transcript.assistant_text,
+        thinking_text: transcript.thinking_text,
+        usage: transcript.usage,
+        tools: transcript.tools,
+        ..A2ATurnOutput::default()
+    };
 
     if turn_completed {
         if let Some(policy) = execution_policy.as_ref() {
@@ -985,32 +913,6 @@ mod terminal_tests {
             .expect("search omitted paths should be valid");
         assert_eq!(search["paths"], scope.display().to_string());
         assert_eq!(search["cwd"], scope.display().to_string());
-    }
-
-    #[test]
-    fn response_end_is_not_an_a2a_turn_terminal() {
-        assert!(
-            a2a_explicit_terminal(&FromAgent::ResponseEnd {
-                response_id: "done".to_string(),
-                usage: None,
-            })
-            .is_none()
-        );
-        assert!(matches!(
-            a2a_explicit_terminal(&FromAgent::TurnCompleted {
-                response_id: "done".to_string(),
-                coding_completion: None,
-                coding_child_records: Vec::new(),
-            }),
-            Some(Ok(()))
-        ));
-        assert!(matches!(
-            a2a_explicit_terminal(&FromAgent::ProviderError {
-                kind: maestro_local_host::ai::ProviderStreamErrorKind::TransientProtocol,
-                message: "unexpected eof".to_string(),
-            }),
-            Some(Err(message)) if message.contains("unexpected eof")
-        ));
     }
 
     #[tokio::test]

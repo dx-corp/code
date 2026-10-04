@@ -3963,6 +3963,7 @@ name = "maestro-dex-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "dex-loop",
  "fd-lock",
  "futures-util",
@@ -4144,6 +4145,7 @@ dependencies = [
  "jsonwebtoken 11.0.0",
  "libc",
  "maestro-a2a-ledger",
+ "maestro-dex-host",
  "maestro-local-host",
  "maestro-runtime",
  "pdf-extract",

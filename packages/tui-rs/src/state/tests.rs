@@ -842,6 +842,45 @@ fn test_handle_tool_call() {
 }
 
 #[test]
+fn tool_boundary_separates_commentary_from_reused_response_chunks() {
+    for commentary in ["Checking.", "Checking.\n", "Checking.\n\n", ""] {
+        let mut state = AppState::new();
+        state.handle_agent_message(FromAgent::ResponseStart {
+            response_id: "shared-response".to_string(),
+        });
+        state.handle_agent_message(FromAgent::ResponseChunk {
+            response_id: "shared-response".to_string(),
+            content: commentary.to_string(),
+            is_thinking: false,
+        });
+        for call_id in ["write", "read"] {
+            state.handle_agent_message(FromAgent::ToolCall {
+                call_id: call_id.to_string(),
+                tool: call_id.to_string(),
+                args: serde_json::json!({"path": "hello.txt"}),
+                requires_approval: true,
+                approval_inline_env: None,
+            });
+        }
+        for content in ["Done", "."] {
+            state.handle_agent_message(FromAgent::ResponseChunk {
+                response_id: "shared-response".to_string(),
+                content: content.to_string(),
+                is_thinking: false,
+            });
+        }
+        let expected = if commentary.is_empty() {
+            "Done."
+        } else {
+            "Checking.\n\nDone."
+        };
+        assert_eq!(state.messages[0].content, expected);
+        assert_eq!(state.messages[0].tool_calls.len(), 2);
+        assert!(state.busy);
+    }
+}
+
+#[test]
 fn test_handle_tool_call_no_approval() {
     let mut state = AppState::new();
 

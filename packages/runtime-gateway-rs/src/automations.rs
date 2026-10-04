@@ -6,10 +6,13 @@
 //! replacing the state file. This keeps a second gateway process or a crash
 //! from turning an in-memory placeholder into a false success.
 
+use crate::dex_chat::{KernelRequest, TurnDir, compose, host_turn};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fs2::FileExt;
 use hmac::{Hmac, KeyInit, Mac};
-use maestro_local_host::agent::{CredentialVault, FromAgent, NativeAgent, NativeAgentConfig};
+use maestro_dex_host::dex_loop::{ApprovalMode as TurnMode, Exit};
+use maestro_dex_host::{HostTools, HostTurnRun, Observed, Step, turn_dir};
+use maestro_runtime::agent::native_host::ApprovalMode as HostApprovalMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1230,49 +1233,40 @@ where
 }
 
 async fn execute_native_turn(claim: &ClaimedAutomationRun, cwd: &Path) -> AutomationRunResult {
-    let config = NativeAgentConfig {
+    let Ok(kernel) = compose(KernelRequest {
         model: claim.model.clone(),
         cwd: cwd.to_string_lossy().to_string(),
         system_prompt: Some(
             "You are running a durable Deixic Code automation. Complete the requested task and return a concise result. No external tool calls are available in this automation contract.".to_string(),
         ),
-        ..NativeAgentConfig::default()
+        prompt: claim.prompt.clone(),
+        attachments: Vec::new(),
+        background_task_access: maestro_local_host::tools::background_tasks::BackgroundTaskAccess::Legacy,
+        thinking_budget: None,
+        sandbox_policy: None,
+    })
+    .await
+    else {
+        return failed_run("agent_initialization_failed");
     };
-    let allowed_tools = HashSet::new();
-    let (agent, mut events) = match NativeAgent::new_with_allowed_tools_and_credential_vault(
-        config,
-        &allowed_tools,
-        CredentialVault::new(),
-    ) {
-        Ok(agent) => agent,
-        Err(_) => return failed_run("agent_initialization_failed"),
-    };
-    if agent
-        .set_session_context(Some(claim.run_id.clone()), "automation", false)
-        .is_err()
-    {
-        return failed_run("session_context_failed");
-    }
-    if agent
-        .prompt(claim.prompt.clone(), Vec::new())
-        .await
-        .is_err()
-    {
+    // The automation contract offers no tools; nobody is attached to ask.
+    let tools =
+        HostTools::new(kernel.host.clone(), HostApprovalMode::Selective).only(&HashSet::new());
+    let dir = TurnDir(turn_dir("maestro-dex-automation"));
+    let request = host_turn(&claim.run_id, &dir.0, &kernel, TurnMode::Headless);
+    let Ok(mut run) = HostTurnRun::start(&dir.0, kernel.model, tools, request).await else {
         return failed_run("prompt_enqueue_failed");
-    }
+    };
     let mut digest = Sha256::new();
     let mut output_bytes = 0_u64;
-    while let Some(event) = events.recv().await {
-        match event {
-            FromAgent::ResponseChunk {
-                content,
-                is_thinking: false,
-                ..
-            } => {
+    loop {
+        match run.next().await {
+            Ok(Step::Observed(Observed::Text(content))) => {
                 output_bytes = output_bytes.saturating_add(content.len() as u64);
                 digest.update(content.as_bytes());
             }
-            FromAgent::TurnCompleted { .. } => {
+            Ok(Step::Observed(_)) => {}
+            Ok(Step::Exit(Exit::Done)) => {
                 return AutomationRunResult {
                     succeeded: true,
                     output_sha256: Some(hex_digest(digest.finalize())),
@@ -1280,16 +1274,10 @@ async fn execute_native_turn(claim: &ClaimedAutomationRun, cwd: &Path) -> Automa
                     error_type: None,
                 };
             }
-            // Presentation-only script progress must not enter the automation
-            // output digest or be treated as a terminal execution result.
-            FromAgent::CodeModeProgress { .. } => {}
-            FromAgent::TurnInterrupted { .. } => return failed_run("turn_interrupted"),
-            FromAgent::ProviderError { .. } => return failed_run("provider_error"),
-            FromAgent::Error { terminal: true, .. } => return failed_run("agent_error"),
-            _ => {}
+            Ok(Step::Exit(Exit::Interrupted)) => return failed_run("turn_interrupted"),
+            Ok(Step::Park(_) | Step::Exit(_)) | Err(_) => return failed_run("agent_error"),
         }
     }
-    failed_run("agent_event_channel_closed")
 }
 
 fn hex_digest(bytes: impl AsRef<[u8]>) -> String {

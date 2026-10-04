@@ -1374,11 +1374,17 @@ async fn handle_codex_headless_approval_request(
     pending_approval_ids: &Arc<Mutex<Vec<String>>>,
     stdin: &mut tokio::process::ChildStdin,
 ) -> Result<(), String> {
-    if request.get("request_type").and_then(Value::as_str) != Some("approval") {
+    let native_tool_call = request.get("type").and_then(Value::as_str) == Some("tool_call");
+    if !native_tool_call && request.get("request_type").and_then(Value::as_str) != Some("approval")
+    {
         return Ok(());
     }
     let child_request_id = request
-        .get("request_id")
+        .get(if native_tool_call {
+            "call_id"
+        } else {
+            "request_id"
+        })
         .and_then(Value::as_str)
         .or_else(|| request.get("call_id").and_then(Value::as_str))
         .ok_or_else(|| "Codex headless approval request missing request_id".to_string())?
@@ -1436,11 +1442,29 @@ async fn handle_codex_headless_approval_request(
     let Some((_call_id, approved, result, _source, _consumed)) = receiver.recv().await else {
         return Err("Codex headless approval request closed before decision".to_string());
     };
-    write_codex_headless_message(
-        stdin,
-        &codex_headless_approval_response(&child_request_id, approved, result.as_ref()),
-    )
-    .await
+    let response = if native_tool_call {
+        // An approval is a decision, not a fabricated tool execution result.
+        // Without a client result the native owner executes the admitted tool.
+        let mut response = serde_json::json!({
+            "type": "tool_response",
+            "call_id": child_request_id,
+            "approved": approved,
+        });
+        if let Some(execution_id) = request.get("tool_execution_id") {
+            response["tool_execution_id"] = execution_id.clone();
+        }
+        if let Some(result) = result.as_ref() {
+            response["result"] = serde_json::json!({
+                "success": result.success,
+                "output": result.output,
+                "error": result.error,
+            });
+        }
+        response
+    } else {
+        codex_headless_approval_response(&child_request_id, approved, result.as_ref())
+    };
+    write_codex_headless_message(stdin, &response).await
 }
 
 async fn cleanup_codex_headless_approvals(
@@ -1491,9 +1515,11 @@ pub(crate) async fn run_codex_app_server_headless_cli(
     let bridge_prompt = prepare_codex_bridge_prompt(cwd, prompt, attachment_paths).await?;
     let sandbox_mode = codex_app_server_sandbox_mode();
     let mut command = codex_bridge_command(&cli_path);
+    // The app-server wire uses an unqualified ID, but native routing needs
+    // the subscription provider. A bare ID would select the metered API.
     command
         .arg("headless")
-        .env("MAESTRO_MODEL", model)
+        .env("MAESTRO_MODEL", format!("openai-codex/{model}"))
         .env("MAESTRO_GATEWAY_BACKGROUND_SCOPE_REQUIRED", "1");
     if let Some(sandbox_mode) = sandbox_mode {
         command.env("MAESTRO_SANDBOX_MODE", sandbox_mode);
@@ -1557,6 +1583,8 @@ pub(crate) async fn run_codex_app_server_headless_cli(
         .await?;
 
         let mut assistant_text = String::new();
+        let mut assistant_usage = None;
+        let mut separate_response = false;
         let mut tool_events = Vec::new();
         let mut tool_contexts: HashMap<String, CodexBridgeToolContext> = HashMap::new();
         loop {
@@ -1572,6 +1600,9 @@ pub(crate) async fn run_codex_app_server_headless_cli(
                 continue;
             };
             match event.get("type").and_then(Value::as_str) {
+                Some("response_start") => {
+                    separate_response = !assistant_text.is_empty();
+                }
                 Some("response_chunk")
                     if !event
                         .get("is_thinking")
@@ -1579,11 +1610,19 @@ pub(crate) async fn run_codex_app_server_headless_cli(
                         .unwrap_or(false) =>
                 {
                     if let Some(content) = event.get("content").and_then(Value::as_str) {
+                        if separate_response && !content.is_empty() {
+                            assistant_text.push_str("\n\n");
+                            separate_response = false;
+                        }
                         assistant_text.push_str(content);
                     }
                 }
                 Some("response_end") => {
-                    let assistant_usage = codex_headless_usage_from_json(&event);
+                    // A model response may end before its tools request approval.
+                    // Only the native turn boundary proves coding completion.
+                    assistant_usage = codex_headless_usage_from_json(&event);
+                }
+                Some("turn_completed") => {
                     let _ = write_codex_headless_message(
                         &mut stdin,
                         &serde_json::json!({ "type": "shutdown" }),
@@ -1601,10 +1640,29 @@ pub(crate) async fn run_codex_app_server_headless_cli(
                     });
                 }
                 Some("tool_call") | Some("tool_end") => {
+                    // Codex can keep one response ID across commentary, a
+                    // native tool, and the final answer. Preserve that visible
+                    // tool boundary even without another response_start.
+                    separate_response = !assistant_text.is_empty();
                     if let Some(tool_event) =
                         codex_headless_tool_event_from_json_with_context(&event, &mut tool_contexts)
                     {
                         tool_events.push(tool_event);
+                    }
+                    if event.get("type").and_then(Value::as_str) == Some("tool_call")
+                        && event.get("requires_approval").and_then(Value::as_bool) == Some(true)
+                    {
+                        handle_codex_headless_approval_request(
+                            stream,
+                            transport,
+                            state,
+                            session_id,
+                            &approval_run_id,
+                            &event,
+                            &pending_approval_ids,
+                            &mut stdin,
+                        )
+                        .await?;
                     }
                 }
                 Some("server_request") => {
@@ -1620,14 +1678,27 @@ pub(crate) async fn run_codex_app_server_headless_cli(
                     )
                     .await?;
                 }
-                Some("error") => {
+                Some("error" | "provider_error") => {
                     let message = event
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or("Codex headless bridge error");
-                    if event.get("fatal").and_then(Value::as_bool).unwrap_or(false) {
+                    if event.get("type").and_then(Value::as_str) == Some("provider_error")
+                        || event.get("fatal").and_then(Value::as_bool).unwrap_or(false)
+                        || event
+                            .get("terminal")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    {
                         return Err(message.to_string());
                     }
+                }
+                Some("turn_interrupted") => {
+                    return Err(event
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Native coding turn interrupted")
+                        .to_owned());
                 }
                 _ => {}
             }

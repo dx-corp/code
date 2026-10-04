@@ -25,6 +25,7 @@ maestro-runtime.workspace = true
 maestro-runtime-contracts.workspace = true
 
 anyhow.workspace = true
+base64.workspace = true
 fd-lock.workspace = true
 futures-util = "0.3"
 serde.workspace = true

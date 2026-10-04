@@ -5132,6 +5132,28 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Authenticate your account at (press ENTER to open in browser):",
+        [
+            "Autentique su cuenta en (pulse ENTER para abrir en el navegador):",
+            "Authentifiez votre compte sur (appuyez sur ENTER pour ouvrir dans le navigateur) :",
+            "Authentifizieren Sie Ihr Konto unter (ENTER drücken, um im Browser zu öffnen):",
+            "次の場所でアカウントを認証してください（ENTER を押すとブラウザで開きます）:",
+            "다음에서 계정을 인증하세요(ENTER를 누르면 브라우저에서 열림):",
+            "在以下地址验证您的账户（按 ENTER 在浏览器中打开）：",
+        ],
+    ),
+    (
+        "Authenticate your account at:",
+        [
+            "Autentique su cuenta en:",
+            "Authentifiez votre compte sur :",
+            "Authentifizieren Sie Ihr Konto unter:",
+            "次の場所でアカウントを認証してください:",
+            "다음에서 계정을 인증하세요:",
+            "在以下地址验证您的账户：",
+        ],
+    ),
+    (
         "Authenticated MCP server {0}; token stored in the OS credential store.",
         [
             "Servidor MCP {0} autenticado; token guardado en el almacén de credenciales del sistema.",
@@ -5140,6 +5162,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "MCPサーバー {0} を認証しました。トークンはOSの資格情報ストアに保存されました。",
             "MCP 서버 {0} 인증 완료. 토큰이 OS 자격 증명 저장소에 저장되었습니다.",
             "已认证 MCP 服务器 {0}；令牌已存入操作系统凭据存储。",
+        ],
+    ),
+    (
+        "Authenticated as {0}",
+        [
+            "Autenticado como {0}",
+            "Authentifié en tant que {0}",
+            "Authentifiziert als {0}",
+            "{0} として認証されました",
+            "{0}(으)로 인증됨",
+            "已认证为 {0}",
         ],
     ),
     (
@@ -8315,6 +8348,28 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Device sign-in failed: {0}",
+        [
+            "Falló el inicio de sesión del dispositivo: {0}",
+            "Échec de la connexion de l'appareil : {0}",
+            "Geräteanmeldung fehlgeschlagen: {0}",
+            "デバイスのサインインに失敗しました: {0}",
+            "기기 로그인 실패: {0}",
+            "设备登录失败：{0}",
+        ],
+    ),
+    (
+        "Device sign-in is not available here ({0}); continuing with browser sign-in.",
+        [
+            "El inicio de sesión con dispositivo no está disponible aquí ({0}); se continúa con el inicio de sesión en el navegador.",
+            "La connexion par appareil n'est pas disponible ici ({0}) ; poursuite avec la connexion dans le navigateur.",
+            "Die Geräteanmeldung ist hier nicht verfügbar ({0}); es wird mit der Browser-Anmeldung fortgefahren.",
+            "ここではデバイスでのサインインを利用できません（{0}）。ブラウザでのサインインを続行します。",
+            "여기서는 기기 로그인을 사용할 수 없습니다({0}). 브라우저 로그인으로 계속합니다.",
+            "此处不提供设备登录（{0}）；将改用浏览器登录。",
+        ],
+    ),
+    (
         "Dex appearance",
         [
             "Dex apariencia",
@@ -11386,6 +11441,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "If the link does not open, visit {0} and enter code {1} to complete authentication.",
+        [
+            "Si el enlace no se abre, visite {0} e introduzca el código {1} para completar la autenticación.",
+            "Si le lien ne s'ouvre pas, rendez-vous sur {0} et saisissez le code {1} pour terminer l'authentification.",
+            "Wenn sich der Link nicht öffnet, rufen Sie {0} auf und geben Sie den Code {1} ein, um die Authentifizierung abzuschließen.",
+            "リンクが開かない場合は、{0} にアクセスしてコード {1} を入力し、認証を完了してください。",
+            "링크가 열리지 않으면 {0}에 방문하여 코드 {1}을(를) 입력해 인증을 완료하세요.",
+            "如果链接无法打开，请访问 {0} 并输入代码 {1} 以完成认证。",
+        ],
+    ),
+    (
         "If your browser runs on another machine (for example over SSH), paste the address it ends on here and press Enter:",
         [
             "Si su navegador se ejecuta en otra máquina (por ejemplo, por SSH), pegue aquí la dirección en la que termina y pulse Intro:",
@@ -11537,6 +11603,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "初期化剤({0})...",
             "초기 에이전트 ({0})...",
             "初始化剂({0})...",
+        ],
+    ),
+    (
+        "Initiating authentication...",
+        [
+            "Iniciando la autenticación...",
+            "Lancement de l'authentification...",
+            "Authentifizierung wird gestartet...",
+            "認証を開始しています...",
+            "인증을 시작하는 중...",
+            "正在启动认证...",
         ],
     ),
     (
@@ -20161,6 +20238,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Successfully authenticated",
+        [
+            "Autenticación correcta",
+            "Authentification réussie",
+            "Erfolgreich authentifiziert",
+            "認証に成功しました",
+            "인증에 성공했습니다",
+            "认证成功",
+        ],
+    ),
+    (
         "Summarize conversation",
         [
             "Summarize conversation",
@@ -20460,6 +20548,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "The device sign-in was denied.",
+        [
+            "Se rechazó el inicio de sesión del dispositivo.",
+            "La connexion de l'appareil a été refusée.",
+            "Die Geräteanmeldung wurde abgelehnt.",
+            "デバイスのサインインが拒否されました。",
+            "기기 로그인이 거부되었습니다.",
+            "设备登录已被拒绝。",
+        ],
+    ),
+    (
         "The native client reads the credential when you select this connection.",
         [
             "El cliente nativo lee la credencial cuando seleccionas esta conexión.",
@@ -20501,6 +20600,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "サインインが完了するとセッションが続行されます。",
             "로그인이 완료되면 세션이 계속됩니다.",
             "登录完成后，会话将继续。",
+        ],
+    ),
+    (
+        "The sign-in code expired before it was approved. Run `maestro login` again.",
+        [
+            "El código de inicio de sesión caducó antes de aprobarse. Ejecute `maestro login` de nuevo.",
+            "Le code de connexion a expiré avant d'être approuvé. Relancez `maestro login`.",
+            "Der Anmeldecode ist abgelaufen, bevor er freigegeben wurde. Führen Sie `maestro login` erneut aus.",
+            "サインインコードは承認される前に期限切れになりました。`maestro login` をもう一度実行してください。",
+            "로그인 코드가 승인 전에 만료되었습니다. `maestro login`을 다시 실행하세요.",
+            "登录代码在获得批准前已过期。请重新运行 `maestro login`。",
         ],
     ),
     (
@@ -23594,6 +23704,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "ChatGPTのサイン入りを待って...",
             "ChatGPT 서명에 대한 대기 ...",
             "等待ChatGPT登录完成...",
+        ],
+    ),
+    (
+        "Waiting for authentication to complete...",
+        [
+            "Esperando a que se complete la autenticación...",
+            "En attente de la fin de l'authentification...",
+            "Warten auf den Abschluss der Authentifizierung...",
+            "認証の完了を待っています...",
+            "인증 완료를 기다리는 중...",
+            "正在等待认证完成...",
         ],
     ),
     (

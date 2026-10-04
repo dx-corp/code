@@ -21,6 +21,8 @@ getrandom = "0.4"
 libc.workspace = true
 maestro-a2a-ledger.workspace = true
 maestro-runtime.workspace = true
+# Chat turns run on the dex-loop kernel (`src/dex_chat.rs`).
+maestro-dex-host.workspace = true
 maestro-local-host = { workspace = true, features = ["runtime-gateway-bridge"] }
 pdf-extract.workspace = true
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }

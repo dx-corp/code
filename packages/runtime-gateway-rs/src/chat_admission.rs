@@ -32,20 +32,6 @@ pub(crate) fn client_tool_definitions(
     (definitions, names)
 }
 
-pub(crate) fn native_chat_terminal_status(event: &FromAgent) -> Option<Result<(), String>> {
-    match event {
-        FromAgent::TurnCompleted { .. } => Some(Ok(())),
-        FromAgent::TurnInterrupted { reason, .. } => Some(Err(reason.clone())),
-        FromAgent::ProviderError { kind, message } => {
-            Some(Err(format!("provider failure ({kind:?}): {message}")))
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn native_chat_acknowledges_peer_messages(event: &FromAgent) -> bool {
-    matches!(native_chat_terminal_status(event), Some(Ok(())))
-}
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClientToolDefinition {
