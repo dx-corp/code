@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::http::{RequestHead, json_response};
 use crate::{Config, now_millis, trimmed_env};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) enum AuthSource {
     IdentityJwt,
     StaticGatewayKey,
@@ -158,6 +158,8 @@ fn is_chat_websocket_request(head: &RequestHead) -> bool {
 
 fn runtime_tenant_resource_path(path: &str) -> bool {
     path.starts_with("/api/chat")
+        || path == "/api/native/turns"
+        || path.starts_with("/api/native/turns/")
         || path.starts_with("/api/hosted-threads/")
         || path.starts_with("/api/sessions")
         || matches!(
@@ -872,4 +874,43 @@ pub(crate) fn hmac_sha256_base64url(secret: &[u8], payload: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts arbitrary key sizes");
     mac.update(payload);
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+#[cfg(test)]
+mod native_turn_auth_tests {
+    use super::*;
+    #[test]
+    fn native_turn_reads_and_controls_require_explicit_tenant_scope() {
+        for (method, path, capability) in [
+            ("GET", "/api/native/turns", RuntimeCapability::TenantRead),
+            (
+                "GET",
+                "/api/native/turns/turn-1",
+                RuntimeCapability::TenantRead,
+            ),
+            ("POST", "/api/native/turns", RuntimeCapability::TenantWrite),
+            (
+                "POST",
+                "/api/native/turns/turn-1/control",
+                RuntimeCapability::TenantWrite,
+            ),
+        ] {
+            let head = RequestHead {
+                method: method.into(),
+                path: path.into(),
+                query: Default::default(),
+                headers: Default::default(),
+            };
+            assert_eq!(RuntimeCapability::for_request(&head), capability);
+            let mut principal = AuthContext {
+                subject: Some("user".into()),
+                scopes: vec!["maestro:write".into()],
+                ..Default::default()
+            };
+            assert!(!principal.permits(capability, true));
+            principal.organization_id = Some("organization".into());
+            principal.workspace_id = Some("workspace".into());
+            assert!(principal.permits(capability, true));
+        }
+    }
 }

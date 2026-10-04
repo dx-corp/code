@@ -37,6 +37,9 @@ pub(crate) struct ModelCapabilities {
     pub(crate) tools: bool,
     pub(crate) vision: bool,
     pub(crate) reasoning: bool,
+    /// Gateway admission for bounded file paths/extracted text; images still require vision.
+    #[serde(default)]
+    pub(crate) attachments: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +217,7 @@ fn model_info_from_openrouter_value(model: &Value) -> Option<ModelInfo> {
         reasoning,
         cost: openrouter_model_cost_from_value(model.get("pricing")),
         capabilities: ModelCapabilities {
+            attachments: true,
             streaming: true,
             tools,
             vision,
@@ -282,6 +286,7 @@ fn model_info_from_gateway_value(provider_id: Option<&str>, model: &Value) -> Op
         reasoning,
         cost: model_cost_from_value(model.get("pricing").or_else(|| model.get("cost"))),
         capabilities: ModelCapabilities {
+            attachments: true,
             streaming,
             tools,
             vision,
@@ -410,6 +415,7 @@ pub(crate) fn merge_configured_models(registry: &mut ModelRegistry, config: &Val
                 reasoning,
                 cost: model_cost_from_value(model.get("cost")),
                 capabilities: ModelCapabilities {
+                    attachments: true,
                     streaming: true,
                     tools,
                     vision,
@@ -577,6 +583,7 @@ pub(crate) fn resolve_model(input: &str, registry: &ModelRegistry) -> Option<Mod
         reasoning: false,
         cost: zero_model_cost(),
         capabilities: ModelCapabilities {
+            attachments: true,
             streaming: true,
             tools: false,
             vision: false,
@@ -641,6 +648,7 @@ fn model_info_from_shared(model: &shared_catalog::ModelInfo) -> ModelInfo {
         reasoning: model.capabilities.reasoning,
         cost: zero_model_cost(),
         capabilities: ModelCapabilities {
+            attachments: true,
             streaming: model.capabilities.streaming,
             tools: model.capabilities.tools,
             vision: model.capabilities.vision,

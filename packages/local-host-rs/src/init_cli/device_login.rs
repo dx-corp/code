@@ -3,7 +3,6 @@
 //! The browser callback flow stays in the parent module. This one never needs
 //! a redirect back to the machine that started it.
 
-use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
@@ -13,8 +12,6 @@ use chrono::Utc;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
 use super::{
     OAuthCredentials, OAuthTokenExchange, REQUIRED_LOGIN_SCOPES, identity_base_from_env,
@@ -435,8 +432,12 @@ fn terminal_lines() -> tokio::sync::mpsc::UnboundedReceiver<String> {
     receiver
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn device_authorization() -> DeviceAuthorization {
         DeviceAuthorization {

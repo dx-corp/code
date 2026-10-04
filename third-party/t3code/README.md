@@ -28,3 +28,16 @@ Third-batch reviewed revision: `77823bd102ae50430d4acda9a553e5743d2aa5ba`.
 - `apps/server/src/orchestration-v2/{PullRequestWatchReactor,pullRequestWatch}.ts`: material-change watch baselines, bounded wakes and degraded-read behavior.
 
 These are native owner adaptations, with new Maestro regression fixtures. Pricing uses Maestro's existing versioned model catalog. Scoped commands and output monitors retain the existing native process owner; subagent ownership is not guessed. PR watches retain delegated authorization only in memory and require rearming after a gateway restart. They do not authorize merging or deployment.
+
+Fourth-batch reviewed revision: `f1dcd93931b322d587a7253856f44625a6afbce0`.
+
+- `apps/web/src/components/chat/QueuedRunsControl.tsx`: editing/removing queued prompts and explicit steering.
+- `apps/web/src/lib/imageCompression.ts`: bounded screenshot admission and browser image resizing.
+- `apps/web/src/components/chat/MessagesTimeline.tsx`: virtual mounted rows with a stable reading anchor.
+- `packages/client-runtime/src/state/threadSnapshotHttp.ts` and `apps/server/src/utils/subscribeBeforeSnapshot.ts`: observing accepted execution through snapshots and ordered replay.
+- `apps/web/src/components/chat/ContextWindowMeter.tsx` and `apps/web/src/lib/contextWindow.ts`: provider context observations and explicit compaction state.
+- `apps/server/src/orchestration-v2/ThreadSearch.ts` and `ThreadForkService.ts`: literal scoped transcript search and completed-prefix forks.
+
+The Rust gateway owns acceptance, execution, queue controls, document extraction, transcript persistence, authorization, and replay. Rejoining an accepted turn reads that owner; it does not resubmit effects. A conversation fork copies a portable completed transcript prefix and never restores workspace files or shares a live provider thread.
+
+Composer visual reference: `243d1e7c4499d7ba4dc5b22794fcd2c880936c2d`, especially `apps/web/src/components/chat/ComposerSurface.tsx` and `ChatComposer.tsx`. The desktop adapts their surface proportions and compact toolbar treatment using Deixic theme tokens and the existing native controls.
