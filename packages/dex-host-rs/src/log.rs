@@ -14,7 +14,7 @@
 //! left for the real cutover.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -216,6 +216,70 @@ impl LocalLog {
         tokio::task::spawn_blocking(move || read_all_locked(&dir)).await?
     }
 
+    /// Start observing after the existing rows, under the append lock.
+    pub(crate) async fn observer_offset(&self) -> Result<u64, LogError> {
+        let dir = self.inner.dir.clone();
+        tokio::task::spawn_blocking(move || {
+            lease::with_shared_lock(&dir, || match fs::metadata(log_path(&dir)) {
+                Ok(metadata) => Ok(metadata.len()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+                Err(error) => Err(error),
+            })
+        })
+        .await?
+        .map_err(LogError::from)
+    }
+
+    /// A bounded page of accepted rows, without rereading earlier payloads.
+    /// The generation and committed cursor are checked under the append lock:
+    /// a failed write or another lease cannot become observer output.
+    pub(crate) async fn read_observed(
+        &self,
+        offset: u64,
+        limit: usize,
+    ) -> Result<(u64, Vec<(Cursor, Event)>), LogError> {
+        let dir = self.inner.dir.clone();
+        let generation = self.inner.generation;
+        tokio::task::spawn_blocking(move || {
+            lease::with_shared_lock(&dir, || {
+                let meta = lease::read_meta(&dir)?;
+                if meta.generation != generation {
+                    return Err(io::Error::other("the observed log lease was superseded"));
+                }
+                let file = match fs::File::open(log_path(&dir)) {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        return Ok((offset, Vec::new()));
+                    }
+                    Err(error) => return Err(error),
+                };
+                let mut reader = io::BufReader::new(file);
+                reader.seek(SeekFrom::Start(offset))?;
+                let mut next_offset = offset;
+                let mut rows = Vec::with_capacity(limit);
+                let mut line = String::new();
+                while rows.len() < limit {
+                    line.clear();
+                    if reader.read_line(&mut line)? == 0 || !line.ends_with('\n') {
+                        break;
+                    }
+                    if !line.trim().is_empty() {
+                        let row: Row = serde_json::from_str(&line)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                        if row.cursor.0 > meta.last_cursor {
+                            break;
+                        }
+                        rows.push((row.cursor, row.event));
+                    }
+                    next_offset = reader.stream_position()?;
+                }
+                Ok((next_offset, rows))
+            })
+            .map_err(LogError::from)
+        })
+        .await?
+    }
+
     fn ensure_live(&self) -> Result<(), Fenced> {
         if self.inner.lost.load(Ordering::Acquire) {
             return Err(Fenced::new("lease lost"));
@@ -296,6 +360,118 @@ mod tests {
             authorized_tools: Vec::new(),
             approval_mode: dex_loop::ApprovalMode::Headless,
         }
+    }
+
+    #[tokio::test]
+    async fn observer_pages_resume_after_existing_rows_without_duplicates() {
+        let dir = TempDir::new().expect("tempdir");
+        let log = LocalLog::acquire(dir.path(), &thread())
+            .await
+            .expect("acquire");
+        log.append(&[user_message("already visible")])
+            .await
+            .expect("prefix");
+        let mut offset = log.observer_offset().await.expect("offset");
+        for index in 0..5 {
+            log.append_text(format!("delta-{index}"))
+                .await
+                .expect("text");
+        }
+        let mut seen = Vec::new();
+        loop {
+            let (next, page) = log.read_observed(offset, 2).await.expect("page");
+            assert!(page.len() <= 2);
+            if page.is_empty() {
+                assert_eq!(next, offset, "EOF does not advance the reader");
+                break;
+            }
+            assert!(next > offset);
+            offset = next;
+            seen.extend(page);
+        }
+        assert_eq!(
+            seen,
+            (0..5)
+                .map(|index| (
+                    Cursor(index + 2),
+                    Event::TextDelta {
+                        text: format!("delta-{index}")
+                    }
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn observer_never_delivers_uncommitted_or_partial_trailing_rows() {
+        let dir = TempDir::new().expect("tempdir");
+        let log = LocalLog::acquire(dir.path(), &thread())
+            .await
+            .expect("acquire");
+        log.append(&[Event::Interrupted])
+            .await
+            .expect("accepted event");
+        // A failed append can leave bytes in the file without advancing the
+        // committed cursor. A partial trailing line cannot be decoded yet.
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(log_path(&log.inner.dir))
+            .expect("log");
+        serde_json::to_writer(
+            &mut file,
+            &Row {
+                cursor: Cursor(2),
+                event: Event::TextDelta {
+                    text: "not committed".into(),
+                },
+            },
+        )
+        .expect("row");
+        file.write_all(b"\n{\"cursor\":3").expect("partial row");
+        let (offset, rows) = log.read_observed(0, 32).await.expect("accepted rows");
+        assert_eq!(rows, vec![(Cursor(1), Event::Interrupted)]);
+        let (next, rows) = log
+            .read_observed(offset, 32)
+            .await
+            .expect("uncommitted tail");
+        assert!(rows.is_empty());
+        assert_eq!(next, offset);
+        lease::with_locked_meta(&log.inner.dir, |meta| {
+            meta.last_cursor = 2;
+            Ok(())
+        })
+        .expect("commit complete row");
+        let (next, rows) = log.read_observed(offset, 32).await.expect("committed row");
+        assert_eq!(
+            rows,
+            vec![(
+                Cursor(2),
+                Event::TextDelta {
+                    text: "not committed".into()
+                }
+            )]
+        );
+        let (end, rows) = log.read_observed(next, 32).await.expect("partial tail");
+        assert!(rows.is_empty());
+        assert_eq!(end, next);
+    }
+
+    #[tokio::test]
+    async fn observer_cannot_read_writes_from_a_replacement_lease() {
+        let dir = TempDir::new().expect("tempdir");
+        let first = LocalLog::acquire(dir.path(), &thread())
+            .await
+            .expect("first");
+        let second = LocalLog::acquire(dir.path(), &thread())
+            .await
+            .expect("second");
+        second
+            .append(&[Event::Interrupted])
+            .await
+            .expect("replacement write");
+        assert!(
+            matches!(first.read_observed(0, 32).await, Err(error) if error.to_string().contains("superseded"))
+        );
     }
 
     #[tokio::test]
