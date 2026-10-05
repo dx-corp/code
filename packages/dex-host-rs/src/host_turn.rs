@@ -9,14 +9,14 @@
 //! This is the one place a Maestro surface drives the kernel; the gateway's
 //! chat endpoints, automations and A2A turns are thin projections of it.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dex_loop::{
     ActionConfirmation, ApprovalMode, ArtifactRef, Budget, CallId, CancellationToken,
-    ClientToolSpec, ConfirmationDecision, Engine, Event, Exit, Lexicon, Log as _, Model, Outcome,
-    PrincipalId, ThreadId, ToolName, TurnId, rehydrate,
+    ClientToolSpec, ConfirmationDecision, Cursor, Engine, Event, Exit, Lexicon, Log as _, Model,
+    Outcome, PrincipalId, ThreadId, ToolName, TurnId, rehydrate,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -61,6 +61,9 @@ pub enum Step {
     Exit(Exit),
 }
 
+/// At most this many payloads are retained between pulls.
+const OBSERVED_PAGE_SIZE: usize = 32;
+
 type Finished = Result<(Exit, dex_loop::Context), String>;
 
 /// A turn in progress. See the module docs.
@@ -70,7 +73,9 @@ pub struct HostTurnRun<M: Model + 'static> {
     principal: PrincipalId,
     local: LocalLog,
     engine: Arc<Engine<ObservedLog<LocalLog>, M, HostTools, LocalEffects, Lexicon>>,
-    observed: mpsc::UnboundedReceiver<Observed>,
+    observed: mpsc::Receiver<()>,
+    observed_offset: u64,
+    caller_events: BTreeSet<Cursor>,
     cancel: CancellationToken,
     running: Option<JoinHandle<Finished>>,
     buffered: VecDeque<Observed>,
@@ -124,6 +129,10 @@ impl<M: Model + 'static> HostTurnRun<M> {
         let effects = LocalEffects::open(dir.join("effects.json"))
             .await
             .map_err(|error| format!("open the effect ledger: {error}"))?;
+        let observed_offset = local
+            .observer_offset()
+            .await
+            .map_err(|error| format!("start observing the turn log: {error}"))?;
         let (log, observed) = ObservedLog::new(local.clone());
         let engine = Engine::new(
             log,
@@ -140,6 +149,8 @@ impl<M: Model + 'static> HostTurnRun<M> {
             local,
             engine: Arc::new(engine),
             observed,
+            observed_offset,
+            caller_events: BTreeSet::new(),
             cancel: CancellationToken::new(),
             running: None,
             buffered: VecDeque::new(),
@@ -201,38 +212,53 @@ impl<M: Model + 'static> HostTurnRun<M> {
     /// The next accepted write, park, or the exit. After `Step::Exit` it
     /// keeps returning that exit.
     pub async fn next(&mut self) -> Result<Step, String> {
-        if let Some(observed) = self.buffered.pop_front() {
-            return Ok(Step::Observed(observed));
-        }
-        if let Some(exit) = &self.exited {
-            return Ok(Step::Exit(exit.clone()));
-        }
-        if let Some(finished) = self.finished.take() {
-            return self.settle(finished);
-        }
-        if self.running.is_none() {
-            self.spawn();
-        }
-        let running = self.running.as_mut().expect("spawned above");
-        let finished = tokio::select! {
-            biased;
-            Some(observed) = self.observed.recv() => {
+        loop {
+            if let Some(observed) = self.buffered.pop_front() {
                 self.note(&observed);
                 return Ok(Step::Observed(observed));
             }
-            finished = running => finished.map_err(|error| format!("the turn task failed: {error}"))?,
-        };
-        self.running = None;
-        // Everything the run wrote reaches the caller before its outcome.
-        while let Ok(observed) = self.observed.try_recv() {
-            self.note(&observed);
-            self.buffered.push_back(observed);
-        }
-        if let Some(observed) = self.buffered.pop_front() {
+            if let Some(exit) = &self.exited {
+                return Ok(Step::Exit(exit.clone()));
+            }
+            // Catch up even without a wakeup: notifications may coalesce,
+            // and completion may win the select after the final write.
+            let (offset, entries) = self
+                .local
+                .read_observed(self.observed_offset, OBSERVED_PAGE_SIZE)
+                .await
+                .map_err(|error| format!("read observed turn writes: {error}"))?;
+            self.observed_offset = offset;
+            let had_entries = !entries.is_empty();
+            for (cursor, event) in entries {
+                // The old observer wrapped only engine writes. Answers and
+                // caller tool results still reach rehydrate, not the surface.
+                if self.caller_events.remove(&cursor) {
+                    continue;
+                }
+                self.buffered.push_back(match event {
+                    Event::TextDelta { text } => Observed::Text(text),
+                    event => Observed::Event(cursor, Box::new(event)),
+                });
+            }
+            if had_entries {
+                continue;
+            }
+            // Everything the run wrote reaches the caller before its outcome.
+            if let Some(finished) = self.finished.take() {
+                return self.settle(finished);
+            }
+            if self.running.is_none() {
+                self.spawn();
+            }
+            let running = self.running.as_mut().expect("spawned above");
+            let finished = tokio::select! {
+                biased;
+                Some(()) = self.observed.recv() => continue,
+                finished = running => finished.map_err(|error| format!("the turn task failed: {error}"))?,
+            };
+            self.running = None;
             self.finished = Some(finished);
-            return Ok(Step::Observed(observed));
         }
-        self.settle(finished)
     }
 
     fn settle(&mut self, finished: Finished) -> Result<Step, String> {
@@ -282,7 +308,8 @@ impl<M: Model + 'static> HostTurnRun<M> {
         binding: &ActionConfirmation,
         approved: bool,
     ) -> Result<(), String> {
-        self.local
+        let cursors = self
+            .local
             .append(&[Event::Answer {
                 call: question,
                 principal: self.principal.clone(),
@@ -295,8 +322,9 @@ impl<M: Model + 'static> HostTurnRun<M> {
                 args_digest: binding.args_digest.clone(),
             }])
             .await
-            .map(|_| ())
-            .map_err(|fenced| fenced.to_string())
+            .map_err(|fenced| fenced.to_string())?;
+        self.caller_events.extend(cursors);
+        Ok(())
     }
 
     /// Answers a `Park::ClientTool`; the next pull resumes the turn.
@@ -306,7 +334,8 @@ impl<M: Model + 'static> HostTurnRun<M> {
         succeeded: bool,
         output: String,
     ) -> Result<(), String> {
-        self.local
+        let cursors = self
+            .local
             .append(&[Event::ClientToolResult {
                 call,
                 principal: self.principal.clone(),
@@ -318,8 +347,9 @@ impl<M: Model + 'static> HostTurnRun<M> {
                 output,
             }])
             .await
-            .map(|_| ())
-            .map_err(|fenced| fenced.to_string())
+            .map_err(|fenced| fenced.to_string())?;
+        self.caller_events.extend(cursors);
+        Ok(())
     }
 }
 
@@ -331,3 +361,7 @@ pub fn turn_dir(prefix: &str) -> PathBuf {
         .unwrap_or_default();
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
+
+#[cfg(test)]
+#[path = "host_turn/tests.rs"]
+mod tests;
