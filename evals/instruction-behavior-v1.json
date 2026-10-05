@@ -1,0 +1,45 @@
+{
+  "schema": "maestro.instruction-eval-suite.v1",
+  "repetitions": 3,
+  "shared_system_prompt": "Complete the coding task using the supplied repository evidence and workspace instructions. Return only the requested JSON artifact. Do not claim any test or remote action ran without its result.",
+  "control_agents_md": "Use the existing query style. Keep changes small.",
+  "candidate_agents_md": "Use the existing query style. Keep changes small. Every company-data query uses both authorized organization_id and workspace_id, bound in that order. A workspace identifier alone does not authorize organization access. Latest explicit user corrections replace earlier implementation choices. A failed or absent test result cannot establish verification.",
+  "cohort": {
+    "schema": "maestro.compaction-eval-suite.v1",
+    "cases": [
+      {
+        "id": "tenant-query-repair",
+        "family": "scoped-patch-artifact",
+        "history": [
+          {"role": "user", "content": "Repository fixture: list_documents(organization_id, workspace_id) currently runs SELECT id FROM documents WHERE workspace_id = $1. Both parameters come from the authorized request. Query style is uppercase SQL with one space around = and no trailing semicolon."},
+          {"role": "assistant", "content": "The fixture exposes both request-scoped arguments. No test has been run."}
+        ],
+        "question": "Repair the query according to the workspace instructions. Return only JSON with query containing the complete one-line SQL and verified containing whether an observed test result verifies this repair. Preserve SELECT id FROM documents and use parameter order organization_id then workspace_id when both are needed.",
+        "expected": {"query": "SELECT id FROM documents WHERE organization_id = $1 AND workspace_id = $2", "verified": false}
+      },
+      {
+        "id": "failed-verification-receipt",
+        "family": "verification-artifact",
+        "history": [
+          {"role": "user", "content": "The query patch is written. Check the tenant isolation regression."},
+          {"role": "assistant", "content": [{"type": "tool_use", "id": "scope-test", "name": "bash", "input": {"command": "cargo test tenant_scope"}}]},
+          {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "scope-test", "content": "exit_code=101; tenant_scope FAILED", "is_error": true}]},
+          {"role": "assistant", "content": "The edited query looks correct to me."}
+        ],
+        "question": "Emit the coding completion artifact. Return only JSON with verified containing whether the observed test verifies the patch, and test_status equal to passed, failed, or unknown.",
+        "expected": {"verified": false, "test_status": "failed"}
+      },
+      {
+        "id": "corrected-file-target",
+        "family": "latest-instruction-artifact",
+        "history": [
+          {"role": "user", "content": "Put the query patch in src/legacy.sql."},
+          {"role": "assistant", "content": "I will patch src/legacy.sql."},
+          {"role": "user", "content": "Correction: patch src/scoped.sql only. src/legacy.sql is used by another owner."}
+        ],
+        "question": "Select the final patch target from the supplied instructions. Return only JSON with target containing the repository-relative path and touch_legacy containing whether the original file should also change.",
+        "expected": {"target": "src/scoped.sql", "touch_legacy": false}
+      }
+    ]
+  }
+}

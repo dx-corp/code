@@ -1,10 +1,10 @@
 //! These exercise real native requests against a local fixture, not model efficacy.
 #[path = "report.rs"]
-mod report;
+pub(super) mod report;
 #[path = "suite.rs"]
-mod suite;
+pub(super) mod suite;
 #[path = "trial.rs"]
-mod trial;
+pub(super) mod trial;
 
 use crate as host;
 use crate::agent::{CredentialVault, ModelDynamicsConfig, NativeAgent, NativeAgentConfig};
@@ -20,7 +20,7 @@ fn hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-async fn request(stream: &mut TcpStream) -> serde_json::Value {
+pub(super) async fn request(stream: &mut TcpStream) -> serde_json::Value {
     let mut bytes = Vec::new();
     loop {
         let mut buffer = [0; 8192];
@@ -44,7 +44,7 @@ async fn request(stream: &mut TcpStream) -> serde_json::Value {
     }
 }
 
-fn sse(text: &str) -> String {
+pub(super) fn sse(text: &str) -> String {
     let start = serde_json::json!({"id":"fixture", "model":"gpt-4o", "created":0, "object":"chat.completion.chunk",
         "choices":[{"index":0,"delta":{"role":"assistant","content":text},"finish_reason":null}]});
     let stop = serde_json::json!({"id":"fixture", "model":"gpt-4o", "created":0, "object":"chat.completion.chunk",

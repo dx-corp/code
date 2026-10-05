@@ -15,6 +15,11 @@ path = "examples/compaction_eval/main.rs"
 test = true
 
 [[example]]
+name = "instruction-eval"
+path = "examples/instruction_eval/main.rs"
+test = true
+
+[[example]]
 name = "embedding-test-kit"
 path = "examples/embedding_test_kit.rs"
 required-features = ["test-support"]
