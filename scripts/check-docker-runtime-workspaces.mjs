@@ -185,6 +185,7 @@ try {
 			`^(?:RUN|[ \\t]*&&)[ \\t]+${regexEscape(command)}(?:[ \\t]*\\\\)?[ \\t]*$`, "m",
 		).test(plannerInputs);
 		const actualSharedMembers = [];
+		const inherited = [];
 		for (const dependency of rustToMaestro) {
 			const source = relative(rustRoot, dependency).split(sep).join("/");
 			const member = relative(maestroRoot, dependency).split(sep).join("/");
@@ -202,6 +203,11 @@ try {
 				const exclude = `sed -i 's|"vendor/\\*"|"vendor/*", "${member}"|' Cargo.toml`;
 				if (!beforePrepare(filter) || !beforePrepare(exclude)) {
 					uncopied.push(`actual shared library ${member} before cargo chef prepare`);
+				}
+				// Excluded from the image workspace, the library has no workspace root
+				// there, so an inherited key fails the cook (run 37264900952).
+				if (/^[^#\n]*\bworkspace\s*=\s*true\b/m.test(readFileSync(resolve(dependency, "Cargo.toml"), "utf8"))) {
+					inherited.push(`${member}/Cargo.toml`);
 				}
 			}
 		}
@@ -233,6 +239,9 @@ try {
 			uncopied.push("original Maestro workspace after cook and before native build");
 		}
 		if (uncopied.length > 0) throw new Error(`Dockerfile omits reachable local dependencies: ${uncopied.join(", ")}`);
+		if (inherited.length > 0) {
+			throw new Error(`Image-excluded shared libraries must not inherit workspace keys: ${inherited.join(", ")}`);
+		}
 	}
 } catch (error) {
 	console.error(error.message);
