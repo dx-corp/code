@@ -83,6 +83,7 @@ async fn read_then_write_then_done_with_no_approval() {
         .await
         .expect("acquire log");
     log.append(&[Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         model_binding: None,

@@ -107,6 +107,8 @@ pub struct CodexThreadBinding {
     pub thread_id: String,
     pub protocol_version: Option<String>,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_projection: Option<String>,
 }
 
 impl CodexThreadBinding {
@@ -122,7 +124,13 @@ impl CodexThreadBinding {
             thread_id: thread_id.into(),
             protocol_version,
             updated_at,
+            tool_projection: None,
         }
+    }
+
+    pub fn with_tool_projection(mut self, projection: String) -> Self {
+        self.tool_projection = Some(projection);
+        self
     }
 
     pub fn fresh(

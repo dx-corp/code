@@ -922,6 +922,9 @@ where
         // `dispatch` keeps the model's order around effects, so a read that
         // follows a mutation (or any call held back) must not observe the
         // world before that call has run.
+        if !ctx.interaction_mode().tools_allowed() {
+            return Ok(());
+        }
         if prefetch.started.len() != index || call.tool.as_str() == TOOLS_SEARCH {
             return Ok(());
         }
@@ -1013,6 +1016,17 @@ where
             return Ok(None);
         };
         let calls = step.calls.clone();
+        if !ctx.interaction_mode().tools_allowed() {
+            for (index, call) in calls.iter().enumerate() {
+                if !matches!(
+                    ctx.open_step().and_then(|step| step.states.get(index)),
+                    Some(CallState::Done(_))
+                ) {
+                    self.finish(ctx, call, ToolResult::error("not executed: Discuss mode does not allow tools; switch to Implement after this turn finishes")).await?;
+                }
+            }
+            return Ok(None);
+        }
         let mut wave: Vec<usize> = Vec::new();
         for (index, call) in calls.iter().enumerate() {
             // Interrupt stops at the next effect boundary.
@@ -1809,6 +1823,9 @@ where
     /// `dex_tools::client::declare` for dex-runtime's host); the engine
     /// does not merge them in itself, so they are never offered twice.
     fn offered(&self, ctx: &Context) -> Vec<ToolSpec> {
+        if !ctx.interaction_mode().tools_allowed() {
+            return Vec::new();
+        }
         // Search and core tools come first; exposed tools follow admission
         // order. The wrapper stays stable; on-demand discovery describes the
         // exact callable catalog without repeating direct declarations.
@@ -1839,6 +1856,9 @@ where
 
     /// A tool the model was offered. Calls to anything else are unknown.
     fn offered_spec(&self, ctx: &Context, name: &ToolName) -> Option<ToolSpec> {
+        if !ctx.interaction_mode().tools_allowed() {
+            return None;
+        }
         if name.as_str() == agent_codemode::TOOL_NAME {
             return Some(codemode::spec());
         }

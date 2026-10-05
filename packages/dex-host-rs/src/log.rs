@@ -284,6 +284,7 @@ mod tests {
 
     fn user_message(text: &str) -> Event {
         Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new("t1"),
             message_id: None,
             model_binding: None,

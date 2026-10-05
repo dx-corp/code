@@ -756,6 +756,7 @@ mod tests {
             &[(
                 dex_loop::Cursor(1),
                 dex_loop::Event::UserMessage {
+                    interaction_mode: dex_loop::InteractionMode::Unspecified,
                     turn: dex_loop::TurnId::new("t1"),
                     message_id: None,
                     model_binding: None,

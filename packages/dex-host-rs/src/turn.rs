@@ -64,6 +64,7 @@ pub async fn run_local_turn<M: Model>(
         .await
         .map_err(|error| anyhow::anyhow!("acquire the local dex-loop log: {error}"))?;
     log.append(&[Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: request.turn,
         message_id: None,
         model_binding: None,
@@ -272,6 +273,7 @@ mod tests {
         // two-tool catalog cannot ask yet; the driver still owns this exit.
         log.append(&[
             Event::UserMessage {
+                interaction_mode: dex_loop::InteractionMode::Unspecified,
                 turn: TurnId::new("t1"),
                 message_id: None,
                 model_binding: None,

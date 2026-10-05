@@ -265,6 +265,7 @@ mod tests {
     }
     fn user(turn: &str, text: &str) -> Event {
         Event::UserMessage {
+            interaction_mode: crate::InteractionMode::Unspecified,
             turn: TurnId::new(turn),
             message_id: None,
             principal: PrincipalId::new("alice"),
@@ -690,6 +691,7 @@ mod cut_tests {
 
     fn user(turn: &str) -> Event {
         Event::UserMessage {
+            interaction_mode: crate::InteractionMode::Unspecified,
             turn: TurnId::new(turn),
             message_id: None,
             principal: PrincipalId::new("alice"),

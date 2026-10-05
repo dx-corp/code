@@ -4,6 +4,7 @@ use dex_loop::{Context, Cursor, Event, PrincipalId, ThreadId, ToolName, TurnId};
 
 fn message(turn: &str, principal: &str, tools: &[&str]) -> Event {
     Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new(turn),
         message_id: None,
         principal: PrincipalId::new(principal),

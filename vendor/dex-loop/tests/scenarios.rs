@@ -356,6 +356,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
     );
     for event in [
         Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new("t1"),
             message_id: None,
             principal: alice(),
@@ -954,6 +955,7 @@ async fn crashed_read_runs_again() {
 async fn crash_mid_stream_abandons_the_attempt_and_reissues_it() {
     let log = FakeLog::default();
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: dex_loop::TurnId::new("t1"),
         message_id: None,
         principal: alice(),
@@ -1174,6 +1176,7 @@ async fn same_turn_id_in_two_threads_dispatches_under_distinct_threads() {
     async fn run_one(thread: dex_loop::ThreadId) -> FakeTools {
         let log = FakeLog::default();
         log.host_append(Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: dex_loop::TurnId::new("t1"),
             message_id: None,
             principal: alice(),
@@ -2215,6 +2218,7 @@ async fn model_failure_abandons_the_attempt_and_fails() {
 async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the_new_turn() {
     let log = FakeLog::default();
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         principal: alice(),
@@ -2229,6 +2233,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
     log.host_append(Event::Interrupt { principal: alice() }); // cursor 2 -- excluded from the suffix below
     log.host_append(Event::Interrupted); // cursor 3
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t2"),
         message_id: None,
         principal: alice(),
@@ -2275,6 +2280,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
 async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_turn() {
     let log = FakeLog::default();
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         principal: alice(),
@@ -2294,6 +2300,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         text: "done".into(),
     }); // cursor 3
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t2"),
         message_id: None,
         principal: alice(),

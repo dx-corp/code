@@ -422,14 +422,59 @@ impl NativeAgentRunner {
             return execution;
         }
 
+        let script_only = self.model_route.uses_app_server();
+        let script_names = if script_only {
+            self.codemode_catalog()
+                .into_iter()
+                .map(|tool| tool.name.to_ascii_lowercase())
+                .collect::<HashSet<_>>()
+        } else {
+            HashSet::new()
+        };
         let mut activated = Vec::new();
         let mut lines = Vec::with_capacity(selected.len() + 1);
-        lines.push("Activated tools for the next turn:".to_string());
+        let initial = initial_active_tool_names(
+            self.tool_profile,
+            &self.tools,
+            &self.external_tools,
+            Some(&self.explicitly_allowed_tools),
+            self.config.external_tool_schema_policy,
+        );
+        lines.push(if script_only {
+            "Matching tools (Codex tool registrations are fixed):".to_string()
+        } else {
+            "Matching tools (bounded schemas load on the next provider request):".to_string()
+        });
         for (_, name, description) in selected {
-            if self.active_tool_names.insert(name.clone()) {
+            let registered = self
+                .codex_session
+                .as_ref()
+                .is_some_and(|session| session.has_dynamic_tool(&name));
+            if script_only && !registered && !script_names.contains(&name) {
+                continue;
+            }
+            let direct = !script_only
+                && (!self.tools.contains_key(agent_codemode::TOOL_NAME)
+                    || super::deferred_tool_schemas::discovery_budget_allows(
+                        &self.tools,
+                        &initial,
+                        &self.active_tool_names,
+                        &name,
+                    ));
+            if direct && self.active_tool_names.insert(name.clone()) {
                 activated.push(name.clone());
             }
-            lines.push(format!("- {name}: {description}"));
+            let description = description.chars().take(256).collect::<String>();
+            let guidance = if script_only && registered {
+                " (call directly; already registered)"
+            } else if script_only {
+                " (use codemode getToolSchema(name) and tools.<name>(args))"
+            } else if !direct {
+                " (native schema budget reached; use codemode)"
+            } else {
+                ""
+            };
+            lines.push(format!("- {name}: {description}{guidance}"));
         }
         if !activated.is_empty() {
             self.model_tool_cache = None;
@@ -437,7 +482,7 @@ impl NativeAgentRunner {
         }
         let result = ToolResult::success(lines.join("\n")).with_details(json!({
             "activated": activated,
-            "nextTurn": true,
+            "nextTurn": !activated.is_empty(),
         }));
         let execution =
             ToolExecution::from_legacy(call_id, "tool_search", ExecutionSource::Native, result)

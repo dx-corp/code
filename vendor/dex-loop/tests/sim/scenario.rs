@@ -350,6 +350,7 @@ pub async fn run_actions(seed: u64, actions: &[Action]) -> Vec<Violation> {
                 };
                 if used_turns.insert(turn.clone()) {
                     log.host_append(Event::UserMessage {
+                        interaction_mode: dex_loop::InteractionMode::Unspecified,
                         turn: TurnId::new(turn),
                         message_id: None,
                         principal: principal(p),

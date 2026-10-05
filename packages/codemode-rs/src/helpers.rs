@@ -11,7 +11,8 @@ pub(crate) fn install_helpers(
     overflow: Arc<Mutex<Option<String>>>,
     store: Arc<Mutex<Store>>,
 ) -> Result<(), String> {
-    let catalog = tools.to_vec();
+    let shared: Arc<[Tool]> = tools.to_vec().into();
+    let catalog = Arc::clone(&shared);
     let search = Function::new(
         ctx.clone(),
         move |query: String, options: String| -> rquickjs::Result<String> {
@@ -37,7 +38,7 @@ pub(crate) fn install_helpers(
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = tools.to_vec();
+    let catalog = Arc::clone(&shared);
     let describe = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
@@ -46,7 +47,7 @@ pub(crate) fn install_helpers(
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = tools.to_vec();
+    let catalog = Arc::clone(&shared);
     let describe_ns = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
@@ -54,6 +55,44 @@ pub(crate) fn install_helpers(
             serde_json::to_string(&value).map_err(bridge_error)
         },
     )
+    .map_err(|e| e.to_string())?;
+    let catalog = Arc::clone(&shared);
+    let schema = Function::new(
+        ctx.clone(),
+        move |name: String, options: String| -> rquickjs::Result<String> {
+            let options: Value = serde_json::from_str(&options).map_err(bridge_error)?;
+            serde_json::to_string(
+                &discovery::schema_page(&catalog, &name, &options).map_err(bridge_error)?,
+            )
+            .map_err(bridge_error)
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let catalog = Arc::clone(&shared);
+    let metadata = Function::new(
+        ctx.clone(),
+        move |name: String, field: String| -> rquickjs::Result<String> {
+            let tool = discovery::lookup(&catalog, &name)
+                .ok_or_else(|| bridge_error("unknown admitted tool"))?;
+            match field.as_str() {
+                "description" => serde_json::to_string(&tool.description),
+                "schema" => serde_json::to_string(&tool.schema),
+                "output_schema" => serde_json::to_string(&tool.output_schema),
+                "namespace" => serde_json::to_string(&tool.namespace),
+                "model_operation" => serde_json::to_string(&tool.model_operation),
+                "model_binding" => serde_json::to_string(&tool.model_binding),
+                _ => return Err(bridge_error("unknown tool metadata field")),
+            }
+            .map_err(bridge_error)
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    // Validate model bindings now, but keep their schemas outside the VM until
+    // the script explicitly requests the available model catalog.
+    let model_catalog = admitted_models(tools)?;
+    let available_models = Function::new(ctx.clone(), move || -> rquickjs::Result<String> {
+        serde_json::to_string(&model_catalog).map_err(bridge_error)
+    })
     .map_err(|e| e.to_string())?;
     let snapshot = serde_json::to_string(
         &*store
@@ -97,7 +136,7 @@ pub(crate) fn install_helpers(
         result.map_err(bridge_error)
     })
     .map_err(|e| e.to_string())?;
-    let catalog = tools.to_vec();
+    let catalog = Arc::clone(&shared);
     let models = Function::new(
         ctx.clone(),
         move |operation: String, selector: String, args: String| -> rquickjs::Result<String> {
@@ -129,6 +168,9 @@ pub(crate) fn install_helpers(
         .set("__host_namespace", describe_ns)
         .map_err(|e| e.to_string())?;
     ctx.globals()
+        .set("__host_schema", schema)
+        .map_err(|e| e.to_string())?;
+    ctx.globals()
         .set("__host_store", store_write)
         .map_err(|e| e.to_string())?;
     ctx.globals()
@@ -141,10 +183,10 @@ pub(crate) fn install_helpers(
         .set("__host_model", models)
         .map_err(|e| e.to_string())?;
     ctx.globals()
-        .set(
-            "__models",
-            serde_json::to_string(&admitted_models(tools)?).map_err(|e| e.to_string())?,
-        )
+        .set("__host_metadata", metadata)
+        .map_err(|e| e.to_string())?;
+    ctx.globals()
+        .set("__host_models", available_models)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

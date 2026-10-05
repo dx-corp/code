@@ -103,6 +103,7 @@ impl<M: Model + 'static> HostTurnRun<M> {
             .collect();
         local
             .append(&[Event::UserMessage {
+                interaction_mode: dex_loop::InteractionMode::Unspecified,
                 turn: turn.turn,
                 message_id: None,
                 model_binding: None,

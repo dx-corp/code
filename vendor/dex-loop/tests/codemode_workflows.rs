@@ -162,6 +162,7 @@ async fn scratch_state_is_partitioned_by_the_accepted_principal() {
     );
     assert_eq!(outer_result(&log, "alice-1-1-0").0, Outcome::Succeeded);
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("bob-1"),
         message_id: None,
         principal: PrincipalId::new("bob"),

@@ -1405,14 +1405,11 @@ impl NativeAgent {
         for definition in external_tool_definitions {
             tools.insert(definition.tool.name.to_lowercase(), definition);
         }
-        if config.external_tool_schema_policy == ExternalToolSchemaPolicy::Deferred
-            && !external_tools.is_empty()
-            && !tools.contains_key("tool_search")
-        {
-            anyhow::bail!(
-                "Deferred external tool schemas require the `tool_search` discovery tool"
-            );
-        }
+        self::deferred_tool_schemas::validate_deferred_discovery(
+            config.external_tool_schema_policy,
+            !external_tools.is_empty(),
+            |name| tools.contains_key(name),
+        )?;
         let goal_tools_visible = host.goal_tools_visible();
         let include_ide_tools = host.include_ide_tools();
         let tool_profile = ToolProfile::from_env();
@@ -1616,16 +1613,15 @@ impl NativeAgent {
         external_tool_definitions: Vec<ToolDefinition>,
     ) -> Result<()> {
         validate_tools_with_host(&self.host, Some(&allowed_tools), &external_tool_definitions)?;
-        if self.external_tool_schema_policy == ExternalToolSchemaPolicy::Deferred
-            && !external_tool_definitions.is_empty()
-            && !allowed_tools
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case("tool_search"))
-        {
-            anyhow::bail!(
-                "Deferred external tool schemas require the `tool_search` discovery tool"
-            );
-        }
+        self::deferred_tool_schemas::validate_deferred_discovery(
+            self.external_tool_schema_policy,
+            !external_tool_definitions.is_empty(),
+            |name| {
+                allowed_tools
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(name))
+            },
+        )?;
         self.command_tx
             .send(AgentCommand::ReplaceGovernedTools {
                 allowed_tools,

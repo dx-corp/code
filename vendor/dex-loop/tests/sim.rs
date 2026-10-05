@@ -187,6 +187,7 @@ fn stale_control_kinds_would_release_a_lease_with_unprocessed_control_event() {
         (
             dex_loop::Cursor(1),
             Event::UserMessage {
+                interaction_mode: dex_loop::InteractionMode::Unspecified,
                 turn: TurnId::new("t1"),
                 message_id: None,
                 principal: PrincipalId::new("alice"),
@@ -301,6 +302,7 @@ async fn dst_two_replicas_racing_the_same_generation_dispatch_once() {
     let model = SimModel::fixed(tools_seed, fakes::StepScript::OneMutation);
 
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         principal: PrincipalId::new("alice"),
@@ -362,6 +364,7 @@ async fn dst_two_replica_lease_fencing() {
     let model = SimModel::fixed(tools_seed, fakes::StepScript::OneMutation);
 
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         principal: PrincipalId::new("alice"),

@@ -54,11 +54,19 @@ impl CodexAppServerTurnResult {
 }
 
 /// One dynamic tool exposed to Codex app-server.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
+    #[serde(rename = "inputSchema")]
     pub input_schema: Value,
+}
+
+/// Fingerprint the exact fixed registrations, including discovery instructions.
+pub fn dynamic_tool_projection(tools: &[DynamicToolSpec]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(serde_json::to_vec(tools)?);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Session wrapper that owns one app-server process and one thread.
@@ -70,6 +78,8 @@ pub struct CodexAppServerTurnSession {
     profile: String,
     compatibility: CodexCompatibilityReport,
     capabilities: CodexCapabilities,
+    tool_projection: Option<String>,
+    registered_tool_names: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,6 +344,11 @@ impl CodexAppServerTurnSession {
             profile,
             compatibility,
             capabilities: manifest.capabilities,
+            tool_projection: Some(dynamic_tool_projection(dynamic_tools)?),
+            registered_tool_names: dynamic_tools
+                .iter()
+                .map(|tool| tool.name.to_ascii_lowercase())
+                .collect(),
         })
     }
 
@@ -350,7 +365,7 @@ impl CodexAppServerTurnSession {
             .start_thread(params, None)
             .await
             .context("thread/start")?;
-        let session = Self::from_started_thread_with_metadata(
+        let mut session = Self::from_started_thread_with_metadata(
             client,
             thread.thread_id,
             model,
@@ -359,6 +374,12 @@ impl CodexAppServerTurnSession {
             compatibility,
         )
         .await?;
+        session.tool_projection = Some(dynamic_tool_projection(payload.dynamic_tools)?);
+        session.registered_tool_names = payload
+            .dynamic_tools
+            .iter()
+            .map(|tool| tool.name.to_ascii_lowercase())
+            .collect();
         if let Some((state_root, manifest, initialized)) = binding_store {
             CodexThreadBinding::fresh(
                 manifest.key,
@@ -421,7 +442,17 @@ impl CodexAppServerTurnSession {
             profile,
             compatibility,
             capabilities: CodexCapabilities::default(),
+            tool_projection: None,
+            registered_tool_names: Default::default(),
         })
+    }
+
+    pub fn has_dynamic_tool(&self, name: &str) -> bool {
+        self.registered_tool_names.contains(name)
+    }
+
+    pub fn matches_dynamic_tools(&self, tools: &[DynamicToolSpec]) -> Result<bool> {
+        Ok(self.tool_projection.as_deref() == Some(dynamic_tool_projection(tools)?.as_str()))
     }
 
     pub fn thread_id(&self) -> &str {
@@ -766,7 +797,17 @@ pub async fn open_persistent_thread(
     compatibility: &CodexCompatibilityReport,
 ) -> Result<CodexPersistentThreadOpen> {
     ensure_dynamic_tools_declared(&manifest.capabilities, payload.dynamic_tools)?;
-    let binding = CodexThreadBinding::load_at(state_root, &manifest.key)?;
+    let projection = dynamic_tool_projection(payload.dynamic_tools)?;
+    let mut binding = CodexThreadBinding::load_at(state_root, &manifest.key)?;
+    if binding
+        .as_ref()
+        .is_some_and(|binding| binding.tool_projection.as_ref() != Some(&projection))
+    {
+        // Preserve the old thread and binding; registrations cannot be replaced
+        // by thread/resume. A fresh thread receives the semantic history below.
+        CodexThreadBinding::quarantine_at(state_root, &manifest.key)?;
+        binding = None;
+    }
     if manifest.capabilities.resume && compatibility.resume {
         if let Some(binding) = binding.as_ref() {
             match client
@@ -860,6 +901,7 @@ async fn start_and_store_persistent_thread(
             .and_then(Value::as_str)
             .map(str::to_owned),
     )
+    .with_tool_projection(dynamic_tool_projection(dynamic_tools)?)
     .store_at(state_root)?;
     Ok(thread.thread_id)
 }
@@ -2214,6 +2256,7 @@ mod tests {
             Some("2025-01-01".to_owned()),
             1_725_000_000,
         )
+        .with_tool_projection(dynamic_tool_projection(&[]).unwrap())
         .store_at(state_root.path())
         .expect("store binding");
         let manifest = crate::codex_session::CodexSessionManifest {
@@ -2286,7 +2329,11 @@ mod tests {
             .expect("session key");
         let binding =
             crate::codex_session::CodexThreadBinding::new(key.clone(), "missing-thread", None, 1);
-        binding.store_at(state_root.path()).expect("store binding");
+        binding
+            .clone()
+            .with_tool_projection(dynamic_tool_projection(&[]).unwrap())
+            .store_at(state_root.path())
+            .expect("store binding");
         let old_path = binding.path_at(state_root.path());
         let manifest = crate::codex_session::CodexSessionManifest {
             key: key.clone(),
@@ -2356,7 +2403,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleared_binding_runtime_connect_starts_fresh_with_live_manifest() {
+    async fn legacy_projection_starts_fresh_preserves_binding_and_restores_history() {
         let state_root = tempfile::tempdir().expect("state root");
         let workspace = tempfile::tempdir().expect("workspace");
         let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
@@ -2364,8 +2411,7 @@ mod tests {
         let binding =
             crate::codex_session::CodexThreadBinding::new(key.clone(), "missing-thread", None, 1);
         binding.store_at(state_root.path()).expect("store binding");
-        crate::codex_session::CodexThreadBinding::quarantine_at(state_root.path(), &key)
-            .expect("clear binding");
+        // An old binding has no projection fingerprint. Keep it for recovery.
         let manifest = crate::codex_session::CodexSessionManifest {
             key: key.clone(),
             approval_policy: "never".to_owned(),
@@ -2394,7 +2440,10 @@ mod tests {
                 &state_root_path,
                 &dynamic_tools,
                 Some("Use the workspace-specific developer instructions.".to_owned()),
-                &[],
+                &[Message {
+                    role: Role::User,
+                    content: MessageContent::text("preserved legacy context"),
+                }],
             )
             .await
         });
@@ -2436,6 +2485,29 @@ mod tests {
             json!({ "thread": { "id": "runtime-thread" } }),
         );
 
+        let inject = mock
+            .next_request()
+            .await
+            .expect("semantic history restoration");
+        assert_eq!(inject["method"], "thread/inject_items");
+        assert!(
+            inject["params"]
+                .to_string()
+                .contains("preserved legacy context")
+        );
+        mock.respond(inject["id"].as_u64().unwrap(), json!({}));
+        assert!(
+            std::fs::read_dir(
+                binding
+                    .path_at(state_root.path())
+                    .parent()
+                    .unwrap()
+                    .join("quarantine")
+            )
+            .unwrap()
+            .next()
+            .is_some()
+        );
         let session = task.await.unwrap().expect("fresh runtime session");
         assert_eq!(session.thread_id(), "runtime-thread");
         assert_eq!(
@@ -2511,6 +2583,7 @@ mod tests {
         let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
             .expect("session key");
         crate::codex_session::CodexThreadBinding::new(key.clone(), "thread-old", None, 1)
+            .with_tool_projection(dynamic_tool_projection(&[]).unwrap())
             .store_at(state_root.path())
             .expect("store binding");
         let manifest = crate::codex_session::CodexSessionManifest {
@@ -2578,6 +2651,7 @@ mod tests {
         let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
             .expect("session key");
         crate::codex_session::CodexThreadBinding::new(key.clone(), "thread-persisted", None, 1)
+            .with_tool_projection(dynamic_tool_projection(&[]).unwrap())
             .store_at(state_root.path())
             .expect("store binding");
         let manifest = crate::codex_session::CodexSessionManifest {
@@ -2640,6 +2714,7 @@ mod tests {
         let key = crate::codex_session::CodexSessionKey::new("work", workspace.path(), "gpt-5.5")
             .expect("session key");
         crate::codex_session::CodexThreadBinding::new(key.clone(), "thread-persisted", None, 1)
+            .with_tool_projection(dynamic_tool_projection(&[]).unwrap())
             .store_at(state_root.path())
             .expect("store binding");
         let manifest = crate::codex_session::CodexSessionManifest {

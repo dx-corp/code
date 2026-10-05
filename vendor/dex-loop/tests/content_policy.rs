@@ -23,6 +23,7 @@ fn budget() -> Budget {
 
 fn start(log: &FakeLog, policy: TurnContentPolicy) -> Context {
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("policy-turn"),
         message_id: None,
         principal: alice(),

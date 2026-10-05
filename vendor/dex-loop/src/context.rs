@@ -208,6 +208,7 @@ pub struct Context {
     exposed: Vec<ToolName>,
     client_tools: Vec<ClientToolSpec>,
     authorized_tools: Vec<ToolName>,
+    interaction_mode: crate::InteractionMode,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
     voice: Option<crate::TurnVoice>,
@@ -259,6 +260,7 @@ struct PendingTurn {
     /// does not replace the still-running turn's client tools.
     client_tools: Vec<ClientToolSpec>,
     authorized_tools: Vec<ToolName>,
+    interaction_mode: crate::InteractionMode,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
     voice: Option<crate::TurnVoice>,
@@ -287,6 +289,7 @@ impl Context {
             exposed: Vec::new(),
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
+            interaction_mode: crate::InteractionMode::Unspecified,
             approval_mode: ApprovalMode::Interactive,
             model_binding: None,
             voice: None,
@@ -366,8 +369,12 @@ impl Context {
         self.model_binding.as_ref()
     }
 
-    /// The current turn's host-resolved writing policy and voice choice, as
-    /// logged on its `UserMessage`. Writing rules grant no execution authority.
+    /// Immutable host-admitted policy, outside compactable model history.
+    pub fn interaction_mode(&self) -> crate::InteractionMode {
+        self.interaction_mode
+    }
+
+    /// The current turn's host-resolved writing policy and voice choice.
     pub fn voice(&self) -> Option<&crate::TurnVoice> {
         self.voice.as_ref()
     }
@@ -611,6 +618,7 @@ impl Context {
                 approval_mode,
                 model_binding,
                 voice,
+                interaction_mode,
             } => {
                 let next = PendingTurn {
                     turn: turn.clone(),
@@ -620,6 +628,7 @@ impl Context {
                     attachments: attachments.clone(),
                     client_tools: client_tools.clone(),
                     authorized_tools: authorized_tools.clone(),
+                    interaction_mode: *interaction_mode,
                     approval_mode: *approval_mode,
                     model_binding: model_binding.clone(),
                     voice: voice.as_deref().cloned(),
@@ -1128,6 +1137,7 @@ impl Context {
             approval_mode,
             model_binding,
             voice,
+            interaction_mode,
         } = next;
         self.turn = Some(turn.clone());
         self.acting = Some(principal.clone());
@@ -1152,6 +1162,7 @@ impl Context {
         self.approval_mode = approval_mode;
         self.model_binding = model_binding;
         self.voice = voice;
+        self.interaction_mode = interaction_mode;
         self.last_served = None;
         self.authorized_principal = Some(principal.clone());
         self.push(

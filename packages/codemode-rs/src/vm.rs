@@ -139,7 +139,7 @@ fn execute(
         for tool in &mut tools { tool.namespace_instructions = None; }
         ctx.globals().set("__host_call", bridge).map_err(|e| e.to_string())?;
         ctx.globals().set("__host_text", emit).map_err(|e| e.to_string())?;
-        ctx.globals().set("__catalog", serde_json::to_string(&tools).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        ctx.globals().set("__catalog", serde_json::to_string(&tools.iter().map(|tool| serde_json::json!({"name":tool.name})).collect::<Vec<_>>()).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let respond: Function = ctx.eval(PRELUDE).map_err(|e| js_error(&ctx, e))?;
         let source = format!("(async function(){{{code}\n}})().then(value => {{ if (value !== undefined) text(value); }})");
         let mut options = rquickjs::context::EvalOptions::default();
