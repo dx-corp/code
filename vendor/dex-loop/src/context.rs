@@ -247,6 +247,9 @@ pub struct Context {
     scratch: crate::codemode_state::Scratch,
     model_usage_unresolved: bool,
     specialist_usage_recorded: bool,
+    // Turn-local safe feedback and cap survive history compaction/recovery.
+    content_policy_repairs: u32,
+    content_policy_feedback: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -306,6 +309,8 @@ impl Context {
             scratch: Default::default(),
             model_usage_unresolved: false,
             specialist_usage_recorded: false,
+            content_policy_repairs: 0,
+            content_policy_feedback: None,
         }
     }
 
@@ -559,6 +564,15 @@ impl Context {
 
     /// Whether a turn is running (or a queued one just began). A host that
     /// finished a turn checks this before doing work between turns.
+    pub fn content_policy_repairs(&self) -> u32 {
+        self.content_policy_repairs
+    }
+
+    /// Latest safe validation feedback, kept outside compactable history.
+    pub fn content_policy_repair_guidance(&self) -> Option<String> {
+        self.content_policy_feedback.as_ref().map(|feedback| format!("The prior draft was rejected before publication or tool execution. Repair attempt {}/2. Correct these writing-rule violations using the admitted policy and the original request. Do not retry an accepted or uncertain write. Do not invent sources. {feedback}", self.content_policy_repairs))
+    }
+
     pub fn turn_running(&self) -> bool {
         self.status == Status::Running
     }
@@ -789,6 +803,11 @@ impl Context {
                     });
                 }
                 self.pre_started.clear();
+                self.content_policy_feedback = None;
+            }
+            Event::ContentPolicyRepairRequested { feedback, .. } => {
+                self.content_policy_repairs = self.content_policy_repairs.saturating_add(1);
+                self.content_policy_feedback = Some(feedback.clone());
             }
             Event::ModelAttemptAbandoned { .. } => {
                 self.attempt = None;
@@ -1146,6 +1165,8 @@ impl Context {
         self.usage = Usage::default();
         self.model_usage_unresolved = false;
         self.specialist_usage_recorded = false;
+        self.content_policy_repairs = 0;
+        self.content_policy_feedback = None;
         self.attempt = None;
         self.interrupt_requested = false;
         self.exposed.clear();

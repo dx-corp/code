@@ -559,6 +559,7 @@ where
         let mut calls = Vec::new();
         let mut failure = None;
         let mut wall_exceeded = false;
+        let mut policy_feedback = None;
         // Usage arrives mid-stream but is never written on its own: it is
         // batched into whichever terminal event ends this attempt
         // (`ModelStepCompleted` or `ModelAttemptAbandoned`), so one attempt
@@ -750,9 +751,14 @@ where
                 .first()
                 .or_else(|| response.violations.first())
             {
+                let feedback = format!(
+                    "{} at {} ({}): {}",
+                    violation.rule_id, violation.field_path, violation.code, violation.message
+                );
+                policy_feedback = Some(feedback.clone());
                 failure = Some(ModelError {
                     class: crate::ErrorClass::Rejected,
-                    message: format!("{}: {}", violation.code, violation.message),
+                    message: feedback,
                 });
             }
         }
@@ -812,6 +818,16 @@ where
             return Ok((!continues).then_some(Exit::Done));
         }
         if let Some(error) = failure {
+            if let Some(feedback) = policy_feedback
+                && ctx.content_policy_repairs() < 2
+                && !cancel.is_cancelled()
+            {
+                let mut events = pending_usage;
+                events.push(Event::ModelAttemptAbandoned { step });
+                events.push(Event::ContentPolicyRepairRequested { step, feedback });
+                self.emit(ctx, events).await?;
+                return Ok(None);
+            }
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
             events.push(Event::Error {
