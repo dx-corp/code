@@ -14,6 +14,9 @@ mod compaction_eval_provider_tests;
 #[cfg(test)]
 pub mod harness;
 #[cfg(test)]
+#[path = "../../examples/instruction_eval/provider_tests.rs"]
+mod instruction_eval_provider_tests;
+#[cfg(test)]
 mod native_admission_tests;
 #[cfg(test)]
 mod native_codex_tests;

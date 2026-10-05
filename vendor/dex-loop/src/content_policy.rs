@@ -25,11 +25,11 @@ pub enum AuthoredFieldKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthoredField {
-    pub path: String,
+    path: String,
     pub prose: String,
-    pub kind: AuthoredFieldKind,
-    pub items: usize,
-    pub citation_urls: Vec<String>,
+    kind: AuthoredFieldKind,
+    items: usize,
+    citation_urls: Vec<String>,
 }
 
 impl AuthoredContent {
