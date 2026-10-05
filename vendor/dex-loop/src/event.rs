@@ -535,7 +535,7 @@ impl InteractionMode {
     pub fn is_unspecified(&self) -> bool {
         *self == Self::Unspecified
     }
-    pub fn tools_allowed(self) -> bool {
+    pub(crate) fn tools_allowed(self) -> bool {
         self != Self::Discuss
     }
 }
