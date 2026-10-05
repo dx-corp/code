@@ -20,7 +20,6 @@ impl SubagentManager {
             credential_vault,
             parent_credential_vault,
             parent_credential_generation,
-            parent_cancel: _,
         } = launch;
         let parent_credential_scope = ParentCredentialScope {
             vault: &parent_credential_vault,

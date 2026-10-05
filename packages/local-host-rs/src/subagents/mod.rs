@@ -13,6 +13,8 @@ use maestro_runtime_contracts::tool_wire;
 pub mod factory;
 mod handoff;
 mod lifecycle;
+#[cfg(test)]
+mod lifetime_tests;
 
 use crate::model_dynamics::{ModelChoice, TaskDifficulty};
 use crate::session::ThinkingLevel;
@@ -662,7 +664,20 @@ struct ChildLaunch {
     credential_vault: CredentialVault,
     parent_credential_vault: CredentialVault,
     parent_credential_generation: u64,
-    parent_cancel: Option<CancellationToken>,
+}
+
+/// Foreground work belongs to the launching call; deliberately background
+/// work survives that call's cancellation. Link before polling the child so
+/// an already-cancelled parent cannot race scheduler admission or construction.
+fn child_run_token(
+    run_in_background: bool,
+    parent: Option<&CancellationToken>,
+) -> CancellationToken {
+    if run_in_background {
+        CancellationToken::new()
+    } else {
+        parent.map_or_else(CancellationToken::new, CancellationToken::child_token)
+    }
 }
 
 struct ChildRun {
@@ -1876,7 +1891,7 @@ impl SubagentManager {
                 .await;
         }
 
-        let token = CancellationToken::new();
+        let token = child_run_token(request.run_in_background, cancel);
         if validator.is_some() {
             self.coding_validator_receipts
                 .lock()
@@ -1892,31 +1907,18 @@ impl SubagentManager {
         let launch_policy = sandbox_policy;
         let launch_token = token.clone();
         let run_in_background = request.run_in_background;
-        let parent_cancel = if run_in_background {
-            None
-        } else {
-            cancel.cloned()
-        };
         let parent_credential_generation = credential_vault.generation();
         let launch = ChildLaunch {
             lease: Some(lease),
             credential_vault: child_credential_vault,
             parent_credential_vault: credential_vault,
             parent_credential_generation,
-            parent_cancel,
         };
         let role = request.role;
         let task = request.task.clone();
         let launch_id = id.clone();
         let launch_error_id = id.clone();
         let launch = async move {
-            let cancellation_link = launch.parent_cancel.clone().map(|parent| {
-                let child_token = launch_token.clone();
-                tokio::spawn(async move {
-                    parent.cancelled().await;
-                    child_token.cancel();
-                })
-            });
             let result = manager
                 .run_child(
                     launch_record,
@@ -1930,9 +1932,6 @@ impl SubagentManager {
                     launch,
                 )
                 .await;
-            if let Some(cancellation_link) = cancellation_link {
-                cancellation_link.abort();
-            }
             manager.runtime.remove(&launch_id);
             result
         };
@@ -3268,7 +3267,7 @@ impl SubagentManager {
             return ToolResult::failure(error);
         }
 
-        let token = CancellationToken::new();
+        let token = child_run_token(run_in_background, cancel);
         let (control_tx, control_rx) = mpsc::channel(RUNTIME_CONTROL_CAPACITY);
         self.runtime.insert(id, token.clone(), control_tx);
         let manager = self.clone();
@@ -3277,11 +3276,6 @@ impl SubagentManager {
         let launch_error_id = id.to_string();
         let launch_policy = sandbox_policy;
         let launch_token = token.clone();
-        let parent_cancel = if run_in_background {
-            None
-        } else {
-            cancel.cloned()
-        };
         self.runtime
             .set_credential_scope(id, child_credential_vault.clone());
         let parent_credential_generation = credential_vault.generation();
@@ -3290,16 +3284,8 @@ impl SubagentManager {
             credential_vault: child_credential_vault,
             parent_credential_vault: credential_vault,
             parent_credential_generation,
-            parent_cancel,
         };
         let launch = async move {
-            let cancellation_link = launch.parent_cancel.clone().map(|parent| {
-                let child_token = launch_token.clone();
-                tokio::spawn(async move {
-                    parent.cancelled().await;
-                    child_token.cancel();
-                })
-            });
             let result = manager
                 .run_child(
                     launch_record,
@@ -3313,9 +3299,6 @@ impl SubagentManager {
                     launch,
                 )
                 .await;
-            if let Some(cancellation_link) = cancellation_link {
-                cancellation_link.abort();
-            }
             manager.runtime.remove(&launch_id);
             result
         };
@@ -6378,7 +6361,6 @@ mod tests {
                     credential_vault: CredentialVault::new(),
                     parent_credential_generation: parent.generation(),
                     parent_credential_vault: parent,
-                    parent_cancel: None,
                 },
             )
             .await
@@ -6443,7 +6425,7 @@ mod tests {
         assert!(persisted.lifecycle_notification_published);
     }
 
-    fn control_receipt_record(root: &Path) -> SubagentRecord {
+    pub(super) fn control_receipt_record(root: &Path) -> SubagentRecord {
         SubagentRecord {
             parent_requests: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
