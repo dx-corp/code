@@ -37,8 +37,8 @@ pub use compaction::{
     Compaction, CompactionPlan, Compactor, NoCompaction, Summarize, Summary, Threshold,
 };
 pub use content_policy::{
-    AuthoredContent, ContentPolicyEvaluation, ContentPolicyScope, ContentPolicyViolation,
-    evaluate_content_policy,
+    AuthoredContent, AuthoredField, AuthoredFieldKind, ContentPolicyEvaluation, ContentPolicyScope,
+    ContentPolicyViolation, evaluate_content_policy,
 };
 pub use context::{
     AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message, TOOL_EVIDENCE_LIMIT,
@@ -62,7 +62,10 @@ pub use ports::{
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};
 pub use tokio_util::sync::CancellationToken;
-pub use voice::{ToneAdjustment, TurnBrandVoice, TurnContentPolicy, TurnVoice, TurnVoiceChoice};
+pub use voice::{
+    HeadingCase, ToneAdjustment, TurnBrandVoice, TurnContentPolicy, TurnVoice, TurnVoiceChoice,
+    WritingRules,
+};
 
 pub use agent_codemode::{ModelBinding, ModelOperation, OutputBlock};
 pub use codemode_output::validate_codemode_blocks;

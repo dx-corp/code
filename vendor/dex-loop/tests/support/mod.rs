@@ -789,6 +789,7 @@ pub fn shape(event: &Event) -> String {
             format!("attempt_failed:{step}:{code}:{then:?}")
         }
         Event::CodeModeStorePrepared { parent, .. } => format!("store_prepared:{parent}"),
+        Event::ContentPolicyRepairRequested { step, .. } => format!("policy_repair:{step}"),
         Event::ModelUsageResolved { call } => format!("usage_resolved:{call}"),
         Event::ModelUsageUnresolved { call, .. } => format!("usage_unresolved:{call}"),
         Event::CodeModeCallsProposed { parent, calls } => {

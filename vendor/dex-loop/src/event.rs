@@ -679,6 +679,12 @@ pub enum Event {
     ModelAttemptAbandoned {
         step: u32,
     },
+    /// A rejected unpublished draft. Only safe, generated rule diagnostics are retained.
+    /// No proposed call from this attempt is eligible to run.
+    ContentPolicyRepairRequested {
+        step: u32,
+        feedback: String,
+    },
     /// A model attempt on one route ended without a `ModelStepCompleted`.
     /// Debug data for staff: never model history, never rendered. Carries
     /// only the route's configured provider/model, dex-model's fixed error

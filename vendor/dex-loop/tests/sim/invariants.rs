@@ -68,6 +68,7 @@ fn kind_str(event: &Event) -> &'static str {
         Event::ThinkingDelta { .. } => "thinking_delta",
         Event::Usage(_) => "usage",
         Event::ModelStepCompleted { .. } => "model_step_completed",
+        Event::ContentPolicyRepairRequested { .. } => "policy_repair",
         Event::ModelAttemptAbandoned { .. } => "model_attempt_abandoned",
         Event::ModelAttemptFailed { .. } => "model_attempt_failed",
         Event::CodeModeStorePrepared { .. } => "code_mode_store_prepared",

@@ -53,7 +53,42 @@ pub struct TurnContentPolicy {
     #[serde(default)]
     pub max_response_words: u32,
     #[serde(default)]
+    pub response_rules: WritingRules,
+    #[serde(default)]
+    pub document_rules: WritingRules,
+    #[serde(default)]
+    pub presentation_rules: WritingRules,
+    #[serde(default)]
     pub voice: TurnVoiceChoice,
+}
+
+/// Explicit mechanical writing controls. Zero leaves a limit disabled.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WritingRules {
+    pub max_sentence_words: u32,
+    pub max_paragraph_words: u32,
+    pub max_heading_words: u32,
+    pub max_bullet_words: u32,
+    pub max_bullets: u32,
+    pub max_slide_words: u32,
+    pub heading_case: HeadingCase,
+}
+
+impl WritingRules {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// English heading conventions; all-capital acronyms retain their case.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadingCase {
+    #[default]
+    Unspecified,
+    Sentence,
+    Title,
 }
 
 /// Which brand voice the turn writes in.

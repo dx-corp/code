@@ -44,15 +44,13 @@ fn start(log: &FakeLog, policy: TurnContentPolicy) -> Context {
 #[tokio::test]
 async fn prohibited_text_split_across_chunks_never_leaks_or_dispatches_a_mutation() {
     let log = FakeLog::default();
-    let model = FakeModel::new(vec![
-        vec![
-            text("We fos"),
-            text("ter growth."),
-            call("update", json!({})),
-            usage(3, 4, 7),
-        ],
-        vec![text("Updated.")],
-    ]);
+    let rejected = vec![
+        text("We fos"),
+        text("ter growth."),
+        call("update", json!({})),
+        usage(3, 4, 7),
+    ];
+    let model = FakeModel::new(vec![rejected.clone(), rejected.clone(), rejected]);
     let tools = FakeTools::new(vec![write_tool("update")]);
     let mut ctx = start(
         &log,
@@ -75,7 +73,7 @@ async fn prohibited_text_split_across_chunks_never_leaks_or_dispatches_a_mutatio
         tools.runs().is_empty(),
         "a rejected step dispatched its mutation"
     );
-    assert_eq!(ctx.usage().cost_micros, 7);
+    assert_eq!(ctx.usage().cost_micros, 21);
     assert_eq!(ctx, log.rehydrate());
 }
 
@@ -350,5 +348,95 @@ async fn compliant_controlled_answer_and_progress_are_published_after_validation
     assert!(log.events().iter().any(
         |event| matches!(event, Event::ThinkingDelta { text } if text == "Checking evidence.")
     ));
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn rejected_draft_is_repaired_without_publishing_or_dispatching_rejected_calls() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![
+            text("We foster growth."),
+            call("update", json!({})),
+            usage(3, 4, 7),
+        ],
+        vec![text("We support growth."), usage(5, 6, 11)],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let mut ctx = start(
+        &log,
+        TurnContentPolicy {
+            forbidden_terms: vec!["foster".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        engine(&log, &model, &tools, budget())
+            .run(&mut ctx, &CancellationToken::new())
+            .await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(log.text_writes(), vec!["We support growth."]);
+    assert!(tools.runs().is_empty());
+    assert_eq!(ctx.usage().cost_micros, 18);
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn scoped_sentence_rule_rejects_long_draft_and_accepts_short_repair() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![text("This sentence has too many words.")],
+        vec![text("Keep it brief.")],
+    ]);
+    let tools = FakeTools::new(vec![]);
+    let policy: TurnContentPolicy = serde_json::from_value(
+        json!({"guide_version":0, "response_rules":{"max_sentence_words":3}}),
+    )
+    .unwrap();
+    let mut ctx = start(&log, policy);
+    assert_eq!(
+        engine(&log, &model, &tools, budget())
+            .run(&mut ctx, &CancellationToken::new())
+            .await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(log.text_writes(), vec!["Keep it brief."]);
+}
+
+#[tokio::test]
+async fn repair_cap_survives_rehydration_and_never_restarts_the_allowance() {
+    let log = FakeLog::default();
+    let mut ctx = start(
+        &log,
+        TurnContentPolicy {
+            forbidden_terms: vec!["foster".into()],
+            ..Default::default()
+        },
+    );
+    for step in [1, 2] {
+        log.host_append(Event::StepStarted {
+            step,
+            control_through: ctx.control_cursor(),
+        });
+        log.host_append(Event::ModelAttemptAbandoned { step });
+        log.host_append(Event::ContentPolicyRepairRequested {
+            step,
+            feedback: "forbidden_terms[0] at response".into(),
+        });
+        ctx = log.rehydrate();
+    }
+    assert_eq!(ctx.content_policy_repairs(), 2);
+    let model = FakeModel::new(vec![vec![text("foster"), call("update", json!({}))]]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    assert_eq!(
+        engine(&log, &model, &tools, budget())
+            .run(&mut ctx, &CancellationToken::new())
+            .await,
+        Ok(Exit::Failed)
+    );
+    assert_eq!(ctx.content_policy_repairs(), 2);
+    assert!(log.text_writes().is_empty());
+    assert!(tools.runs().is_empty());
     assert_eq!(ctx, log.rehydrate());
 }
