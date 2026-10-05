@@ -33,7 +33,35 @@ class CaptureFixture:
                 if self.path in {"/v1/chat/completions", "/v1/responses"}:
                     responses = self.path == "/v1/responses"
                     fixture.turn += 1
-                    if fixture.scene == "streaming":
+                    if fixture.scene == "compliance":
+                        request = json.loads(request_body)
+                        messages = request.get("input", []) if responses else request.get("messages", [])
+                        results = [str(message.get("content", message.get("output", ""))) for message in messages
+                                   if message.get("role") == "tool" or message.get("type") == "function_call_output"]
+                        def tool(name, args):
+                            return {"role": "assistant", "tool_calls": [{"index": 0, "id": f"compliance-{fixture.turn}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+                        if fixture.turn == 1:
+                            delta = tool("read", {"path": "SECURITY.md"})
+                            finish = "tool_calls"
+                        elif fixture.turn == 2:
+                            if not any("Security policy" in result for result in results):
+                                self.send_error(409, "requires actual security file read")
+                                return
+                            delta = tool("write", {"path": "SECURITY.md", "content": "# Security policy\n\nReport vulnerabilities privately to security@acme.example.\nWe acknowledge reports within two business days.\n"})
+                            finish = "tool_calls"
+                        elif fixture.turn == 3:
+                            delta = tool("bash", {"command": "python3 -m unittest test_security_policy -v"})
+                            finish = "tool_calls"
+                        elif fixture.turn == 4:
+                            if not any("OK" in result and "test_private_reporting" in result for result in results):
+                                self.send_error(409, "requires actual passing regression test")
+                                return
+                            delta = {"role": "assistant", "content": "Fixed SECURITY.md after your approval.\n\n- Added a private vulnerability reporting address.\n- Kept the two-business-day response commitment.\n- Read the file in the regression test: 2 tests pass.\n\nThe local change is ready for review. Production publication and the SOC 2 control re-test are still pending."}
+                            finish = "stop"
+                        else:
+                            self.send_error(409, "capture fixture exhausted")
+                            return
+                    elif fixture.scene == "streaming":
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
                         self.end_headers()
@@ -62,7 +90,7 @@ class CaptureFixture:
                         self.wfile.flush()
                         fixture.stopped.wait(20)
                         return
-                    if fixture.scene == "long-conversation":
+                    elif fixture.scene == "long-conversation":
                         delta = {
                             "role": "assistant",
                             "content": "Release review\n\n"

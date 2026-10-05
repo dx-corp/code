@@ -1,0 +1,16 @@
+{
+  "name": "compliance",
+  "steps": [
+    {"wait": "(?s)Dex.*GPT-6 Astra.*security-policy"},
+    {"text": "Fix SECURITY.md and run its tests."},
+    {"wait": "Fix SECURITY.md and run its tests"},
+    {"key": "Enter"},
+    {"wait": "Action Approval Required"},
+    {"key": "Enter"},
+    {"wait": "Action Approval Required"},
+    {"key": "Enter"},
+    {"wait": "2 tests pass"},
+    {"absent": "Working|Thinking"},
+    {"wait": "Dex · finished"}
+  ]
+}

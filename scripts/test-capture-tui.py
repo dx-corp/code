@@ -62,6 +62,17 @@ class CaptureTests(unittest.TestCase):
         self.assertIn({"text": "/dex motion-off"}, reduced["steps"])
         self.assertEqual(reduced["steps"][-1], {"wait": "Dex appreciates the boop"})
 
+    def test_compliance_fixture_refuses_unproven_success(self):
+        from tui_capture_fixture import CaptureFixture
+        with CaptureFixture("compliance") as fixture:
+            base = fixture.environment()["MAESTRO_IDENTITY_URL"]
+            fixture.turn = 3
+            request = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps({"messages": []}).encode(), headers={"Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=3)
+            self.assertEqual(raised.exception.code, 409)
+            self.assertIn(b"requires actual passing regression test", raised.exception.read())
+
     def test_fixture_serves_only_local_scripted_contracts(self):
         from tui_capture_fixture import CaptureFixture
 
