@@ -2,6 +2,24 @@
 
 use super::*;
 
+#[derive(PartialEq, Eq)]
+struct DiscoveryContext {
+    profile: ToolProfile,
+    goal: bool,
+    ide: bool,
+    excluded: HashSet<String>,
+    app_server: bool,
+    has_client: bool,
+    classifier: Option<agent_codemode::ModelBinding>,
+}
+
+pub(super) struct DiscoveryCatalogCache {
+    context: DiscoveryContext,
+    attestation: CredentialAttestation,
+    native: agent_codemode::Catalog,
+    script: agent_codemode::Catalog,
+}
+
 pub(super) fn register(
     tools: &mut HashMap<String, ToolDefinition>,
     allowed: Option<&HashSet<String>>,
@@ -256,28 +274,68 @@ impl NativeAgentRunner {
         missing
     }
 
-    pub(super) fn codemode_catalog(&self) -> Vec<agent_codemode::Tool> {
+    // Membership is checked against live admission on every nested call. A
+    // retained metadata snapshot never grants authority to a removed tool.
+    pub(super) fn codemode_tool_admitted(&self, name: &str, excluded: &HashSet<String>) -> bool {
+        self.tools.contains_key(name)
+            && name != agent_codemode::TOOL_NAME
+            && name != "ask_user"
+            && !excluded.contains(name)
+            && (name != classifier::TOOL_NAME
+                || (self.client.is_some() && !self.model_route.uses_app_server()))
+            && tool_is_visible_to_model(name, self.goal_tools_visible, self.include_ide_tools)
+            && tool_search_profile_allows(self.tool_profile, name, &self.explicitly_allowed_tools)
+    }
+
+    pub(super) fn codemode_catalog(&self) -> agent_codemode::Catalog {
+        self.discovery_catalog(true)
+    }
+
+    pub(super) fn discovery_catalog(&self, script: bool) -> agent_codemode::Catalog {
         let excluded = self
             .runtime_audit
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .excluded_context_tools
             .clone();
+        let context = DiscoveryContext {
+            profile: self.tool_profile,
+            goal: self.goal_tools_visible,
+            ide: self.include_ide_tools,
+            excluded,
+            app_server: self.model_route.uses_app_server(),
+            has_client: self.client.is_some(),
+            classifier: self
+                .tools
+                .contains_key(classifier::TOOL_NAME)
+                .then(|| self.classifier_binding())
+                .flatten(),
+        };
+        let mut cache = self
+            .discovery_catalog_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cache.as_ref().filter(|cached| {
+            cached.context == context && self.credential_vault.has_attestation(cached.attestation)
+        }) {
+            return if script {
+                cached.script.clone()
+            } else {
+                cached.native.clone()
+            };
+        }
+        // If sanitization or a concurrent owner learns a credential while building,
+        // this attestation expires and the next use rebuilds the snapshot.
+        let attestation = self
+            .credential_vault
+            .attest_provider_text("")
+            .expect("empty provider text");
         let mut tools = self
             .tools
             .values()
             .filter(|definition| {
                 let name = definition.tool.name.to_ascii_lowercase();
-                name != agent_codemode::TOOL_NAME
-                    && name != "ask_user"
-                    && !excluded.contains(&name)
-                    && (name != classifier::TOOL_NAME
-                        || (self.client.is_some() && !self.model_route.uses_app_server()))
-                    && tool_is_visible_to_model(
-                        &name,
-                        self.goal_tools_visible,
-                        self.include_ide_tools,
-                    )
+                tool_is_visible_to_model(&name, self.goal_tools_visible, self.include_ide_tools)
                     && tool_search_profile_allows(
                         self.tool_profile,
                         &name,
@@ -319,12 +377,25 @@ impl NativeAgentRunner {
                 .then_some(agent_codemode::ModelOperation::Classify),
                 model_binding: (definition.tool.name == classifier::TOOL_NAME
                     && !self.external_tools.contains(classifier::TOOL_NAME))
-                .then(|| self.classifier_binding())
+                .then(|| context.classifier.clone())
                 .flatten(),
             })
             .collect::<Vec<_>>();
         tools.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-        tools
+        let all = agent_codemode::Catalog::new(tools);
+        let native = all.filtered(|tool| {
+            tool.name != "tool_search" && !self.tool_executor.is_reserved_tool(&tool.name)
+        });
+        let script_catalog = all.filtered(|tool| {
+            self.codemode_tool_admitted(&tool.name.to_ascii_lowercase(), &context.excluded)
+        });
+        *cache = Some(DiscoveryCatalogCache {
+            context,
+            attestation,
+            native: native.clone(),
+            script: script_catalog.clone(),
+        });
+        if script { script_catalog } else { native }
     }
 
     pub(super) async fn execute_codemode(&mut self, args: &Value, call_id: &str) -> ToolExecution {
@@ -390,7 +461,7 @@ impl NativeAgentRunner {
         self.codemode_indeterminate = false;
 
         self.codemode_parent_call_id = Some(call_id.to_owned());
-        let session = agent_codemode::Session::start_with_store(
+        let session = agent_codemode::Session::start_with_catalog(
             code.to_owned(),
             catalog,
             &cancel,

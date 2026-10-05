@@ -267,6 +267,169 @@ fn deferred_external_schemas_keep_search_visible_without_shipping_the_tools() {
 
 #[tokio::test]
 async fn tool_search_materializes_a_deferred_external_schema_on_the_next_request() {
+    exercise_tool_search(serde_json::json!({"names":["client_calendar"]})).await;
+}
+
+#[tokio::test]
+async fn native_discovery_searches_schema_parameters_with_namespace_filtering() {
+    exercise_tool_search(serde_json::json!({"query":"continuationToken", "namespace":"client"}))
+        .await;
+}
+
+#[tokio::test]
+async fn discovery_reuses_snapshots_but_rebuilds_after_learning_a_credential() {
+    use super::*;
+    use crate::agent::credential_store::CredentialType;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let vault = CredentialVault::new();
+    let server_vault = vault.clone();
+    let server = tokio::spawn(async move {
+        let mut observations = Vec::new();
+        for index in 0..8 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_scripted_provider_request(&mut stream).await;
+            if matches!(index, 1 | 2 | 3 | 5 | 7) {
+                let latest = request["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|m| m["role"] == "tool")
+                    .unwrap();
+                let content = latest["content"].as_str().unwrap();
+                let payload = content
+                    .strip_prefix("<untrusted_content source=\"codemode\">\n")
+                    .and_then(|s| s.strip_suffix("\n</untrusted_content>"))
+                    .expect("script output retains its untrusted-content boundary");
+                observations.push(serde_json::from_str::<Value>(payload).unwrap());
+            }
+            if index == 2 {
+                let generation = server_vault.generation();
+                server_vault.store("learned-sensitive-fixture", CredentialType::ApiKey);
+                assert_eq!(
+                    server_vault.generation(),
+                    generation,
+                    "learning does not clear the vault"
+                );
+            }
+            let body = if matches!(index, 0 | 1 | 2 | 4 | 6) {
+                let name = if index >= 4 {
+                    "client_updated"
+                } else {
+                    "client_calendar"
+                };
+                let code = format!(
+                    "text({{step:{index}, snapshot:describeNamespacePage('client').snapshot, description:ALL_TOOLS.find(t=>t.name==='{name}').description, oldAvailable:getToolSchema('client_calendar') !== null}});"
+                );
+                let chunk = serde_json::json!({"id":"snapshot","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":format!("script-{index}"),"type":"function","function":{"name":"codemode","arguments":serde_json::json!({"code":code}).to_string()}}]},"finish_reason":"tool_calls"}]});
+                format!("data: {chunk}\n\ndata: [DONE]\n\n")
+            } else {
+                chat_sse_response("snapshot-done", "Done.", false)
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        observations
+    });
+    let workspace = tempfile::tempdir().unwrap();
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        external_tool_schema_policy: ExternalToolSchemaPolicy::Deferred,
+        ..Default::default()
+    };
+    let client = UnifiedClient::OpenAI(
+        crate::ai::OpenAiClient::with_base_url("test-key", format!("http://{address}/v1")).unwrap(),
+    );
+    let host = RuntimeTestHost::new(config.cwd.clone(), client.clone());
+    let resolved = NativeResolvedClient {
+        provider_name: client.provider_name().to_owned(),
+        client: Some(client),
+        model_route: NativeModelRoute::DirectProvider,
+    };
+    let mut calendar = external_tool_definition("client_calendar");
+    calendar.tool.description = "learned-sensitive-fixture".into();
+    let (agent, mut events) = super::super::NativeAgent::start_with_resolved_client(
+        config,
+        NativeExecutionHostHandle::new(Arc::new(host)),
+        vec![calendar],
+        vault,
+        None,
+        resolved,
+    )
+    .unwrap();
+    for turn in 0..3 {
+        if turn == 1 {
+            agent
+                .replace_governed_tools(
+                    HashSet::from([
+                        "codemode".into(),
+                        "tool_search".into(),
+                        super::classifier::TOOL_NAME.into(),
+                    ]),
+                    vec![external_tool_definition("client_updated")],
+                )
+                .unwrap();
+        }
+        if turn == 1 {
+            agent.continue_execution().unwrap();
+        } else {
+            agent
+                .prompt("Inspect admitted tools".into(), vec![])
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await.unwrap() {
+                    FromAgent::TurnCompleted { .. } => break,
+                    FromAgent::Error { message, .. } | FromAgent::ProviderError { message, .. } => {
+                        panic!("{message}")
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    agent.shutdown().await;
+    let observations = server.await.unwrap();
+    assert_eq!(
+        observations
+            .iter()
+            .map(|v| v["step"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 4, 6]
+    );
+    assert_eq!(
+        observations[0]["snapshot"], observations[1]["snapshot"],
+        "ordinary scripts must share the snapshot"
+    );
+    assert_ne!(
+        observations[1]["snapshot"], observations[2]["snapshot"],
+        "a newly learned credential invalidates sanitized metadata"
+    );
+    assert_ne!(observations[2]["snapshot"], observations[3]["snapshot"]);
+    assert_eq!(observations[3]["oldAvailable"], false);
+    assert_ne!(
+        observations[3]["snapshot"], observations[4]["snapshot"],
+        "a fresh user prompt starts a new snapshot even without registry changes"
+    );
+    assert_eq!(observations[0]["description"], "learned-sensitive-fixture");
+    assert!(
+        !observations[2]["description"]
+            .as_str()
+            .unwrap()
+            .contains("learned-sensitive-fixture")
+    );
+}
+
+async fn exercise_tool_search(search_args: Value) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -284,7 +447,7 @@ async fn tool_search_materializes_a_deferred_external_schema_on_the_next_request
                     "id":"deferred-tools","object":"chat.completion.chunk","created":0,
                     "model":"gpt-4o","choices":[{"index":0,
                     "delta":{"tool_calls":[{"index":0,"id":"call-search","type":"function",
-                    "function":{"name":"tool_search","arguments":"{\"names\":[\"client_calendar\"]}"}}]},
+                    "function":{"name":"tool_search","arguments":search_args.to_string()}}]},
                     "finish_reason":"tool_calls"}]
                 });
                 format!("data: {start}\n\ndata: {tool}\n\ndata: [DONE]\n\n")
@@ -310,13 +473,11 @@ async fn tool_search_materializes_a_deferred_external_schema_on_the_next_request
     let client = UnifiedClient::OpenAI(
         crate::ai::OpenAiClient::with_base_url("test-key", format!("http://{address}/v1")).unwrap(),
     );
-    let (agent, mut events) = NativeAgent::new_with_external_tools(
-        config,
-        vec![external_tool_definition("client_calendar")],
-        None,
-        client,
-    )
-    .unwrap();
+    let mut calendar = external_tool_definition("client_calendar");
+    calendar.tool.input_schema =
+        serde_json::json!({"type":"object","properties":{"continuationToken":{"type":"string"}}});
+    let (agent, mut events) =
+        NativeAgent::new_with_external_tools(config, vec![calendar], None, client).unwrap();
     agent
         .prompt("Check my calendar.".into(), vec![])
         .await

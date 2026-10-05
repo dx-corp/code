@@ -10,7 +10,7 @@ struct VmState {
 
 pub(crate) fn run(
     code: String,
-    tools: Vec<Tool>,
+    tools: Catalog,
     events: &mpsc::UnboundedSender<Event>,
     stop: &CancellationToken,
     deadline: Duration,
@@ -20,7 +20,7 @@ pub(crate) fn run(
     let current = Arc::new(Mutex::new(initial.clone()));
     let summaries = Arc::new(Mutex::new(Vec::new()));
     let result = validate_store(&initial)
-        .and_then(|_| admitted_models(&tools).map(|_| ()))
+        .and_then(|_| tools.validate_models())
         .and_then(|_| {
             execute(
                 code,
@@ -79,7 +79,7 @@ pub(crate) fn run(
 
 fn execute(
     code: String,
-    mut tools: Vec<Tool>,
+    tools: Catalog,
     events: &mpsc::UnboundedSender<Event>,
     stop: &CancellationToken,
     deadline: Duration,
@@ -104,11 +104,6 @@ fn execute(
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     let pending = Arc::new(Mutex::new(Vec::new()));
     let overflow = Arc::new(Mutex::new(None::<String>));
-    for tool in &mut tools {
-        if let Some(instructions) = &mut tool.namespace_instructions {
-            shorten(instructions, discovery::MAX_METADATA_BYTES, "...");
-        }
-    }
     context.with(|ctx| -> Result<(), String> {
         let pending_calls = pending.clone();
         let requested = summaries.clone();
@@ -136,7 +131,6 @@ fn execute(
         install_helpers(&ctx, &tools, output.clone(), overflow.clone(), store)?;
         // The Rust helper retains bounded on-demand guidance. Do not charge
         // the VM heap for copies repeated in every ALL_TOOLS declaration.
-        for tool in &mut tools { tool.namespace_instructions = None; }
         ctx.globals().set("__host_call", bridge).map_err(|e| e.to_string())?;
         ctx.globals().set("__host_text", emit).map_err(|e| e.to_string())?;
         ctx.globals().set("__catalog", serde_json::to_string(&tools.iter().map(|tool| serde_json::json!({"name":tool.name})).collect::<Vec<_>>()).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

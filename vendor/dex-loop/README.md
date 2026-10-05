@@ -67,6 +67,32 @@ Engine: `StepStarted`, `TextDelta`, `Usage`, `ModelStepCompleted`,
 Interrupt cancels the model stream and running reads; a mutation that has
 started completes, and the turn stops before the next effect.
 
+## Shared host recovery contracts
+
+Host dev-dependencies can enable dex-loop's `testing` feature and implement
+`testing::RecoveryHost` using their real `Log` and `Effects` adapters. Run each
+`RecoveryScenario` with a fresh thread. `restart` reopens durable storage and
+acquires a new log generation; it must fence the old handle. The suite covers
+lost leases, crashes on either side of the dispatch boundary, exact recorded
+result replay, duplicate claims, and cancellation that persists the partial
+outcome. `testing::tenant_isolation` uses matching thread/call IDs in separate
+organization and workspace scopes over shared storage.
+
+The filesystem host (`maestro-dex-host --test recovery_contract`) and hosted
+PostgreSQL host (`dex-runtime --test postgres recovery_contract`) run the same
+assertions. The latter uses real `PgLog` and `DexEffects` over `PgLedger`,
+requires PostgreSQL, and refuses all external calls. The model and mutation
+are deterministic probes. These tests prove port recovery and persisted replay;
+they do not prove process-kill/fsync durability, live provider reconciliation,
+or cross-process locking for the single-process local effect ledger.
+
+After the normal build-capacity prerequisite, focused commands are:
+
+```bash
+cargo test --manifest-path products/maestro/Cargo.toml --locked -p maestro-dex-host --test recovery_contract
+scripts/ci/run-with-postgres cargo test --manifest-path rust/Cargo.toml --locked -p dex-runtime --test postgres recovery_contract
+```
+
 ## What this crate will never contain
 
 - Surface logic: no Slack, Teams, web or renderer code, and no per-surface

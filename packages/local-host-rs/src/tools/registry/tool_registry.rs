@@ -469,6 +469,7 @@ impl ToolRegistry {
                     "properties": {
                         "query": {"type": "string", "description": "Words describing the capability to find"},
                         "names": {"type": "array", "items": {"type": "string"}, "description": "Exact tool names to activate"},
+                        "namespace": {"type": "string", "description": "Optional exact namespace or unique normalized alias"},
                         "maxResults": {"type": "number", "description": "Maximum matches to activate (default 8)"}
                     }
                 })),

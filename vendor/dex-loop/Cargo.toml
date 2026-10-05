@@ -6,6 +6,10 @@ license = "UNLICENSED"
 publish = false
 rust-version = "1.95"
 
+[features]
+# Host crates enable this only for their adapter contract tests.
+testing = []
+
 [dependencies]
 agent-codemode = { path = "../../packages/codemode-rs" }
 futures-util = "0.3"
@@ -22,6 +26,7 @@ thiserror = "2.0"
 # still does no I/O of its own.
 tokio = { version = "1.48", features = ["time"] }
 tokio-util = "0.7"
+tracing = "0.1"
 url = { version = "2.5", features = ["serde"] }
 
 [dev-dependencies]

@@ -941,7 +941,10 @@ where
         if !ctx.interaction_mode().tools_allowed() {
             return Ok(());
         }
-        if prefetch.started.len() != index || call.tool.as_str() == TOOLS_SEARCH {
+        if prefetch.started.len() != index
+            || call.tool.as_str() == TOOLS_SEARCH
+            || call.tool.as_str() == crate::GRC_GRAPH_TOOL_NAME
+        {
             return Ok(());
         }
         let Some(spec) = self.offered_spec(ctx, &call.tool) else {
@@ -1211,6 +1214,13 @@ where
                     ClientToolOutcome::Break => break,
                     ClientToolOutcome::Exit(exit) => return Ok(Some(exit)),
                 }
+            }
+            if call.tool.as_str() == crate::GRC_GRAPH_TOOL_NAME
+                && let Err(reason) = crate::grc_context::admission(ctx, call)
+            {
+                prefetch.reads.discard(index);
+                self.finish(ctx, call, ToolResult::error(reason)).await?;
+                continue;
             }
             // Current policy first, even for a decided call: a revoked
             // grant or changed policy denies it.
@@ -1928,6 +1938,7 @@ where
         call: &ProposedCall,
         result: ToolResult,
     ) -> Result<(), Fenced> {
+        let result = crate::grc_context::finish(ctx, call, result);
         let mut events = Vec::new();
         match self.tools.model_usage(ctx, call, &result).await {
             Ok(Some(usage)) => {

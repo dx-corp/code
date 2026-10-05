@@ -15,8 +15,10 @@ pub(crate) const PRELUDE: &str = r#"
   const emitImage = globalThis.__host_image;
   const modelCall = globalThis.__host_model;
   const metadata = globalThis.__host_metadata;
+  const namespacePage = globalThis.__host_namespace_page;
+  const modelPage = globalThis.__host_model_page;
   const availableModels = globalThis.__host_models;
-  for (const name of ["__host_search","__host_describe","__host_namespace","__host_schema","__host_store","__store","__host_image","__host_model","__host_metadata","__host_models"]) delete globalThis[name];
+  for (const name of ["__host_namespace_page","__host_model_page","__host_search","__host_describe","__host_namespace","__host_schema","__host_store","__store","__host_image","__host_model","__host_metadata","__host_models"]) delete globalThis[name];
   const copied = value => JSON.parse(JSON.stringify(value));
   const pending = new Map();
   const tools = Object.create(null);
@@ -52,6 +54,7 @@ pub(crate) const PRELUDE: &str = r#"
   Object.defineProperty(globalThis, "searchTools", { value: (query,options={}) => JSON.parse(search(query,JSON.stringify(options))) });
   Object.defineProperty(globalThis, "describeTool", { value: name => JSON.parse(describe(name)) ?? undefined });
   Object.defineProperty(globalThis, "getToolSchema", { value: (name,options={}) => JSON.parse(schema(name,JSON.stringify(options))) });
+  Object.defineProperty(globalThis, "describeNamespacePage", { value: (name,options={}) => JSON.parse(namespacePage(name,JSON.stringify(options))) ?? undefined });
   Object.defineProperty(globalThis, "describeNamespace", { value: name => JSON.parse(describeNamespace(name)) ?? undefined });
   Object.defineProperty(globalThis, "store", { value: (key,value) => {
     if (typeof key !== "string") throw new TypeError("store key must be a string");
@@ -69,6 +72,7 @@ pub(crate) const PRELUDE: &str = r#"
     return tools[request.name](request.args);
   };
   Object.defineProperty(globalThis, "models", { value: Object.freeze({
+    list: (options={}) => JSON.parse(modelPage(JSON.stringify(options))),
     getAvailable: () => JSON.parse(availableModels()),
     classify: (selector,args) => invokeModel("classify",selector,args),
     generateImages: (selector,args) => invokeModel("generateImages",selector,args)

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use dex_loop::{
     ActionConfirmation, ApprovalMode, ArtifactRef, Budget, CallId, CancellationToken,
     ClientToolSpec, ConfirmationDecision, Cursor, Engine, Event, Exit, Lexicon, Log as _, Model,
-    Outcome, PrincipalId, ThreadId, ToolName, TurnId, rehydrate,
+    ModelSummarizer, Outcome, PrincipalId, ThreadId, Threshold, ToolName, TurnId, rehydrate,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -61,6 +61,44 @@ pub enum Step {
     Exit(Exit),
 }
 
+// A model need not be Clone to serve the primary step and its summary. Both
+// calls use this same port, preserving provider ownership, routing and receipts.
+struct SharedModel<M>(Arc<M>);
+
+impl<M> Clone for SharedModel<M> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<M: Model> Model for SharedModel<M> {
+    fn stream<'a>(
+        &'a self,
+        ctx: &'a dex_loop::Context,
+        tools: &'a [&'a dex_loop::ToolSpec],
+    ) -> impl futures_util::Stream<Item = Result<dex_loop::ModelChunk, dex_loop::ModelError>> + Send + 'a
+    {
+        self.0.stream(ctx, tools)
+    }
+
+    fn prepare_turn(&self, ctx: &dex_loop::Context) {
+        self.0.prepare_turn(ctx);
+    }
+}
+
+// Per-turn context projection only: compaction never replaces the raw LocalLog.
+// Keep the hosted planner's bounded default, with explicit local policy rather
+// than reading the hosted service's environment or selecting another credential.
+const HISTORY_BYTES: usize = 48 * 1024;
+type TurnEngine<M> = Engine<
+    ObservedLog<LocalLog>,
+    SharedModel<M>,
+    HostTools,
+    LocalEffects,
+    Lexicon,
+    Threshold<ModelSummarizer<SharedModel<M>>>,
+>;
+
 /// At most this many payloads are retained between pulls.
 const OBSERVED_PAGE_SIZE: usize = 32;
 
@@ -72,7 +110,7 @@ pub struct HostTurnRun<M: Model + 'static> {
     thread: ThreadId,
     principal: PrincipalId,
     local: LocalLog,
-    engine: Arc<Engine<ObservedLog<LocalLog>, M, HostTools, LocalEffects, Lexicon>>,
+    engine: Arc<TurnEngine<M>>,
     observed: mpsc::Receiver<()>,
     observed_offset: u64,
     caller_events: BTreeSet<Cursor>,
@@ -134,6 +172,8 @@ impl<M: Model + 'static> HostTurnRun<M> {
             .await
             .map_err(|error| format!("start observing the turn log: {error}"))?;
         let (log, observed) = ObservedLog::new(local.clone());
+        let model = SharedModel(Arc::new(model));
+        let compactor = Threshold::for_turns(HISTORY_BYTES, ModelSummarizer::new(model.clone()));
         let engine = Engine::new(
             log,
             model,
@@ -141,7 +181,8 @@ impl<M: Model + 'static> HostTurnRun<M> {
             effects,
             Lexicon::default(),
             Budget::default(),
-        );
+        )
+        .with_compactor(compactor);
         Ok(Self {
             dir: dir.to_path_buf(),
             thread: turn.thread,
@@ -361,6 +402,10 @@ pub fn turn_dir(prefix: &str) -> PathBuf {
         .unwrap_or_default();
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
+
+#[cfg(test)]
+#[path = "host_turn/tests/compaction.rs"]
+mod compaction_tests;
 
 #[cfg(test)]
 #[path = "host_turn/tests.rs"]

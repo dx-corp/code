@@ -1520,6 +1520,7 @@ impl NativeAgent {
             messages: Arc::new(Vec::new()),
             tools,
             model_tool_cache: None,
+            discovery_catalog_cache: std::sync::Mutex::new(None),
             goal_tools_visible,
             include_ide_tools,
             tool_profile,
@@ -2424,6 +2425,7 @@ struct NativeAgentRunner {
     /// lifetime of a runner; only goal visibility and the IDE-tools flag can
     /// change the filtered view.
     model_tool_cache: Option<ModelToolCache>,
+    discovery_catalog_cache: std::sync::Mutex<Option<codemode::DiscoveryCatalogCache>>,
 
     /// Tool schemas currently exposed to the model. The native `tool_search`
     /// path expands this set on demand without rebuilding the executor.
@@ -4160,50 +4162,6 @@ impl NativeAgentRunner {
             .runtime_audit
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot;
-    }
-
-    fn replace_governed_tools(
-        &mut self,
-        allowed_tools: &HashSet<String>,
-        external_tool_definitions: Vec<ToolDefinition>,
-    ) {
-        let mut tools = self
-            .tool_executor
-            .tool_definitions()
-            .into_iter()
-            .filter(|definition| allowed_tools.contains(&definition.tool.name.to_ascii_lowercase()))
-            .map(|definition| {
-                (
-                    definition.tool.name.to_ascii_lowercase(),
-                    definition.clone(),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        codemode::register(&mut tools, Some(allowed_tools));
-        classifier::register(
-            &mut tools,
-            Some(allowed_tools),
-            self.client.is_some() && !self.model_route.uses_app_server(),
-        );
-        let external_tools = external_tool_definitions
-            .iter()
-            .map(|definition| definition.tool.name.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        for definition in external_tool_definitions {
-            tools.insert(definition.tool.name.to_ascii_lowercase(), definition);
-        }
-        self.active_tool_names = initial_active_tool_names(
-            self.tool_profile,
-            &tools,
-            &external_tools,
-            Some(allowed_tools),
-            self.config.external_tool_schema_policy,
-        );
-        self.explicitly_allowed_tools = allowed_tools.clone();
-        self.tools = tools;
-        self.external_tools = external_tools;
-        self.model_tool_cache = None;
-        self.refresh_runtime_audit();
     }
 
     fn emit_conversation_snapshot(&mut self) {
