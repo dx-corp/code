@@ -76,4 +76,4 @@ pub use agent_codemode::{ModelBinding, ModelOperation, OutputBlock};
 pub use codemode_output::validate_codemode_blocks;
 
 mod grc_context;
-pub use grc_context::{GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME, GRC_RESULT_BYTES};
+pub use grc_context::{GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME};
