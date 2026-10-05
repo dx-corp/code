@@ -5,7 +5,7 @@ use crate::TurnContentPolicy;
 /// Prose and citation targets have different meanings for writing rules.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AuthoredContent {
-    pub prose: String,
+    prose: String,
     pub citation_urls: Vec<String>,
     word_count: usize,
 }
@@ -68,7 +68,7 @@ pub struct ContentPolicyEvaluation {
 }
 
 impl TurnContentPolicy {
-    pub fn has_deterministic_controls(&self) -> bool {
+    pub(crate) fn has_deterministic_controls(&self) -> bool {
         !self.required_terms.is_empty()
             || !self.forbidden_terms.is_empty()
             || self.require_citations
