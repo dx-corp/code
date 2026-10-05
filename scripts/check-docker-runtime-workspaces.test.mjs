@@ -17,7 +17,7 @@ const embeddedConfigCopy =
 
 const sourceCargoManifest = readFileSync(join(repositoryRoot, "Cargo.toml"), "utf8");
 
-function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = false, viaVendor = false, crossWorkspace = false } = {}) {
+function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = false, viaVendor = false, crossWorkspace = false, codemodeDependencies = "" } = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "maestro-docker-runtime-"));
 	const fixtureRoot = join(directory, "products/maestro");
 	mkdirSync(fixtureRoot, { recursive: true });
@@ -36,7 +36,7 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 		crate(`products/maestro/${member}`, member === "packages/codemode-rs" ? "agent-codemode" : member.split("/").at(-1),
 			member === "packages/dex-host-rs"
 				? `[dependencies]\ndex-loop = { path = "${viaVendor ? "../../vendor/bridge" : standalone ? "../../vendor/dex-loop" : "../../../../rust/crates/dex-loop"}" }\n`
-				: "");
+				: member === "packages/codemode-rs" ? codemodeDependencies : "");
 	}
 	if (viaVendor) {
 		crate("products/maestro/vendor/bridge", "dex-loop",
@@ -289,4 +289,17 @@ test("Docker runtime guard copies shared external dependencies into the fresh na
 		/shared dependency packages\/codemode-rs before cargo chef cook/);
 	assert.match(runChecker(without.replace(cook, `${copy}${cook}`), sourceCargoManifest, { crossWorkspace: true }),
 		/Verified native-only Docker runtime contract\./);
+});
+
+test("Docker runtime guard rejects workspace inheritance in an image-excluded shared library", () => {
+	// Run 37264900952: `sha2.workspace = true` in codemode-rs, which the image
+	// moves out of the Maestro workspace, failed `cargo chef cook`.
+	assert.match(runChecker(sourceDockerfile, sourceCargoManifest,
+		{ crossWorkspace: true, codemodeDependencies: '[dependencies]\nsha2 = "0.10"\n' }),
+	/Verified native-only Docker runtime contract\./);
+	for (const inherited of ["sha2.workspace = true", "sha2 = { workspace = true }"]) {
+		assert.throws(() => runChecker(sourceDockerfile, sourceCargoManifest,
+			{ crossWorkspace: true, codemodeDependencies: `[dependencies]\n${inherited}\n` }),
+		/Image-excluded shared libraries must not inherit workspace keys: packages\/codemode-rs\/Cargo.toml/);
+	}
 });
