@@ -18,6 +18,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
     push(
         &mut events,
         Event::UserMessage {
+            interaction_mode: crate::InteractionMode::Unspecified,
             turn: TurnId::new("turn-1"),
             message_id: None,
             principal: PrincipalId::new("alice"),

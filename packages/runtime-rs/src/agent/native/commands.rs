@@ -780,6 +780,8 @@ impl NativeAgentRunner {
                         self.codex_current_prompt_started = false;
                     }
 
+                    self.begin_tool_discovery_turn();
+
                     // Reset retry policy for new request
                     self.retry_policy.reset();
                     self.begin_user_note_consumption();

@@ -118,6 +118,7 @@ impl FakeLog {
         client_tools: Vec<ClientToolSpec>,
     ) -> Context {
         self.host_append(Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new(turn),
             message_id: None,
             principal: alice(),
@@ -141,6 +142,7 @@ impl FakeLog {
         approval_mode: dex_loop::ApprovalMode,
     ) -> Context {
         self.host_append(Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new(turn),
             message_id: None,
             principal: alice(),
@@ -874,6 +876,7 @@ pub fn approval(id: &str) -> Verdict {
 pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
     for event in [
         Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new("t1"),
             message_id: None,
             principal: alice(),

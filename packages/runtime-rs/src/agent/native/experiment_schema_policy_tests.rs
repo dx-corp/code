@@ -134,10 +134,15 @@ async fn exercise_experiment_profile_boundaries(policy: ExternalToolSchemaPolicy
                 .find(|tool| tool["function"]["name"] == "tool_search")
                 .unwrap();
             assert!(
-                search["function"]["description"]
+                names(request).contains("codemode"),
+                "deferred invocation must remain available across consent changes"
+            );
+            assert!(
+                !search["function"]["description"]
                     .as_str()
                     .unwrap()
-                    .contains("client_calendar")
+                    .contains("client_calendar"),
+                "the initial discovery description must not embed the external catalog"
             );
         }
     }

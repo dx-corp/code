@@ -521,6 +521,25 @@ pub const HEADLESS_AUTO_APPROVER: &str = "policy:headless_auto_approve";
 /// record of what ran, for whom, and under which argument digest.
 pub const AUTO_APPROVER: &str = "policy:auto_approve";
 
+/// Host-admitted turn policy, retained outside compactable model history.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    #[default]
+    Unspecified,
+    Discuss,
+    Implement,
+}
+
+impl InteractionMode {
+    pub fn is_unspecified(&self) -> bool {
+        *self == Self::Unspecified
+    }
+    pub fn tools_allowed(self) -> bool {
+        self != Self::Discuss
+    }
+}
+
 /// One row in a thread's log. Hosts append the ingress events (`UserMessage`,
 /// `Steer`, `Interrupt`, `ApprovalDecided`, `Answer`, and optionally
 /// `ToolProgress`); the engine appends everything else.
@@ -533,6 +552,8 @@ pub const AUTO_APPROVER: &str = "policy:auto_approve";
 pub enum Event {
     /// Starts a turn under `principal`.
     UserMessage {
+        #[serde(default, skip_serializing_if = "InteractionMode::is_unspecified")]
+        interaction_mode: InteractionMode,
         turn: TurnId,
         /// The source message this turn was sent for, when the host has one.
         /// `#[serde(default)] so log rows written before this field existed
@@ -824,6 +845,10 @@ impl Event {
     /// non-authoritative, sanitized projection.
     pub const STORED_JSON_V1_TYPE: &'static str = "_dex_event_json_v1";
 
+    /// Explicit turn authority requires a reader that understands this mode.
+    /// Older readers reject the outer marker before replaying the user message.
+    pub const STORED_INTERACTION_MODE_V1_TYPE: &'static str = "_dex_event_interaction_mode_v1";
+
     /// Decode legacy event JSON or a lossless storage-adapter envelope.
     /// Durable readers pass the independently stored row kind. A malformed
     /// envelope never falls back to the projection, and its original tool
@@ -835,15 +860,31 @@ impl Event {
         let encoded = payload.get(Self::STORED_JSON_V1_KEY);
         let event: Self = match encoded {
             Some(exact) => {
-                if payload.get("type").and_then(serde_json::Value::as_str)
-                    != Some(Self::STORED_JSON_V1_TYPE)
-                {
+                let marker = payload.get("type").and_then(serde_json::Value::as_str);
+                if !matches!(
+                    marker,
+                    Some(Self::STORED_JSON_V1_TYPE | Self::STORED_INTERACTION_MODE_V1_TYPE)
+                ) {
                     return Err(serde::de::Error::custom(
                         "encoded event has no storage type marker",
                     ));
                 }
                 let exact: String = serde_json::from_value(exact.clone())?;
-                serde_json::from_str(&exact)?
+                let event: Self = serde_json::from_str(&exact)?;
+                if marker == Some(Self::STORED_INTERACTION_MODE_V1_TYPE)
+                    && !matches!(
+                        &event,
+                        Self::UserMessage {
+                            interaction_mode: InteractionMode::Discuss | InteractionMode::Implement,
+                            ..
+                        }
+                    )
+                {
+                    return Err(serde::de::Error::custom(
+                        "mode storage marker requires an explicit-mode user message",
+                    ));
+                }
+                event
             }
             None => serde_json::from_value(payload.clone())?,
         };
@@ -874,6 +915,42 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_storage_marker_rejects_missing_authority_or_wrong_event() {
+        let envelope = |exact: serde_json::Value| {
+            serde_json::json!({
+                "type": Event::STORED_INTERACTION_MODE_V1_TYPE,
+                Event::STORED_JSON_V1_KEY: serde_json::to_string(&exact).unwrap()
+            })
+        };
+        let user = serde_json::json!({"type": "user_message", "turn": "t",
+            "principal": "alice", "text": "plan", "attachments": []});
+        for mode in [None, Some("unspecified")] {
+            let mut exact = user.clone();
+            if let Some(mode) = mode {
+                exact["interaction_mode"] = mode.into();
+            }
+            assert!(Event::from_stored_json(&envelope(exact), Some("user_message")).is_err());
+        }
+        assert!(
+            Event::from_stored_json(&envelope(serde_json::json!({"type":"interrupted"})), None)
+                .is_err()
+        );
+        let mut exact = user;
+        exact["interaction_mode"] = "discuss".into();
+        let valid = envelope(exact);
+        assert!(Event::from_stored_json(&valid, Some("user_message")).is_ok());
+        assert!(Event::from_stored_json(&valid, Some("interrupted")).is_err());
+        let mut malformed = valid.clone();
+        malformed[Event::STORED_JSON_V1_KEY] = "invalid JSON".into();
+        assert!(Event::from_stored_json(&malformed, None).is_err());
+        malformed
+            .as_object_mut()
+            .unwrap()
+            .remove(Event::STORED_JSON_V1_KEY);
+        assert!(Event::from_stored_json(&malformed, None).is_err());
+    }
 
     #[test]
     fn accepted_model_binding_survives_event_round_trip() {
@@ -987,6 +1064,7 @@ mod tests {
     fn events_round_trip_through_json() {
         let events = vec![
             Event::UserMessage {
+                interaction_mode: crate::InteractionMode::Unspecified,
                 turn: TurnId::new("t1"),
                 message_id: Some(MessageId::new("m1")),
                 principal: PrincipalId::new("alice"),
@@ -1100,6 +1178,7 @@ mod tests {
     #[test]
     fn user_message_without_message_id_round_trips_to_none() {
         let event = Event::UserMessage {
+            interaction_mode: crate::InteractionMode::Unspecified,
             turn: TurnId::new("t1"),
             message_id: None,
             principal: PrincipalId::new("alice"),
@@ -1130,6 +1209,7 @@ mod tests {
         assert_eq!(
             back,
             Event::UserMessage {
+                interaction_mode: crate::InteractionMode::Unspecified,
                 turn: TurnId::new("t1"),
                 message_id: None,
                 principal: PrincipalId::new("alice"),

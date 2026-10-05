@@ -22,6 +22,133 @@ async fn done(session: &mut Session) -> Report {
 }
 
 #[tokio::test]
+async fn large_catalog_discovers_and_calls_one_tool_without_loading_all_schemas() {
+    let catalog = (0..10_000).map(|index| Tool {
+        name: format!("client_capability_{index:04}"),
+        description: "Large catalog capability".into(),
+        schema: json!({"type":"object","description":"x".repeat(8192),"properties":{"id":{"type":"string"}},"required":["id"]}),
+        ..Default::default()
+    }).collect();
+    let mut session = Session::start(
+        "text(searchTools('client_capability_9999',{limit:1})[0].name); const page=getToolSchema('client_capability_9999'); text(JSON.parse(page.json).inputSchema.description.length); text(await tools.client_capability_9999({id:'one'}));".into(),
+        catalog, &CancellationToken::new(), Duration::from_secs(10),
+    );
+    let (calls, reply) = match tokio::time::timeout(Duration::from_secs(15), session.next())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        Event::Calls { calls, reply } => (calls, reply),
+        Event::Done(report) => panic!(
+            "large catalog must reach the selected tool under the unchanged VM heap limit: {report:?}"
+        ),
+    };
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "client_capability_9999");
+    assert_eq!(calls[0].args, json!({"id":"one"}));
+    reply
+        .send(vec![(calls[0].index, Ok(json!("selected")))])
+        .unwrap();
+    let report = done(&mut session).await;
+    assert_eq!(report.error, None);
+    assert_eq!(
+        report.output,
+        vec!["client_capability_9999", "8192", "selected"]
+    );
+}
+
+#[tokio::test]
+async fn lazy_catalog_metadata_preserves_values_identity_and_host_immutability() {
+    let mut tool = tools().remove(0);
+    tool.schema =
+        json!({"type":"object","properties":{"id":{"type":"string","pattern":"original"}}});
+    tool.output_schema = Some(json!({"type":"string"}));
+    tool.namespace_instructions = Some("untrusted instructions".into());
+    let mut session = Session::start(
+        "const tool=ALL_TOOLS[0]; text(Object.keys(tool)); text(Object.isFrozen(tool)); const schema=tool.schema; text(schema===tool.schema); schema.properties.id.pattern='changed'; text(tool.schema.properties.id.pattern); text(JSON.parse(getToolSchema(tool.name).json).inputSchema.properties.id.pattern); text(tool.description); text(tool.output_schema); text('namespace_instructions' in tool);".into(),
+        vec![tool], &CancellationToken::new(), Duration::from_secs(2),
+    );
+    let report = done(&mut session).await;
+    assert_eq!(report.error, None);
+    assert_eq!(
+        serde_json::from_str::<Value>(&report.output[0]).unwrap(),
+        json!([
+            "name",
+            "description",
+            "schema",
+            "output_schema",
+            "namespace",
+            "model_operation",
+            "model_binding",
+            "identifier"
+        ])
+    );
+    assert_eq!(
+        report.output[1..],
+        [
+            "true",
+            "true",
+            "changed",
+            "original",
+            "Read rows",
+            r#"{"type":"string"}"#,
+            "false"
+        ]
+    );
+}
+
+#[test]
+fn exact_schema_pages_reject_invalid_offsets_and_identify_schema_changes() {
+    let mut tools = tools();
+    tools[0].schema = json!({"description":"é"});
+    let page = discovery::schema_page(&tools, "read.rows", &json!({})).unwrap();
+    let encoded = page["json"].as_str().unwrap();
+    let unicode_offset = encoded.find('é').unwrap();
+    for options in [
+        json!({"offsetBytes":unicode_offset + 1}),
+        json!({"maxBytes":0}),
+        json!({"maxBytes":16385}),
+        json!({"offsetBytes":999}),
+        json!({"offsetBytes":-1}),
+        json!({"offsetBytes":unicode_offset,"maxBytes":1}),
+    ] {
+        assert!(
+            discovery::schema_page(&tools, "read.rows", &options).is_err(),
+            "{options}"
+        );
+    }
+    tools[0].schema["required"] = json!(["id"]);
+    let changed = discovery::schema_page(&tools, "read.rows", &json!({})).unwrap();
+    assert_ne!(page["revision"], changed["revision"]);
+}
+
+#[tokio::test]
+async fn exact_schema_discovery_preserves_constraints_and_pages_large_unicode_schemas() {
+    let mut tool = tools().remove(0);
+    tool.schema = json!({"type":"object","properties":{"id":{"type":"string","pattern":"^[a-z]+$","description":"é".repeat(20_000)}},"required":["id"],"additionalProperties":false});
+    tool.output_schema = Some(json!({"type":"array","items":{"type":"integer"}}));
+    let mut session = Session::start(
+        "let offset = 0, json = '', revision; do { const page = getToolSchema('read.rows', {offsetBytes:offset,maxBytes:4096}); if (revision && revision !== page.revision) throw Error('changed'); revision = page.revision; json += page.json; offset = page.nextOffsetBytes; if (page.complete) break; } while (true); const value = JSON.parse(json); text({pattern:value.inputSchema.properties.id.pattern, required:value.inputSchema.required, additional:value.inputSchema.additionalProperties, characters:value.inputSchema.properties.id.description.length, output:value.outputSchema, revision}); text(getToolSchema('not_admitted'));".into(),
+        vec![tool],
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    let report = done(&mut session).await;
+    assert_eq!(report.error, None);
+    let result: Value = serde_json::from_str(&report.output[0]).unwrap();
+    assert_eq!(result["pattern"], "^[a-z]+$");
+    assert_eq!(result["required"], json!(["id"]));
+    assert_eq!(result["additional"], false);
+    assert_eq!(result["characters"], 20_000);
+    assert_eq!(
+        result["output"],
+        json!({"type":"array","items":{"type":"integer"}})
+    );
+    assert!(result["revision"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(report.output[1], "null");
+}
+
+#[tokio::test]
 async fn composes_parallel_and_dependent_calls_without_emitting_raw_results() {
     let mut session = Session::start(
         r#"

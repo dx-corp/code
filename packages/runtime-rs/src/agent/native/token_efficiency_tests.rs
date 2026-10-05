@@ -792,7 +792,7 @@ async fn tool_search_materializes_a_deferred_external_schema_on_the_next_request
         .iter()
         .find(|tool| tool["function"]["name"] == "tool_search")
         .and_then(|tool| tool["function"]["description"].as_str())
-        .expect("tool_search should carry the deferred catalog");
-    assert!(search_description.contains("client_calendar: Caller-owned test tool"));
+        .expect("tool_search should expose bounded discovery");
+    assert!(!search_description.contains("client_calendar"));
     assert!(tool_names(&requests[1]).contains("client_calendar"));
 }

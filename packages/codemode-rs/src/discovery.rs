@@ -141,6 +141,48 @@ pub fn describe_tool(tool: &Tool) -> String {
     format!("declare const tools: {{\n{}\n}};", declaration_member(tool))
 }
 
+/// Read exact schemas from this script's immutable admitted catalog. Pages
+/// preserve UTF-8 and never replace omitted constraints with `unknown`.
+pub(crate) fn schema_page(tools: &[Tool], name: &str, options: &Value) -> Result<Value, String> {
+    use sha2::{Digest, Sha256};
+    let Some(tool) = lookup(tools, name) else {
+        return Ok(Value::Null);
+    };
+    let integer = |key: &str, default| match options.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{key} must be an integer")),
+    };
+    let max_bytes = integer("maxBytes", 16_384)?;
+    if !(1..=16_384).contains(&max_bytes) {
+        return Err("maxBytes must be 1 to 16384".into());
+    }
+    let encoded = serde_json::to_string(&serde_json::json!({
+        "inputSchema":tool.schema,"outputSchema":tool.output_schema,
+    }))
+    .map_err(|error| error.to_string())?;
+    let offset =
+        usize::try_from(integer("offsetBytes", 0)?).map_err(|_| "offsetBytes is too large")?;
+    if offset > encoded.len() || !encoded.is_char_boundary(offset) {
+        return Err("offsetBytes must be a UTF-8 boundary within the schema".into());
+    }
+    let end = offset + bounded(&encoded[offset..], max_bytes as usize).len();
+    if end == offset && offset != encoded.len() {
+        return Err("maxBytes is too small for the next UTF-8 character".into());
+    }
+    let digest = Sha256::digest(encoded.as_bytes());
+    let revision = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(
+        serde_json::json!({"name":tool.name,"revision":format!("sha256:{revision}"),
+        "offsetBytes":offset,"nextOffsetBytes":end,"totalBytes":encoded.len(),
+        "complete":end == encoded.len(),"json":&encoded[offset..end]}),
+    )
+}
+
 fn declaration_member(tool: &Tool) -> String {
     let input = render_type(&tool.schema);
     let output = tool
@@ -251,7 +293,7 @@ pub(crate) fn search(
         })
         .collect();
     matches.sort_by(|(a, ta), (b, tb)| b.cmp(a).then(ta.name.cmp(&tb.name)));
-    matches.into_iter().take(limit).map(|(_,tool)|serde_json::json!({"name":identifier(&tool.name),"description":bounded(&tool.description, MAX_METADATA_BYTES),"namespace":namespace(tool)})).collect()
+    matches.into_iter().take(limit).map(|(_,tool)|serde_json::json!({"name":identifier(&tool.name),"description":bounded(&tool.description, 256),"namespace":namespace(tool)})).collect()
 }
 
 pub fn render_type(schema: &Value) -> String {

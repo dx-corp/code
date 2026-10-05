@@ -445,7 +445,8 @@ async fn provider_replay_resume_failure_preserves_binding_without_replacement() 
             "thread-parent",
             Some("2025-01-01".to_owned()),
             1,
-        );
+        )
+        .with_tool_projection(dynamic_tool_projection(&[]).unwrap());
         binding.store_at(state.path()).expect("store binding");
         let process = replay_process("resume_unavailable", workspace.path(), state.path()).await;
         let error = CodexAppServerTurnSession::connect_with_client_and_manifest(
@@ -499,7 +500,8 @@ async fn provider_replay_accepts_workspace_symlink_without_replacing_binding() {
         "thread-parent",
         Some("2025-01-01".to_owned()),
         1,
-    );
+    )
+    .with_tool_projection(dynamic_tool_projection(&[]).unwrap());
     binding.store_at(state.path()).expect("store binding");
     let process = replay_process("resume_unavailable", &alias, state.path()).await;
     let error = CodexAppServerTurnSession::connect_with_client_and_manifest(

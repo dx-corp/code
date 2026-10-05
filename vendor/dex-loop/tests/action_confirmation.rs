@@ -196,6 +196,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
     let p = proposal();
     vec![
         Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new("turn-1"),
             message_id: None,
             principal: PrincipalId::new("alice"),

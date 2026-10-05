@@ -165,6 +165,7 @@ impl Turn {
             .await
             .expect("acquire log");
         log.append(&[Event::UserMessage {
+            interaction_mode: dex_loop::InteractionMode::Unspecified,
             turn: TurnId::new("t1"),
             message_id: None,
             model_binding: None,

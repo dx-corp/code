@@ -154,7 +154,12 @@ pub(super) fn initial_active_tool_names(
         .filter_map(|name| {
             let explicitly_allowed = explicit_allowed_tools
                 .is_some_and(|allowed| allowed.contains(&name.to_ascii_lowercase()));
-            (profile.includes(name) || explicitly_allowed).then_some(name.clone())
+            let deferred_external = external_tool_schema_policy
+                == ExternalToolSchemaPolicy::Deferred
+                && external_tools.contains(name);
+            (profile.includes(name) && (!deferred_external || profile == ToolProfile::All)
+                || explicitly_allowed && !deferred_external)
+                .then_some(name.clone())
         })
         .chain(
             (external_tool_schema_policy == ExternalToolSchemaPolicy::Eager)
@@ -169,7 +174,7 @@ pub(super) fn initial_active_tool_names(
 pub(super) fn effective_tool_definitions(
     tools: &HashMap<String, ToolDefinition>,
     active_tool_names: &HashSet<String>,
-    external_tools: &HashSet<String>,
+    _external_tools: &HashSet<String>,
     goal_tools_visible: bool,
     include_ide_tools: bool,
 ) -> Vec<ToolDefinition> {
@@ -186,49 +191,101 @@ pub(super) fn effective_tool_definitions(
     for definition in &mut definitions {
         definition.tool = compact_tool_for_model(definition.tool.clone());
     }
-    let mut deferred_external_tools = external_tools
+    let has_codemode = definitions
         .iter()
-        .filter(|name| !active_tool_names.contains(*name))
-        .filter_map(|name| tools.get(name))
-        .filter(|definition| {
-            tool_is_visible_to_model(&definition.tool.name, goal_tools_visible, include_ide_tools)
-        })
-        .map(|definition| {
-            let description = definition
-                .tool
-                .description
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let mut characters = description.chars();
-            let compact = characters.by_ref().take(160).collect::<String>();
-            let compact = if characters.next().is_some() {
-                format!("{compact}…")
-            } else {
-                compact
-            };
-            (definition.tool.name.clone(), compact)
-        })
-        .collect::<Vec<_>>();
-    deferred_external_tools.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    if deferred_external_tools.is_empty() {
-        return definitions;
-    }
-    let Some(search) = definitions
+        .any(|definition| definition.tool.name == agent_codemode::TOOL_NAME);
+    if let Some(search) = definitions
         .iter_mut()
         .find(|definition| definition.tool.name.eq_ignore_ascii_case("tool_search"))
-    else {
-        return definitions;
-    };
-    search
-        .tool
-        .description
-        .push_str("\nDeferred caller tools (activate by exact name):");
-    for (name, description) in deferred_external_tools {
-        search
-            .tool
-            .description
-            .push_str(&format!("\n- {name}: {description}"));
+    {
+        if has_codemode {
+            search.tool.description.push_str("\nSearch the admitted catalog by query or exact names. Results are bounded; retrieve exact schemas with codemode getToolSchema and call tools.<name>(args). Discovery grants no execution authority.");
+        } else {
+            search.tool.description.push_str("\nSearch by query or exact names to load matching schemas on the next provider request.");
+        }
     }
     definitions
+}
+
+/// Bound newly discovered direct schemas independently of the eager profile.
+/// The full admitted catalog remains available through the script envelope.
+pub(super) fn discovery_budget_allows(
+    tools: &HashMap<String, ToolDefinition>,
+    initial: &HashSet<String>,
+    active: &HashSet<String>,
+    name: &str,
+) -> bool {
+    if active.contains(name) {
+        return true;
+    }
+    let discovered = active.difference(initial).collect::<Vec<_>>();
+    if discovered.len() >= 16 {
+        return false;
+    }
+    let bytes = |name: &str| {
+        tools
+            .get(name)
+            .and_then(|definition| serde_json::to_vec(&definition.tool).ok())
+            .map_or(usize::MAX, |value| value.len())
+    };
+    let used = discovered
+        .iter()
+        .fold(0usize, |used, name| used.saturating_add(bytes(name)));
+    used.saturating_add(bytes(name)) <= 65_536
+}
+
+impl NativeAgentRunner {
+    /// Start discovery lifetime at prompt admission, outside provider retries.
+    pub(super) fn begin_tool_discovery_turn(&mut self) {
+        // Resolve consent only at the safe user-turn boundary; retries keep this assignment.
+        let assignment = self
+            .tool_executor
+            .experiment_assignment(&self.config.model)
+            .filter(|a| a.is_valid());
+        let selected = assignment
+            .as_ref()
+            .map_or(self.baseline_tool_profile, |a| match a.arm {
+                maestro_runtime_contracts::experiments::ExperimentArm::Control => ToolProfile::Fast,
+                maestro_runtime_contracts::experiments::ExperimentArm::Minimal => {
+                    ToolProfile::Minimal
+                }
+            });
+        // A fresh prompt clears discovery; retries and Continue retain it.
+        self.tool_profile = selected;
+        let mut initial = initial_active_tool_names(
+            selected,
+            &self.tools,
+            &self.external_tools,
+            Some(&self.explicitly_allowed_tools),
+            self.config.external_tool_schema_policy,
+        );
+        // Conversational tools cannot be nested in codemode. Codex registers
+        // this admitted direct tool once, including Review/Explore profiles.
+        if self.model_route.uses_app_server() && self.tools.contains_key("ask_user") {
+            initial.insert("ask_user".into());
+        }
+        if self.active_tool_names != initial || self.experiment_assignment != assignment {
+            self.active_tool_names = initial;
+            self.model_tool_cache = None;
+            self.refresh_runtime_audit();
+        }
+        self.experiment_assignment = assignment;
+    }
+}
+
+pub(super) fn validate_deferred_discovery(
+    policy: ExternalToolSchemaPolicy,
+    has_external: bool,
+    has_tool: impl Fn(&str) -> bool,
+) -> Result<()> {
+    if policy == ExternalToolSchemaPolicy::Deferred && has_external {
+        for name in ["tool_search", agent_codemode::TOOL_NAME] {
+            if !has_tool(name) {
+                bail!(
+                    "Deferred external tool schemas require admitted `{name}` for bounded discovery and execution; use Eager for legacy embeddings"
+                );
+            }
+        }
+    }
+    Ok(())
 }

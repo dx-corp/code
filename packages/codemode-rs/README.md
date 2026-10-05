@@ -14,8 +14,10 @@ Only selected `text()`/`image()` output and the returned value enter the
 model's tool-result context.
 
 ```javascript
-const matches = ALL_TOOLS.filter(tool => /search/.test(tool.name));
-text(matches.map(tool => ({name: tool.name, schema: tool.schema})));
+text(searchTools("search documents", {limit: 4}));
+// On a subsequent call, use a returned name to inspect its exact schema:
+const page = getToolSchema("read.rows");
+text(page);
 ```
 
 ```javascript
@@ -41,6 +43,22 @@ bounded property guidance with its declaration. `describeNamespace` accepts
 unambiguous namespace aliases and returns bounded server instructions only on
 demand, marked as untrusted guidance. Instructions grant no executable authority.
 Direct tool declarations remain separate from the script's callable catalog.
+
+`getToolSchema(name, {offsetBytes: 0, maxBytes: 16384})` retrieves the exact
+input and output schemas from the script's admitted catalog. It returns a JSON
+string fragment, its SHA-256 `revision`, `nextOffsetBytes`, and `complete`.
+Small schemas can be parsed with `JSON.parse(page.json)`. Larger schemas can
+be reconstructed by concatenating pages with the same revision. Byte offsets
+follow UTF-8 character boundaries; an invalid offset or page size fails explicitly.
+An unknown or unadmitted tool returns `null`. Descriptions and schemas grant no
+execution authority; nested calls continue through the host's existing checks.
+
+Maestro's deferred projection sends a fixed discovery description instead of
+listing every registered capability. Direct providers load a bounded selection
+after `tool_search`; selections reset at a new user turn, while retries retain
+the selection. Codex app-server sessions use the fixed initial projection and
+invoke deferred tools through `codemode`, since their dynamic tool registrations
+are fixed at thread creation. Eager caller-tool registration remains available.
 
 Each script gets a fresh QuickJS VM embedded in the native binary. There is no
 Node/Bun subprocess, host filesystem, network, module loader, process API, or
@@ -103,3 +121,9 @@ The reviewed sys archive SHA-256 is
 `53d0aaff245bed1c6f3c39e477fb6b98d710d9d298bfec7c8dfc589bed0e5cef`;
 its build script SHA-256 is
 `d1e3edaaa8d404a6fe311b9128063594f84ad17bf4b0fc742aad750cae95731b`.
+
+Deferred external-tool configurations must admit both `tool_search` and `codemode`, including governed catalog replacements. This ensures that tools beyond the native schema budget remain callable. Existing embeddings that omit `codemode` can keep the default `Eager` policy.
+
+Codex persistence records a fingerprint of the fixed tool registrations. A legacy or changed projection preserves the previous binding for recovery and starts a new thread with Maestro's available semantic history; an identical projection resumes normally. Deferred catalog updates that leave the direct projection unchanged keep the same thread.
+
+The script VM initially loads tool names and invocation wrappers. `ALL_TOOLS` retains its enumerable metadata properties through memoized getters, and `models.getAvailable()` loads model metadata only when requested. Schemas remain in the immutable host catalog until accessed; JavaScript mutations do not alter host discovery or execution contracts. The 32 MiB VM heap limit remains unchanged.

@@ -50,9 +50,9 @@ pub use engine::{
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,
     ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass, ErrorCode, Event,
-    HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output, OutputRef, PrincipalId, ProposedCall,
-    ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName, ToolResult, TurnId,
-    Usage, args_digest,
+    HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output, OutputRef, PrincipalId,
+    ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName,
+    ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use ports::{

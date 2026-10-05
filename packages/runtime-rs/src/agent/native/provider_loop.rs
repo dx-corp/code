@@ -10,32 +10,6 @@ impl NativeAgentRunner {
     /// Wraps [`Self::run_loop_inner`] so every exit path -- normal completion,
     /// cancellation, provider error -- fires `on_turn_end` exactly once.
     pub(super) async fn run_loop(&mut self, step_budget: &mut TurnStepBudget) -> Result<()> {
-        // Resolve consent only at the safe user-turn boundary; retries keep this assignment.
-        let assignment = self
-            .tool_executor
-            .experiment_assignment(&self.config.model)
-            .filter(|a| a.is_valid());
-        let selected = assignment
-            .as_ref()
-            .map_or(self.baseline_tool_profile, |a| match a.arm {
-                maestro_runtime_contracts::experiments::ExperimentArm::Control => ToolProfile::Fast,
-                maestro_runtime_contracts::experiments::ExperimentArm::Minimal => {
-                    ToolProfile::Minimal
-                }
-            });
-        if self.experiment_assignment != assignment {
-            self.tool_profile = selected;
-            self.active_tool_names = initial_active_tool_names(
-                selected,
-                &self.tools,
-                &self.external_tools,
-                Some(&self.explicitly_allowed_tools),
-                self.config.external_tool_schema_policy,
-            );
-            self.model_tool_cache = None;
-            self.refresh_runtime_audit();
-        }
-        self.experiment_assignment = assignment;
         self.current_turn_id = Uuid::new_v4().to_string();
         self.turn_index = self.turn_index.saturating_add(1);
         self.turn_tool_calls = 0;

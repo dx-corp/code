@@ -9,16 +9,25 @@ pub(crate) const PRELUDE: &str = r#"
   const search = globalThis.__host_search;
   const describe = globalThis.__host_describe;
   const describeNamespace = globalThis.__host_namespace;
+  const schema = globalThis.__host_schema;
   const writeStore = globalThis.__host_store;
   const values = new Map(Object.entries(JSON.parse(globalThis.__store)));
   const emitImage = globalThis.__host_image;
   const modelCall = globalThis.__host_model;
-  const modelCatalog = JSON.parse(globalThis.__models);
-  for (const name of ["__host_search","__host_describe","__host_namespace","__host_store","__store","__host_image","__host_model","__models"]) delete globalThis[name];
+  const metadata = globalThis.__host_metadata;
+  const availableModels = globalThis.__host_models;
+  for (const name of ["__host_search","__host_describe","__host_namespace","__host_schema","__host_store","__store","__host_image","__host_model","__host_metadata","__host_models"]) delete globalThis[name];
   const copied = value => JSON.parse(JSON.stringify(value));
   const pending = new Map();
   const tools = Object.create(null);
   const identifiers = new Set();
+  const metadataValues = new WeakMap();
+  const metadataGetters = ["description","schema","output_schema","namespace","model_operation","model_binding"].map(field => [field,function() {
+    let values = metadataValues.get(this);
+    if (!values) { values = Object.create(null); metadataValues.set(this,values); }
+    if (!Object.prototype.hasOwnProperty.call(values,field)) values[field] = JSON.parse(metadata(this.name,field));
+    return values[field];
+  }]);
   for (const tool of catalog) {
     delete tool.namespace_instructions;
     let identifier = tool.name.replace(/[^a-zA-Z0-9_$]/gu, "_");
@@ -31,6 +40,7 @@ pub(crate) const PRELUDE: &str = r#"
     });
     Object.defineProperty(tools, tool.name, { value: invoke });
     if (identifier !== tool.name) Object.defineProperty(tools, identifier, { value: invoke });
+    for (const [field,get] of metadataGetters) Object.defineProperty(tool,field,{enumerable:true,get});
     tool.identifier = identifier;
     Object.freeze(tool);
   }
@@ -41,6 +51,7 @@ pub(crate) const PRELUDE: &str = r#"
   Object.defineProperty(globalThis, "image", { value: value => emitImage(JSON.stringify(value)) });
   Object.defineProperty(globalThis, "searchTools", { value: (query,options={}) => JSON.parse(search(query,JSON.stringify(options))) });
   Object.defineProperty(globalThis, "describeTool", { value: name => JSON.parse(describe(name)) ?? undefined });
+  Object.defineProperty(globalThis, "getToolSchema", { value: (name,options={}) => JSON.parse(schema(name,JSON.stringify(options))) });
   Object.defineProperty(globalThis, "describeNamespace", { value: name => JSON.parse(describeNamespace(name)) ?? undefined });
   Object.defineProperty(globalThis, "store", { value: (key,value) => {
     if (typeof key !== "string") throw new TypeError("store key must be a string");
@@ -58,7 +69,7 @@ pub(crate) const PRELUDE: &str = r#"
     return tools[request.name](request.args);
   };
   Object.defineProperty(globalThis, "models", { value: Object.freeze({
-    getAvailable: () => copied(modelCatalog),
+    getAvailable: () => JSON.parse(availableModels()),
     classify: (selector,args) => invokeModel("classify",selector,args),
     generateImages: (selector,args) => invokeModel("generateImages",selector,args)
   }) });

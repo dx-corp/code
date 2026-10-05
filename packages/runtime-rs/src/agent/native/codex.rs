@@ -62,9 +62,6 @@ fn warn_codex_turn_failed(event: &'static str, thread_id: &str, turn_id: &str) {
 impl NativeAgentRunner {
     /// Ensure a Codex app-server thread exists for `openai-codex/*`.
     pub(super) async fn ensure_codex_session(&mut self) -> Result<()> {
-        if self.codex_session.is_some() {
-            return Ok(());
-        }
         let model = match &self.model_route {
             NativeModelRoute::CodexAppServer { model_id } => model_id.clone(),
             NativeModelRoute::DirectProvider => {
@@ -98,18 +95,28 @@ impl NativeAgentRunner {
                 .filter(|mode| !mode.is_empty() && mode != "default" && mode != "inherit")
                 .or_else(|| codex_sandbox_mode(self.config.sandbox_policy.as_ref())),
         };
-        let mut dynamic_tools =
-            crate::agent::codex_app_server_turns::dynamic_tools_from_native(&self.tools);
-        if let Some(script) = dynamic_tools
-            .iter_mut()
-            .find(|tool| tool.name == agent_codemode::TOOL_NAME)
+        let definitions = effective_tool_definitions(
+            &self.tools,
+            &self.active_tool_names,
+            &self.external_tools,
+            self.goal_tools_visible,
+            self.include_ide_tools,
+        );
+        if self.config.external_tool_schema_policy == ExternalToolSchemaPolicy::Deferred
+            && !definitions
+                .iter()
+                .any(|definition| definition.tool.name == agent_codemode::TOOL_NAME)
         {
-            script.description = format!(
-                "{}\n\n{}",
-                agent_codemode::DESCRIPTION,
-                agent_codemode::declaration_description(&self.codemode_catalog(), 3000)
+            bail!(
+                "Deferred Codex tools require admitted codemode for schema discovery and execution"
             );
         }
+        let projected = definitions
+            .into_iter()
+            .map(|definition| (definition.tool.name.to_ascii_lowercase(), definition))
+            .collect();
+        let dynamic_tools =
+            crate::agent::codex_app_server_turns::dynamic_tools_from_native(&projected);
         let provider_tools: Vec<Tool> = dynamic_tools
             .iter()
             .map(|tool| Tool {
@@ -130,6 +137,27 @@ impl NativeAgentRunner {
             self.tool_executor.model_capabilities(&self.config.model),
         )
         .map(|text| self.credential_vault.vault_in_text(&text));
+        let safe_dynamic_tools = safe_tools
+            .iter()
+            .map(
+                |tool| crate::agent::codex_app_server_turns::DynamicToolSpec {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    input_schema: tool.input_schema.clone(),
+                },
+            )
+            .collect::<Vec<_>>();
+        if let Some(session) = self.codex_session.as_ref() {
+            if session.matches_dynamic_tools(&safe_dynamic_tools)? {
+                return Ok(());
+            }
+            self.codex_session = None;
+            self.codex_current_prompt_started = false;
+            self.codex_history_restore_prefix_len = Some(
+                self.current_request_user_message_index
+                    .unwrap_or(self.messages.len()),
+            );
+        }
         let restored_prefix_len = self.codex_history_restore_prefix_len.unwrap_or(0);
         let restored_messages = vault_provider_history(
             &self.messages[..restored_prefix_len.min(self.messages.len())],

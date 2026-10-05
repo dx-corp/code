@@ -33,6 +33,7 @@ fn context(output: Output) -> Context {
             (
                 Cursor(1),
                 Event::UserMessage {
+                    interaction_mode: dex_loop::InteractionMode::Unspecified,
                     turn: TurnId::new("turn"),
                     message_id: None,
                     model_binding: None,

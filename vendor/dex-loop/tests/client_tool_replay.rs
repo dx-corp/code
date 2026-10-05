@@ -47,6 +47,7 @@ fn now_ms() -> i64 {
 /// -- the log a warm engine would have written before parking it.
 fn log_up_to_model_step(log: &FakeLog, call: &ProposedCall) {
     log.host_append(Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
         turn: TurnId::new("t1"),
         message_id: None,
         principal: alice(),
