@@ -62,6 +62,7 @@ where
                 !matches!(entry.executor, ExecutorKind::Client | ExecutorKind::User)
                     && entry.name.as_str() != agent_codemode::TOOL_NAME
                     && entry.name.as_str() != TOOLS_SEARCH
+                    && entry.name.as_str() != crate::GRC_GRAPH_TOOL_NAME
             })
             .map(|entry| agent_codemode::Tool {
                 name: entry.name.to_string(),

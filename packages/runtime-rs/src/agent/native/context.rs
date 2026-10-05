@@ -525,13 +525,19 @@ impl NativeAgentRunner {
             .iter()
             .any(|tool| tool.name == agent_codemode::TOOL_NAME)
         {
-            let description = format!(
-                "{}\n\n{}",
-                agent_codemode::DESCRIPTION,
+            // Deferred turns need no catalog until discovery or execution. Only
+            // the legacy inline fallback needs declarations at request startup.
+            let missing_direct = self.active_tool_names.iter().any(|name| {
+                self.codemode_tool_admitted(name, &excluded)
+                    && !tools
+                        .iter()
+                        .any(|tool| tool.name.eq_ignore_ascii_case(name))
+            });
+            let declarations = if missing_direct {
                 agent_codemode::declaration_description(
                     &self
                         .codemode_catalog()
-                        .into_iter()
+                        .iter()
                         .filter(|candidate| {
                             self.active_tool_names
                                 .contains(&candidate.name.to_ascii_lowercase())
@@ -539,10 +545,14 @@ impl NativeAgentRunner {
                                     .iter()
                                     .any(|direct| direct.name.eq_ignore_ascii_case(&candidate.name))
                         })
+                        .cloned()
                         .collect::<Vec<_>>(),
-                    3000
+                    3000,
                 )
-            );
+            } else {
+                String::new()
+            };
+            let description = format!("{}\n\n{}", agent_codemode::DESCRIPTION, declarations);
             Arc::new(
                 tools
                     .iter()

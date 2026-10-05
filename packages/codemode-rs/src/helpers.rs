@@ -6,13 +6,13 @@ fn bridge_error(error: impl ToString) -> rquickjs::Error {
 }
 pub(crate) fn install_helpers(
     ctx: &rquickjs::Ctx<'_>,
-    tools: &[Tool],
+    tools: &Catalog,
     output: Arc<Mutex<output::OutputSink>>,
     overflow: Arc<Mutex<Option<String>>>,
     store: Arc<Mutex<Store>>,
 ) -> Result<(), String> {
-    let shared: Arc<[Tool]> = tools.to_vec().into();
-    let catalog = Arc::clone(&shared);
+    let shared = tools.clone();
+    let catalog = shared.clone();
     let search = Function::new(
         ctx.clone(),
         move |query: String, options: String| -> rquickjs::Result<String> {
@@ -33,46 +33,50 @@ pub(crate) fn install_helpers(
                         .ok_or_else(|| bridge_error("namespace must be a string"))?,
                 ),
             };
-            serde_json::to_string(&discovery::search(&catalog, &query, limit, namespace))
+            let names: Vec<String> = match options.get("names") {
+                None => Vec::new(),
+                Some(value) => serde_json::from_value(value.clone()).map_err(bridge_error)?,
+            };
+            serde_json::to_string(&catalog.search(&query, &names, limit, namespace).into_iter().map(|tool|
+                serde_json::json!({"name":discovery::identifier(&tool.name),"description":discovery::bounded(&tool.description,256),"namespace":crate::namespace(tool)})
+            ).collect::<Vec<_>>())
                 .map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = Arc::clone(&shared);
+    let catalog = shared.clone();
     let describe = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
-            serde_json::to_string(&discovery::lookup(&catalog, &name).map(describe_tool))
-                .map_err(bridge_error)
+            serde_json::to_string(&catalog.lookup(&name).map(describe_tool)).map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = Arc::clone(&shared);
+    let catalog = shared.clone();
     let describe_ns = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
-            let value = discovery::describe_namespace(&catalog, &name);
+            let value = discovery::describe_namespace(catalog.iter(), &name);
             serde_json::to_string(&value).map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = Arc::clone(&shared);
+    let catalog = shared.clone();
     let schema = Function::new(
         ctx.clone(),
         move |name: String, options: String| -> rquickjs::Result<String> {
             let options: Value = serde_json::from_str(&options).map_err(bridge_error)?;
-            serde_json::to_string(
-                &discovery::schema_page(&catalog, &name, &options).map_err(bridge_error)?,
-            )
-            .map_err(bridge_error)
+            serde_json::to_string(&catalog.schema_page(&name, &options).map_err(bridge_error)?)
+                .map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;
-    let catalog = Arc::clone(&shared);
+    let catalog = shared.clone();
     let metadata = Function::new(
         ctx.clone(),
         move |name: String, field: String| -> rquickjs::Result<String> {
-            let tool = discovery::lookup(&catalog, &name)
+            let tool = catalog
+                .lookup(&name)
                 .ok_or_else(|| bridge_error("unknown admitted tool"))?;
             match field.as_str() {
                 "description" => serde_json::to_string(&tool.description),
@@ -89,10 +93,35 @@ pub(crate) fn install_helpers(
     .map_err(|e| e.to_string())?;
     // Validate model bindings now, but keep their schemas outside the VM until
     // the script explicitly requests the available model catalog.
-    let model_catalog = admitted_models(tools)?;
+    tools.validate_models()?;
+    let catalog = shared.clone();
     let available_models = Function::new(ctx.clone(), move || -> rquickjs::Result<String> {
-        serde_json::to_string(&model_catalog).map_err(bridge_error)
+        catalog.available_models_json().map_err(bridge_error)
     })
+    .map_err(|e| e.to_string())?;
+    let catalog = shared.clone();
+    let namespace_page = Function::new(
+        ctx.clone(),
+        move |name: String, options: String| -> rquickjs::Result<String> {
+            let options = serde_json::from_str(&options).map_err(bridge_error)?;
+            serde_json::to_string(
+                &catalog
+                    .namespace_page(&name, &options)
+                    .map_err(bridge_error)?,
+            )
+            .map_err(bridge_error)
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let catalog = shared.clone();
+    let model_page = Function::new(
+        ctx.clone(),
+        move |options: String| -> rquickjs::Result<String> {
+            let options = serde_json::from_str(&options).map_err(bridge_error)?;
+            serde_json::to_string(&catalog.model_page(&options).map_err(bridge_error)?)
+                .map_err(bridge_error)
+        },
+    )
     .map_err(|e| e.to_string())?;
     let snapshot = serde_json::to_string(
         &*store
@@ -136,7 +165,7 @@ pub(crate) fn install_helpers(
         result.map_err(bridge_error)
     })
     .map_err(|e| e.to_string())?;
-    let catalog = Arc::clone(&shared);
+    let catalog = shared.clone();
     let models = Function::new(
         ctx.clone(),
         move |operation: String, selector: String, args: String| -> rquickjs::Result<String> {
@@ -146,18 +175,24 @@ pub(crate) fn install_helpers(
                 _ => return Err(bridge_error("unsupported model operation")),
             };
             let selector = serde_json::from_str(&selector).map_err(bridge_error)?;
-            let call = resolve_model_call(
-                &catalog,
-                operation,
-                &selector,
-                serde_json::from_str(&args).map_err(bridge_error)?,
-            )
-            .map_err(bridge_error)?;
+            let call = catalog
+                .resolve_model_call(
+                    operation,
+                    &selector,
+                    serde_json::from_str(&args).map_err(bridge_error)?,
+                )
+                .map_err(bridge_error)?;
             serde_json::to_string(&serde_json::json!({"name":call.name,"args":call.args}))
                 .map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;
+    ctx.globals()
+        .set("__host_namespace_page", namespace_page)
+        .map_err(|e| e.to_string())?;
+    ctx.globals()
+        .set("__host_model_page", model_page)
+        .map_err(|e| e.to_string())?;
     ctx.globals()
         .set("__host_search", search)
         .map_err(|e| e.to_string())?;

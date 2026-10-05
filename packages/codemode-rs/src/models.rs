@@ -76,12 +76,31 @@ fn valid_reference(value: &str) -> bool {
 /// Build aliases only from the catalog already admitted by the host. An
 /// incomplete declaration fails closed rather than fabricating availability.
 pub fn admitted_models(tools: &[Tool]) -> Result<Vec<ModelAlias>, String> {
-    let mut aliases = Vec::new();
+    let indices = model_indices(tools.iter().enumerate())?;
+    Ok(indices
+        .into_iter()
+        .map(|i| {
+            let tool = &tools[i];
+            ModelAlias {
+                operation: tool.model_operation.unwrap(),
+                tool: tool.name.clone(),
+                binding: tool.model_binding.clone().unwrap(),
+                input_schema: tool.schema.clone(),
+                output_schema: tool.output_schema.clone(),
+            }
+        })
+        .collect())
+}
+
+pub(crate) fn model_indices<'a>(
+    tools: impl Iterator<Item = (usize, &'a Tool)>,
+) -> Result<Vec<usize>, String> {
+    let mut indices = Vec::new();
     let mut names = std::collections::BTreeSet::new();
-    for tool in tools {
-        let Some(operation) = tool.model_operation else {
+    for (index, tool) in tools {
+        if tool.model_operation.is_none() {
             continue;
-        };
+        }
         let binding = tool
             .model_binding
             .as_ref()
@@ -97,15 +116,9 @@ pub fn admitted_models(tools: &[Tool]) -> Result<Vec<ModelAlias>, String> {
                 tool.name
             ));
         }
-        aliases.push(ModelAlias {
-            operation,
-            tool: tool.name.clone(),
-            binding: binding.clone(),
-            input_schema: tool.schema.clone(),
-            output_schema: tool.output_schema.clone(),
-        });
+        indices.push(index);
     }
-    Ok(aliases)
+    Ok(indices)
 }
 
 /// Resolve one alias to the exact admitted ordinary tool. No selection is
@@ -118,23 +131,41 @@ pub fn resolve_model_call(
     selector: &ModelSelector,
     args: Value,
 ) -> Result<ModelCall, String> {
-    let aliases = admitted_models(tools)?;
-    let matches = |alias: &&ModelAlias| {
-        alias.operation == operation
+    let indices = model_indices(tools.iter().enumerate())?;
+    resolve_model_tools(
+        indices.into_iter().map(|i| &tools[i]),
+        operation,
+        selector,
+        args,
+    )
+}
+
+pub(crate) fn resolve_model_tools<'a>(
+    tools: impl Iterator<Item = &'a Tool>,
+    operation: ModelOperation,
+    selector: &ModelSelector,
+    args: Value,
+) -> Result<ModelCall, String> {
+    let matches = |tool: &&Tool| {
+        let binding = tool
+            .model_binding
+            .as_ref()
+            .expect("validated model binding");
+        tool.model_operation == Some(operation)
             && selector
                 .owner
                 .as_ref()
-                .is_none_or(|value| value == &alias.binding.owner)
+                .is_none_or(|value| value == &binding.owner)
             && selector
                 .provider
                 .as_ref()
-                .is_none_or(|value| value == &alias.binding.provider)
+                .is_none_or(|value| value == &binding.provider)
             && selector
                 .model
                 .as_ref()
-                .is_none_or(|value| value == &alias.binding.model)
+                .is_none_or(|value| value == &binding.model)
     };
-    let mut matching = aliases.iter().filter(matches);
+    let mut matching = tools.filter(matches);
     let selected = matching.next().ok_or_else(|| {
         format!(
             "models.{} is unavailable for the requested admitted model",
@@ -148,7 +179,7 @@ pub fn resolve_model_call(
         ));
     }
     Ok(ModelCall {
-        name: selected.tool.clone(),
+        name: selected.name.clone(),
         args,
     })
 }

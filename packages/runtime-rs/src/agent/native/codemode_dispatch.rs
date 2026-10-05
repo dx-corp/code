@@ -45,11 +45,12 @@ impl NativeAgentRunner {
             .codemode_parent_call_id
             .clone()
             .ok_or("Missing script parent")?;
-        let admitted = self
-            .codemode_catalog()
-            .iter()
-            .map(|tool| tool.name.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
+        let excluded = self
+            .runtime_audit
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .excluded_context_tools
+            .clone();
         if self
             .codemode_cancel
             .as_ref()
@@ -92,17 +93,18 @@ impl NativeAgentRunner {
         }
         let mut batch = Vec::with_capacity(calls.len());
         for call in calls {
-            let parse_error = if !admitted.contains(&call.name.to_ascii_lowercase()) {
-                Some(format!(
-                    "Tool `{}` is not available in this script",
-                    call.name
-                ))
-            } else {
-                self.codemode_tool_budget
-                    .admit_tool(&call.name, &call.args)
-                    .err()
-                    .map(str::to_owned)
-            };
+            let parse_error =
+                if !self.codemode_tool_admitted(&call.name.to_ascii_lowercase(), &excluded) {
+                    Some(format!(
+                        "Tool `{}` is not available in this script",
+                        call.name
+                    ))
+                } else {
+                    self.codemode_tool_budget
+                        .admit_tool(&call.name, &call.args)
+                        .err()
+                        .map(str::to_owned)
+                };
             batch.push((
                 format!("{call_id}/{}", call.index),
                 call.name,

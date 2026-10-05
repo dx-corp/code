@@ -49,7 +49,7 @@ pub enum Message {
 
 impl Message {
     /// A rough size in bytes, for compaction thresholds.
-    pub fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         match self {
             Message::User { text, .. } | Message::Summary { text } => text.len(),
             Message::Assistant {
@@ -159,7 +159,7 @@ pub struct ToolEvidence {
 
 impl ToolEvidence {
     /// Exact owner ToolFinished event, independent of the grouped history cursor.
-    pub fn cursor(&self) -> Cursor {
+    pub(crate) fn cursor(&self) -> Cursor {
         self.cursor
     }
 }

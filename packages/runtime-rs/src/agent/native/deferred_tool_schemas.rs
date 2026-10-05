@@ -235,6 +235,54 @@ pub(super) fn discovery_budget_allows(
 }
 
 impl NativeAgentRunner {
+    pub(super) fn replace_governed_tools(
+        &mut self,
+        allowed_tools: &HashSet<String>,
+        external_tool_definitions: Vec<ToolDefinition>,
+    ) {
+        let mut tools = self
+            .tool_executor
+            .tool_definitions()
+            .into_iter()
+            .filter(|definition| allowed_tools.contains(&definition.tool.name.to_ascii_lowercase()))
+            .map(|definition| {
+                (
+                    definition.tool.name.to_ascii_lowercase(),
+                    definition.clone(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        codemode::register(&mut tools, Some(allowed_tools));
+        classifier::register(
+            &mut tools,
+            Some(allowed_tools),
+            self.client.is_some() && !self.model_route.uses_app_server(),
+        );
+        let external_tools = external_tool_definitions
+            .iter()
+            .map(|definition| definition.tool.name.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        for definition in external_tool_definitions {
+            tools.insert(definition.tool.name.to_ascii_lowercase(), definition);
+        }
+        self.active_tool_names = initial_active_tool_names(
+            self.tool_profile,
+            &tools,
+            &external_tools,
+            Some(allowed_tools),
+            self.config.external_tool_schema_policy,
+        );
+        self.explicitly_allowed_tools = allowed_tools.clone();
+        *self
+            .discovery_catalog_cache
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.tools = tools;
+        self.external_tools = external_tools;
+        self.model_tool_cache = None;
+        self.refresh_runtime_audit();
+    }
+
     /// Start discovery lifetime at prompt admission, outside provider retries.
     pub(super) fn begin_tool_discovery_turn(&mut self) {
         // Resolve consent only at the safe user-turn boundary; retries keep this assignment.
@@ -250,6 +298,10 @@ impl NativeAgentRunner {
                     ToolProfile::Minimal
                 }
             });
+        *self
+            .discovery_catalog_cache
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         // A fresh prompt clears discovery; retries and Continue retain it.
         self.tool_profile = selected;
         let mut initial = initial_active_tool_names(

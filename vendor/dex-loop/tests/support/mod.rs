@@ -458,6 +458,7 @@ type Hook = Arc<dyn Fn(&ProposedCall) + Send + Sync>;
 
 #[derive(Default)]
 struct ToolState {
+    inline_results: HashMap<String, String>,
     verdicts: HashMap<String, Verdict>,
     principal_verdicts: HashMap<(String, PrincipalId), Verdict>,
     searches: HashMap<String, Vec<ToolName>>,
@@ -482,6 +483,15 @@ impl FakeTools {
             catalog: catalog.into(),
             state: Arc::default(),
         }
+    }
+
+    /// Match tools whose production contract retains bounded inline text.
+    #[allow(dead_code)] // configured by the GRC context integration test
+    pub fn inline_result(self, tool: &str, text: &str) -> Self {
+        lock(&self.state)
+            .inline_results
+            .insert(tool.into(), text.into());
+        self
     }
 
     pub fn verdict(self, tool: &str, verdict: Verdict) -> Self {
@@ -626,7 +636,15 @@ impl Tools for FakeTools {
         if let Some(hook) = hook {
             hook(call);
         }
-        let mut result = output_for(&call.id);
+        let mut result = lock(&self.state)
+            .inline_results
+            .get(call.tool.as_str())
+            .map(|text| ToolResult {
+                outcome: Outcome::Succeeded,
+                output: Output::Text(text.clone()),
+                receipt: None,
+            })
+            .unwrap_or_else(|| output_for(&call.id));
         let mut cancelled = false;
         if let Some(barrier) = barrier
             && tokio::time::timeout(Duration::from_secs(5), barrier.wait())

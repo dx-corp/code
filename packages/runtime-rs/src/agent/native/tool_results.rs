@@ -353,7 +353,7 @@ impl NativeAgentRunner {
                     .iter()
                     .filter_map(Value::as_str)
                     .map(str::to_ascii_lowercase)
-                    .collect::<HashSet<_>>()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         if query.is_empty() && exact_names.is_empty() {
@@ -368,48 +368,13 @@ impl NativeAgentRunner {
             return execution;
         }
 
-        let terms = query.split_whitespace().collect::<Vec<_>>();
-        let mut candidates = self
-            .tools
-            .iter()
-            .filter_map(|(name, definition)| {
-                let name_lower = name.to_ascii_lowercase();
-                if name_lower == "tool_search"
-                    || self.tool_executor.is_reserved_tool(name)
-                    || !tool_search_profile_allows(
-                        self.tool_profile,
-                        name,
-                        &self.explicitly_allowed_tools,
-                    )
-                    || !tool_is_visible_to_model(
-                        name,
-                        self.goal_tools_visible,
-                        self.include_ide_tools,
-                    )
-                {
-                    return None;
-                }
-                let description = definition.tool.description.to_ascii_lowercase();
-                let exact = exact_names.contains(&name_lower);
-                let mut score = if exact { 1_000 } else { 0 };
-                for term in &terms {
-                    if name_lower.contains(term) {
-                        score += 50;
-                    }
-                    if description.contains(term) {
-                        score += 10;
-                    }
-                }
-                (score > 0).then_some((score, name_lower, definition.tool.description.clone()))
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_unstable_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-
         let max_results = args
             .get("maxResults")
             .and_then(Value::as_u64)
             .map_or(8, |value| value.clamp(1, 16) as usize);
-        let selected = candidates.into_iter().take(max_results).collect::<Vec<_>>();
+        let catalog = self.discovery_catalog(false);
+        let namespace = args.get("namespace").and_then(Value::as_str);
+        let selected = catalog.search(&query, &exact_names, max_results, namespace);
         if selected.is_empty() {
             let execution = ToolExecution::from_legacy(
                 call_id,
@@ -423,14 +388,7 @@ impl NativeAgentRunner {
         }
 
         let script_only = self.model_route.uses_app_server();
-        let script_names = if script_only {
-            self.codemode_catalog()
-                .into_iter()
-                .map(|tool| tool.name.to_ascii_lowercase())
-                .collect::<HashSet<_>>()
-        } else {
-            HashSet::new()
-        };
+        let script_catalog = script_only.then(|| self.codemode_catalog());
         let mut activated = Vec::new();
         let mut lines = Vec::with_capacity(selected.len() + 1);
         let initial = initial_active_tool_names(
@@ -445,12 +403,19 @@ impl NativeAgentRunner {
         } else {
             "Matching tools (bounded schemas load on the next provider request):".to_string()
         });
-        for (_, name, description) in selected {
+        for tool in selected {
+            let name = tool.name.to_ascii_lowercase();
+            let description = &tool.description;
             let registered = self
                 .codex_session
                 .as_ref()
                 .is_some_and(|session| session.has_dynamic_tool(&name));
-            if script_only && !registered && !script_names.contains(&name) {
+            if script_only
+                && !registered
+                && script_catalog
+                    .as_ref()
+                    .is_none_or(|catalog| catalog.lookup(&tool.name).is_none())
+            {
                 continue;
             }
             let direct = !script_only
