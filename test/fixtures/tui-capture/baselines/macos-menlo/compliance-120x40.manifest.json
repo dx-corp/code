@@ -1,0 +1,39 @@
+{
+  "scenario": "compliance",
+  "scenario_sha256": "41a647918bd724893856779f19a413561b6ac014e9755e20d69a189f6489af54",
+  "binary": "/Users/jonathanhaas/Documents/Codex/2026-10-05/lo/work/maestro-target/debug/maestro",
+  "columns": 120,
+  "rows": 40,
+  "font": "/System/Library/Fonts/Menlo.ttc",
+  "font_sha256": "f2d400484a6aace67980730ec0a9ef24ce9e535a2604f118e6fdc2510021b85f",
+  "font_size": 18,
+  "terminal_palette": {
+    "default": "#e6e4e0",
+    "black": "#1b1c1e",
+    "red": "#d28b87",
+    "green": "#a0b69a",
+    "brown": "#c9b58c",
+    "blue": "#96a9c7",
+    "magenta": "#b0a2cb",
+    "cyan": "#93b6b3",
+    "white": "#d8d6d2",
+    "brightblack": "#85868b",
+    "brightred": "#e3a19b",
+    "brightgreen": "#b3c8ac",
+    "brightbrown": "#ddc9a1",
+    "brightblue": "#acbdd8",
+    "brightmagenta": "#c3b5de",
+    "brightcyan": "#a8cbc8",
+    "brightwhite": "#f4f2ee"
+  },
+  "status": "passed",
+  "binary_sha256": "8a94378908f17bce6249a022b61b7bc6f367a90b24302b0e1e6b272c03ed0287",
+  "backend": "local-scripted-fixture",
+  "binary_version": "deixic-code 0.10.111",
+  "cursor": [
+    2,
+    36
+  ],
+  "identity_requests": 3,
+  "model_requests": 4
+}

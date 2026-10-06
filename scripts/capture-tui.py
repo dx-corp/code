@@ -313,12 +313,20 @@ class Terminal:
         self.config.write_text(
             'set -g default-terminal "xterm-256color"\nset -g escape-time 0\nset -g status off\n'
         )
-        self.workspace = root / "release-planner"
+        self.workspace = root / ("security-policy" if fixture and fixture.scene == "compliance" else "release-planner")
         self.workspace.mkdir()
         if fixture:
             (self.workspace / "README.md").write_text(
                 "# Release checklist\n\nA small workspace for planning a team release.\n\n"
                 "1. Choose a release owner.\n2. Review the changes.\n3. Run the checks.\n4. Publish the release.\n5. Write a short release note.\n"
+            )
+        if fixture and fixture.scene == "compliance":
+            (self.workspace / "SECURITY.md").write_text("# Security policy\n\nWe acknowledge reports within two business days.\n")
+            (self.workspace / "test_security_policy.py").write_text(
+                "from pathlib import Path\nimport unittest\n\n"
+                "class SecurityPolicyTest(unittest.TestCase):\n"
+                "    def test_private_reporting(self):\n        self.assertIn('security@acme.example', Path('SECURITY.md').read_text())\n"
+                "    def test_response_commitment(self):\n        self.assertIn('two business days', Path('SECURITY.md').read_text())\n"
             )
         self.env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),

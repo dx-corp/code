@@ -3,6 +3,7 @@
 mod support;
 use dex_loop::{
     Budget, CancellationToken, Exit, GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME, Message, Outcome,
+    Output,
 };
 use serde_json::json;
 use support::{FakeLog, FakeModel, FakeTools, call, engine, read_tool, text};
@@ -40,8 +41,16 @@ async fn grc_parallel_then_successive_reads_execute_once_and_replay_the_same_his
         .history()
         .iter()
         .filter_map(|e| match &e.message {
-            Message::Tool { name, outcome, .. } if name.as_str() == GRC_GRAPH_TOOL_NAME => {
-                Some((outcome, e.message.size()))
+            Message::Tool {
+                name,
+                outcome,
+                output,
+                ..
+            } if name.as_str() == GRC_GRAPH_TOOL_NAME => {
+                let Output::Text(text) = output else {
+                    panic!("the GRC fixture must produce inline text");
+                };
+                Some((outcome, text.len()))
             }
             _ => None,
         })
