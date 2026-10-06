@@ -19,6 +19,9 @@
 //! host: on approve/answer, append the decision and call run again
 //! ```
 
+#[cfg(test)]
+extern crate self as dex_loop;
+
 mod budget;
 mod codemode_output;
 mod codemode_state;

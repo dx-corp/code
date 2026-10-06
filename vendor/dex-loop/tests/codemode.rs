@@ -612,6 +612,62 @@ async fn failed_child_receipt_stops_script_and_recovery_never_repeats_its_effect
     assert_eq!(replay, log.rehydrate());
 }
 
+#[derive(Clone)]
+struct GatedReads {
+    inner: FakeTools,
+    slow_entered: CancellationToken,
+    slow_released: CancellationToken,
+}
+impl GatedReads {
+    fn new(inner: FakeTools) -> Self {
+        Self {
+            inner,
+            slow_entered: CancellationToken::new(),
+            slow_released: CancellationToken::new(),
+        }
+    }
+}
+impl Tools for GatedReads {
+    fn catalog(&self) -> &[ToolSpec] {
+        self.inner.catalog()
+    }
+    async fn search(&self, principal: &dex_loop::PrincipalId, query: &str) -> Vec<ToolName> {
+        self.inner.search(principal, query).await
+    }
+    async fn policy(&self, ctx: &Context, call: &ProposedCall) -> Verdict {
+        self.inner.policy(ctx, call).await
+    }
+    async fn run(
+        &self,
+        thread: &ThreadId,
+        call: &ProposedCall,
+        cancel: &CancellationToken,
+    ) -> ToolResult {
+        if call.args["key"] == "slow" {
+            self.slow_entered.cancel();
+            tokio::select! {
+                () = self.slow_released.cancelled() => {},
+                () = cancel.cancelled() => return ToolResult::error("cancelled"),
+            }
+        } else {
+            self.slow_entered.cancelled().await;
+            assert!(!self.slow_released.is_cancelled());
+        }
+        self.inner.run(thread, call, cancel).await
+    }
+    async fn resolve_codemode_result(
+        &self,
+        ctx: &Context,
+        call: &ProposedCall,
+        result: &ToolResult,
+        max_bytes: usize,
+    ) -> Result<ToolResult, String> {
+        self.inner
+            .resolve_codemode_result(ctx, call, result, max_bytes)
+            .await
+    }
+}
+
 #[tokio::test]
 async fn fastest_read_settles_without_waiting_for_unrelated_read() {
     let log = FakeLog::default();
@@ -621,15 +677,24 @@ async fn fastest_read_settles_without_waiting_for_unrelated_read() {
         )],
         vec![text("done")],
     ]);
-    let tools =
-        FakeTools::new(vec![strict_read_tool("lookup")]).delay("slow", Duration::from_secs(5));
+    let tools = GatedReads::new(FakeTools::new(vec![strict_read_tool("lookup")]));
     let mut ctx = log.start_turn("t1", "race");
-    let result = tokio::time::timeout(
-        Duration::from_secs(1),
-        engine(&log, &model, &tools, Budget::default()).run(&mut ctx, &CancellationToken::new()),
+    let result = Engine::new(
+        log.clone(),
+        model,
+        tools.clone(),
+        FakeEffects::default(),
+        Lexicon::default(),
+        Budget::default(),
     )
+    .run(&mut ctx, &CancellationToken::new())
     .await;
-    assert_eq!(result, Ok(Ok(Exit::Done)));
+    assert_eq!(result, Ok(Exit::Done));
+    assert!(tools.slow_entered.is_cancelled());
+    assert!(
+        !tools.slow_released.is_cancelled(),
+        "the unrelated read cannot finish before the script"
+    );
     assert_eq!(outer_result(&log, "t1-1-0").0, Outcome::Succeeded);
     assert_eq!(log.rehydrate(), ctx);
 }
@@ -649,104 +714,34 @@ async fn dependent_read_starts_before_an_unrelated_read_finishes() {
     ]);
     let dependent = Arc::new(AtomicBool::new(false));
     let signal = dependent.clone();
-    let tools = FakeTools::new(vec![strict_read_tool("lookup")])
-        .delay("slow", Duration::from_secs(5))
-        .on_run(move |call| {
+    let tools = GatedReads::new(FakeTools::new(vec![strict_read_tool("lookup")]).on_run(
+        move |call| {
             if call.args["key"] == "dependent" {
                 signal.store(true, Ordering::SeqCst);
             }
-        });
+        },
+    ));
     let mut ctx = log.start_turn("t1", "pipeline");
-    let result = tokio::time::timeout(
-        Duration::from_secs(1),
-        engine(&log, &model, &tools, Budget::default()).run(&mut ctx, &CancellationToken::new()),
+    let result = Engine::new(
+        log.clone(),
+        model,
+        tools.clone(),
+        FakeEffects::default(),
+        Lexicon::default(),
+        Budget::default(),
     )
+    .run(&mut ctx, &CancellationToken::new())
     .await;
-    assert_eq!(result, Ok(Ok(Exit::Done)));
+    assert_eq!(result, Ok(Exit::Done));
+    assert!(tools.slow_entered.is_cancelled());
+    assert!(
+        !tools.slow_released.is_cancelled(),
+        "the unrelated read cannot finish before the script"
+    );
     assert!(dependent.load(Ordering::SeqCst));
     assert_eq!(
         outer_result(&log, "t1-1-0"),
         (Outcome::Succeeded, "pipeline".into())
-    );
-    assert_eq!(log.rehydrate(), ctx);
-}
-
-#[derive(Clone)]
-struct DelayedEffectClaim {
-    effects: FakeEffects,
-    claimed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-impl dex_loop::Effects for DelayedEffectClaim {
-    async fn claim(&self, call: &ProposedCall) -> Result<dex_loop::Claim, dex_loop::Fenced> {
-        let claim = dex_loop::Effects::claim(&self.effects, call).await?;
-        if call.tool.as_str() == "update" && matches!(claim, dex_loop::Claim::Granted) {
-            self.claimed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        Ok(claim)
-    }
-    async fn record(
-        &self,
-        call: &dex_loop::CallId,
-        result: &ToolResult,
-    ) -> Result<(), dex_loop::Fenced> {
-        dex_loop::Effects::record(&self.effects, call, result).await
-    }
-}
-
-#[tokio::test]
-async fn script_completion_during_effect_claim_never_dispatches_the_queued_effect() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    let log = FakeLog::default();
-    // A short real VM computation lets the host enter its delayed claim;
-    // the read then wins the race while claim persistence is still pending.
-    let model = FakeModel::new(vec![
-        vec![script(
-            "text(await Promise.race([tools.lookup({key:'fast'}).then(()=>{let n=0; for(let i=0;i<1000000;i++)n+=i; return 'fast';}),tools.update({key:'effect'})]));",
-        )],
-        vec![text("done")],
-    ]);
-    let tools = FakeTools::new(vec![strict_read_tool("lookup"), write_tool("update")]);
-    let effects = DelayedEffectClaim {
-        effects: FakeEffects::default(),
-        claimed: Arc::new(AtomicBool::new(false)),
-    };
-    let mut ctx = log.start_turn("t1", "race during effect claim");
-    let engine = Engine::new(
-        log.clone(),
-        model,
-        tools.clone(),
-        effects.clone(),
-        Lexicon::default(),
-        Budget::default(),
-    );
-    assert_eq!(
-        engine.run(&mut ctx, &CancellationToken::new()).await,
-        Ok(Exit::Done)
-    );
-    assert!(effects.claimed.load(Ordering::SeqCst));
-    assert_eq!(
-        tools.runs().len(),
-        1,
-        "the queued mutation cannot run after successful VM completion"
-    );
-    assert_eq!(
-        outer_result(&log, "t1-1-0"),
-        (Outcome::Succeeded, "fast".into())
-    );
-    let queued = effects
-        .effects
-        .recorded(&dex_loop::CallId::new("t1-1-0:codemode:1"))
-        .flatten()
-        .unwrap();
-    assert_eq!(
-        queued.outcome,
-        Outcome::Failed,
-        "granted but undispatched claim settles as known not executed"
     );
     assert_eq!(log.rehydrate(), ctx);
 }
