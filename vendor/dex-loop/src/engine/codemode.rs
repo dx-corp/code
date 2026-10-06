@@ -688,3 +688,6 @@ fn sanitize_value<S: Sanitizer>(value: &mut Value, sanitizer: &S) -> Result<(), 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod claim_completion_tests;
