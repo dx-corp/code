@@ -175,45 +175,71 @@ impl<M: Model> Summarize for ModelSummarizer<M> {
         );
         // No tools or executable capability are offered to this call. Reusing
         // Model retains tenant authentication, provider routing, and metering.
-        let stream = self.model.stream(&input, &[]);
-        futures_util::pin_mut!(stream);
         let mut result = Summary::default();
         let mut summary = String::new();
         let mut valid = true;
         let mut failure = None;
         let deadline = tokio::time::sleep(self.timeout);
         tokio::pin!(deadline);
-        loop {
-            let chunk = tokio::select! {
-                chunk = stream.next() => match chunk { Some(chunk) => chunk, None => break },
-                () = &mut deadline => { valid = false; failure = Some("timeout"); break; },
-            };
-            match chunk {
-                Ok(ModelChunk::Usage(usage)) => result.usage += usage,
-                Ok(ModelChunk::Text(delta))
-                    if summary.len().saturating_add(delta.len()) <= SUMMARY_BYTES =>
-                {
-                    summary.push_str(&delta)
+        for attempt in 0..2 {
+            // Failed partial summaries are private and disposable; usage is
+            // accumulated across attempts. Both share the original deadline.
+            summary.clear();
+            valid = true;
+            let mut retry = false;
+            let stream = self.model.stream(&input, &[]);
+            futures_util::pin_mut!(stream);
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    () = &mut deadline => { valid = false; retry = false; failure = Some("timeout"); break; },
+                    chunk = stream.next() => match chunk { Some(chunk) => chunk, None => break },
+                };
+                match chunk {
+                    Ok(ModelChunk::Usage(usage)) => result.usage += usage,
+                    Ok(ModelChunk::Text(delta))
+                        if summary.len().saturating_add(delta.len()) <= SUMMARY_BYTES =>
+                    {
+                        summary.push_str(&delta)
+                    }
+                    Ok(ModelChunk::Text(_)) => {
+                        valid = false;
+                        failure = Some("oversized_summary");
+                    }
+                    Ok(ModelChunk::ToolCall { .. }) => {
+                        valid = false;
+                        failure = Some("unexpected_tool_call");
+                    }
+                    Err(error) => {
+                        // Only classes whose transport contract is always
+                        // retryable. Provider rejections carry retry advice
+                        // below this port; do not override it from prose/class.
+                        retry = valid
+                            && matches!(
+                                error.class(),
+                                crate::ErrorClass::Transport | crate::ErrorClass::Truncated
+                            );
+                        valid = false;
+                        failure = Some("model_error");
+                        // Drain terminal metering even after an error. No
+                        // partial output from this attempt can be installed.
+                    }
+                    Ok(
+                        ModelChunk::Reasoning(_)
+                        | ModelChunk::Thinking(_)
+                        | ModelChunk::Served(_)
+                        | ModelChunk::Timing(_)
+                        | ModelChunk::AttemptFailed { .. },
+                    ) => {}
                 }
-                Ok(ModelChunk::Text(_)) => {
-                    valid = false;
-                    failure = Some("oversized_summary");
-                }
-                Ok(ModelChunk::ToolCall { .. }) => {
-                    valid = false;
-                    failure = Some("unexpected_tool_call");
-                }
-                Err(_) => {
-                    valid = false;
-                    failure = Some("model_error");
-                }
-                Ok(
-                    ModelChunk::Reasoning(_)
-                    | ModelChunk::Thinking(_)
-                    | ModelChunk::Served(_)
-                    | ModelChunk::Timing(_)
-                    | ModelChunk::AttemptFailed { .. },
-                ) => {}
+            }
+            if !retry || attempt == 1 {
+                break;
+            }
+            tokio::select! {
+                biased;
+                () = &mut deadline => { failure = Some("timeout"); break; },
+                () = tokio::time::sleep(Duration::from_millis(250)) => {},
             }
         }
         let mut tier = "summarize";
@@ -1113,6 +1139,77 @@ mod tests {
         assert!(text.len() <= SUMMARY_BYTES);
         assert_eq!(summary.usage.cost_micros, 5);
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn summary_retries_only_transport_failures_with_one_deadline_and_exact_usage() {
+        struct Attempts {
+            calls: Mutex<usize>,
+            class: crate::ErrorClass,
+            succeed: bool,
+        }
+        impl Model for Attempts {
+            fn stream<'a>(
+                &'a self,
+                _: &'a Context,
+                tools: &'a [&'a ToolSpec],
+            ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a {
+                assert!(tools.is_empty());
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
+                let success = *calls == 2 && self.succeed;
+                let mut chunks = vec![
+                    Ok(ModelChunk::Text(
+                        if success {
+                            "complete summary"
+                        } else {
+                            "discard this partial"
+                        }
+                        .into(),
+                    )),
+                    Ok(ModelChunk::Usage(Usage {
+                        cost_micros: if success { 7 } else { 3 },
+                        ..Default::default()
+                    })),
+                ];
+                if !success {
+                    chunks.push(Err(ModelError {
+                        class: self.class,
+                        message: "transport: temporary failure".into(),
+                    }));
+                }
+                stream::iter(chunks)
+            }
+        }
+        for (class, timeout_ms, succeed, calls, cost, recovered) in [
+            (crate::ErrorClass::Transport, 1000, true, 2, 10, true),
+            (crate::ErrorClass::Truncated, 1000, true, 2, 10, true),
+            (crate::ErrorClass::Transport, 1000, false, 2, 6, false),
+            (crate::ErrorClass::Transport, 100, true, 1, 3, false),
+            (crate::ErrorClass::Auth, 1000, true, 1, 3, false),
+            (crate::ErrorClass::ContextCapacity, 1000, true, 1, 3, false),
+            (crate::ErrorClass::Unavailable, 1000, true, 1, 3, false),
+        ] {
+            let summarizer = ModelSummarizer::new(Attempts {
+                calls: Mutex::new(0),
+                class,
+                succeed,
+            })
+            .with_timeout(Duration::from_millis(timeout_ms));
+            let ctx = context();
+            let original = ctx.clone();
+            let result = summarizer.summarize(&ctx, &inference_history()).await;
+            assert_eq!(*summarizer.model.calls.lock().unwrap(), calls, "{class:?}");
+            assert_eq!(result.usage.cost_micros, cost, "{class:?}");
+            let text = result
+                .text
+                .expect("successful summary or faithful fallback");
+            assert!(!text.contains("discard this partial"));
+            assert_eq!(text.contains("complete summary"), recovered);
+            assert!(text.contains("attachment@v1") && text.contains("result@v1"));
+            assert_eq!(ctx, original);
+        }
+    }
+
     #[tokio::test]
     async fn empty_summary_falls_back_to_exact_constraints_and_references_with_usage() {
         let usage = Usage {

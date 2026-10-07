@@ -17,6 +17,12 @@ pub struct Compaction {
 /// Decides, before each model call, whether to compact.
 pub trait Compactor: Send + Sync {
     fn plan(&self, ctx: &Context) -> impl Future<Output = CompactionPlan> + Send;
+
+    /// A complete request exceeded capacity despite the proactive threshold.
+    /// Hosts without a recovery strategy leave the original failure intact.
+    fn recover(&self, _ctx: &Context) -> impl Future<Output = CompactionPlan> + Send {
+        async { CompactionPlan::default() }
+    }
 }
 
 /// An attempted summary may consume model usage even when no summary commits.
@@ -148,6 +154,38 @@ impl<S: Summarize> Threshold<S> {
 impl<S: Summarize> Compactor for Threshold<S> {
     async fn plan(&self, ctx: &Context) -> CompactionPlan {
         self.plan_at(ctx, self.max_bytes).await
+    }
+
+    async fn recover(&self, ctx: &Context) -> CompactionPlan {
+        if self.max_bytes == usize::MAX {
+            return CompactionPlan::default();
+        }
+        // Request framing, tools and resolved references are not all counted
+        // by the history threshold. Use the same safe cuts even below it.
+        let mut plan = self.plan_at(ctx, 0).await;
+        if let Some(compaction) = &plan.compaction {
+            let before: usize = ctx.history().iter().map(|entry| entry.message.size()).sum();
+            let mut projected = ctx.clone();
+            projected.observe(
+                compaction.covers_to,
+                &crate::Event::Compaction {
+                    covers_to_cursor: compaction.covers_to,
+                    summary: compaction.summary.clone(),
+                },
+            );
+            let after: usize = projected
+                .history()
+                .iter()
+                .map(|entry| entry.message.size())
+                .sum();
+            if after >= before {
+                // A successful summarizer is not necessarily a reduction.
+                // Retain billed usage, but never retry an unchanged payload.
+                plan.compaction = None;
+                plan.declined = true;
+            }
+        }
+        plan
     }
 }
 

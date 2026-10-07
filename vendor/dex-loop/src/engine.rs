@@ -42,6 +42,14 @@ use crate::ports::{
 };
 use crate::sanitize::{DeltaFilter, Sanitizer};
 
+/// One capacity recovery per run; restart remains bounded by the durable
+/// step and usage budgets. No failed answer or tool call is replayed.
+enum CapacityRecovery {
+    Available,
+    Pending(ModelError),
+    Attempted,
+}
+
 /// The engine-owned discovery tool. Always offered to the model.
 pub const TOOLS_SEARCH: &str = "tools.search";
 /// The engine-owned bounded script tool.
@@ -413,6 +421,7 @@ where
     ) -> Result<Exit, Fenced> {
         let started = Instant::now();
         let mut prefetch = Prefetch::new();
+        let mut capacity_recovery = CapacityRecovery::Available;
         loop {
             self.read_control(ctx).await?;
             match ctx.status() {
@@ -465,13 +474,29 @@ where
                 return Ok(Exit::Failed);
             }
             let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
+            let recovery_error = if matches!(capacity_recovery, CapacityRecovery::Pending(_)) {
+                match std::mem::replace(&mut capacity_recovery, CapacityRecovery::Attempted) {
+                    CapacityRecovery::Pending(error) => Some(error),
+                    _ => unreachable!(),
+                }
+            } else {
+                None
+            };
+            let planning = async {
+                if recovery_error.is_some() {
+                    self.compactor.recover(ctx).await
+                } else {
+                    self.compactor.plan(ctx).await
+                }
+            };
             let plan = tokio::select! {
                 _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
-                result = tokio::time::timeout(remaining_wall, self.compactor.plan(ctx)) => result,
+                result = tokio::time::timeout(remaining_wall, planning) => result,
             };
             let mut compaction_declined = false;
             if let Ok(plan) = plan {
-                compaction_declined = plan.declined;
+                compaction_declined =
+                    plan.declined || (recovery_error.is_some() && plan.compaction.is_none());
                 let mut events = Vec::new();
                 if plan.usage != Default::default() {
                     events.push(Event::Usage(plan.usage));
@@ -511,7 +536,10 @@ where
                     vec![Event::Error {
                         class: Some(crate::ErrorClass::ContextCapacity),
                         code: ErrorCode::ModelFailed,
-                        message: "Conversation context could not be reduced safely. History is preserved; start a new conversation with the relevant details if recovery keeps failing.".into(),
+                        message: recovery_error.map_or_else(
+                            || "Conversation context could not be reduced safely. History is preserved; start a new conversation with the relevant details if recovery keeps failing.".into(),
+                            |error| error.message,
+                        ),
                     }],
                 )
                 .await?;
@@ -519,7 +547,10 @@ where
             }
             // A step never inherits another step's reads.
             prefetch = Prefetch::new();
-            if let Some(exit) = self.model_step(ctx, cancel, started, &mut prefetch).await? {
+            if let Some(exit) = self
+                .model_step(ctx, cancel, started, &mut prefetch, &mut capacity_recovery)
+                .await?
+            {
                 return Ok(exit);
             }
         }
@@ -543,6 +574,7 @@ where
         cancel: &'e CancellationToken,
         started: Instant,
         prefetch: &mut Prefetch<'e>,
+        capacity_recovery: &mut CapacityRecovery,
     ) -> Result<Option<Exit>, Fenced> {
         let step = ctx.step().saturating_add(1);
         self.emit(
@@ -844,6 +876,20 @@ where
             }
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
+            if error.class() == crate::ErrorClass::ContextCapacity
+                && matches!(capacity_recovery, CapacityRecovery::Available)
+                && text.is_empty()
+                && calls.is_empty()
+                && reasoning.is_none()
+                && !cancel.is_cancelled()
+            {
+                // Close this attempt before planning a safe cut. The next
+                // loop checks control and budgets, persists a reducing summary,
+                // then rebuilds the complete request through normal admission.
+                self.emit(ctx, events).await?;
+                *capacity_recovery = CapacityRecovery::Pending(error);
+                return Ok(None);
+            }
             events.push(Event::Error {
                 class: Some(error.class()),
                 code: ErrorCode::ModelFailed,
