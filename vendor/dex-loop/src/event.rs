@@ -462,6 +462,7 @@ impl ErrorClass {
     /// Explicit wire-code boundary; human-readable details are never classified.
     pub fn of_gateway_code(code: &str) -> Self {
         match code {
+            "context_length_exceeded" | "context_capacity" => Self::ContextCapacity,
             "rate_limit_error"
             | "rate_limit_exceeded"
             | "resource_exhausted"

@@ -2543,6 +2543,228 @@ async fn declined_compaction_preserves_history_and_a_later_turn_can_recover() {
 }
 
 #[tokio::test]
+async fn capacity_recovery_reduces_history_once_before_retrying_the_same_turn() {
+    for second_fails in [false, true] {
+        let log = FakeLog::default();
+        log.start_turn("old", "Never publish without approval. Budget is $10.");
+        log.host_append(Event::ModelStepCompleted {
+            step: 1,
+            text: "historical analysis ".repeat(100),
+            calls: vec![],
+            reasoning: None,
+            served: None,
+            timing: None,
+        });
+        log.host_append(Event::Final {
+            text: "unfinished".into(),
+        });
+        let mut ctx = log.start_turn("current", "continue investigating, do not publish");
+        let capacity = || {
+            Err(ModelError {
+                class: dex_loop::ErrorClass::ContextCapacity,
+                message: "request too large".into(),
+            })
+        };
+        let model = FakeModel::new(vec![
+            vec![usage(3, 0, 5), capacity()],
+            if second_fails {
+                vec![capacity()]
+            } else {
+                vec![text("recovered answer"), usage(7, 2, 11)]
+            },
+        ]);
+        let tools = FakeTools::new(vec![]);
+        // History is below the proactive threshold: the complete request's
+        // capacity error, not its text, must trigger recovery.
+        let engine = support::engine(&log, &model, &tools, budget())
+            .with_compactor(Threshold::for_turns(48 * 1024, FakeSummarizer));
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(if second_fails {
+                Exit::Failed
+            } else {
+                Exit::Done
+            })
+        );
+        assert_eq!(model.calls(), 2);
+        assert_eq!(ctx.usage().cost_micros, if second_fails { 5 } else { 16 });
+        assert_eq!(
+            log.events()
+                .iter()
+                .filter(|e| matches!(e, Event::Compaction { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            log.events()
+                .iter()
+                .filter(|e| matches!(e, Event::Error { .. }))
+                .count(),
+            usize::from(second_fails)
+        );
+        assert!(matches!(
+            &model.seen()[1][0],
+            dex_loop::Message::Summary { .. }
+        ));
+        assert!(model.seen()[1].iter().any(|m| matches!(m,
+            dex_loop::Message::User { text, .. } if text == "continue investigating, do not publish")));
+        assert_eq!(ctx, log.rehydrate());
+        assert!(tools.runs().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn capacity_recovery_does_not_retry_nonreducing_or_uncompactable_history() {
+    struct Expanding;
+    impl dex_loop::Summarize for Expanding {
+        async fn summarize(
+            &self,
+            _: &dex_loop::Context,
+            _: &[dex_loop::Entry],
+        ) -> dex_loop::Summary {
+            dex_loop::Summary {
+                text: Some("x".repeat(10_000)),
+                usage: dex_loop::Usage {
+                    cost_micros: 13,
+                    ..Default::default()
+                },
+            }
+        }
+    }
+    for history in [false, true] {
+        let log = FakeLog::default();
+        if history {
+            log.start_turn("old", "exact constraint");
+            log.host_append(Event::ModelStepCompleted {
+                step: 1,
+                text: "done".into(),
+                calls: vec![],
+                reasoning: None,
+                served: None,
+                timing: None,
+            });
+            log.host_append(Event::Final {
+                text: "done".into(),
+            });
+        }
+        let mut ctx = log.start_turn("current", "keep this exact");
+        let original = ctx.history().to_vec();
+        let model = FakeModel::new(vec![vec![Err(ModelError {
+            class: dex_loop::ErrorClass::ContextCapacity,
+            message: "request too large".into(),
+        })]]);
+        let tools = FakeTools::new(vec![]);
+        let engine = support::engine(&log, &model, &tools, budget())
+            .with_compactor(Threshold::for_turns(48 * 1024, Expanding));
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(Exit::Failed)
+        );
+        assert_eq!(model.calls(), 1);
+        assert_eq!(ctx.history(), original);
+        assert_eq!(ctx.usage().cost_micros, if history { 13 } else { 0 });
+        assert!(
+            !log.events()
+                .iter()
+                .any(|e| matches!(e, Event::Compaction { .. }))
+        );
+        assert_eq!(ctx, log.rehydrate());
+    }
+}
+
+#[tokio::test]
+async fn capacity_recovery_respects_failure_class_visible_output_and_budget() {
+    for (class, partial, max_cost, exit, error_class) in [
+        (
+            dex_loop::ErrorClass::Unknown,
+            false,
+            100,
+            Exit::Failed,
+            Some(dex_loop::ErrorClass::Unknown),
+        ),
+        (
+            dex_loop::ErrorClass::ContextCapacity,
+            true,
+            100,
+            Exit::Done,
+            None,
+        ),
+        (
+            dex_loop::ErrorClass::ContextCapacity,
+            false,
+            5,
+            Exit::Failed,
+            None,
+        ),
+    ] {
+        let log = FakeLog::default();
+        log.start_turn("old", "preserve approval constraint");
+        log.host_append(Event::ModelStepCompleted {
+            step: 1,
+            text: "old analysis".repeat(100),
+            calls: vec![],
+            reasoning: None,
+            served: None,
+            timing: None,
+        });
+        log.host_append(Event::Final {
+            text: "unfinished".into(),
+        });
+        let mut ctx = log.start_turn("current", "continue");
+        let mut chunks = vec![usage(3, 1, 5)];
+        if partial {
+            chunks.push(text("already visible answer"));
+        }
+        chunks.push(Err(ModelError {
+            class,
+            message: "context_length_exceeded".into(),
+        }));
+        let model = FakeModel::new(vec![chunks]);
+        let tools = FakeTools::new(vec![]);
+        let engine = support::engine(
+            &log,
+            &model,
+            &tools,
+            Budget {
+                max_cost_micros: max_cost,
+                ..budget()
+            },
+        )
+        .with_compactor(Threshold::for_turns(48 * 1024, FakeSummarizer));
+        assert_eq!(
+            engine.run(&mut ctx, &CancellationToken::new()).await,
+            Ok(exit)
+        );
+        assert_eq!(model.calls(), 1);
+        assert!(
+            !log.events()
+                .iter()
+                .any(|e| matches!(e, Event::Compaction { .. }))
+        );
+        assert_eq!(
+            log.events().iter().find_map(|e| match e {
+                Event::Error { class, .. } => *class,
+                _ => None,
+            }),
+            error_class
+        );
+        if max_cost == 5 {
+            assert!(log.events().iter().any(|e| matches!(
+                e,
+                Event::Error {
+                    code: dex_loop::ErrorCode::BudgetExhausted,
+                    ..
+                }
+            )));
+        }
+        if partial {
+            assert!(log.events().iter().any(|e| matches!(e, Event::Final { text } if text.starts_with("already visible answer") && text.ends_with(CUT_OFF_NOTICE))));
+        }
+        assert_eq!(ctx, log.rehydrate());
+    }
+}
+
+#[tokio::test]
 async fn summary_calls_obey_the_same_wall_budget_as_normal_model_calls() {
     struct Slow;
     impl dex_loop::Summarize for Slow {
