@@ -31,7 +31,7 @@ pub struct CompactionPlan {
     pub compaction: Option<Compaction>,
     pub usage: Usage,
     /// History needed compaction, but no safe replacement could be prepared.
-    pub declined: bool,
+    pub(crate) declined: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -613,6 +613,36 @@ mod tests {
             "queued work is never compacted between turns"
         );
         assert!(compactor.plan(&ctx).await.compaction.is_none());
+    }
+
+    #[tokio::test]
+    async fn declined_summary_preserves_history_and_reports_consumed_usage() {
+        struct DeclinedSummary;
+        impl Summarize for DeclinedSummary {
+            async fn summarize(&self, _ctx: &Context, _entries: &[Entry]) -> Summary {
+                Summary {
+                    text: None,
+                    usage: Usage {
+                        input_tokens: 11,
+                        cost_micros: 7,
+                        ..Default::default()
+                    },
+                }
+            }
+        }
+        let mut events = vec![];
+        append(&mut events, user("current", "exact current request"));
+        completed(&mut events, "one", 1);
+        completed(&mut events, "two", 2);
+        let ctx = rehydrate(thread(), &events);
+        let before = ctx.clone();
+        let plan = Threshold::for_turns(1, DeclinedSummary).plan(&ctx).await;
+        assert!(plan.declined);
+        assert!(plan.compaction.is_none());
+        assert_eq!(plan.usage.input_tokens, 11);
+        assert_eq!(plan.usage.cost_micros, 7);
+        assert_eq!(ctx, before);
+        assert!(!NoCompaction.plan(&ctx).await.declined);
     }
 
     struct RecordedSummary(std::sync::Arc<std::sync::Mutex<Vec<Entry>>>);
