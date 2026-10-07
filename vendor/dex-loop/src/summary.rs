@@ -1032,6 +1032,74 @@ mod tests {
             .chain(stream::pending())
         }
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn semantic_summary_can_recover_after_the_mechanical_digest_fills() {
+        struct DelayedSummary(Duration);
+        impl Model for DelayedSummary {
+            fn stream<'a>(
+                &'a self,
+                ctx: &'a Context,
+                tools: &'a [&'a ToolSpec],
+            ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a {
+                assert!(tools.is_empty());
+                let Message::User { text, .. } = &ctx.history()[0].message else {
+                    panic!("summary input");
+                };
+                assert!(text.contains("Never publish without my approval. Budget is $10."));
+                assert!(!text.contains("current request remains verbatim"));
+                stream::iter([Ok(ModelChunk::Text("Approval required. ".into()))]).chain(
+                    stream::once(async move {
+                        tokio::time::sleep(self.0).await;
+                        Ok(ModelChunk::Text(
+                            "Budget is $10; analysis is unfinished.".into(),
+                        ))
+                    }),
+                )
+            }
+        }
+
+        let mut entries = history();
+        entries.extend((3..40).map(|cursor| Entry {
+            cursor: Cursor(cursor),
+            message: Message::Tool {
+                call: crate::CallId::new(format!("historical-call-{cursor}")),
+                name: ToolName::new("dex.describe"),
+                outcome: Outcome::Succeeded,
+                output: Output::Text("catalog entry ".repeat(100)),
+            },
+        }));
+        let (_, references, from, to) = material(&entries).unwrap();
+        assert!(mechanical_digest(&entries, &references, from, to).is_none());
+        let ctx = context();
+        let original = ctx.clone();
+        for (deadline, latency, succeeds) in [(10, 45, false), (300, 45, true), (300, 305, false)] {
+            let result = ModelSummarizer::new(DelayedSummary(Duration::from_secs(latency)))
+                .with_timeout(Duration::from_secs(deadline))
+                .summarize(&ctx, &entries)
+                .await;
+            assert_eq!(result.text.is_some(), succeeds);
+            if let Some(text) = result.text {
+                assert!(text.len() <= SUMMARY_BYTES);
+                let envelope: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(
+                    envelope["references"],
+                    json!(["attachment@v1", "result@v1"])
+                );
+                assert_eq!(envelope["covers_from_cursor"], 1);
+                assert_eq!(envelope["covers_to_cursor"], 39);
+                assert_eq!(
+                    envelope["summary"],
+                    "Approval required. Budget is $10; analysis is unfinished."
+                );
+            }
+            assert_eq!(
+                ctx, original,
+                "summary planning cannot mutate owner history"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn timed_out_summary_falls_back_and_keeps_already_observed_usage() {
         let summarizer = ModelSummarizer {
