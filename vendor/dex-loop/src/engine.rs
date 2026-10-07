@@ -469,7 +469,9 @@ where
                 _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
                 result = tokio::time::timeout(remaining_wall, self.compactor.plan(ctx)) => result,
             };
+            let mut compaction_declined = false;
             if let Ok(plan) = plan {
+                compaction_declined = plan.declined;
                 let mut events = Vec::new();
                 if plan.usage != Default::default() {
                     events.push(Event::Usage(plan.usage));
@@ -498,6 +500,18 @@ where
                         class: Some(crate::ErrorClass::BudgetExhausted),
                         code: ErrorCode::BudgetExhausted,
                         message,
+                    }],
+                )
+                .await?;
+                return Ok(Exit::Failed);
+            }
+            if compaction_declined {
+                self.emit(
+                    ctx,
+                    vec![Event::Error {
+                        class: Some(crate::ErrorClass::ContextCapacity),
+                        code: ErrorCode::ModelFailed,
+                        message: "Conversation context could not be reduced safely. History is preserved; start a new conversation with the relevant details if recovery keeps failing.".into(),
                     }],
                 )
                 .await?;

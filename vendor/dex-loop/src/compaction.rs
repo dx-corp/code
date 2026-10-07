@@ -24,6 +24,8 @@ pub trait Compactor: Send + Sync {
 pub struct CompactionPlan {
     pub compaction: Option<Compaction>,
     pub usage: Usage,
+    /// History needed compaction, but no safe replacement could be prepared.
+    pub declined: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -44,7 +46,7 @@ impl Compactor for NoCompaction {
 
 /// Writes the summary for a prefix of history (usually one model call).
 pub trait Summarize: Send + Sync {
-    /// `None` skips this compaction; the engine continues uncompacted.
+    /// `None` declines this compaction without changing the original history.
     fn summarize(&self, ctx: &Context, entries: &[Entry]) -> impl Future<Output = Summary> + Send;
 }
 
@@ -133,6 +135,7 @@ impl<S: Summarize> Threshold<S> {
         }
         let summary = self.summarizer.summarize(ctx, &entries).await;
         CompactionPlan {
+            declined: summary.text.is_none(),
             compaction: summary.text.map(|summary| Compaction {
                 covers_to: history[cut - 1].cursor,
                 summary,

@@ -423,6 +423,8 @@ pub enum ErrorClass {
     Protocol,
     /// Stored history could not be loaded for the request.
     Resolve,
+    /// Context could not be reduced safely or exceeds the request capacity.
+    ContextCapacity,
     /// The host could not prepare the request.
     Host,
     /// Any other gateway or provider rejection.
@@ -450,6 +452,7 @@ impl ErrorClass {
             ErrorClass::Auth => "auth",
             ErrorClass::Protocol => "protocol",
             ErrorClass::Resolve => "resolve",
+            ErrorClass::ContextCapacity => "context_capacity",
             ErrorClass::Host => "host",
             ErrorClass::Rejected => "rejected",
             ErrorClass::Unknown => "unknown",
