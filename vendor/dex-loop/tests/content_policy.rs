@@ -32,6 +32,7 @@ fn start(log: &FakeLog, policy: TurnContentPolicy) -> Context {
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: Some(Box::new(TurnVoice {
             policy: Some(policy),
             tone: Vec::new(),

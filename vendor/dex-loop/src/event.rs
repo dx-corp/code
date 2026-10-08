@@ -586,6 +586,9 @@ pub enum Event {
         /// never credential values, and grants no Gateway authority.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_binding: Option<crate::ManagedInferenceProviderBinding>,
+        /// Host catalog capacity. Absent or zero means unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window_tokens: Option<u64>,
         /// The workspace writing policy and the sender's voice choice,
         /// resolved by the authenticated host. Prompt data only; grants no
         /// authority. Older turns carry none and render no voice.
@@ -1082,6 +1085,7 @@ mod tests {
                 attachments: vec![ArtifactRef::new("a1")],
                 authorized_tools: Vec::new(),
                 model_binding: None,
+                context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 client_tools: vec![ClientToolSpec {
@@ -1197,6 +1201,7 @@ mod tests {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
         };
@@ -1228,6 +1233,7 @@ mod tests {
                 client_tools: vec![],
                 authorized_tools: Vec::new(),
                 model_binding: None,
+                context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
             }

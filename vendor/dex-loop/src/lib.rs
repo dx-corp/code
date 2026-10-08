@@ -41,7 +41,8 @@ pub mod testing;
 
 pub use budget::{Budget, BudgetAxis, RemainingBudget};
 pub use compaction::{
-    Compaction, CompactionPlan, Compactor, NoCompaction, Summarize, Summary, Threshold,
+    Compaction, CompactionPlan, Compactor, DEFAULT_OUTPUT_TOKENS, NoCompaction, Summarize, Summary,
+    Threshold, context_input_byte_limit,
 };
 pub use content_policy::{
     AuthoredContent, AuthoredField, AuthoredFieldKind, ContentPolicyEvaluation, ContentPolicyScope,

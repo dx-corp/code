@@ -294,6 +294,7 @@ fn pending_events(call: &ProposedCall) -> Vec<Event> {
             authorized_tools: vec![call.tool.clone()],
             approval_mode: ApprovalMode::Interactive,
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
         },
         Event::StepStarted {

@@ -37,6 +37,7 @@ fn context(output: Output) -> Context {
                     turn: TurnId::new("turn"),
                     message_id: None,
                     model_binding: None,
+                    context_window_tokens: None,
                     voice: None,
                     principal: PrincipalId::new("alice"),
                     text: "Inspect the image and peer".into(),

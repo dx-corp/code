@@ -5,6 +5,20 @@ use std::future::Future;
 use crate::context::{Context, Entry, Message};
 use crate::event::{Cursor, Usage};
 
+/// Shared reserve used by the default model request and proactive compaction.
+pub const DEFAULT_OUTPUT_TOKENS: u32 = 32_000;
+
+/// Conservative byte budget, not a tokenizer measurement. Reserve the requested
+/// output and 10% of the catalog window for framing/tokenization uncertainty.
+/// Charge one token per UTF-8 byte rather than assuming English's ~4 bytes/token.
+/// Providers still enforce their actual tokenizer and multimodal accounting.
+pub fn context_input_byte_limit(window_tokens: u64, output_tokens: u32) -> usize {
+    let input = window_tokens
+        .saturating_sub(window_tokens.div_ceil(10))
+        .saturating_sub(u64::from(output_tokens));
+    usize::try_from(input).unwrap_or(usize::MAX)
+}
+
 /// A planned compaction: history up to and including `covers_to` becomes
 /// `summary`. The engine appends it as `Event::Compaction`, so rehydration
 /// applies it the same way.
@@ -94,11 +108,24 @@ impl<S: Summarize> Threshold<S> {
 }
 
 impl<S: Summarize> Threshold<S> {
+    fn limit(&self, ctx: &Context) -> usize {
+        // usize::MAX is the existing explicit opt-out.
+        if self.max_bytes == usize::MAX {
+            return self.max_bytes;
+        }
+        ctx.context_window_tokens()
+            .map_or(self.max_bytes, |window| {
+                self.max_bytes
+                    .min(context_input_byte_limit(window, DEFAULT_OUTPUT_TOKENS))
+            })
+    }
+
     /// Plans at 70% of the limit after a finished turn; running turns are untouched.
     pub async fn plan_after_turn(&self, ctx: &Context) -> CompactionPlan {
         if ctx.turn_running() || self.max_bytes == usize::MAX {
             return CompactionPlan::default();
         }
+        let max_bytes = self.limit(ctx);
         // Do not repeatedly summarize a large prior summary after tiny turns.
         let new_bytes: usize = ctx
             .history()
@@ -106,11 +133,10 @@ impl<S: Summarize> Threshold<S> {
             .filter(|entry| !matches!(entry.message, Message::Summary { .. }))
             .map(|entry| entry.message.size())
             .sum();
-        if new_bytes < self.max_bytes / 10 {
+        if new_bytes < max_bytes / 10 {
             return CompactionPlan::default();
         }
-        self.plan_at(ctx, self.max_bytes.saturating_mul(70) / 100)
-            .await
+        self.plan_at(ctx, max_bytes.saturating_mul(70) / 100).await
     }
 
     async fn plan_at(&self, ctx: &Context, max_bytes: usize) -> CompactionPlan {
@@ -153,7 +179,7 @@ impl<S: Summarize> Threshold<S> {
 
 impl<S: Summarize> Compactor for Threshold<S> {
     async fn plan(&self, ctx: &Context) -> CompactionPlan {
-        self.plan_at(ctx, self.max_bytes).await
+        self.plan_at(ctx, self.limit(ctx)).await
     }
 
     async fn recover(&self, ctx: &Context) -> CompactionPlan {
@@ -315,6 +341,7 @@ mod tests {
             client_tools: vec![],
             authorized_tools: vec![],
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
         }
@@ -373,6 +400,75 @@ mod tests {
                 text: Some("untrusted old completed work".into()),
                 usage: Usage::default(),
             }
+        }
+    }
+
+    #[test]
+    fn catalog_budget_reserves_output_and_headroom_without_overflow() {
+        assert_eq!(context_input_byte_limit(40_000, 32_000), 4_000);
+        assert_eq!(context_input_byte_limit(40_001, 32_000), 4_000);
+        assert_eq!(context_input_byte_limit(40_000, 8_000), 28_000);
+        assert_eq!(context_input_byte_limit(30_000, 32_000), 0);
+        assert_eq!(context_input_byte_limit(0, 32_000), 0);
+        assert!(context_input_byte_limit(u64::MAX, 32_000) >= 48 * 1024);
+    }
+
+    #[tokio::test]
+    async fn catalog_capacity_lowers_threshold_but_never_raises_the_byte_cap() {
+        for (window, history_bytes, expected) in [
+            (Some(40_000), 4_000, false),
+            (Some(40_000), 4_001, true),
+            (Some(40_000), 3_000, false),
+            (None, 4_001, false),
+            (Some(0), 4_001, false),
+            (Some(1_000_000), 50_001, true),
+        ] {
+            let mut event = user("old", &"x".repeat(history_bytes));
+            if let Event::UserMessage {
+                context_window_tokens,
+                ..
+            } = &mut event
+            {
+                *context_window_tokens = window;
+            }
+            // User text alone has an exact byte size; no tokenizer-derived expectations.
+            let events = vec![
+                (Cursor(1), event),
+                (
+                    Cursor(2),
+                    Event::ModelStepCompleted {
+                        step: 1,
+                        text: String::new(),
+                        calls: vec![],
+                        reasoning: None,
+                        served: None,
+                        timing: None,
+                    },
+                ),
+                (
+                    Cursor(3),
+                    Event::Final {
+                        text: String::new(),
+                    },
+                ),
+            ];
+            let ctx = rehydrate(thread(), &events);
+            let compactor = Threshold::for_turns(50_000, Fake);
+            assert_eq!(
+                compactor.plan(&ctx).await.compaction.is_some(),
+                expected,
+                "{window:?}/{history_bytes}"
+            );
+            if window == Some(40_000) && history_bytes == 3_000 {
+                assert!(compactor.plan_after_turn(&ctx).await.compaction.is_some());
+            }
+            assert!(
+                Threshold::for_turns(usize::MAX, Fake)
+                    .plan(&ctx)
+                    .await
+                    .compaction
+                    .is_none()
+            );
         }
     }
 
@@ -771,6 +867,7 @@ mod cut_tests {
             client_tools: Vec::new(),
             authorized_tools: Vec::new(),
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
         }

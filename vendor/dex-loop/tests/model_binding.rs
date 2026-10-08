@@ -29,9 +29,26 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
     };
     let first = binding("vertex-ai", "selected-gemini");
     let second = binding("vertex-anthropic", "selected-claude");
+    let with_capacity = |mut event: Event, tokens| {
+        let Event::UserMessage {
+            context_window_tokens,
+            ..
+        } = &mut event
+        else {
+            panic!("user message");
+        };
+        *context_window_tokens = Some(tokens);
+        event
+    };
     let events = vec![
-        (Cursor(1), message("first", Some(first.clone()))),
-        (Cursor(2), message("second", Some(second.clone()))),
+        (
+            Cursor(1),
+            with_capacity(message("first", Some(first.clone())), 1_000_000),
+        ),
+        (
+            Cursor(2),
+            with_capacity(message("second", Some(second.clone())), 200_000),
+        ),
         (Cursor(3), message("third", None)),
         (
             Cursor(4),
@@ -46,8 +63,10 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
         live.observe(*cursor, event);
     }
     assert_eq!(live.model_binding(), Some(&first));
+    assert_eq!(live.context_window_tokens(), Some(1_000_000));
     let mut replay = rehydrate(thread, &events);
     assert_eq!(replay.model_binding(), live.model_binding());
+    assert_eq!(replay.context_window_tokens(), live.context_window_tokens());
     for context in [&mut live, &mut replay] {
         context.observe(
             Cursor(5),
@@ -57,6 +76,7 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
         );
         assert_eq!(context.turn(), Some(&TurnId::new("second")));
         assert_eq!(context.model_binding(), Some(&second));
+        assert_eq!(context.context_window_tokens(), Some(200_000));
         context.observe(
             Cursor(6),
             &Event::Final {
@@ -65,6 +85,49 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
         );
         assert_eq!(context.turn(), Some(&TurnId::new("third")));
         assert_eq!(context.model_binding(), None);
+        assert_eq!(context.context_window_tokens(), None);
+    }
+}
+
+#[test]
+fn legacy_null_and_zero_capacity_are_unknown_and_optional_on_the_wire() {
+    for tokens in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!(0)),
+        Some(serde_json::json!(200_000)),
+    ] {
+        let mut input = serde_json::json!({
+            "type": "user_message", "turn": "turn-1", "principal": "user-1",
+            "text": "hello", "attachments": []
+        });
+        if let Some(tokens) = tokens {
+            input["context_window_tokens"] = tokens;
+        }
+        let event: Event = serde_json::from_value(input.clone()).unwrap();
+        let durable = serde_json::to_value(&event).unwrap();
+        if input["context_window_tokens"].is_null() {
+            assert!(durable.get("context_window_tokens").is_none());
+        } else {
+            assert_eq!(
+                durable["context_window_tokens"],
+                input["context_window_tokens"]
+            );
+        }
+        let context = rehydrate(
+            ThreadId {
+                org: "org-1".into(),
+                workspace: "ws-1".into(),
+                thread: "thread-1".into(),
+            },
+            &[(Cursor(1), event)],
+        );
+        assert_eq!(
+            context.context_window_tokens(),
+            input["context_window_tokens"]
+                .as_u64()
+                .filter(|tokens| *tokens > 0)
+        );
     }
 }
 

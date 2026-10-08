@@ -205,6 +205,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
             client_tools: vec![],
             authorized_tools: vec![],
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
         },

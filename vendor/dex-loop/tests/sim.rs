@@ -196,6 +196,7 @@ fn stale_control_kinds_would_release_a_lease_with_unprocessed_control_event() {
                 client_tools: vec![],
                 authorized_tools: Vec::new(),
                 model_binding: None,
+                context_window_tokens: None,
                 voice: None,
                 approval_mode: dex_loop::ApprovalMode::Interactive,
             },
@@ -311,6 +312,7 @@ async fn dst_two_replicas_racing_the_same_generation_dispatch_once() {
         client_tools: vec![],
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
@@ -373,6 +375,7 @@ async fn dst_two_replica_lease_fencing() {
         client_tools: vec![],
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
