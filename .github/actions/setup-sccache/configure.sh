@@ -321,10 +321,14 @@ else
     exit "${startup_status}"
   fi
   # The startup client can time out just before its job-local daemon becomes
-  # ready. The existing statistics request must still succeed and prove the
-  # selected backend; a timeout alone never admits an unavailable cache.
+  # ready. Require an acknowledged daemon request before inspecting the
+  # backend; --show-stats can synthesize empty stats without a server.
   echo "::warning::sccache startup client timed out; checking daemon readiness"
 fi
+# Each job owns a fresh daemon and has not compiled yet. ZeroStats requires an
+# actual server connection and acknowledgement; it cannot report cached config
+# as readiness. Keep the following backend validation independently required.
+"${SCCACHE_BIN}" --zero-stats
 stats="$("${SCCACHE_BIN}" --show-stats)"
 printf '%s\n' "${stats}"
 
