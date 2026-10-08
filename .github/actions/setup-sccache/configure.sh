@@ -312,7 +312,19 @@ else
   unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX
 fi
 
-"${SCCACHE_BIN}" --start-server
+if startup_output="$("${SCCACHE_BIN}" --start-server 2>&1)"; then
+  printf '%s\n' "${startup_output}"
+else
+  startup_status=$?
+  printf '%s\n' "${startup_output}" >&2
+  if [[ "${startup_output}" != *"Timed out waiting for server startup"* ]]; then
+    exit "${startup_status}"
+  fi
+  # The startup client can time out just before its job-local daemon becomes
+  # ready. The existing statistics request must still succeed and prove the
+  # selected backend; a timeout alone never admits an unavailable cache.
+  echo "::warning::sccache startup client timed out; checking daemon readiness"
+fi
 stats="$("${SCCACHE_BIN}" --show-stats)"
 printf '%s\n' "${stats}"
 
