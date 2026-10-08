@@ -352,6 +352,7 @@ mod tests {
             turn: TurnId::new("t1"),
             message_id: None,
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             principal: PrincipalId::new("alice"),
             text: text.into(),

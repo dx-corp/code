@@ -27,6 +27,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
             client_tools: vec![],
             authorized_tools: vec![],
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
         },

@@ -150,6 +150,7 @@ impl<M: Model + 'static> HostTurnRun<M> {
                 turn: turn.turn,
                 message_id: None,
                 model_binding: None,
+                context_window_tokens: None,
                 voice: None,
                 principal: turn.principal.clone(),
                 text: turn.prompt,

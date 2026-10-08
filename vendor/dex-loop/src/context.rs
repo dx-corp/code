@@ -211,6 +211,7 @@ pub struct Context {
     interaction_mode: crate::InteractionMode,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
+    context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
     /// Last completed serving route in this turn, derived from existing events.
     /// Kept outside compactable history so recovery does not retry a failed primary.
@@ -266,6 +267,7 @@ struct PendingTurn {
     interaction_mode: crate::InteractionMode,
     approval_mode: ApprovalMode,
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
+    context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
 }
 
@@ -295,6 +297,7 @@ impl Context {
             interaction_mode: crate::InteractionMode::Unspecified,
             approval_mode: ApprovalMode::Interactive,
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             last_served: None,
             authorized_principal: None,
@@ -372,6 +375,11 @@ impl Context {
     /// The current turn's exact host-resolved provider coordinates.
     pub fn model_binding(&self) -> Option<&crate::ManagedInferenceProviderBinding> {
         self.model_binding.as_ref()
+    }
+
+    /// The current turn's host catalog capacity; zero and absent are unknown.
+    pub fn context_window_tokens(&self) -> Option<u64> {
+        self.context_window_tokens.filter(|tokens| *tokens > 0)
     }
 
     /// Immutable host-admitted policy, outside compactable model history.
@@ -631,6 +639,7 @@ impl Context {
                 authorized_tools,
                 approval_mode,
                 model_binding,
+                context_window_tokens,
                 voice,
                 interaction_mode,
             } => {
@@ -645,6 +654,7 @@ impl Context {
                     interaction_mode: *interaction_mode,
                     approval_mode: *approval_mode,
                     model_binding: model_binding.clone(),
+                    context_window_tokens: *context_window_tokens,
                     voice: voice.as_deref().cloned(),
                 };
                 if self.status == Status::Running {
@@ -1155,6 +1165,7 @@ impl Context {
             authorized_tools,
             approval_mode,
             model_binding,
+            context_window_tokens,
             voice,
             interaction_mode,
         } = next;
@@ -1182,6 +1193,7 @@ impl Context {
         self.authorized_tools = authorized_tools;
         self.approval_mode = approval_mode;
         self.model_binding = model_binding;
+        self.context_window_tokens = context_window_tokens;
         self.voice = voice;
         self.interaction_mode = interaction_mode;
         self.last_served = None;

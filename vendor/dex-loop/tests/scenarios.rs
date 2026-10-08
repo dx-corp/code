@@ -365,6 +365,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         },
@@ -964,6 +965,7 @@ async fn crash_mid_stream_abandons_the_attempt_and_reissues_it() {
         client_tools: vec![],
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     });
@@ -1185,6 +1187,7 @@ async fn same_turn_id_in_two_threads_dispatches_under_distinct_threads() {
             client_tools: vec![],
             authorized_tools: Vec::new(),
             model_binding: None,
+            context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
         });
@@ -2227,6 +2230,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 1
@@ -2242,6 +2246,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 4
@@ -2289,6 +2294,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 1 -- excluded from the suffix below
@@ -2309,6 +2315,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         client_tools: Vec::new(),
         authorized_tools: Vec::new(),
         model_binding: None,
+        context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
     }); // cursor 4
