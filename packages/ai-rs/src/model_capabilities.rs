@@ -100,6 +100,7 @@ const ALWAYS_ON_THINKING_FAMILIES: &[&str] = &[
 /// effort ladder, and no extended-thinking model does
 /// (`anthropic_capabilities_follow_the_catalog_effort_ladder`).
 const ADAPTIVE_THINKING_FAMILIES: &[&str] = &[
+    "claude-haiku-5-5",
     "claude-opus-5",
     "claude-sonnet-5",
     "claude-opus-4-8",
@@ -112,11 +113,12 @@ const ADAPTIVE_THINKING_FAMILIES: &[&str] = &[
 
 /// Direct Anthropic families that are sent no `temperature`. models.dev
 /// lists `temperature: false` for Fable 5/5.1, Opus 4.7/4.8/5/5.5 and Sonnet
-/// 5. Opus 4.5 and 4.6 are listed as accepting it and are omitted here on
+/// 5, and Haiku 5.5. Opus 4.5 and 4.6 are listed as accepting it and are omitted here on
 /// purpose (see `is_anthropic_opus_4_family_for_capabilities`): omitting a
 /// sampling parameter cannot fail a request, sending one a model rejects
 /// returns 400.
 const NO_TEMPERATURE_FAMILIES: &[&str] = &[
+    "claude-haiku-5-5",
     "claude-fable-5",
     "claude-mythos-5",
     "claude-mythos-preview",
@@ -129,6 +131,7 @@ const NO_TEMPERATURE_FAMILIES: &[&str] = &[
 /// (`reasoning_efforts` contains `xhigh`) and pinned against it by
 /// `anthropic_capabilities_follow_the_catalog_effort_ladder`.
 const XHIGH_FAMILIES: &[&str] = &[
+    "claude-haiku-5-5",
     "claude-fable-5",
     "claude-mythos-5",
     "claude-opus-5",
@@ -403,11 +406,17 @@ pub fn openai_request_capabilities(
             // Ladder tops from the bundled catalog's `reasoning_efforts`
             // (models.dev): the GPT-5.6 and GPT-6 families end at `max`, the
             // GPT-5.2 to 5.5 families and the realtime model at `xhigh`,
-            // everything earlier at `high`. Pinned model by model against the
+            // native Daybreak aliases also end at `max`; everything earlier
+            // ends at `high`. Pinned model by model against the
             // catalog by `openai_and_xai_efforts_follow_the_catalog_ladder`.
             if is_model_family(&lower, "gpt-5.6")
                 || lower.starts_with("gpt-6")
                 || is_model_family(&lower, "gpt-5.7")
+                || (direct_openai
+                    && matches!(
+                        lower.as_str(),
+                        "gpt-daybreak-blue-latest" | "gpt-daybreak-red-latest"
+                    ))
             {
                 "max"
             } else if ["gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5"]
@@ -507,6 +516,13 @@ fn uses_responses_api(provider: Option<&str>, model: &str) -> bool {
         || normalized.starts_with("gpt-5")
         || normalized == "gpt-6-astra"
         || normalized.starts_with("o3")
+        // OpenAI documents these exact aliases as Responses-only. Preserve
+        // other providers' routes even when they reuse the same model name.
+        || (provider.is_none_or(|provider| provider.eq_ignore_ascii_case("openai"))
+            && matches!(
+                normalized.as_str(),
+                "gpt-daybreak-blue-latest" | "gpt-daybreak-red-latest"
+            ))
 }
 
 impl OpenAiRequestCapabilities {
@@ -1137,6 +1153,54 @@ mod tests {
     }
 
     #[test]
+    fn daybreak_request_controls_preserve_the_provider_boundary() {
+        for model in ["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"] {
+            let caps = openai_request_capabilities(Some("openai"), model);
+            assert_eq!(
+                caps.protocol,
+                OpenAiWireProtocol::OpenAiResponses,
+                "{model}"
+            );
+            assert!(!caps.temperature, "{model}");
+            assert!(caps.reasoning_effort_supported, "{model}");
+            assert_eq!(caps.maximum_reasoning_effort, "max", "{model}");
+            assert_eq!(
+                openai_request_capabilities(None, &format!("maestro-managed/openai/{model}")),
+                caps,
+                "{model}"
+            );
+            let local = openai_request_capabilities(Some("ollama"), model);
+            assert_eq!(
+                local.protocol,
+                OpenAiWireProtocol::OpenAiChat,
+                "local {model}"
+            );
+            assert!(local.temperature, "local {model}");
+            assert_eq!(local.maximum_reasoning_effort, "high", "local {model}");
+            let routed =
+                openai_request_capabilities(Some("openrouter"), &format!("openai/{model}"));
+            assert_eq!(
+                routed.protocol,
+                OpenAiWireProtocol::OpenAiChat,
+                "OpenRouter {model}"
+            );
+            assert_eq!(
+                routed.maximum_reasoning_effort, "high",
+                "OpenRouter {model}"
+            );
+            assert_eq!(
+                openai_request_capabilities(Some("xai"), model).protocol,
+                OpenAiWireProtocol::OpenAiChat,
+                "other provider {model}"
+            );
+            assert_eq!(
+                openai_request_capabilities(Some("openai"), "gpt-daybreak-unknown").protocol,
+                OpenAiWireProtocol::OpenAiChat
+            );
+        }
+    }
+
+    #[test]
     fn xhigh_effort_is_gated_on_the_documented_model_families() {
         // ThinkingLevel::XHigh carries a 32,000-token budget.
         const XHIGH_BUDGET: u32 = 32_000;
@@ -1203,6 +1267,12 @@ mod tests {
     /// models; see the note on the rows below.
     const ANTHROPIC_CAPABILITY_MATRIX: &[(&str, AnthropicThinkingMode, bool, bool)] = &[
         // model, thinking, sends temperature, accepts xhigh
+        (
+            "claude-haiku-5-5",
+            AnthropicThinkingMode::Adaptive,
+            false,
+            true,
+        ),
         (
             "claude-opus-5-5",
             AnthropicThinkingMode::AlwaysOn,

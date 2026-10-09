@@ -1600,7 +1600,9 @@ mod tests {
     /// be reviewed before entering the catalog.
     #[test]
     fn every_catalogued_model_has_a_published_price() {
-        const PRICED_AT_ROUTING_TIME: [&str; 6] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 7] = [
+            // https://openrouter.ai/nvidia/switchyard: billed at the chosen model's rates.
+            "nvidia/switchyard",
             "openrouter/auto",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
@@ -1624,10 +1626,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn switchyard_is_catalogued_without_an_invented_fixed_price() {
+        assert!(
+            bundled_models()
+                .iter()
+                .any(|model| { model.provider == "openrouter" && model.id == "nvidia/switchyard" })
+        );
+        assert!(bundled_rates("nvidia/switchyard").is_none());
+    }
+
     /// The routing exceptions must stay real models, not a stale allowlist.
     #[test]
     fn every_routing_time_exception_is_still_catalogued() {
-        const PRICED_AT_ROUTING_TIME: [&str; 6] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 7] = [
+            "nvidia/switchyard",
             "openrouter/auto",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
@@ -1651,7 +1664,8 @@ mod tests {
     /// survives a regeneration.
     #[test]
     fn anthropic_context_windows_match_the_published_list() {
-        const ONE_MILLION: [&str; 9] = [
+        const ONE_MILLION: [&str; 11] = [
+            "claude-haiku-5-5",
             "claude-fable-5",
             "claude-fable-5-1",
             "claude-opus-4-6",
@@ -1661,6 +1675,7 @@ mod tests {
             "claude-opus-5-5",
             "claude-sonnet-4-6",
             "claude-sonnet-5",
+            "claude-sonnet-5-5",
         ];
 
         let mut wrong = Vec::new();

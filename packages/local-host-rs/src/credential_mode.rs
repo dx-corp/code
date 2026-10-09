@@ -529,10 +529,26 @@ pub(crate) fn refreshed_identity_session_for_capture(
 }
 
 // The hosted exchange endpoint is an existing operator-provided coordinate, not
-// discovery authority. Only this established private Identity origin may receive
-// admission tokens; arbitrary URLs and local trust overrides remain rejected.
+// discovery authority. Only these established private Identity origins may
+// receive admission tokens; arbitrary URLs and local trust overrides remain
+// rejected. Identity serves the sandbox-facing routes (workload-certificate
+// exchange and token introspection) on a dedicated listener so sandbox network
+// policy can admit that port alone. The shared listener stays accepted until
+// every resident has moved; the selected origin always matches the exchange URL.
 const HOSTED_IDENTITY_ORIGIN: &str = "https://identity-service.evalops.svc.cluster.local:8080";
 const HOSTED_IDENTITY_EXCHANGE: &str = "https://identity-service.evalops.svc.cluster.local:8080/internal/v1/kubernetes-workload-certificates/exchange";
+const HOSTED_IDENTITY_SANDBOX_ORIGIN: &str =
+    "https://identity-service.evalops.svc.cluster.local:8444";
+const HOSTED_IDENTITY_SANDBOX_EXCHANGE: &str = "https://identity-service.evalops.svc.cluster.local:8444/internal/v1/kubernetes-workload-certificates/exchange";
+
+/// Map a pinned hosted exchange URL to the Identity origin that serves it.
+fn pinned_hosted_identity_origin(exchange: &str) -> Option<&'static str> {
+    match exchange {
+        HOSTED_IDENTITY_EXCHANGE => Some(HOSTED_IDENTITY_ORIGIN),
+        HOSTED_IDENTITY_SANDBOX_EXCHANGE => Some(HOSTED_IDENTITY_SANDBOX_ORIGIN),
+        _ => None,
+    }
+}
 
 fn hosted_runner_mode(env: &HashMap<String, String>) -> bool {
     env.get("MAESTRO_HOSTED_RUNNER_MODE").is_some_and(|value| {
@@ -549,8 +565,8 @@ fn identity_verification_endpoint(
 ) -> Result<(String, Option<std::path::PathBuf>)> {
     let hosted = hosted_runner_mode(env);
     if let Some(exchange) = env.get("MAESTRO_IDENTITY_EXCHANGE_URL").filter(|_| hosted) {
-        let origin = if exchange.trim() == HOSTED_IDENTITY_EXCHANGE {
-            HOSTED_IDENTITY_ORIGIN.to_owned()
+        let origin = if let Some(origin) = pinned_hosted_identity_origin(exchange.trim()) {
+            origin.to_owned()
         } else {
             hosted_test_identity_origin(exchange.trim(), env)
                 .context("untrusted hosted EvalOps Identity exchange endpoint")?
@@ -1279,9 +1295,32 @@ mod tests {
     }
 
     #[test]
+    fn hosted_identity_selects_the_origin_of_the_dedicated_sandbox_listener() {
+        let mut env = hosted_identity_env();
+        env.insert(
+            "MAESTRO_IDENTITY_EXCHANGE_URL".into(),
+            HOSTED_IDENTITY_SANDBOX_EXCHANGE.into(),
+        );
+        let (origin, ca) = identity_verification_endpoint(None, &env).unwrap();
+        assert_eq!(origin, HOSTED_IDENTITY_SANDBOX_ORIGIN);
+        assert_eq!(
+            ca.unwrap(),
+            std::path::PathBuf::from(&env["MAESTRO_IDENTITY_TLS_CA_FILE"])
+        );
+        assert_eq!(
+            pinned_hosted_identity_origin(HOSTED_IDENTITY_EXCHANGE),
+            Some(HOSTED_IDENTITY_ORIGIN)
+        );
+    }
+
+    #[test]
     fn hosted_identity_rejects_other_authorities_and_missing_trust() {
         for exchange in [
             "http://identity-service.evalops.svc.cluster.local:8080/internal/v1/kubernetes-workload-certificates/exchange",
+            "http://identity-service.evalops.svc.cluster.local:8444/internal/v1/kubernetes-workload-certificates/exchange",
+            "https://identity-service.evalops.svc.cluster.local:8443/internal/v1/kubernetes-workload-certificates/exchange",
+            "https://identity-service.evalops.svc.cluster.local:8444/internal/v1/kubernetes-workload-certificates/exchange?redirect=1",
+            "https://identity-service.evalops.svc.cluster.local:8444/v1/tokens/introspect",
             "https://identity.attacker.example/internal/v1/kubernetes-workload-certificates/exchange",
             "https://identity-service.evalops.svc.cluster.local:8080/internal/v1/kubernetes-workload-certificates/exchange?redirect=1",
         ] {
