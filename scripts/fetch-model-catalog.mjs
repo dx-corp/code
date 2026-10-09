@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { omitUnverifiedSonarOutput } from "./catalog-output-limits.mjs";
+import { openAiProtocol } from "./catalog-provider-protocol.mjs";
 
 /**
  * Regenerate the bundled model catalog snapshot consumed by
@@ -38,16 +39,6 @@ const PROVIDER_PROTOCOLS = {
 	xai: "openai-chat",
 	openai: null,
 };
-
-/**
- * Mirror of `uses_responses_api` in packages/ai-rs/src/openai.rs:
- * Codex, GPT-5, GPT-6 Astra, and o3 models use the Responses API.
- */
-function openAiProtocol(modelId) {
-	return modelId.includes("codex") || modelId.startsWith("gpt-5") || modelId === "gpt-6-astra" || modelId.startsWith("o3")
-		? "openai-responses"
-		: "openai-chat";
-}
 
 function truncate(text, maxLen) {
 	if (text.length <= maxLen) {
