@@ -174,6 +174,7 @@ impl<M: Model> Summarize for ModelSummarizer<M> {
                 approval_mode: ApprovalMode::Interactive,
             },
         );
+        input.retain_owner_evidence_from(ctx);
         // No tools or executable capability are offered to this call. Reusing
         // Model retains tenant authentication, provider routing, and metering.
         let mut result = Summary::default();

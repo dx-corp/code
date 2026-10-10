@@ -745,3 +745,46 @@ async fn dependent_read_starts_before_an_unrelated_read_finishes() {
     );
     assert_eq!(log.rehydrate(), ctx);
 }
+
+#[tokio::test]
+async fn context_pocket_is_conversational_even_after_compaction() {
+    for compacted in [false, true] {
+        let log = FakeLog::default();
+        let model = FakeModel::new(vec![
+            vec![script(
+                r#"
+            text(ALL_TOOLS.map(tool => tool.name));
+            if (typeof tools.dex_get_context_pocket === 'function') {
+                text(await tools.dex_get_context_pocket({key:"case"}));
+            }
+        "#,
+            )],
+            vec![text("done")],
+        ]);
+        let tools = FakeTools::new(vec![strict_read_tool(dex_loop::CONTEXT_POCKET_TOOL_NAME)]);
+        let mut ctx = log.start_turn("t1", "review a case");
+        if compacted {
+            let event = Event::Compaction {
+                covers_to_cursor: ctx.cursor(),
+                summary: "historical case".into(),
+            };
+            let cursor = log.host_append(event.clone());
+            ctx.observe(cursor, &event);
+        }
+        assert_eq!(
+            engine(&log, &model, &tools, Budget::default())
+                .run(&mut ctx, &CancellationToken::new())
+                .await,
+            Ok(Exit::Done)
+        );
+        assert!(
+            tools.runs().is_empty(),
+            "pocket must never reach its owner through codemode"
+        );
+        assert!(
+            !outer_result(&log, "t1-1-0")
+                .1
+                .contains(dex_loop::CONTEXT_POCKET_TOOL_NAME)
+        );
+    }
+}
