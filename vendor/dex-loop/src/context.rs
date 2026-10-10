@@ -192,6 +192,7 @@ pub struct Context {
     status: Status,
     history: Vec<Entry>,
     tool_evidence: Vec<ToolEvidence>,
+    context_pocket_authority_lost: bool,
     /// Script proposals are evidence, never assistant/provider messages.
     nested_calls: Vec<ProposedCall>,
     // Newest input first (even when it has no uploads), then bounded earlier
@@ -281,6 +282,7 @@ impl Context {
             status: Status::Idle,
             history: Vec::new(),
             tool_evidence: Vec::new(),
+            context_pocket_authority_lost: false,
             nested_calls: Vec::new(),
             attachment_inputs: Vec::new(),
             step: 0,
@@ -315,6 +317,18 @@ impl Context {
             content_policy_repairs: 0,
             content_policy_feedback: None,
         }
+    }
+
+    /// A retained case lost its owner manifest; fresh context is required.
+    pub fn context_pocket_authority_lost(&self) -> bool {
+        self.context_pocket_authority_lost
+    }
+
+    /// A synthetic summary input retains exact owner records for host reauthorization.
+    /// This carries no executable capability and never uses model-authored text as proof.
+    pub(crate) fn retain_owner_evidence_from(&mut self, source: &Self) {
+        self.tool_evidence.clone_from(&source.tool_evidence);
+        self.context_pocket_authority_lost = source.context_pocket_authority_lost;
     }
 
     /// Owner results survive summaries; model-authored summary text is never
@@ -931,7 +945,12 @@ impl Context {
                         },
                     });
                     if self.tool_evidence.len() > TOOL_EVIDENCE_LIMIT {
-                        self.tool_evidence.remove(0);
+                        let evicted = self.tool_evidence.remove(0);
+                        if evicted.call.tool.as_str() == crate::CONTEXT_POCKET_TOOL_NAME
+                            && evicted.result.outcome == Outcome::Succeeded
+                        {
+                            self.context_pocket_authority_lost = true;
+                        }
                     }
                 }
                 // A confirmation preview is an owner policy refusal before the

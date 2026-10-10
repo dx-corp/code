@@ -1004,6 +1004,7 @@ where
         if prefetch.started.len() != index
             || call.tool.as_str() == TOOLS_SEARCH
             || call.tool.as_str() == crate::GRC_GRAPH_TOOL_NAME
+            || call.tool.as_str() == crate::CONTEXT_POCKET_TOOL_NAME
         {
             return Ok(());
         }
@@ -1279,6 +1280,13 @@ where
                 && let Err(reason) = crate::grc_context::admission(ctx, call)
             {
                 prefetch.reads.discard(index);
+                self.finish(ctx, call, ToolResult::error(reason)).await?;
+                continue;
+            }
+
+            if call.tool.as_str() == crate::CONTEXT_POCKET_TOOL_NAME
+                && let Err(reason) = crate::context_pocket::admission(ctx, call)
+            {
                 self.finish(ctx, call, ToolResult::error(reason)).await?;
                 continue;
             }
@@ -1999,6 +2007,7 @@ where
         result: ToolResult,
     ) -> Result<(), Fenced> {
         let result = crate::grc_context::finish(ctx, call, result);
+        let result = crate::context_pocket::finish(ctx, call, result);
         let mut events = Vec::new();
         match self.tools.model_usage(ctx, call, &result).await {
             Ok(Some(usage)) => {

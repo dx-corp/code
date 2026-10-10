@@ -63,6 +63,7 @@ where
                     && entry.name.as_str() != agent_codemode::TOOL_NAME
                     && entry.name.as_str() != TOOLS_SEARCH
                     && entry.name.as_str() != crate::GRC_GRAPH_TOOL_NAME
+                    && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
             })
             .map(|entry| agent_codemode::Tool {
                 name: entry.name.to_string(),
@@ -236,6 +237,7 @@ where
                         let Some(entry) = self.offered_spec(ctx, &call.tool).filter(|entry| {
                             entry.name.as_str() != agent_codemode::TOOL_NAME
                                 && entry.name.as_str() != TOOLS_SEARCH
+                                && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
                                 && !matches!(
                                     entry.executor,
                                     ExecutorKind::Client | ExecutorKind::User

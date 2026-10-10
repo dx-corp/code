@@ -81,3 +81,8 @@ pub use codemode_output::validate_codemode_blocks;
 
 mod grc_context;
 pub use grc_context::{GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME};
+
+mod context_pocket;
+pub use context_pocket::{
+    CONTEXT_POCKET_BYTES, CONTEXT_POCKET_RESULT_BYTES, CONTEXT_POCKET_TOOL_NAME,
+};
