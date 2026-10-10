@@ -145,6 +145,13 @@ const within = (parent, child) => {
 try {
 	const maestroRoot = resolve(process.cwd());
 	const rustRoot = resolve(maestroRoot, "../../rust");
+	// The one crate outside rust/ that rust/crates/cerebro-client needs. The
+	// image receives it through its own named build context, never through
+	// dex-loop-workspace, so Cerebro source reaches no other path.
+	const cerebroHandleRoot = resolve(
+		maestroRoot, "../../platform/cerebro/cerebro-rs/crates/cerebro-handle",
+	);
+	const contextCrates = [];
 	const pending = loadPackages(cargoManifestPath);
 	const visited = new Set();
 	const external = [];
@@ -153,10 +160,14 @@ try {
 		const pkg = pending.pop();
 		if (visited.has(pkg.manifest_path)) continue;
 		visited.add(pkg.manifest_path);
-		if (!within(maestroRoot, pkg.manifest_path)) external.push(pkg.manifest_path);
+		if (within(cerebroHandleRoot, pkg.manifest_path)) contextCrates.push(pkg.manifest_path);
+		else if (!within(maestroRoot, pkg.manifest_path)) external.push(pkg.manifest_path);
 		for (const dependency of pkg.dependencies) {
 			if (!dependency.path) continue;
-			if (!within(maestroRoot, dependency.path) && !within(rustRoot, dependency.path)) {
+			if (
+				!within(maestroRoot, dependency.path) && !within(rustRoot, dependency.path)
+				&& !within(cerebroHandleRoot, dependency.path)
+			) {
 				throw new Error(`Unsupported external Docker dependency: ${dependency.path}`);
 			}
 			if (within(rustRoot, pkg.manifest_path) && within(maestroRoot, dependency.path)) {
@@ -167,6 +178,24 @@ try {
 			const target = packages.get(manifest);
 			if (!target) throw new Error(`Cargo omitted local dependency ${manifest}`);
 			pending.push(target);
+		}
+	}
+	if (contextCrates.length > 0) {
+		const prepare = plannerStage.search(/^RUN\s+cargo\s+chef\s+prepare\b/m);
+		const cook = nativeStage.search(/^RUN\s+cargo\s+chef\s+cook\b/m);
+		const copy = "COPY --from=cerebro-handle-source / /platform/cerebro/cerebro-rs/crates/cerebro-handle";
+		const missingContext = [];
+		if (prepare < 0 || !plannerStage.slice(0, prepare).split("\n").some((line) => line.trim() === copy)) {
+			missingContext.push("cerebro-handle before cargo chef prepare in the planner stage");
+		}
+		if (
+			cook < 0
+			|| !/^COPY --from=planner \/platform \/platform\s*$/m.test(nativeStage.slice(0, cook))
+		) {
+			missingContext.push("cerebro-handle (COPY --from=planner /platform) before cargo chef cook in the native stage");
+		}
+		if (missingContext.length > 0) {
+			throw new Error(`Dockerfile omits the Cerebro build context: ${missingContext.join(", ")}`);
 		}
 	}
 	if (external.length > 0) {
