@@ -1,7 +1,6 @@
 //! Scripts compress provider history, while every nested boundary remains
 //! authorized, journaled and reconciled through normal Dex ports.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

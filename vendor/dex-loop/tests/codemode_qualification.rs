@@ -1,6 +1,5 @@
 //! Deterministic transport qualification, not a model quality benchmark.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

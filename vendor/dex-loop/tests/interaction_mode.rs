@@ -1,6 +1,5 @@
 //! Discuss is immutable turn authority, including untrusted model tool proposals.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 use dex_loop::{Budget, CancellationToken, Cursor, Event, Exit, InteractionMode, Outcome};
 use serde_json::json;
 use std::time::Duration;

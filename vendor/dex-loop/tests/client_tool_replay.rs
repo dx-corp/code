@@ -15,8 +15,7 @@
 // This binary only exercises a slice of `support`'s shared helpers (each
 // integration test file is its own compilation unit); the rest are real,
 // used by `scenarios.rs`.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

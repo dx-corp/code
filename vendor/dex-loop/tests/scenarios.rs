@@ -2,7 +2,7 @@
 //! the engine appends, and most check that `rehydrate` rebuilds the same
 //! context the warm engine holds.
 
-mod support;
+use crate::support;
 
 use std::time::{Duration, Instant};
 

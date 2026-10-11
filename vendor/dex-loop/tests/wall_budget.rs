@@ -13,8 +13,7 @@
 // This test only needs a handful of `support` helpers; the rest are dead
 // code from this test binary's own point of view (each `tests/*.rs` file is
 // its own crate), even though `scenarios.rs` uses the whole module.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

@@ -1,7 +1,6 @@
 //! Writing rules are enforced before model prose becomes visible or effects run.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

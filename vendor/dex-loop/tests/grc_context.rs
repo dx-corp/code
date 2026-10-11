@@ -1,6 +1,5 @@
 //! GRC admission is tested at the real engine/transcript boundary.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 use dex_loop::{
     Budget, CancellationToken, Exit, GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME, Message, Outcome,
     Output,

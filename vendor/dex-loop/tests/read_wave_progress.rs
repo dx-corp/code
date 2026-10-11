@@ -1,6 +1,5 @@
 //! A read awaiting its own log write must keep progressing during peer results.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
