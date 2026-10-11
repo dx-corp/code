@@ -71,6 +71,7 @@
 //! ```
 
 mod claude_code_import;
+mod command_output;
 mod config;
 pub(crate) mod context;
 mod hot_reload;

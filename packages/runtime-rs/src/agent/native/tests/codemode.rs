@@ -1549,10 +1549,10 @@ async fn codemode_read_race_and_dependent_pipeline_settle_before_unrelated_read(
     let code = "const slow = tools.read({path:'slow.json'}); const fast = tools.read({path:'fast.json'}); const winner = await Promise.race([slow, fast]); const next = await tools.read({path:'dependent.json'}); text(winner.label + ':' + next.label);";
     let (client, server) = codemode_http_fixture(code).await;
     let mut host = RuntimeTestHost::new(workspace.path(), client);
-    host.read_delays
-        .insert("slow.json".into(), Duration::from_secs(2));
-    host.read_delays
-        .insert("fast.json".into(), Duration::from_millis(10));
+    // Keep the unrelated read pending until script cancellation. Wall-clock
+    // delays cannot prove read ordering when VM startup competes for CPU.
+    host.read_gates
+        .insert("slow.json".into(), Arc::new(tokio::sync::Notify::new()));
     let journal = Arc::new(Mutex::new(Vec::new()));
     let host = host.with_tool_operation_journal(journal.clone());
     let config = NativeAgentConfig {
@@ -1566,9 +1566,7 @@ async fn codemode_read_race_and_dependent_pipeline_settle_before_unrelated_read(
         .prompt("Race then dependent read".into(), vec![])
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(1), wait_for_turn_completed(&mut events))
-        .await
-        .expect("Race/dependent read waited for unrelated slow read");
+    wait_for_turn_completed(&mut events).await;
     agent.shutdown().await;
     let requests = server.await.unwrap();
     assert!(

@@ -10,7 +10,7 @@ impl RuntimeTestHost {
         cancel: Option<CancellationToken>,
         completions: mpsc::UnboundedSender<(String, ToolExecution)>,
     ) -> NativeHostFuture<'a, HashMap<String, ToolExecution>> {
-        if self.read_delays.is_empty() {
+        if self.read_delays.is_empty() && self.read_gates.is_empty() {
             return Box::pin(async move {
                 let results = self.execute_read_only_wave(calls, event_tx, cancel).await;
                 for (id, execution) in &results {
@@ -30,9 +30,15 @@ impl RuntimeTestHost {
                 let cancel = cancel.clone().unwrap_or_default();
                 pending.push(async move {
                     self.assert_effect_pending(&call.call_id);
-                    let delay = self.read_delays.get(call.args["path"].as_str().unwrap_or("")).copied().unwrap_or_default();
+                    let path = call.args["path"].as_str().unwrap_or("");
+                    let ready = async {
+                        if let Some(gate) = self.read_gates.get(path) {
+                            gate.notified().await;
+                        }
+                        tokio::time::sleep(self.read_delays.get(path).copied().unwrap_or_default()).await;
+                    };
                     let execution = tokio::select! {
-                        () = tokio::time::sleep(delay) => self.execution(&call.call_id, &call.tool_name, &call.args),
+                        () = ready => self.execution(&call.call_id, &call.tool_name, &call.args),
                         () = cancel.cancelled() => ToolExecution::cancelled(&call.call_id, &call.tool_name, ExecutionSource::Native, ExecutionPhase::Running),
                     };
                     (call.call_id.clone(), execution)
