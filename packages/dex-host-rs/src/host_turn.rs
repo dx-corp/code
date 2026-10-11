@@ -81,6 +81,30 @@ impl<M: Model> Model for SharedModel<M> {
         self.0.stream(ctx, tools)
     }
 
+    async fn needs_compaction(
+        &self,
+        ctx: &dex_loop::Context,
+        tools: &[&dex_loop::ToolSpec],
+    ) -> Option<bool> {
+        self.0.needs_compaction(ctx, tools).await
+    }
+
+    async fn request_size(
+        &self,
+        ctx: &dex_loop::Context,
+        tools: &[&dex_loop::ToolSpec],
+    ) -> Option<dex_loop::RequestSize> {
+        self.0.request_size(ctx, tools).await
+    }
+
+    async fn summary_outputs(
+        &self,
+        ctx: &dex_loop::Context,
+        entries: &[dex_loop::Entry],
+    ) -> Result<Vec<(dex_loop::OutputRef, String)>, dex_loop::ModelError> {
+        self.0.summary_outputs(ctx, entries).await
+    }
+
     fn prepare_turn(&self, ctx: &dex_loop::Context) {
         self.0.prepare_turn(ctx);
     }
