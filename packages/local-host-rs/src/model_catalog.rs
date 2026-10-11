@@ -2466,11 +2466,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_mappers_keep_vendor_corrected_context() {
+    fn runtime_mappers_keep_native_context_and_correct_routed_context() {
         let native = serde_json::json!({
             "anthropic": {"models": {
-                "claude-sonnet-4-5": {"tool_call": true, "limit": {"context": 1_000_000, "output": 64_000}},
-                "claude-sonnet-4-5-20250929": {"tool_call": true, "limit": {"context": 1_000_000, "output": 64_000}}
+                "claude-sonnet-4-5": {"tool_call": true, "limit": {"context": 200_000, "output": 64_000}},
+                "claude-sonnet-4-5-20250929": {"tool_call": true, "limit": {"context": 200_000, "output": 64_000}}
             }},
             "google": {"models": {}}, "openai": {"models": {}}, "xai": {"models": {}}
         });
@@ -2493,9 +2493,23 @@ mod tests {
                 .find(|model| model.id == id)
                 .expect("corrected model");
             assert_eq!(model.capabilities.context_tokens, 200_000, "{id}");
+            let is_routed = id == "anthropic/claude-sonnet-4.5";
             assert_eq!(
                 model.verification.state,
-                VerificationState::Verified,
+                if is_routed {
+                    VerificationState::Verified
+                } else {
+                    VerificationState::Catalog
+                },
+                "{id}"
+            );
+            assert_eq!(
+                model.verification.source,
+                if is_routed {
+                    "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+                } else {
+                    "models.dev"
+                },
                 "{id}"
             );
         }

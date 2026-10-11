@@ -103,6 +103,24 @@ impl ModelError {
     }
 }
 
+/// Full prepared request sizes. These are conservative input units, not a
+/// provider tokenizer count, and separately encoded transport bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestSize {
+    pub input_units: usize,
+    pub wire_bytes: usize,
+}
+
+impl RequestSize {
+    /// Retrying is safe only when neither constrained component grows and at
+    /// least one shrinks. Admission still checks the new route's own limits.
+    pub(crate) fn strictly_reduces(self, before: Self) -> bool {
+        self.input_units <= before.input_units
+            && self.wire_bytes <= before.wire_bytes
+            && (self.input_units < before.input_units || self.wire_bytes < before.wire_bytes)
+    }
+}
+
 /// The model, streaming.
 pub trait Model: Send + Sync {
     /// Streams one response to `ctx.history()` with `tools` offered. The
@@ -112,6 +130,40 @@ pub trait Model: Send + Sync {
         ctx: &'a Context,
         tools: &'a [&'a ToolSpec],
     ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a;
+
+    /// Measures the actual prepared model context without inference. The host
+    /// includes instructions, tools, enrichment and resolved results. Final
+    /// dispatch must still admit the rebuilt request against its hard bounds.
+    fn needs_compaction(
+        &self,
+        _ctx: &Context,
+        _tools: &[&ToolSpec],
+    ) -> impl Future<Output = Option<bool>> + Send {
+        async { None }
+    }
+
+    /// Measures a complete request even when it exceeds admission limits.
+    /// Implementations preserve validation and ownership checks and perform no
+    /// inference or credential minting. None retains the rough-history fallback.
+    fn request_size(
+        &self,
+        _ctx: &Context,
+        _tools: &[&ToolSpec],
+    ) -> impl Future<Output = Option<RequestSize>> + Send {
+        async { None }
+    }
+
+    /// Reads bounded stored-result excerpts for a historical summary, using
+    /// the original context's owner scope. No inference or tool execution.
+    /// Missing entries mean the contents were not inspected; the summarizer
+    /// may retain exact retrieval references but must not infer their contents.
+    fn summary_outputs(
+        &self,
+        _ctx: &Context,
+        _entries: &[crate::Entry],
+    ) -> impl Future<Output = Result<Vec<(crate::OutputRef, String)>, ModelError>> + Send {
+        async { Ok(Vec::new()) }
+    }
 
     /// Called once when a turn is admitted, before its first step, with the
     /// context that step will see. An implementation may start work the
