@@ -17,7 +17,7 @@ const embeddedConfigCopy =
 
 const sourceCargoManifest = readFileSync(join(repositoryRoot, "Cargo.toml"), "utf8");
 
-function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = false, viaVendor = false, crossWorkspace = false, codemodeDependencies = "", cerebro = false } = {}) {
+function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = false, viaVendor = false, crossWorkspace = false, codemodeDependencies = "", platformCrate = false } = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "maestro-docker-runtime-"));
 	const fixtureRoot = join(directory, "products/maestro");
 	mkdirSync(fixtureRoot, { recursive: true });
@@ -36,7 +36,7 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 		crate(`products/maestro/${member}`, member === "packages/codemode-rs" ? "agent-codemode" : member.split("/").at(-1),
 			member === "packages/dex-host-rs"
 				? `[dependencies]\ndex-loop = { path = "${viaVendor ? "../../vendor/bridge" : standalone ? "../../vendor/dex-loop" : "../../../../rust/crates/dex-loop"}" }\n`
-					+ (cerebro ? 'cerebro-client = { path = "../../../../rust/crates/cerebro-client" }\n' : "")
+					+ (platformCrate ? 'extra-client = { path = "../../../../rust/crates/extra-client" }\n' : "")
 				: member === "packages/codemode-rs" ? codemodeDependencies : "");
 	}
 	if (viaVendor) {
@@ -48,13 +48,13 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 	} else {
 		mkdirSync(join(directory, "rust"), { recursive: true });
 		writeFileSync(join(directory, "rust/Cargo.toml"),
-			`[workspace]\nresolver = "3"\nmembers = ["crates/dex-loop", "crates/managed-inference-contract"${cerebro ? ', "crates/cerebro-client"' : ""}]\n`
+			`[workspace]\nresolver = "3"\nmembers = ["crates/dex-loop", "crates/managed-inference-contract"${platformCrate ? ', "crates/extra-client"' : ""}]\n`
 			+ '[workspace.dependencies]\nmanaged-inference-contract = { path = "crates/managed-inference-contract" }\n'
 			+ (crossWorkspace ? 'agent-codemode = { path = "../products/maestro/packages/codemode-rs" }\n' : "")
-			+ (cerebro ? 'cerebro-handle = { path = "../platform/cerebro/cerebro-rs/crates/cerebro-handle" }\n' : ""));
-		if (cerebro) {
-			crate("rust/crates/cerebro-client", "cerebro-client", "[dependencies]\ncerebro-handle.workspace = true\n");
-			crate("platform/cerebro/cerebro-rs/crates/cerebro-handle", "cerebro-handle", "[workspace]\n");
+			+ (platformCrate ? 'extra-handle = { path = "../platform/extras/crates/extra-handle" }\n' : ""));
+		if (platformCrate) {
+			crate("rust/crates/extra-client", "extra-client", "[dependencies]\nextra-handle.workspace = true\n");
+			crate("platform/extras/crates/extra-handle", "extra-handle", "[workspace]\n");
 		}
 		crate("rust/crates/dex-loop", "dex-loop",
 			'[dependencies]\nmanaged-inference-contract.workspace = true\n'
@@ -203,7 +203,7 @@ test("Docker runtime guard resolves transitive target dependencies from Cargo ma
 	assert.throws(() => runChecker(sourceDockerfile, sourceCargoManifest, { transitive: true }),
 		/receipt-contract.*before cargo chef prepare/);
 	const complete = sourceDockerfile
-		.replace('"crates/managed-inference-contract"]', '"crates/managed-inference-contract", "crates/receipt-contract"]')
+		.replace(/(members = \[[^\]]*)\]/, '$1, "crates/receipt-contract"]')
 		.replace("RUN cargo chef prepare --recipe-path recipe.json",
 			"COPY --from=dex-loop-workspace /crates/receipt-contract /rust/crates/receipt-contract\nRUN cargo chef prepare --recipe-path recipe.json");
 	assert.match(runChecker(complete, sourceCargoManifest, { transitive: true }), /Verified native-only Docker runtime contract\./);
@@ -310,33 +310,41 @@ test("Docker runtime guard rejects workspace inheritance in an image-excluded sh
 	}
 });
 
-const clientCopy = "COPY --from=dex-loop-workspace /crates/cerebro-client /rust/crates/cerebro-client\n";
-const handleCopy = "COPY --from=cerebro-handle-source / /platform/cerebro/cerebro-rs/crates/cerebro-handle\n";
+// A rust/ crate that needs a crate under platform/. The Dockerfile under test
+// is the checked-in one plus these generic lines, so the cases hold whatever
+// else the image copies.
+const clientCopy = "COPY --from=dex-loop-workspace /crates/extra-client /rust/crates/extra-client\n";
+const handleCopy = "COPY --from=extra-handle-source / /platform/extras/crates/extra-handle\n";
 const handleNativeCopy = "COPY --from=planner /platform /platform\n";
-const withCerebro = sourceDockerfile
-	.replace("COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract\n",
-		(line) => line + clientCopy + handleCopy)
-	.replace('"crates/managed-inference-contract"]', '"crates/managed-inference-contract", "crates/cerebro-client"]')
-	.replace("COPY --from=planner /rust /rust\n", (line) => line + handleNativeCopy);
+const withPlatformCrate = sourceDockerfile
+	.replace(/^(COPY --from=dex-loop-workspace \/crates\/managed-inference-contract .*\n)/m, (line) => line + clientCopy + handleCopy)
+	.replace(/(c\\members = \[[^\]]*)\]/, '$1, "crates/extra-client"]')
+	.replace(/^COPY --from=planner \/rust \/rust\n/m, (line) => line.endsWith("\n") && sourceDockerfile.includes(handleNativeCopy) ? line : line + handleNativeCopy);
 
-test("Docker runtime guard accepts the Cerebro handle through its own build context", () => {
-	assert.ok(withCerebro.includes(handleCopy) && withCerebro.includes(handleNativeCopy));
-	assert.match(runChecker(withCerebro, sourceCargoManifest, { cerebro: true }),
+test("Docker runtime guard accepts a platform crate through its own build context", () => {
+	assert.ok(withPlatformCrate.includes(handleCopy));
+	assert.match(runChecker(withPlatformCrate, sourceCargoManifest, { platformCrate: true }),
 		/Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard rejects Cerebro source that reaches the image any other way", () => {
-	assert.throws(() => runChecker(sourceDockerfile, sourceCargoManifest, { cerebro: true }),
-		/Cerebro build context|cerebro-client/);
-	assert.throws(() => runChecker(withCerebro.replace(handleCopy, ""), sourceCargoManifest, { cerebro: true }),
-		/cerebro-handle before cargo chef prepare in the planner stage/);
-	const late = withCerebro.replace(handleCopy, "").replace(
+test("Docker runtime guard rejects a platform crate that reaches the image any other way", () => {
+	const options = { platformCrate: true };
+	assert.throws(() => runChecker(withPlatformCrate.replace(handleCopy, ""), sourceCargoManifest, options),
+		/extra-handle \(COPY --from=extra-handle-source\) before cargo chef prepare in the planner stage/);
+	const late = withPlatformCrate.replace(handleCopy, "").replace(
 		"RUN cargo chef prepare --recipe-path recipe.json", `RUN cargo chef prepare --recipe-path recipe.json\n${handleCopy}`);
-	assert.throws(() => runChecker(late, sourceCargoManifest, { cerebro: true }),
-		/cerebro-handle before cargo chef prepare in the planner stage/);
-	assert.throws(() => runChecker(withCerebro.replace(handleNativeCopy, ""), sourceCargoManifest, { cerebro: true }),
+	assert.throws(() => runChecker(late, sourceCargoManifest, options),
+		/before cargo chef prepare in the planner stage/);
+	const viaRust = withPlatformCrate.replace(handleCopy,
+		"COPY --from=dex-loop-workspace / /platform/extras/crates/extra-handle\n");
+	assert.throws(() => runChecker(viaRust, sourceCargoManifest, options),
+		/before cargo chef prepare in the planner stage/);
+	assert.throws(() => runChecker(withPlatformCrate.replace(clientCopy, ""), sourceCargoManifest, options),
+		/extra-client.*before cargo chef prepare/);
+});
+
+test("Docker runtime guard needs the platform tree in the native stage before the cook", () => {
+	const noNativeCopy = withPlatformCrate.split(handleNativeCopy).join("");
+	assert.throws(() => runChecker(noNativeCopy, sourceCargoManifest, { platformCrate: true }),
 		/before cargo chef cook in the native stage/);
-	const viaRust = withCerebro.replace(handleCopy, "COPY --from=dex-loop-workspace / /platform/cerebro/cerebro-rs/crates/cerebro-handle\n");
-	assert.throws(() => runChecker(viaRust, sourceCargoManifest, { cerebro: true }),
-		/cerebro-handle before cargo chef prepare in the planner stage/);
 });
