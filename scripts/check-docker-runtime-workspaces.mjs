@@ -2,7 +2,7 @@
 // @ts-check
 
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const dockerfilePath = join(process.cwd(), "Dockerfile");
@@ -145,12 +145,11 @@ const within = (parent, child) => {
 try {
 	const maestroRoot = resolve(process.cwd());
 	const rustRoot = resolve(maestroRoot, "../../rust");
-	// The one crate outside rust/ that rust/crates/cerebro-client needs. The
-	// image receives it through its own named build context, never through
-	// dex-loop-workspace, so Cerebro source reaches no other path.
-	const cerebroHandleRoot = resolve(
-		maestroRoot, "../../platform/cerebro/cerebro-rs/crates/cerebro-handle",
-	);
+	// A crate under platform/ that a rust/ crate needs. The image receives
+	// each one through its own named build context (<crate directory>-source),
+	// never through dex-loop-workspace, so platform source reaches no other path.
+	const repositoryRoot = resolve(maestroRoot, "../..");
+	const platformRoot = resolve(repositoryRoot, "platform");
 	const contextCrates = [];
 	const pending = loadPackages(cargoManifestPath);
 	const visited = new Set();
@@ -160,13 +159,13 @@ try {
 		const pkg = pending.pop();
 		if (visited.has(pkg.manifest_path)) continue;
 		visited.add(pkg.manifest_path);
-		if (within(cerebroHandleRoot, pkg.manifest_path)) contextCrates.push(pkg.manifest_path);
+		if (within(platformRoot, pkg.manifest_path)) contextCrates.push(pkg.manifest_path);
 		else if (!within(maestroRoot, pkg.manifest_path)) external.push(pkg.manifest_path);
 		for (const dependency of pkg.dependencies) {
 			if (!dependency.path) continue;
 			if (
 				!within(maestroRoot, dependency.path) && !within(rustRoot, dependency.path)
-				&& !within(cerebroHandleRoot, dependency.path)
+				&& !within(platformRoot, dependency.path)
 			) {
 				throw new Error(`Unsupported external Docker dependency: ${dependency.path}`);
 			}
@@ -183,19 +182,24 @@ try {
 	if (contextCrates.length > 0) {
 		const prepare = plannerStage.search(/^RUN\s+cargo\s+chef\s+prepare\b/m);
 		const cook = nativeStage.search(/^RUN\s+cargo\s+chef\s+cook\b/m);
-		const copy = "COPY --from=cerebro-handle-source / /platform/cerebro/cerebro-rs/crates/cerebro-handle";
+		const plannerLines = prepare < 0 ? [] : plannerStage.slice(0, prepare).split("\n").map((line) => line.trim());
 		const missingContext = [];
-		if (prepare < 0 || !plannerStage.slice(0, prepare).split("\n").some((line) => line.trim() === copy)) {
-			missingContext.push("cerebro-handle before cargo chef prepare in the planner stage");
+		for (const manifest of contextCrates) {
+			const directory = dirname(manifest);
+			const name = `${basename(directory)}-source`;
+			const destination = `/${relative(repositoryRoot, directory).split(sep).join("/")}`;
+			if (!plannerLines.includes(`COPY --from=${name} / ${destination}`)) {
+				missingContext.push(`${destination} (COPY --from=${name}) before cargo chef prepare in the planner stage`);
+			}
 		}
 		if (
 			cook < 0
 			|| !/^COPY --from=planner \/platform \/platform\s*$/m.test(nativeStage.slice(0, cook))
 		) {
-			missingContext.push("cerebro-handle (COPY --from=planner /platform) before cargo chef cook in the native stage");
+			missingContext.push("/platform (COPY --from=planner /platform /platform) before cargo chef cook in the native stage");
 		}
 		if (missingContext.length > 0) {
-			throw new Error(`Dockerfile omits the Cerebro build context: ${missingContext.join(", ")}`);
+			throw new Error(`Dockerfile omits a platform crate build context: ${missingContext.join(", ")}`);
 		}
 	}
 	if (external.length > 0) {
