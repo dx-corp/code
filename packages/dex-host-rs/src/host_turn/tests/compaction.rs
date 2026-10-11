@@ -9,8 +9,11 @@ use std::sync::Mutex;
 // Deliberately not Clone: sharing the model must preserve HostTurnRun's API.
 struct ModelFixture {
     seen: Arc<Mutex<Vec<Context>>>,
+    summaries: Arc<Mutex<Vec<Context>>>,
     prepared: Arc<Mutex<usize>>,
 }
+
+const SUMMARY: &str = "Two fixture reads returned retrievable original evidence. Retain uncertainty; no writes or publishing without approval.";
 
 fn reasoning() -> ProviderReasoning {
     ProviderReasoning {
@@ -30,10 +33,12 @@ impl Model for ModelFixture {
         ctx: &'a Context,
         tools: &'a [&'a ToolSpec],
     ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a {
-        assert!(
-            !tools.is_empty(),
-            "tool-heavy summary uses the existing mechanical path"
-        );
+        if tools.is_empty() {
+            // Complete inline outputs exceed the lossless digest bound, so
+            // production asks this same model for a separate concise summary.
+            self.summaries.lock().unwrap().push(ctx.clone());
+            return stream::iter(vec![Ok(ModelChunk::Text(SUMMARY.into()))]);
+        }
         let mut seen = self.seen.lock().unwrap();
         seen.push(ctx.clone());
         let chunks = if seen.len() <= 2 {
@@ -84,6 +89,7 @@ async fn long_turn_compacts_and_replays_exact_input_steer_and_raw_pairs() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let summaries = Arc::new(Mutex::new(Vec::new()));
     let prepared = Arc::new(Mutex::new(0));
     let request = HostTurn {
         thread: thread(),
@@ -97,6 +103,7 @@ async fn long_turn_compacts_and_replays_exact_input_steer_and_raw_pairs() {
         dir.path(),
         ModelFixture {
             seen: seen.clone(),
+            summaries: summaries.clone(),
             prepared: prepared.clone(),
         },
         tools(workspace.path()),
@@ -159,10 +166,56 @@ async fn long_turn_compacts_and_replays_exact_input_steer_and_raw_pairs() {
     assert_eq!(
         snapshots.len(),
         3,
-        "pruning must not invoke another model call"
+        "summary inference does not consume an ordinary turn response"
     );
+    let summaries = summaries.lock().unwrap().clone();
+    assert_eq!(summaries.len(), 1, "one semantic summary is required");
+    assert_eq!(summaries[0].thread(), &thread());
+    let [summary_input] = summaries[0].history() else {
+        panic!("summary receives one historical transcript request");
+    };
+    let Message::User {
+        text,
+        principal,
+        attachments,
+        ..
+    } = &summary_input.message
+    else {
+        panic!("summary receives a user request");
+    };
+    assert_eq!(
+        principal.as_str(),
+        "bob",
+        "summary retains the acting principal after the steer"
+    );
+    assert!(attachments.is_empty());
+    let (_, transcript) = text.split_once("\n\n").unwrap();
+    let transcript: Vec<serde_json::Value> = serde_json::from_str(transcript).unwrap();
+    let summarized_tools: Vec<_> = transcript
+        .iter()
+        .filter(|entry| entry["message"]["role"] == "tool")
+        .collect();
+    assert_eq!(summarized_tools.len(), 2);
+    for entry in &summarized_tools {
+        assert_eq!(entry["message"]["name"], "fixture.read");
+        assert_eq!(
+            entry["message"]["output"],
+            json!({"kind": "text", "value": output})
+        );
+    }
     assert!(snapshots[1].history().iter().any(|entry| matches!(&entry.message, Message::Assistant { reasoning: Some(value), .. } if value == &reasoning())));
     let compacted = &snapshots[2];
+    let summary = compacted
+        .history()
+        .iter()
+        .find_map(|entry| match &entry.message {
+            Message::Summary { text } => {
+                Some(serde_json::from_str::<serde_json::Value>(text).unwrap())
+            }
+            _ => None,
+        })
+        .expect("semantic summary is installed in the compacted projection");
+    assert_eq!(summary["summary"], SUMMARY);
     assert!(
         compacted.history().contains(&original),
         "principal, cursor, text and attachment identity remain exact"
@@ -197,6 +250,12 @@ async fn long_turn_compacts_and_replays_exact_input_steer_and_raw_pairs() {
         .collect();
     assert_eq!(calls.len(), 2);
     for call in calls {
+        assert!(
+            summarized_tools
+                .iter()
+                .any(|entry| entry["message"]["call"] == json!(call)),
+            "summary sees each original call/result pair"
+        );
         assert!(rows.iter().any(|(_, event)| matches!(event, Event::ClientToolResult { call: result_call, output: result, .. } if result_call == &call && result == &output)), "raw call/result pairing and complete output survive");
     }
     drop(snapshots);
@@ -224,6 +283,7 @@ fn shared_model_forwards_preparation_without_requiring_clone() {
     let prepared = Arc::new(Mutex::new(0));
     let shared = SharedModel(Arc::new(ModelFixture {
         seen: Arc::new(Mutex::new(Vec::new())),
+        summaries: Arc::new(Mutex::new(Vec::new())),
         prepared: prepared.clone(),
     }));
     shared.clone().prepare_turn(&Context::new(thread()));
