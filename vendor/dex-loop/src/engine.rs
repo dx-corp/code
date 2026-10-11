@@ -42,8 +42,8 @@ use crate::ports::{
 };
 use crate::sanitize::{DeltaFilter, Sanitizer};
 
-/// One capacity recovery per run; restart remains bounded by the durable
-/// step and usage budgets. No failed answer or tool call is replayed.
+/// One recovery per consecutive capacity-failure episode. A committed ordinary
+/// step rearms recovery; durable work and usage budgets still bound the run.
 enum CapacityRecovery {
     Available,
     Pending(ModelError),
@@ -473,6 +473,84 @@ where
                 .await?;
                 return Ok(Exit::Failed);
             }
+            // Preparation only reads bounded context; it performs no inference.
+            // Give compaction a freshly computed interval after that read.
+            let pressure = if !self.compactor.uses_model_budget()
+                || matches!(capacity_recovery, CapacityRecovery::Pending(_))
+            {
+                None
+            } else {
+                // StepStarted applies admitted queued steers before ordinary
+                // dispatch. Project that same view without a journal append;
+                // compaction still plans against the original durable history.
+                let mut projected = ctx.clone();
+                projected.observe(
+                    Cursor(ctx.cursor().0.saturating_add(1)),
+                    &Event::StepStarted {
+                        step: ctx.step().saturating_add(1),
+                        control_through: ctx.control_cursor(),
+                    },
+                );
+                let owned = if self.budget.answer_only(ctx.step()) {
+                    Vec::new()
+                } else {
+                    self.offered(&projected)
+                };
+                let tools: Vec<&ToolSpec> = owned.iter().collect();
+                let model_ctx = projected.for_model(self.budget.remaining(
+                    ctx.step(),
+                    ctx.usage(),
+                    started.elapsed(),
+                ));
+                let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
+                tokio::select! {
+                    _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
+                    result = tokio::time::timeout(remaining_wall, self.model.needs_compaction(&model_ctx, &tools)) => result.unwrap_or(None),
+                }
+            };
+            self.read_control(ctx).await?;
+            if ctx.interrupt_requested() || cancel.is_cancelled() {
+                return self.interrupt(ctx, &prefetch).await;
+            }
+            if self.exhausted_budget(ctx, started.elapsed()).is_some() {
+                continue;
+            }
+            // A request can shrink while the rough history grows (for example,
+            // retiring a historical attachment). Snapshot both the admitted
+            // control view and advisory budget for a comparable before/after read.
+            let comparison_context = ctx.clone();
+            let comparison_budget =
+                self.budget
+                    .remaining(ctx.step(), ctx.usage(), started.elapsed());
+            // An explicit history threshold owns proactive policy. Hard
+            // capacity errors still recover under every enabled policy.
+            let proactive_recovery = self.compactor.uses_model_budget() && pressure == Some(true);
+            let recovering =
+                matches!(capacity_recovery, CapacityRecovery::Pending(_)) || proactive_recovery;
+            let before_size = if recovering {
+                let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
+                tokio::select! {
+                    _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
+                    result = tokio::time::timeout(remaining_wall, self.next_request_size(&comparison_context, comparison_budget)) => result.unwrap_or(None),
+                }
+            } else {
+                None
+            };
+            if recovering {
+                // Resolution can outlive a durable interrupt or steer. Poll
+                // before paid summarization, and discard a measurement of the
+                // old admission view. Pending recovery is not consumed yet.
+                self.read_control(ctx).await?;
+                if ctx.interrupt_requested() || cancel.is_cancelled() {
+                    return self.interrupt(ctx, &prefetch).await;
+                }
+                if ctx.control_cursor() != comparison_context.control_cursor() {
+                    continue;
+                }
+            }
+            if self.exhausted_budget(ctx, started.elapsed()).is_some() {
+                continue;
+            }
             let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
             let recovery_error = if matches!(capacity_recovery, CapacityRecovery::Pending(_)) {
                 match std::mem::replace(&mut capacity_recovery, CapacityRecovery::Attempted) {
@@ -484,7 +562,25 @@ where
             };
             let planning = async {
                 if recovery_error.is_some() {
-                    self.compactor.recover(ctx).await
+                    if before_size.is_some() {
+                        self.compactor.propose_recovery(ctx).await
+                    } else {
+                        self.compactor.recover(ctx).await
+                    }
+                } else if proactive_recovery {
+                    let mut plan = if before_size.is_some() {
+                        self.compactor.propose_recovery(ctx).await
+                    } else {
+                        self.compactor.recover(ctx).await
+                    };
+                    // A soft threshold alone cannot reject mandatory input
+                    // that still fits. Final admission determines that case.
+                    if plan.compaction.is_none() {
+                        plan.declined = false;
+                    }
+                    plan
+                } else if pressure == Some(false) && self.compactor.uses_model_budget() {
+                    crate::CompactionPlan::default()
                 } else {
                     self.compactor.plan(ctx).await
                 }
@@ -494,13 +590,43 @@ where
                 result = tokio::time::timeout(remaining_wall, planning) => result,
             };
             let mut compaction_declined = false;
-            if let Ok(plan) = plan {
+            if let Ok(mut plan) = plan {
+                // Persist completed inference usage before another cancellable
+                // read; declining a proposal never erases the summary's bill.
+                if plan.usage != Default::default() {
+                    self.emit(ctx, vec![Event::Usage(plan.usage)]).await?;
+                }
+                if before_size.is_some() && self.exhausted_budget(ctx, started.elapsed()).is_some()
+                {
+                    // Preserve budget precedence without another potentially slow
+                    // read. A replacement without its proof is never committed.
+                    plan.compaction = None;
+                }
+                if let (Some(before), Some(compaction)) = (before_size, plan.compaction.as_ref()) {
+                    // Usage is already durable; include its cursor/state in the
+                    // replacement projection, retaining the same advisory budget.
+                    let mut after = ctx.clone();
+                    after.observe(
+                        Cursor(after.cursor().0.saturating_add(1)),
+                        &Event::Compaction {
+                            covers_to_cursor: compaction.covers_to,
+                            summary: compaction.summary.clone(),
+                        },
+                    );
+                    let remaining_wall = self.budget.wall.saturating_sub(started.elapsed());
+                    let size = tokio::select! {
+                        _ = cancel.cancelled() => return self.interrupt(ctx, &prefetch).await,
+                        result = tokio::time::timeout(remaining_wall, self.next_request_size(&after, comparison_budget)) => result.unwrap_or(None),
+                    };
+                    if !size.is_some_and(|size| size.strictly_reduces(before)) {
+                        plan.compaction = None;
+                        // A soft threshold alone does not fail mandatory input.
+                        plan.declined = recovery_error.is_some();
+                    }
+                }
                 compaction_declined =
                     plan.declined || (recovery_error.is_some() && plan.compaction.is_none());
                 let mut events = Vec::new();
-                if plan.usage != Default::default() {
-                    events.push(Event::Usage(plan.usage));
-                }
                 if let Some(compaction) = plan.compaction {
                     events.push(Event::Compaction {
                         covers_to_cursor: compaction.covers_to,
@@ -554,6 +680,30 @@ where
                 return Ok(exit);
             }
         }
+    }
+
+    async fn next_request_size(
+        &self,
+        ctx: &Context,
+        remaining: crate::RemainingBudget,
+    ) -> Option<crate::RequestSize> {
+        let mut projected = ctx.clone();
+        projected.observe(
+            Cursor(ctx.cursor().0.saturating_add(1)),
+            &Event::StepStarted {
+                step: ctx.step().saturating_add(1),
+                control_through: ctx.control_cursor(),
+            },
+        );
+        let owned = if remaining.answer_only {
+            Vec::new()
+        } else {
+            self.offered(&projected)
+        };
+        let tools: Vec<&ToolSpec> = owned.iter().collect();
+        self.model
+            .request_size(&projected.for_model(remaining), &tools)
+            .await
     }
 
     async fn read_control(&self, ctx: &mut Context) -> Result<(), Fenced> {
@@ -963,6 +1113,7 @@ where
                 events.push(Event::Final { text });
             }
             self.emit(ctx, events).await?;
+            *capacity_recovery = CapacityRecovery::Available;
             return Ok((!continues).then_some(Exit::Done));
         }
         let mut events = pending_usage;
@@ -977,6 +1128,7 @@ where
         // The reads started during the stream are still running: keep
         // polling them through the commit (see `ReadsHandle`).
         prefetch.reads.drive(self.emit(ctx, events)).await?;
+        *capacity_recovery = CapacityRecovery::Available;
         Ok(None)
     }
 

@@ -65,7 +65,7 @@ pub use event::{
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
-    ToolSpec, Tools, Verdict, model_tool_name,
+    RequestSize, ToolSpec, Tools, Verdict, model_tool_name,
 };
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};

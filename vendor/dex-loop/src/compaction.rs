@@ -30,10 +30,21 @@ pub struct Compaction {
 
 /// Decides, before each model call, whether to compact.
 pub trait Compactor: Send + Sync {
+    /// Prefer complete adapter measurement over the legacy history fallback.
+    fn uses_model_budget(&self) -> bool {
+        false
+    }
+
     fn plan(&self, ctx: &Context) -> impl Future<Output = CompactionPlan> + Send;
 
     /// A complete request exceeded capacity despite the proactive threshold.
     /// Hosts without a recovery strategy leave the original failure intact.
+    /// Proposes the same safe cut for a host which will verify full request
+    /// reduction before committing it. Callers must retain usage on rejection.
+    fn propose_recovery(&self, ctx: &Context) -> impl Future<Output = CompactionPlan> + Send {
+        self.recover(ctx)
+    }
+
     fn recover(&self, _ctx: &Context) -> impl Future<Output = CompactionPlan> + Send {
         async { CompactionPlan::default() }
     }
@@ -76,6 +87,7 @@ pub trait Summarize: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct Threshold<S> {
     max_bytes: usize,
+    model_budget: bool,
     cut_policy: CutPolicy,
     summarizer: S,
 }
@@ -90,6 +102,7 @@ impl<S: Summarize> Threshold<S> {
     pub fn new(max_bytes: usize, keep_recent: usize, summarizer: S) -> Self {
         Self {
             max_bytes,
+            model_budget: false,
             cut_policy: CutPolicy::KeepRecent(keep_recent),
             summarizer,
         }
@@ -101,6 +114,7 @@ impl<S: Summarize> Threshold<S> {
     pub fn for_turns(max_bytes: usize, summarizer: S) -> Self {
         Self {
             max_bytes,
+            model_budget: false,
             cut_policy: CutPolicy::CompletedTurnSteps,
             summarizer,
         }
@@ -108,6 +122,17 @@ impl<S: Summarize> Threshold<S> {
 }
 
 impl<S: Summarize> Threshold<S> {
+    /// Model-aware history fallback; full-request pressure is measured by Model.
+    /// The legacy fallback applies only when accepted capacity is unknown.
+    pub fn for_model_budget(fallback_bytes: usize, summarizer: S) -> Self {
+        Self {
+            max_bytes: fallback_bytes,
+            model_budget: true,
+            cut_policy: CutPolicy::CompletedTurnSteps,
+            summarizer,
+        }
+    }
+
     fn limit(&self, ctx: &Context) -> usize {
         // usize::MAX is the existing explicit opt-out.
         if self.max_bytes == usize::MAX {
@@ -115,8 +140,12 @@ impl<S: Summarize> Threshold<S> {
         }
         ctx.context_window_tokens()
             .map_or(self.max_bytes, |window| {
-                self.max_bytes
-                    .min(context_input_byte_limit(window, DEFAULT_OUTPUT_TOKENS))
+                let limit = context_input_byte_limit(window, DEFAULT_OUTPUT_TOKENS);
+                if self.model_budget {
+                    limit
+                } else {
+                    self.max_bytes.min(limit)
+                }
             })
     }
 
@@ -178,8 +207,19 @@ impl<S: Summarize> Threshold<S> {
 }
 
 impl<S: Summarize> Compactor for Threshold<S> {
+    fn uses_model_budget(&self) -> bool {
+        self.model_budget
+    }
+
     async fn plan(&self, ctx: &Context) -> CompactionPlan {
         self.plan_at(ctx, self.limit(ctx)).await
+    }
+
+    async fn propose_recovery(&self, ctx: &Context) -> CompactionPlan {
+        if self.max_bytes == usize::MAX {
+            return CompactionPlan::default();
+        }
+        self.plan_at(ctx, 0).await
     }
 
     async fn recover(&self, ctx: &Context) -> CompactionPlan {
@@ -470,6 +510,53 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn model_budget_threshold_follows_accepted_capacity_and_proposes_unconditionally() {
+        let mut event = user("old", &"x".repeat(60_000));
+        if let Event::UserMessage {
+            context_window_tokens,
+            ..
+        } = &mut event
+        {
+            *context_window_tokens = Some(1_000_000);
+        }
+        let events = vec![
+            (Cursor(1), event),
+            (
+                Cursor(2),
+                Event::ModelStepCompleted {
+                    step: 1,
+                    text: String::new(),
+                    calls: vec![],
+                    reasoning: None,
+                    served: None,
+                    timing: None,
+                },
+            ),
+            (
+                Cursor(3),
+                Event::Final {
+                    text: String::new(),
+                },
+            ),
+        ];
+        let ctx = rehydrate(thread(), &events);
+        let legacy = Threshold::for_turns(50_000, Fake);
+        let budgeted = Threshold::for_model_budget(50_000, Fake);
+        assert!(!legacy.uses_model_budget());
+        assert!(budgeted.uses_model_budget());
+        assert!(legacy.plan(&ctx).await.compaction.is_some());
+        assert!(budgeted.plan(&ctx).await.compaction.is_none());
+        assert!(budgeted.propose_recovery(&ctx).await.compaction.is_some());
+        assert!(
+            Threshold::for_model_budget(usize::MAX, Fake)
+                .propose_recovery(&ctx)
+                .await
+                .compaction
+                .is_none()
+        );
     }
 
     #[test]
