@@ -1,7 +1,6 @@
 //! Budget visibility and recovery exercise the real Engine and model boundary.
 // Shared fixtures include helpers used by other integration-test binaries.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use dex_loop::{
     Budget, CancellationToken, Context, Engine, Event, Exit, Lexicon, Model, ModelChunk,

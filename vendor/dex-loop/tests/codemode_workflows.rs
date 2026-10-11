@@ -1,7 +1,6 @@
 //! Script scratch data survives successful wrappers through the thread journal,
 //! while failed or uncertain scripts cannot publish replacement state.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

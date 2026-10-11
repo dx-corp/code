@@ -5,6 +5,7 @@ edition = "2024"
 license = "UNLICENSED"
 publish = false
 rust-version = "1.95"
+autotests = false
 
 [features]
 # Host crates enable this only for their adapter contract tests.
@@ -28,6 +29,10 @@ tokio = { version = "1.48", features = ["time"] }
 tokio-util = "0.7"
 tracing = "0.1"
 url = { version = "2.5", features = ["serde"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
 
 [dev-dependencies]
 proptest = "1.9"

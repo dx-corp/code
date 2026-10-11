@@ -9,8 +9,7 @@
 
 // Each `tests/*.rs` file is its own crate; this one uses a subset of the
 // shared helpers.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

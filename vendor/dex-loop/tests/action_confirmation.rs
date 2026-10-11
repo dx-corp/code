@@ -1,6 +1,5 @@
 //! Consent is log-derived, one use, exact-action bound, and independent of summaries.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 use dex_loop::{
     ActionConfirmation, ApprovalMode, Budget, CallId, CancellationToken, ConfirmationDecision,
     Context, Cursor, Engine, Event, Exit, Lexicon, Outcome, Output, PrincipalId, ProposedCall,

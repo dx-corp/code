@@ -1,6 +1,5 @@
 //! Policy, schema and original deadline boundaries for speculative reads.
-#[allow(dead_code)]
-mod support;
+use crate::support;
 use dex_loop::{
     Budget, CancellationToken, Context, Engine, Event, Exit, Lexicon, PrincipalId, ProposedCall,
     ThreadId, ToolName, ToolResult, ToolSpec, Tools, Verdict,
