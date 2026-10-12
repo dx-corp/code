@@ -73,13 +73,10 @@ pub(crate) fn run(args: &[OsString]) -> Result<i32> {
     ensure_repository(&cwd)?;
     // The execution owner fixes production cwd to /workspace. Tests use their
     // own temporary worktree through the same snapshot and command path.
-    let root = std::env::temp_dir().join("maestro-native-effects");
-    std::fs::create_dir_all(&root)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
-    }
+    let root = maestro_local_host::sandbox::prepare_private_temp_directory(
+        &std::env::temp_dir(),
+        "maestro-native-effects",
+    )?;
     let pending = begin_or_resume(&cwd, &root, key);
     let mut child = Command::new("/bin/sh")
         .args(["-c", command])

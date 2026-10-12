@@ -1,7 +1,11 @@
 use super::*;
 
 mod explore;
+#[cfg(not(windows))]
+mod mcp_counter_fixture;
 mod streaming_order;
+#[cfg(not(windows))]
+use mcp_counter_fixture::{failing_counter_server, read_counter};
 use std::path::Path;
 
 use crate::agent::{
@@ -328,35 +332,6 @@ fn collect_openai_schema_issues(value: &serde_json::Value, path: &str, issues: &
             }
         }
     }
-}
-
-#[cfg(not(windows))]
-fn failing_counter_server(server_name: &str, counter_path: &Path) -> serde_json::Value {
-    serde_json::json!({
-        "name": server_name,
-        "transport": "stdio",
-        "command": "sh",
-        // Leave enough headroom for a loaded parallel test process to
-        // schedule the child before the handshake timeout expires.
-        "timeout": 500,
-        // These tests exercise retry/reload mechanics, not the workspace
-        // trust gate, so opt the server out of the approval requirement.
-        "requiresProjectApproval": false,
-        "args": [
-            "-c",
-            "count=$(cat \"$1\" 2>/dev/null || echo 0); echo $((count + 1)) > \"$1\"; exit 1",
-            "sh",
-            counter_path.display().to_string()
-        ]
-    })
-}
-
-#[cfg(not(windows))]
-fn read_counter(counter_path: &Path) -> usize {
-    std::fs::read_to_string(counter_path)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0)
 }
 
 struct TrustedWorkspaceGuard {

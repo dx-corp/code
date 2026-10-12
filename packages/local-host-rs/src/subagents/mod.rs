@@ -3059,7 +3059,7 @@ impl SubagentManager {
             Ok(timeout_ms) => timeout_ms,
             Err(error) => return ToolResult::failure(error),
         };
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         let steer_signal = self.steer_signal();
 
         loop {
@@ -3067,14 +3067,17 @@ impl SubagentManager {
                 Ok(record) => record,
                 Err(error) => return ToolResult::failure(error),
             };
-            if record.status.is_terminal() || timeout_ms == 0 || Instant::now() >= deadline {
+            if record.status.is_terminal()
+                || timeout_ms == 0
+                || tokio::time::Instant::now() >= deadline
+            {
                 return tool_result_for_record(record);
             }
             if cancel.is_some_and(CancellationToken::is_cancelled) {
                 return cancelled_result("wait_subagent cancelled");
             }
             let (record, slice) = if record.backend == SubagentBackend::Orb {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 let refresh_cancel =
                     cancel.map_or_else(CancellationToken::new, CancellationToken::child_token);
                 let refresh = self.refresh_orb_record(record.clone(), Some(&refresh_cancel));
@@ -3090,14 +3093,14 @@ impl SubagentManager {
             } else {
                 (record, Duration::from_millis(50))
             };
-            if record.status.is_terminal() || Instant::now() >= deadline {
+            if record.status.is_terminal() || tokio::time::Instant::now() >= deadline {
                 return tool_result_for_record(record);
             }
             if cancel.is_some_and(CancellationToken::is_cancelled) {
                 return cancelled_result("wait_subagent cancelled");
             }
 
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match sleep_or_release(remaining.min(slice), cancel, steer_signal.as_deref()).await {
                 WaitWake::Elapsed => {}
                 WaitWake::Cancelled => return cancelled_result("wait_subagent cancelled"),
@@ -5987,6 +5990,7 @@ fn convert_usage(usage: &crate::agent::TokenUsage) -> crate::headless::TokenUsag
 
 #[cfg(test)]
 mod tests {
+    mod wait_timeouts;
     use std::sync::Mutex;
 
     use futures::future::BoxFuture;
@@ -6587,49 +6591,6 @@ mod tests {
                 .expect("owner caller calls lock")
                 .is_empty(),
             "an immediate wait must not make a remote status or collect call"
-        );
-    }
-
-    #[tokio::test]
-    async fn orb_wait_bounds_remote_refresh_by_remaining_timeout() {
-        let root = tempfile::tempdir().expect("temp root");
-        let manager =
-            SubagentManager::with_root(root.path().to_path_buf(), root.path().join("records"));
-        let binding = owner_binding("org-a", "workspace-a", "connection-a", 1);
-        let caller = OwnerBindingCaller::with_status_delay("active", &[], Duration::from_secs(5));
-        manager
-            .set_orb_adapter(OrbDelegationAdapter::from_caller_with_owner_binding(
-                caller.clone(),
-                binding.clone(),
-            ))
-            .await;
-        let record = running_orb_record(root.path(), &binding);
-        manager
-            .write_record(&record)
-            .expect("persist Computer record");
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            manager.wait(
-                &serde_json::json!({
-                    "subagent_id": record.id,
-                    "timeout_ms": 25,
-                }),
-                None,
-            ),
-        )
-        .await
-        .expect("wait deadline must bound a slow remote refresh");
-
-        assert!(result.success, "the cached running snapshot remains valid");
-        assert_eq!(
-            caller
-                .calls
-                .lock()
-                .expect("owner caller calls lock")
-                .as_slice(),
-            ["orb_task_status"],
-            "a timed-out status refresh must not proceed to collect"
         );
     }
 

@@ -386,7 +386,8 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.expect("descendant pid");
         let descendant: i32 = line.trim().parse().expect("pid");
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let cleanup_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        tokio::time::timeout_at(cleanup_deadline, async {
             loop {
                 let stat =
                     std::fs::read_to_string(format!("/proc/{root}/stat")).expect("direct child");
@@ -408,6 +409,21 @@ mod tests {
             Some(7)
         );
         drop(guard);
+        // Late orphan adoption is handled by the owned asynchronous reaper.
+        // Await it within the original shared cleanup budget.
+        tokio::time::timeout_at(cleanup_deadline, async {
+            loop {
+                // SAFETY: signal 0 only probes this test's recorded descendant.
+                if unsafe { libc::kill(descendant, 0) } == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("owned asynchronous reaper removes the descendant");
         // Reaping, not merely SIGKILL: signal 0 must see no zombie either.
         // SAFETY: signal 0 only probes this test's recorded descendant.
         assert_eq!(unsafe { libc::kill(descendant, 0) }, -1);

@@ -1,3 +1,7 @@
+mod blocked_executor_cleanup;
+use blocked_executor_cleanup::{
+    BlockedPromptRuntimeExecutor, BlockedPromptRuntimeExecutorReleaseGuard,
+};
 mod request_routing;
 use maestro_runtime_contracts::tool_wire;
 use reqwest::StatusCode;
@@ -2479,58 +2483,6 @@ impl HostedRunnerHeadlessMessageExecutor for ResponseRecordingExecutor {
 #[derive(Debug, Default)]
 struct PumpOnlyRuntimeExecutor {
     queued: Arc<Mutex<Vec<FromAgentMessage>>>,
-}
-
-#[derive(Debug)]
-struct BlockedPromptRuntimeExecutor {
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-    started: Arc<AtomicBool>,
-    release: Arc<(Mutex<bool>, Condvar)>,
-}
-
-impl BlockedPromptRuntimeExecutor {
-    fn new() -> Self {
-        Self {
-            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            started: Arc::new(AtomicBool::new(false)),
-            release: Arc::new((Mutex::new(false), Condvar::new())),
-        }
-    }
-
-    fn release(&self) {
-        let (released, wake) = &*self.release;
-        *released.lock().expect("release state") = true;
-        wake.notify_all();
-    }
-}
-
-impl HostedRunnerHeadlessMessageExecutor for BlockedPromptRuntimeExecutor {
-    fn execute(
-        &self,
-        _context: &HostedRunnerHeadlessMessageContext,
-        message: ToAgentMessage,
-    ) -> Result<HostedRunnerHeadlessMessageResult, HostedRunnerError> {
-        if matches!(message, ToAgentMessage::Prompt { .. }) || is_control_response_message(&message)
-        {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            self.started.store(true, Ordering::SeqCst);
-            let (released, wake) = &*self.release;
-            let mut released = released.lock().expect("release state");
-            while !*released {
-                released = wake.wait(released).expect("release state");
-            }
-            return Ok(HostedRunnerHeadlessMessageResult::runtime_handled(
-                vec![FromAgentMessage::ResponseStart {
-                    response_id: "response-blocked".to_string(),
-                }],
-                "released blocked prompt",
-            ));
-        }
-        Ok(HostedRunnerHeadlessMessageResult::transport_only(
-            Vec::new(),
-            "ignored by blocked prompt executor",
-        ))
-    }
 }
 
 #[derive(Debug)]
@@ -8074,6 +8026,7 @@ async fn shutdown_awaits_event_pump() {
 async fn drain_fences_in_flight_prompts_and_serializes_repeated_drains() {
     let workspace = tempdir().expect("workspace");
     let executor = Arc::new(BlockedPromptRuntimeExecutor::new());
+    let _release_guard = BlockedPromptRuntimeExecutorReleaseGuard(executor.clone());
     let handle = start_hosted_runner_with_message_executor(
         test_config(workspace.path().to_path_buf()),
         executor.clone(),
@@ -8188,6 +8141,7 @@ async fn drain_fences_in_flight_prompts_and_serializes_repeated_drains() {
 async fn concurrent_idempotent_messages_wait_for_the_original_attempt() {
     let workspace = tempdir().expect("workspace");
     let executor = Arc::new(BlockedPromptRuntimeExecutor::new());
+    let _release_guard = BlockedPromptRuntimeExecutorReleaseGuard(executor.clone());
     let handle = start_hosted_runner_with_message_executor(
         test_config(workspace.path().to_path_buf()),
         executor.clone(),
