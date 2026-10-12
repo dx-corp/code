@@ -1,0 +1,100 @@
+[package]
+name = "maestro-a2a-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A2A, value and operating-plane command surfaces for Deixic Code"
+
+[lib]
+name = "maestro_a2a_cli"
+path = "src/lib.rs"
+
+[dependencies]
+maestro-local-host.workspace = true
+maestro-a2a-ledger.workspace = true
+
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "signal", "fs", "net", "process", "time"] }
+futures.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls"] }
+sha2.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+regex.workspace = true
+dirs.workspace = true
+dunce.workspace = true
+chrono.workspace = true
+url = "2"
+urlencoding = "2"
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints.clippy]
+# Enable pedantic lints for code quality
+pedantic = { level = "warn", priority = -1 }
+
+# Allow common patterns that are intentional in this codebase
+unused_async = "allow"                  # Async functions for interface consistency
+missing_errors_doc = "allow"            # Not all error conditions need docs
+missing_panics_doc = "allow"            # Not all panics need docs
+cast_possible_truncation = "allow"      # Often unavoidable in systems code
+cast_precision_loss = "allow"           # Acceptable for display/UI calculations
+cast_sign_loss = "allow"                # Used intentionally in many places
+cast_lossless = "allow"                 # Allow explicit casts for clarity
+must_use_candidate = "allow"            # Too noisy for all builder patterns
+doc_markdown = "allow"                  # Too picky about formatting
+module_name_repetitions = "allow"       # Common Rust naming pattern
+similar_names = "allow"                 # Often intentional (e.g., tx/rx)
+too_many_lines = "allow"                # Subjective limit
+struct_excessive_bools = "allow"        # Sometimes needed for state machines
+items_after_statements = "allow"        # Useful for local helpers
+wildcard_imports = "allow"              # Used for re-exports
+match_same_arms = "allow"               # Sometimes clearer than combining
+needless_pass_by_value = "allow"        # Interface consistency
+redundant_closure_for_method_calls = "allow" # Sometimes clearer
+uninlined_format_args = "allow"         # Older Rust style is still readable
+if_not_else = "allow"                   # Sometimes clearer to negate
+single_match_else = "allow"             # Sometimes clearer than if-let
+return_self_not_must_use = "allow"      # Builder patterns returning Self
+format_push_string = "allow"            # push_str(&format!()) is readable
+unnecessary_wraps = "allow"             # Sometimes for API consistency
+option_if_let_else = "allow"            # match is often clearer
+match_wildcard_for_single_variants = "allow" # Future-proofing matches
+ref_option_ref = "allow"                # &Option<T> is sometimes cleaner
+trivially_copy_pass_by_ref = "allow"    # Sometimes clearer to pass by ref
+fn_params_excessive_bools = "allow"     # UI functions often have many flags
+large_futures = "allow"                 # TUI app naturally has large futures
+iter_without_into_iter = "allow"        # Not always needed
+unused_self = "allow"                   # Sometimes for method consistency
+option_option = "allow"                 # Sometimes needed for optional Option
+manual_let_else = "allow"               # match is often clearer
+significant_drop_tightening = "allow"   # Sometimes clearer to drop earlier
+map_unwrap_or = "allow"                 # Sometimes clearer than map+unwrap_or_else
+implicit_hasher = "allow"               # Not generalizing over hashers is fine
+struct_field_names = "allow"            # prefix/postfix patterns are OK
+many_single_char_names = "allow"        # Short names in math/UI code
+assigning_clones = "allow"              # Sometimes clearer than clone_from
+case_sensitive_file_extension_comparisons = "allow" # Platform-specific code
+cast_possible_wrap = "allow"            # Necessary for libc interop
+needless_continue = "allow"             # Sometimes improves readability
+if_then_some_else_none = "allow"        # Sometimes clearer than bool::then
+ref_option = "allow"                    # &Option<T> is sometimes appropriate
+default_trait_access = "allow"          # Type::default() is clear enough
+used_underscore_binding = "allow"       # Sometimes used for side effects
+match_bool = "allow"                    # if-else is sometimes clearer than match
+missing_fields_in_debug = "allow"       # Some fields can't be debugged (closures)
+naive_bytecount = "allow"               # bytecount crate not worth adding
+doc_link_with_quotes = "allow"          # Quotes in doc examples are OK
+comparison_chain = "allow"              # if-else chains are often clearer
+large_stack_arrays = "allow"            # Test fixtures may use large arrays
+
+[lints.rust]
+# Unsafe code is allowed only for low-level system operations
+# (libc process management, Darwin APIs, pointer arithmetic)
+# Each unsafe block should have a SAFETY comment explaining why it's safe
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(kani)"] }

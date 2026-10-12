@@ -29,6 +29,7 @@ anyhow.workspace = true
 ctor.workspace = true
 maestro-runtime-gateway.workspace = true
 maestro-local-host.workspace = true
+maestro-hosted-runner-lib.workspace = true
 maestro-runtime.workspace = true
 maestro-tui.workspace = true
 serde_json.workspace = true

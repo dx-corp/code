@@ -12,7 +12,7 @@ const CONFORMANCE_VERSION = "evalops.maestro.runtime-conformance.v1";
 const FIXTURE = resolve(ROOT, "packages/runtime-contracts-rs/fixtures/runtime-conformance-v1.json");
 const PASSPORT_CONTRACT = resolve(ROOT, "packages/runtime-contracts-rs/fixtures/runtime-passport-contract-v1.json");
 const DRIVER = resolve(ROOT, "scripts/run-runtime-conformance.mjs");
-const NATIVE_FIXTURE = resolve(ROOT, "packages/local-host-rs/src/hosted_runner_conformance.rs");
+const NATIVE_FIXTURE = resolve(ROOT, "packages/hosted-runner-rs/src/hosted_runner_conformance.rs");
 
 function canonicalize(value) {
 	if (value === null || typeof value === "boolean" || typeof value === "string") {

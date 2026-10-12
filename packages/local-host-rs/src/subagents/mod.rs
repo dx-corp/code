@@ -48,7 +48,6 @@ use crate::orb_connection::HostedOrbOwnerBinding;
 use crate::sandbox::SandboxPolicy;
 use crate::session::{SessionLock, sanitize_path_for_dirname};
 use crate::state::ApprovalMode;
-use crate::tools::ToolRegistry;
 use crate::worktree::WorktreeSession;
 
 use crate::tools::orb_delegation::{
@@ -4894,8 +4893,9 @@ fn child_allowed_tools_for_role(
     role: SubagentRole,
     profile_tools: Option<&[String]>,
 ) -> HashSet<String> {
-    let mut tools = ToolRegistry::new()
-        .tools()
+    let mut tools = crate::agent::tool_host::tool_host()
+        .registry_tool_definitions()
+        .into_iter()
         .filter(|definition| {
             let name = definition.tool.name.to_ascii_lowercase();
             let globally_allowed = !SUBAGENT_TOOL_NAMES.contains(&name.as_str())

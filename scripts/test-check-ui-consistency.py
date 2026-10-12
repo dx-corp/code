@@ -39,7 +39,7 @@ fn render() { Color::White; }
 
     def test_scope_excludes_palette_owner_and_unmigrated_components(self):
         self.assertEqual(len(check.FILES), 10)
-        self.assertNotIn('packages/tui-rs/src/themes.rs', check.FILES)
+        self.assertNotIn('packages/tui-kit-rs/src/themes.rs', check.FILES)
         self.assertNotIn('packages/tui-rs/src/app.rs', check.FILES)
         self.assertTrue(all((check.ROOT / p).is_file() for p in check.FILES))
 

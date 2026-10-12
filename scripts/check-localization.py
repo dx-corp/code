@@ -96,7 +96,7 @@ def check(root: Path) -> list[str]:
                 if key not in known:
                     line = text.count('\n', 0, match.start()) + 1
                     errors.append(f'{path.relative_to(root)}:{line}: missing catalog key {key!r}')
-    metadata = root / 'packages/tui-rs/src/mcp_catalog.rs'
+    metadata = root / 'packages/cli-commands-rs/src/mcp_catalog.rs'
     for match in re.finditer(r'(?:description|category):\s*(' + STRING + r')', metadata.read_text()):
         key = json.loads(match[1])
         if key not in known:

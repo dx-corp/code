@@ -25,6 +25,7 @@ mod native_host;
 mod native_lifecycle_tests;
 #[cfg(test)]
 mod native_read_only_tests;
+pub mod tool_host;
 
 // The runtime owns these modules. Re-exporting them here keeps existing TUI
 // callers source-compatible without putting a dependency from runtime back to
@@ -252,14 +253,16 @@ impl NativeAgent {
         let telemetry_identity_scope = Arc::new(RwLock::new(initial_identity_scope));
         let provider_name = resolved.provider_name.clone();
         let telemetry_config = config.clone();
-        let host = build_local_host(
-            &config,
-            credential_vault.clone(),
-            client_override,
-            subagent_parent_scope_id.clone(),
-            mailbox_identity.clone(),
-            Arc::clone(&telemetry_identity_scope),
-        )?;
+        let host = tool_host::tool_host().build_local_host(tool_host::LocalHostBuild {
+            config: &config,
+            credential_vault: credential_vault.clone(),
+            skip_identity_verification: client_override
+                .as_ref()
+                .is_some_and(ClientOverride::skips_identity_verification),
+            subagent_parent_scope_id: subagent_parent_scope_id.clone(),
+            mailbox_identity: mailbox_identity.clone(),
+            telemetry_identity_scope: Arc::clone(&telemetry_identity_scope),
+        })?;
         let runtime_config = config.into_runtime();
         let telemetry_host = host.clone();
         let (inner, events) = maestro_runtime::agent::NativeAgent::start_with_resolved_client(
@@ -619,20 +622,20 @@ pub fn dex_loop_execution_host(
     config: &NativeAgentConfig,
     credential_vault: CredentialVault,
 ) -> Result<NativeExecutionHostHandle> {
-    build_local_host(
+    tool_host::tool_host().build_local_host(tool_host::LocalHostBuild {
         config,
         credential_vault,
-        None,
-        None,
-        None,
-        Arc::new(RwLock::new(None)),
-    )
+        skip_identity_verification: false,
+        subagent_parent_scope_id: None,
+        mailbox_identity: None,
+        telemetry_identity_scope: Arc::new(RwLock::new(None)),
+    })
 }
 
 fn build_local_host(
     config: &NativeAgentConfig,
     credential_vault: CredentialVault,
-    client_override: Option<ClientOverride>,
+    skip_identity_verification: bool,
     subagent_parent_scope_id: Option<String>,
     mailbox_identity: Option<String>,
     telemetry_identity_scope: Arc<RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>,
@@ -653,10 +656,7 @@ fn build_local_host(
 
     let mut hooks = IntegratedHookSystem::load_from_config(&config.cwd);
     hooks.set_model(&config.model);
-    if client_override
-        .as_ref()
-        .is_none_or(|override_client| !override_client.skips_identity_verification())
-    {
+    if !skip_identity_verification {
         if let Ok(session) = crate::credential_mode::verified_current_identity_session() {
             hooks.set_identity_context(
                 Some(session.organization_id.clone()),

@@ -14,15 +14,15 @@ use thiserror::Error;
 use super::messages::ControllerBindingHello;
 
 /// Version of the optional Platform-to-Maestro controller binding handshake.
-pub(crate) const CONTROLLER_BINDING_VERSION: &str = "evalops.maestro.controller-binding.v1";
+pub const CONTROLLER_BINDING_VERSION: &str = "evalops.maestro.controller-binding.v1";
 /// Schema version for the secret-free controller context inside the binding.
-pub(crate) const CONTROLLER_CONTEXT_SCHEMA_VERSION: &str = "evalops.maestro.controller-context.v1";
+pub const CONTROLLER_CONTEXT_SCHEMA_VERSION: &str = "evalops.maestro.controller-context.v1";
 const PLATFORM_CONTROLLER_ID: &str = "evalops.platform";
 
 /// Lifetime selected by Platform before the Maestro process is admitted.
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ControllerLifetimeProfile {
+pub enum ControllerLifetimeProfile {
     /// One bounded operating turn.
     Ephemeral,
     /// One durable hosted thread generation.
@@ -32,35 +32,35 @@ pub(crate) enum ControllerLifetimeProfile {
 /// Secret-free Platform scope and request correlation for one headless child.
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ControllerContext {
-    pub(crate) schema_version: String,
-    pub(crate) controller_id: String,
-    pub(crate) organization_id: String,
-    pub(crate) workspace_id: String,
-    pub(crate) thread_id: String,
+pub struct ControllerContext {
+    pub schema_version: String,
+    pub controller_id: String,
+    pub organization_id: String,
+    pub workspace_id: String,
+    pub thread_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) channel_id: Option<String>,
+    pub channel_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) request_id: Option<String>,
-    pub(crate) lifetime_profile: ControllerLifetimeProfile,
+    pub request_id: Option<String>,
+    pub lifetime_profile: ControllerLifetimeProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) runtime_generation: Option<u64>,
+    pub runtime_generation: Option<u64>,
 }
 
 /// Runtime identity values that a managed process may require the hello to match.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub(crate) struct ControllerScopeExpectation {
-    pub(crate) organization_id: Option<String>,
-    pub(crate) workspace_id: Option<String>,
-    pub(crate) thread_id: Option<String>,
-    pub(crate) channel_id: Option<String>,
-    pub(crate) request_id: Option<String>,
+pub struct ControllerScopeExpectation {
+    pub organization_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub request_id: Option<String>,
 }
 
 impl ControllerScopeExpectation {
     /// Reads only secret-free identity variables populated by the Platform adapter.
     #[must_use]
-    pub(crate) fn from_evalops_environment() -> Self {
+    pub fn from_evalops_environment() -> Self {
         Self {
             organization_id: std::env::var("MAESTRO_EVALOPS_ORG_ID").ok(),
             workspace_id: std::env::var("MAESTRO_EVALOPS_WORKSPACE_ID").ok(),
@@ -73,15 +73,15 @@ impl ControllerScopeExpectation {
 
 /// Echoed proof that Maestro parsed and accepted the exact binding payload.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ControllerBindingReceipt {
-    pub(crate) binding_version: String,
-    pub(crate) binding_sha256: String,
-    pub(crate) controller_context: ControllerContext,
+pub struct ControllerBindingReceipt {
+    pub binding_version: String,
+    pub binding_sha256: String,
+    pub controller_context: ControllerContext,
 }
 
 /// Strict controller-binding validation failures.
 #[derive(Debug, Error, Eq, PartialEq)]
-pub(crate) enum ControllerBindingError {
+pub enum ControllerBindingError {
     #[error("controller binding fields must be supplied together")]
     Incomplete,
     #[error("unsupported controller binding version")]
@@ -119,7 +119,7 @@ struct ControllerHelloExtension {
 }
 
 /// Parses and validates the optional controller extension carried by `hello`.
-pub(crate) fn controller_binding_from_hello_json(
+pub fn controller_binding_from_hello_json(
     raw: &str,
     negotiated_protocol_version: &str,
     expected: &ControllerScopeExpectation,
@@ -152,7 +152,7 @@ pub(crate) fn controller_binding_from_hello_json(
     }))
 }
 
-pub(crate) fn controller_binding_from_hello_extension(
+pub fn controller_binding_from_hello_extension(
     extension: Option<&ControllerBindingHello>,
     negotiated_protocol_version: &str,
     expected: &ControllerScopeExpectation,
@@ -287,7 +287,7 @@ fn validate_manifest(
 }
 
 /// Computes the cross-repository canonical binding digest.
-pub(crate) fn controller_binding_sha256(
+pub fn controller_binding_sha256(
     binding_version: &str,
     context: &ControllerContext,
     capability_manifest: &Value,

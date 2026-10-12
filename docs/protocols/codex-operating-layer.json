@@ -363,7 +363,7 @@
 		{
 			"area": "remote-runner-continuity",
 			"evidenceType": "source",
-			"path": "packages/local-host-rs/src/hosted_runner.rs",
+			"path": "packages/hosted-runner-rs/src/hosted_runner.rs",
 			"anchors": [
 				"evalops.remote-runner.work-continuity.v1",
 				"evalops.remote-runner.runtime-continuity.v1"
@@ -372,7 +372,7 @@
 		{
 			"area": "remote-runner-continuity",
 			"evidenceType": "source",
-			"path": "packages/local-host-rs/src/hosted_runner/manifests.rs",
+			"path": "packages/hosted-runner-rs/src/hosted_runner/manifests.rs",
 			"anchors": [
 				"RuntimeContinuityManifest",
 				"CodexSubagentContinuityEdge",
@@ -383,7 +383,7 @@
 		{
 			"area": "remote-runner-continuity",
 			"evidenceType": "test",
-			"path": "packages/local-host-rs/src/hosted_runner/tests.rs",
+			"path": "packages/hosted-runner-rs/src/hosted_runner/tests.rs",
 			"anchors": [
 				"work_continuity_manifest_extracts_codex_subagent_ids",
 				"work_continuity_manifest_keeps_spawned_and_resumed_codex_subagents_active",
@@ -393,7 +393,7 @@
 		{
 			"area": "remote-runner-continuity",
 			"evidenceType": "source",
-			"path": "packages/local-host-rs/src/hosted_runner_cli.rs",
+			"path": "packages/hosted-runner-rs/src/hosted_runner_cli.rs",
 			"anchors": [
 				"start_hosted_runner_cli_runtime",
 				"AgentSupervisorHostedRunnerMessageExecutor",
@@ -426,7 +426,7 @@
 		{
 			"area": "remote-runner-continuity",
 			"evidenceType": "test",
-			"path": "packages/local-host-rs/src/hosted_runner_cli.rs",
+			"path": "packages/hosted-runner-rs/src/hosted_runner_cli.rs",
 			"anchors": [
 				"resolves_cli_flags_into_runner_and_supervisor_config",
 				"starts_real_hosted_runner_with_supervised_headless_child"

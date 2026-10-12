@@ -1,6 +1,6 @@
 # Hosted Runner Contract
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Hosted runner code now lives in `packages/local-host-rs/src/hosted_runner/` (config, handle, manifests, snapshots, rendezvous, workload identity) and `packages/local-host-rs/src/hosted_runner_cli.rs` (launch resolution and the `hosted-runner` entrypoint). The startup coordinates in [Configuration](#configuration) are executable: `packages/local-host-rs/tests/hosted_runner_startup_contract.rs` runs every case in `packages/local-host-rs/tests/fixtures/hosted-runner-startup-contract.json` through the real CLI resolver, so a documented coordinate that stops being honored fails `cargo test -p maestro-local-host`. Other file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Hosted runner code now lives in `packages/hosted-runner-rs/src/hosted_runner/` (config, handle, manifests, snapshots, rendezvous, workload identity) and `packages/hosted-runner-rs/src/hosted_runner_cli.rs` (launch resolution and the `hosted-runner` entrypoint). The startup coordinates in [Configuration](#configuration) are executable: `packages/hosted-runner-rs/tests/hosted_runner_startup_contract.rs` runs every case in `packages/hosted-runner-rs/tests/fixtures/hosted-runner-startup-contract.json` through the real CLI resolver, so a documented coordinate that stops being honored fails `cargo test -p maestro-local-host`. Other file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 Maestro hosted runners are substrate-neutral runtime pods or sandboxes that
@@ -56,7 +56,7 @@ flags or environment variables, but the resolved values are the contract.
 | Rendezvous | `MAESTRO_RENDEZVOUS_MODE` (`inbound`, `outbound_shadow`, `outbound`); outbound modes require workload identity | optional |
 
 Deprecated environment keys are the entries of `DEPRECATED_ENV_ALIASES` in
-`packages/local-host-rs/src/hosted_runner/config.rs`. The canonical key always
+`packages/hosted-runner-rs/src/hosted_runner/config.rs`. The canonical key always
 wins when both are set; every deprecated key that carries a value produces one
 `hosted-runner environment key ... is deprecated` startup warning, and the
 deprecated keys stop being read after the next Maestro minor release. Platform
@@ -484,9 +484,9 @@ the operational model.
 
 Two executable suites back this contract; both run in the Maestro CI Rust lane.
 
-Startup and lifecycle (`cargo test -p maestro-local-host --test hosted_runner_startup_contract`):
+Startup and lifecycle (`cargo test -p maestro-hosted-runner-lib --test hosted_runner_startup_contract`):
 
-- `packages/local-host-rs/tests/fixtures/hosted-runner-startup-contract.json`
+- `packages/hosted-runner-rs/tests/fixtures/hosted-runner-startup-contract.json`
   is the accept/reject matrix for the [Configuration](#configuration)
   coordinates. Each case is resolved through
   `hosted_runner_cli::resolve_hosted_runner_launch_config`, the same code path

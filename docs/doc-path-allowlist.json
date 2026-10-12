@@ -591,7 +591,7 @@
 	},
 	{
 		"source": "docs/protocols/a2a-fleet-delegation.md",
-		"path": "packages/tui-rs/src/a2a_cli.rs",
+		"path": "packages/a2a-cli-rs/src/a2a_cli.rs",
 		"reason": "[docs/protocols/a2a-fleet-delegation.md] Design/reference doc predating the Rust-only runtime migration (#3016, #3017); see the \"Status\" banner in the file for the current Rust equivalent (or an explicit \"not found\" note) before this list of stale paths."
 	},
 	{

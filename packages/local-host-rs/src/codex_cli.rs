@@ -1302,10 +1302,10 @@ fn codex_schema_diagnostics_for_cwd(cwd: &Path) -> Result<Vec<String>> {
 }
 
 fn runtime_codex_dynamic_tools(cwd: &Path) -> Vec<crate::agent::DynamicToolSpec> {
-    let executor = crate::tools::ToolExecutor::new(cwd.to_string_lossy().to_string());
-    let tools = executor
-        .tool_definitions()
-        .map(|definition| (definition.tool.name.clone(), definition.clone()))
+    let tools = crate::agent::tool_host::tool_host()
+        .executor_tool_definitions(cwd)
+        .into_iter()
+        .map(|definition| (definition.tool.name.clone(), definition))
         .collect::<HashMap<_, _>>();
     crate::agent::dynamic_tools_from_native(&tools)
 }

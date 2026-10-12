@@ -43,7 +43,7 @@ budgets:
   maxCostUsd: 5
 ```
 
-Oracle configurations must be read-only and reasoning-capable at runtime. The built-in profiles always choose the Oracle, and the high and ultra reviewer specialists, from a different provider family than the primary model (`cross_provider` in `packages/tui-rs/src/mode_cli.rs`). Runtime reviewer subagent dispatch for the canonical levels still uses the parent provider; see evalops/mono#9321.
+Oracle configurations must be read-only and reasoning-capable at runtime. The built-in profiles always choose the Oracle, and the high and ultra reviewer specialists, from a different provider family than the primary model (`cross_provider` in `packages/tui-kit-rs/src/mode_cli.rs`). Runtime reviewer subagent dispatch for the canonical levels still uses the parent provider; see evalops/mono#9321.
 
 ## Routing evidence
 

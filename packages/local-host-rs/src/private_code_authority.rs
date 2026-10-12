@@ -41,10 +41,7 @@ pub(crate) fn load() -> Result<Option<CustomerAuthority>> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(TIMEOUT);
     if let Some(certificates) = certificates(&config)? {
-        builder = builder.use_rustls_tls().tls_built_in_root_certs(false);
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate);
-        }
+        builder = builder.tls_backend_rustls().tls_certs_only(certificates);
     }
     Ok(Some(CustomerAuthority {
         http: builder.build()?,
@@ -180,10 +177,7 @@ fn verify(
             .redirect(reqwest::redirect::Policy::none())
             .timeout(TIMEOUT);
         if let Some(certificates) = certificates(&config)? {
-            builder = builder.use_rustls_tls().tls_built_in_root_certs(false);
-            for certificate in certificates {
-                builder = builder.add_root_certificate(certificate);
-            }
+            builder = builder.tls_backend_rustls().tls_certs_only(certificates);
         }
         let response = builder
             .build()?

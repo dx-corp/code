@@ -23,11 +23,11 @@ const SOURCE_PATHS = {
 	runtimeReceiptContractFixture:
 		"packages/runtime-contracts-rs/fixtures/runtime-receipt-contract-v1.json",
 	transcript: "packages/local-host-rs/src/transcript.rs",
-	thread: "packages/local-host-rs/src/hosted_runner/thread_protocol.rs",
+	thread: "packages/hosted-runner-rs/src/hosted_runner/thread_protocol.rs",
 	threadCompatibilityMatrix: "proto/maestro/v1/hosted-thread-compatibility-matrix.json",
-	resident: "packages/local-host-rs/src/hosted_runner_cli.rs",
-	hostedRunner: "packages/local-host-rs/src/hosted_runner.rs",
-	rendezvous: "packages/local-host-rs/src/hosted_runner/rendezvous_protocol.rs",
+	resident: "packages/hosted-runner-rs/src/hosted_runner_cli.rs",
+	hostedRunner: "packages/hosted-runner-rs/src/hosted_runner.rs",
+	rendezvous: "packages/hosted-runner-rs/src/hosted_runner/rendezvous_protocol.rs",
 };
 
 const ENUM_EXPORTS = {

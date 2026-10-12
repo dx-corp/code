@@ -151,7 +151,7 @@ fn is_credential_key(key: &str) -> bool {
         .any(|metric| normalized.contains(metric))
 }
 
-pub(crate) fn redact_agent_message(
+pub fn redact_agent_message(
     message: crate::headless::messages::FromAgentMessage,
 ) -> crate::headless::messages::FromAgentMessage {
     let Ok(value) = serde_json::to_value(&message) else {
@@ -178,7 +178,7 @@ pub(crate) fn redact_agent_message(
     redacted_message
 }
 
-pub(crate) fn agent_message_for_controller(
+pub fn agent_message_for_controller(
     message: crate::headless::messages::FromAgentMessage,
 ) -> crate::headless::messages::FromAgentMessage {
     if matches!(

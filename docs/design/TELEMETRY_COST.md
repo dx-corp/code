@@ -413,7 +413,7 @@ function computeSessionAnalytics(tracker: UsageTracker): SessionAnalytics {
 ## Display Components
 
 > **Historical note:** `src/cli-tui/...` paths below refer to the removed TypeScript
-> TUI (PR #2891). Native cost/usage UI lives under `packages/tui-rs/src/usage/` and
+> TUI (PR #2891). Native cost/usage UI lives under `packages/tui-kit-rs/src/usage/` and
 > related status components.
 
 ### TUI Footer Cost Display

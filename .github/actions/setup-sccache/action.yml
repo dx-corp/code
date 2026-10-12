@@ -62,3 +62,6 @@ runs:
         SCCACHE_RUST_TOOLCHAIN: ${{ inputs.rust-toolchain }}
         SCCACHE_ALLOW_GHA_FALLBACK: ${{ inputs.allow-gha-fallback }}
       run: bash "${GITHUB_ACTION_PATH}/configure.sh"
+    - name: Link prebuilt AWS-LC when the runner has one
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/../../../scripts/ci/aws-lc-system-env.sh"

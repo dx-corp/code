@@ -273,6 +273,104 @@ pub struct ManagedInferenceScope {
     pub output_token_budget: ManagedInferenceOutputTokenBudget,
 }
 
+/// Tenant-independent model route for one dispatched turn: the part of a
+/// [`ManagedInferenceScope`] the server chooses from a provider binding before
+/// any organization, workspace or turn identifiers exist. Routing is always
+/// ordered over the single selected candidate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedInferenceRoute {
+    pub endpoint: String,
+    pub model: String,
+    pub provider_candidates: Vec<ManagedInferenceProviderCandidate>,
+    pub output_token_budget: ManagedInferenceOutputTokenBudget,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ManagedInferenceRouteError {
+    #[error("The server-selected model binding is unavailable")]
+    InvalidBinding,
+    #[error("The Process model has no priced Work route")]
+    UnpricedWorkRoute,
+}
+
+const ROUTE_FIELD_MAX_LEN: usize = 512;
+const PREPAID_OUTPUT_TOKEN_CEILING: u64 = 32_768;
+
+impl ManagedInferenceProviderBinding {
+    /// Build the server-selected route used by interactive turns. Prepaid
+    /// coordinates get the chat-completions route ceiling; every other binding
+    /// keeps the provider default budget.
+    pub fn dispatch_route(&self) -> Result<ManagedInferenceRoute, ManagedInferenceRouteError> {
+        let valid_required = |value: &str| {
+            !value.is_empty()
+                && value.len() <= ROUTE_FIELD_MAX_LEN
+                && !value.chars().any(char::is_control)
+        };
+        let valid_optional = |value: &str| {
+            value.len() <= ROUTE_FIELD_MAX_LEN && !value.chars().any(char::is_control)
+        };
+        if !valid_required(&self.model)
+            || !valid_required(&self.provider)
+            || !valid_required(&self.provider_environment)
+            || !valid_optional(&self.credential_name)
+            || !valid_optional(&self.team_id)
+        {
+            return Err(ManagedInferenceRouteError::InvalidBinding);
+        }
+
+        let funded = self.is_prepaid();
+        let output_token_budget = if funded {
+            ManagedInferenceOutputTokenBudget {
+                value: Some(PREPAID_OUTPUT_TOKEN_CEILING),
+                origin: ManagedInferenceBudgetOrigin::RoutePolicy,
+                origin_reference: "managed-prepaid-v1".into(),
+            }
+        } else {
+            ManagedInferenceOutputTokenBudget {
+                value: None,
+                origin: ManagedInferenceBudgetOrigin::ProviderDefault,
+                origin_reference: String::new(),
+            }
+        };
+        Ok(ManagedInferenceRoute {
+            endpoint: if funded {
+                "chat_completions"
+            } else {
+                "responses"
+            }
+            .into(),
+            model: self.model.clone(),
+            provider_candidates: vec![ManagedInferenceProviderCandidate {
+                provider: self.provider.clone(),
+                environment: self.provider_environment.clone(),
+                credential_name: self.credential_name.clone(),
+                team_id: self.team_id.clone(),
+                model: self.model.clone(),
+            }],
+            output_token_budget,
+        })
+    }
+
+    /// Build the priced Work route used by managed Process turns.
+    ///
+    /// The route-policy value is a ceiling: a resident may request fewer
+    /// tokens, while Gateway verifies the unchanged signed scope before
+    /// reserving money.
+    pub fn work_route(&self) -> Result<ManagedInferenceRoute, ManagedInferenceRouteError> {
+        if prepaid_model_pricing(&self.provider, &self.model).is_none() {
+            return Err(ManagedInferenceRouteError::UnpricedWorkRoute);
+        }
+        let mut route = self.dispatch_route()?;
+        route.endpoint = "chat_completions".into();
+        route.output_token_budget = ManagedInferenceOutputTokenBudget {
+            value: Some(PREPAID_OUTPUT_TOKEN_CEILING),
+            origin: ManagedInferenceBudgetOrigin::RoutePolicy,
+            origin_reference: "process-work-v1".into(),
+        };
+        Ok(route)
+    }
+}
+
 /// Reference to Billing's immutable Work allowance. The signature binds the
 /// reference to the same tenant and turn as model execution.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

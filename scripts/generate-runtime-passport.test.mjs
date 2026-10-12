@@ -69,7 +69,7 @@ test("canonical conformance fixture is present and versioned", () => {
 test("passport suite digest includes the executable native fixture source", () => {
 	const identity = buildRuntimeConformanceIdentity();
 	const nativeFixtureDigest = `sha256:${createHash("sha256")
-		.update(readFileSync("packages/local-host-rs/src/hosted_runner_conformance.rs"))
+		.update(readFileSync("packages/hosted-runner-rs/src/hosted_runner_conformance.rs"))
 		.digest("hex")}`;
 	assert.equal(identity.nativeFixtureDigest, nativeFixtureDigest);
 	assert.equal(buildRuntimePassport(options).conformance.suiteDigest, identity.suiteDigest);

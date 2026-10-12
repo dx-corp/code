@@ -144,7 +144,7 @@ pub(crate) fn accept_workspace_capability_receipt(
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
-pub(crate) enum WorkspaceCapabilityError {
+pub enum WorkspaceCapabilityError {
     #[error(
         "workspace prompt capabilities require an accepted Platform resident controller binding"
     )]
@@ -551,8 +551,8 @@ fn capability_item_sha256(
     Ok(sha256_prefixed(canonical.as_bytes()))
 }
 
-#[cfg(test)]
-pub(crate) fn recompute_request_digests(
+#[cfg(any(test, feature = "test-support"))]
+pub fn recompute_request_digests(
     request: &mut ApplyWorkspaceCapabilitySet,
 ) -> Result<(), WorkspaceCapabilityError> {
     for capability in &mut request.admitted_catalog {

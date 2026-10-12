@@ -19,6 +19,10 @@ COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
 COPY packages/dex-host-rs ./packages/dex-host-rs
 COPY packages/local-host-rs ./packages/local-host-rs
+COPY packages/tui-kit-rs ./packages/tui-kit-rs
+COPY packages/cli-commands-rs ./packages/cli-commands-rs
+COPY packages/hosted-runner-rs ./packages/hosted-runner-rs
+COPY packages/a2a-cli-rs ./packages/a2a-cli-rs
 COPY packages/sandbox-rs ./packages/sandbox-rs
 COPY packages/workspace-rs ./packages/workspace-rs
 COPY packages/codex-rs ./packages/codex-rs
@@ -63,6 +67,10 @@ COPY packages/context-rs ./packages/context-rs
 COPY packages/tui-rs ./packages/tui-rs
 COPY packages/dex-host-rs ./packages/dex-host-rs
 COPY packages/local-host-rs ./packages/local-host-rs
+COPY packages/tui-kit-rs ./packages/tui-kit-rs
+COPY packages/cli-commands-rs ./packages/cli-commands-rs
+COPY packages/hosted-runner-rs ./packages/hosted-runner-rs
+COPY packages/a2a-cli-rs ./packages/a2a-cli-rs
 COPY packages/sandbox-rs ./packages/sandbox-rs
 COPY packages/workspace-rs ./packages/workspace-rs
 COPY packages/codex-rs ./packages/codex-rs

@@ -27,6 +27,10 @@ path = "src/lib.rs"
 
 [dependencies]
 maestro-local-host.workspace = true
+maestro-tui-kit.workspace = true
+maestro-cli-commands.workspace = true
+maestro-hosted-runner-lib.workspace = true
+maestro-a2a-cli.workspace = true
 maestro-a2a-ledger.workspace = true
 # Terminal handling
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
@@ -66,7 +70,7 @@ maestro-session-history.workspace = true
 maestro-session.workspace = true
 
 # HTTP client for AI APIs
-reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls"] }
 rcgen.workspace = true
 rustls.workspace = true
 semver = "1"
@@ -177,19 +181,20 @@ windows-sys = { workspace = true, features = [
 default = []
 # Unverified NativeAgent constructor for in-crate tests plus the local
 # perf/bench binaries. Shipped maestro / deixic-code builds must not enable it.
-test-support = ["maestro-local-host/test-support", "maestro-runtime/test-support"]
+test-support = ["maestro-local-host/test-support", "maestro-runtime/test-support", "maestro-tui-kit/test-support"]
 thin-scenario = ["maestro-local-host/thin-scenario"]
-clipboard = ["arboard"]
+clipboard = ["arboard", "maestro-tui-kit/clipboard"]
 # Hook backends
 lua = ["mlua", "maestro-local-host/lua"]
 wasm = ["wasmtime", "maestro-local-host/wasm"]
-hot-reload = ["notify", "maestro-local-host/hot-reload"]
+hot-reload = ["notify", "maestro-local-host/hot-reload", "maestro-tui-kit/hot-reload"]
 # Enable all hook features
 hooks-full = ["lua", "wasm", "hot-reload"]
 
 [dev-dependencies]
 maestro-ui-preview = { path = "../ui-preview-rs" }
 maestro-local-host = { workspace = true, features = ["test-support"] }
+maestro-tui-kit = { workspace = true, features = ["test-support"] }
 maestro-runtime = { workspace = true, features = ["test-support"] }
 maestro-session = { workspace = true, features = ["test-support"] }
 # Reconstruct real terminal cells in PTY assertions, including cursor-only spaces.

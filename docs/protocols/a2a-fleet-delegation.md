@@ -1,6 +1,6 @@
 # A2A Fleet And Delegation
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Native A2A now lives in `packages/tui-rs/src/a2a_cli.rs`; the TS test paths below have no confirmed Rust replacement. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Native A2A now lives in `packages/a2a-cli-rs/src/a2a_cli.rs`; the TS test paths below have no confirmed Rust replacement. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 Native A2A pairing makes peers discoverable. The fleet layer turns those peers
