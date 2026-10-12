@@ -441,10 +441,10 @@ test("source-root receipt generation supports the legacy v1-only recovery source
 		runtimeReceipts: "packages/runtime-contracts-rs/src/receipts.rs",
 		runtimeReceiptFixture: "packages/runtime-contracts-rs/fixtures/runtime-receipt-v1.json",
 		transcript: "packages/local-host-rs/src/transcript.rs",
-		thread: "packages/local-host-rs/src/hosted_runner/thread_protocol.rs",
-		resident: "packages/local-host-rs/src/hosted_runner_cli.rs",
-		hostedRunner: "packages/local-host-rs/src/hosted_runner.rs",
-		rendezvous: "packages/local-host-rs/src/hosted_runner/rendezvous_protocol.rs",
+		thread: "packages/hosted-runner-rs/src/hosted_runner/thread_protocol.rs",
+		resident: "packages/hosted-runner-rs/src/hosted_runner_cli.rs",
+		hostedRunner: "packages/hosted-runner-rs/src/hosted_runner.rs",
+		rendezvous: "packages/hosted-runner-rs/src/hosted_runner/rendezvous_protocol.rs",
 	};
 	const legacyCodeMode = `/// Runtime execution mode negotiated by a governing controller.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

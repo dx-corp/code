@@ -98,9 +98,8 @@ use serde::{Deserialize, Serialize, de::Deserializer};
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub(crate) const CODEX_SUBAGENT_TOOL_PREFIX: &str = "codex.subagent.";
-pub(crate) const CODEX_SUBAGENT_WORK_GRAPH_SCHEMA: &str =
-    "evalops.maestro.codex.subagent-workgraph.v1";
+pub const CODEX_SUBAGENT_TOOL_PREFIX: &str = "codex.subagent.";
+pub const CODEX_SUBAGENT_WORK_GRAPH_SCHEMA: &str = "evalops.maestro.codex.subagent-workgraph.v1";
 pub(crate) const SEMANTIC_CONVERSATION_PROTOCOL: &str = "evalops.maestro.semantic-conversation.v1";
 
 /// Current headless protocol version shared with the TypeScript runtime.
@@ -417,7 +416,7 @@ pub enum ToAgentMessage {
 }
 
 impl ToAgentMessage {
-    pub(crate) fn validate_managed_inference_authorization(&self) -> Result<(), &'static str> {
+    pub fn validate_managed_inference_authorization(&self) -> Result<(), &'static str> {
         let authorization = match self {
             Self::ManagedAuthorizationResult { authorization, .. } => Some(authorization),
             Self::Prompt {
@@ -1474,11 +1473,13 @@ pub use state::{
     ActiveFileWatch, ActiveTool, ActiveUtilityCommand, AgentEvent, AgentState,
     CodexSubagentContinuityEdge, GovernedClientToolBinding, PendingApproval, StreamingResponse,
 };
+pub use state::{
+    CodexSubagentChildRun, active_codex_subagent_status, codex_subagent_child_runs,
+    codex_subagent_edge_key, codex_subagent_operation, codex_subagent_status_is_terminal,
+};
 #[allow(unused_imports)]
 pub(crate) use state::{
-    CodexSubagentChildRun, HEADLESS_OUTPUT_LIMIT, active_codex_subagent_status,
-    codex_subagent_child_runs, codex_subagent_edge_key, codex_subagent_operation,
-    codex_subagent_status_is_terminal, json_string_array_from_object, json_string_from_object,
+    HEADLESS_OUTPUT_LIMIT, json_string_array_from_object, json_string_from_object,
 };
 
 #[cfg(test)]

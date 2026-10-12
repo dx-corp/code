@@ -162,6 +162,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+mod private_temp;
+pub use private_temp::prepare_private_temp_directory;
+
 // ─────────────────────────────────────────────────────────────
 // Sandbox Policy Types
 // ─────────────────────────────────────────────────────────────
@@ -383,10 +386,8 @@ pub fn sandbox_cache_session_id() -> &'static str {
 #[must_use]
 pub fn sandbox_cache_root(session_id: &str) -> PathBuf {
     let temp_dir = std::env::temp_dir();
-    dunce::canonicalize(&temp_dir)
-        .unwrap_or(temp_dir)
-        .join(SANDBOX_CACHE_DIR)
-        .join(session_id)
+    let temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    private_temp::private_temp_directory_path(&temp_dir, SANDBOX_CACHE_DIR).join(session_id)
 }
 
 fn prepare_sandbox_cache_root(session_id: &str) -> std::io::Result<PathBuf> {
@@ -406,10 +407,7 @@ fn prepare_sandbox_cache_root_in(temp_dir: &Path, session_id: &str) -> std::io::
         ));
     }
 
-    let temp_dir = dunce::canonicalize(temp_dir)?;
-    ensure_trusted_temp_directory(&temp_dir)?;
-    let parent = temp_dir.join(SANDBOX_CACHE_DIR);
-    ensure_private_directory(&parent)?;
+    let parent = prepare_private_temp_directory(temp_dir, SANDBOX_CACHE_DIR)?;
     reclaim_inactive_sandbox_caches(&parent, session_id)?;
 
     let root = parent.join(session_id);

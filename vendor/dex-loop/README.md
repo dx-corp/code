@@ -79,7 +79,7 @@ outcome. `testing::tenant_isolation` uses matching thread/call IDs in separate
 organization and workspace scopes over shared storage.
 
 The filesystem host (`maestro-dex-host --test recovery_contract`) and hosted
-PostgreSQL host (`dex-runtime --test postgres recovery_contract`) run the same
+PostgreSQL host (`dex-runtime --test suite postgres::recovery_contract`) run the same
 assertions. The latter uses real `PgLog` and `DexEffects` over `PgLedger`,
 requires PostgreSQL, and refuses all external calls. The model and mutation
 are deterministic probes. These tests prove port recovery and persisted replay;

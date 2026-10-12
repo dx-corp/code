@@ -157,3 +157,119 @@ fn first_approved_command_in_blank_workspace_saves_changes_but_broken_git_is_pre
     );
     fs::remove_dir_all(cwd).unwrap();
 }
+
+#[test]
+fn persisted_baselines_keep_preimages_when_legacy_roots_appear_or_persist() {
+    use maestro_local_host::checkpoints::{finalize_turn_snapshot, native_effect::begin_or_resume};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for legacy_first in [true, false] {
+        let temp = std::env::temp_dir().join(format!(
+            "maestro-native-legacy-{}-{legacy_first}",
+            std::process::id()
+        ));
+        fs::create_dir(&temp).unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o700)).unwrap();
+        let cwd = temp.join("repo");
+        fs::create_dir(&cwd).unwrap();
+        git(&cwd, &["init", "-q"]);
+        fs::write(cwd.join("source.txt"), "before\n").unwrap();
+        git(&cwd, &["add", "."]);
+        git(
+            &cwd,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "initial",
+            ],
+        );
+        let legacy = temp.join("maestro-native-effects");
+        if legacy_first {
+            fs::create_dir(&legacy).unwrap();
+            fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let root = maestro_local_host::sandbox::prepare_private_temp_directory(
+            &temp,
+            "maestro-native-effects",
+        )
+        .unwrap();
+        let key = maestro_runtime_contracts::native_code::checkpoint_key(
+            "org",
+            "workspace",
+            &cwd.to_string_lossy(),
+        );
+        let pending = begin_or_resume(&cwd, &root, &key).unwrap();
+        fs::write(cwd.join("source.txt"), "first effect\n").unwrap();
+        finalize_turn_snapshot(pending).unwrap().unwrap();
+        if !legacy_first {
+            // An older binary may create its current-UID legacy directory after
+            // the new binary has already persisted the turn's first baseline.
+            fs::create_dir(&legacy).unwrap();
+            fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let output = Command::new(maestro_binary())
+            .args(["native-code-effect", &key, "printf 'after\\n' > source.txt"])
+            .env("TMPDIR", &temp)
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let file = receipt["changes"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == "source.txt")
+            .unwrap();
+        assert_eq!(file["beforeContent"], "before\n");
+        assert_eq!(file["afterContent"], "after\n");
+        assert_eq!(
+            maestro_local_host::sandbox::prepare_private_temp_directory(
+                &temp,
+                "maestro-native-effects"
+            )
+            .unwrap(),
+            root
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+}
+
+#[test]
+fn native_checkpoint_root_symlink_is_rejected_before_the_command() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temp =
+        std::env::temp_dir().join(format!("maestro-native-root-link-{}", std::process::id()));
+    fs::create_dir(&temp).unwrap();
+    fs::set_permissions(&temp, fs::Permissions::from_mode(0o700)).unwrap();
+    let cwd = temp.join("repo");
+    fs::create_dir(&cwd).unwrap();
+    let target = temp.join("other-root");
+    fs::create_dir(&target).unwrap();
+    symlink(&target, temp.join("maestro-native-effects")).unwrap();
+    let key = maestro_runtime_contracts::native_code::checkpoint_key(
+        "org",
+        "workspace",
+        &cwd.to_string_lossy(),
+    );
+    let output = Command::new(maestro_binary())
+        .args(["native-code-effect", &key, "printf 'unexpected' > marker"])
+        .env("TMPDIR", &temp)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!cwd.join("marker").exists());
+    assert_eq!(fs::read_dir(target).unwrap().count(), 0);
+    fs::remove_dir_all(temp).unwrap();
+}

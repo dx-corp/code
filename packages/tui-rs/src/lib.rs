@@ -14,13 +14,13 @@
 /// Runs the native agent and exchanges typed commands and events.
 pub mod agent;
 
-pub mod acp_cli;
 /// AI provider clients (Anthropic, OpenAI, etc.).
 /// Provides unified interfaces for different AI APIs with streaming support.
 /// Lives in the `maestro-ai` crate (packages/ai-rs); re-exported here under
 /// its historical module path so existing `crate::ai::...` call sites are
 /// unaffected.
 pub use maestro_ai as ai;
+pub use maestro_cli_commands::acp_cli;
 pub use maestro_local_host::agents_cli;
 pub use maestro_local_host::model_dynamics;
 /// File-level checkpoints for `/rewind files` (restore files an agent turn modified).
@@ -31,14 +31,14 @@ pub use maestro_local_host::doctor;
 pub use maestro_local_host::local_models;
 pub use maestro_local_host::managed_setup;
 pub use maestro_local_host::model_catalog;
+pub use maestro_local_host::orb_connection;
 /// Shared atomic-write helper (temp file + fsync + rename + parent-dir fsync)
 /// for persisted JSON/text state. See module docs for crash-safety vs.
 /// power-loss-safety guarantees.
 pub use maestro_session::fs_atomic;
-pub mod model_monitor;
-pub use maestro_local_host::orb_connection;
-pub mod palette_resource;
-pub mod platform_provider_refs;
+pub use maestro_tui_kit::model_monitor;
+pub use maestro_tui_kit::palette_resource;
+pub use maestro_tui_kit::platform_provider_refs;
 
 /// Slash command system.
 /// Parses and executes commands like /help, /clear, /model, etc.
@@ -54,11 +54,11 @@ pub use maestro_local_host::config;
 
 /// Async-signal-safe crash handler for SIGSEGV/SIGBUS.
 /// Complements the panic hook: records hard crashes and restores the terminal.
-pub mod crash_handler;
+pub use maestro_tui_kit::crash_handler;
 
 /// Visual effects (spinners, shimmers, animations).
 /// Terminal-based animations for loading states and visual feedback.
-pub mod effects;
+pub use maestro_tui_kit::effects;
 
 /// Native CLI entrypoint shared by the `maestro-tui` and canonical `maestro` binaries.
 pub mod entrypoint;
@@ -70,7 +70,7 @@ pub(crate) use maestro_local_host::path_utils;
 pub use maestro_workspace::files;
 
 /// Inline `@file` mention expansion for the composer.
-pub mod file_mentions;
+pub use maestro_tui_kit::file_mentions;
 
 /// Headless mode communication protocol.
 /// JSON-based IPC protocol for communicating with the native agent.
@@ -78,22 +78,22 @@ pub use maestro_local_host::headless;
 pub use maestro_local_host::headless_server;
 
 /// Hosted runner contract primitives for Platform-managed Maestro runtimes.
-pub use maestro_local_host::hosted_runner;
-pub use maestro_local_host::hosted_runner_conformance;
+pub use maestro_hosted_runner_lib::hosted_runner;
+pub use maestro_hosted_runner_lib::hosted_runner_conformance;
 
 /// Rust hosted runner command-line entrypoints.
-pub use maestro_local_host::hosted_runner_cli;
+pub use maestro_hosted_runner_lib::hosted_runner_cli;
 
 /// Message protocol definitions.
 /// Type definitions shared by native terminal consumers.
-pub mod protocol;
+pub use maestro_tui_kit::protocol;
 
 /// Maestro <-> Conductor bridge status types and helpers.
-pub mod bridge;
+pub use maestro_tui_kit::bridge;
 
-/// Live, bounded checks used by guided setup.
-pub mod onboarding_checks;
 pub use maestro_local_host::service_connections;
+/// Live, bounded checks used by guided setup.
+pub use maestro_tui_kit::onboarding_checks;
 /// Session persistence (save/load conversations).
 /// JSONL-based session storage for resuming previous conversations.
 pub mod session {
@@ -104,9 +104,9 @@ pub mod session {
 }
 pub mod session_transfer;
 pub mod setup_cli;
-mod subscription_usage;
 pub use maestro_local_host::skill_cli;
 pub use maestro_local_host::skill_package_cli;
+pub use maestro_tui_kit::subscription_usage;
 
 /// Application state management.
 /// Central state struct that holds all mutable application data.
@@ -114,7 +114,7 @@ pub mod state;
 
 /// Terminal setup and event handling.
 /// Raw terminal mode, event polling, and cleanup on exit.
-pub mod terminal;
+pub use maestro_tui_kit::terminal;
 
 /// Tool execution (bash, file operations).
 /// Executes tools requested by the AI agent and returns results.
@@ -129,7 +129,7 @@ pub use maestro_local_host::tools;
 
 /// Clipboard integration (copy/paste).
 /// Platform-specific clipboard access for copying code blocks.
-pub mod clipboard;
+pub use maestro_tui_kit::clipboard;
 
 /// Interactive goal mode (create / pause / block / complete + auto-continue).
 pub use maestro_local_host::goal;
@@ -143,10 +143,10 @@ pub use maestro_local_host::rlm;
 /// Durable local messages for parent and delegated agent sessions.
 pub use maestro_local_host::mailbox;
 
-mod dex_actions;
+pub use maestro_tui_kit::dex_actions;
 pub mod dex_delight;
 /// Lightweight UI prefs (`~/.maestro/ui.json`), e.g. footer density.
-pub mod ui_prefs;
+pub use maestro_tui_kit::ui_prefs;
 
 /// Diff generation and rendering.
 /// Shows file changes with colored additions/deletions.
@@ -173,15 +173,15 @@ pub use maestro_workspace::git;
 pub use maestro_ui::key_hints;
 
 /// User-configurable Rust TUI keybinding loading and resolution.
-pub mod keybindings;
+pub use maestro_tui_kit::keybindings;
 
 /// Markdown rendering for terminal.
 /// Converts markdown to styled terminal output with syntax highlighting.
-pub mod markdown;
+pub use maestro_tui_kit::markdown;
 
 /// Desktop notifications.
 /// Sends system notifications when tasks complete (optional).
-pub mod notifications;
+pub use maestro_tui_kit::notifications;
 
 /// Scrollable text pager.
 /// Like `less` - allows scrolling through long content.
@@ -189,57 +189,57 @@ pub use maestro_ui::pager;
 
 /// Terminal color palette management.
 /// Handles different color capability levels (16, 256, true color).
-pub mod palette;
+pub use maestro_tui_kit::palette;
 
-pub mod a2a_cli;
+pub use maestro_a2a_cli::a2a_cli;
 pub mod cli_commands;
-pub mod cloud_cli;
-pub mod deixic_operating_client;
+pub use maestro_cli_commands::cloud_cli;
+pub use maestro_cli_commands::deixic_operating_client;
 /// The one-loop kernel consumer for local (non-cloud) turns, behind
 /// `MAESTRO_DEX_LOOP=1`. See `docs/design/maestro-on-dex-loop.md`.
 pub mod dex_loop_local;
 pub mod mission_run;
 pub mod workflow_cli;
+pub use maestro_cli_commands::config_cli;
+pub use maestro_cli_commands::context_cli;
+pub use maestro_cli_commands::evidence;
 pub use maestro_codex::codex_app_server;
 pub use maestro_codex::codex_session;
 pub use maestro_local_host::codex_auth;
 pub use maestro_local_host::codex_cli;
 pub use maestro_local_host::codex_identity;
-pub mod config_cli;
-pub mod context_cli;
 pub use maestro_local_host::evalops_cli;
-mod evidence;
 /// Droid-style executable slash commands from `.composer/commands/`.
 pub mod exec_commands;
-pub mod import_claude_cli;
+pub use maestro_a2a_cli::operating_plane_cli;
+pub use maestro_a2a_cli::operating_plane_client;
+pub use maestro_a2a_cli::operating_plane_summary;
+pub use maestro_cli_commands::import_claude_cli;
+pub use maestro_cli_commands::memory_cli;
+pub use maestro_cli_commands::plugins_cli;
 pub use maestro_local_host::init_cli;
-pub mod memory_cli;
 pub use maestro_local_host::mission_cli;
 pub use maestro_local_host::mission_readiness;
-pub mod mode_cli;
 pub use maestro_local_host::openai_cli;
-pub mod operating_plane_cli;
-pub mod operating_plane_client;
-pub mod operating_plane_summary;
-pub mod orb_cli;
-pub mod painter_cli;
-pub mod plugins_cli;
+pub use maestro_tui_kit::mode_cli;
+pub use maestro_tui_kit::orb_cli;
+pub use maestro_tui_kit::painter_cli;
 pub mod print_mode;
+pub use maestro_cli_commands::remote_attach;
+pub use maestro_cli_commands::remote_cli;
 /// Pre-main process hardening (core dumps, ptrace, loader-injection env vars).
-pub mod process_hardening;
+pub use maestro_tui_kit::process_hardening;
 /// Custom prompt templates.
 /// User-defined prompts with argument substitution.
-pub mod prompts;
-pub mod remote_attach;
-pub mod remote_cli;
+pub use maestro_tui_kit::prompts;
 /// Second-opinion review of uncommitted changes by a different model (`/rubber-duck`).
 pub mod rubber_duck;
 pub mod run_cli;
 pub mod scenario_cli;
-pub mod search_cli;
-pub mod thread_cli;
-pub mod update_cli;
-pub mod value_cli;
+pub use maestro_a2a_cli::value_cli;
+pub use maestro_cli_commands::search_cli;
+pub use maestro_cli_commands::thread_cli;
+pub use maestro_cli_commands::update_cli;
 pub use maestro_local_host::video;
 
 /// Droid-style session worktrees (`-w` / `--worktree`).
@@ -247,7 +247,7 @@ pub use maestro_workspace::worktree;
 
 /// Jane Street magic-trace stop indicator + slow-frame hooks.
 /// Linux/Intel PT only; see module docs and `scripts/magic-trace-tui.sh`.
-pub mod magic_trace;
+pub use maestro_tui_kit::magic_trace;
 
 /// Command sandboxing (macOS Seatbelt, Linux Landlock).
 /// Restricts file system access for executed commands.
@@ -264,24 +264,24 @@ pub use maestro_local_host::safety;
 
 /// Syntax highlighting for code blocks.
 /// Uses syntect for highlighting in various languages.
-pub mod syntax;
+pub use maestro_tui_kit::syntax;
 
 /// Color themes.
 /// UI color schemes (dark, light, custom).
-pub mod themes;
+pub use maestro_tui_kit::themes;
 
 /// Loading tooltips.
 /// Random tips shown while waiting for AI responses.
-pub mod tooltips;
+pub use maestro_tui_kit::tooltips;
 
 /// Text wrapping utilities.
 /// Word-wraps text for terminal display, respecting ANSI codes.
 pub use maestro_ui::wrapping;
 
+pub use maestro_cli_commands::mcp_config_cli;
 /// Model Context Protocol (MCP) client.
 /// Connects to external MCP servers for additional tools and capabilities.
 pub use maestro_local_host::mcp;
-pub mod mcp_config_cli;
 
 /// LSP diagnostics bridge (optional Node-based CLI integration).
 pub use maestro_local_host::lsp;
@@ -295,11 +295,11 @@ pub use maestro_local_host::workflow_runtime;
 
 /// Usage and cost tracking.
 /// Tracks token consumption and estimates costs across sessions.
-pub mod usage;
+pub use maestro_tui_kit::usage;
 
 /// Prompt history with persistence and search.
 /// Stores and retrieves previous prompts for easy recall.
-pub mod history;
+pub use maestro_tui_kit::history;
 
 pub mod runtime_badges;
 /// Persistent UI state (queue modes, preferences).
@@ -307,14 +307,14 @@ pub mod ui_state;
 
 /// Configuration file watcher for hot-reload.
 /// Watches config files and emits events on changes.
-pub mod config_watcher;
+pub use maestro_tui_kit::config_watcher;
 
 pub use maestro_local_host::tool_output;
+pub use maestro_tui_kit::tool_summary;
+pub use maestro_tui_kit::turn_summary;
 /// Text formatting utilities (truncation, JSON compacting).
 /// Ported from OpenAI Codex CLI (MIT licensed).
 pub use maestro_ui::text_format;
-pub mod tool_summary;
-pub mod turn_summary;
 
 /// Live/incremental text wrapping for streaming content.
 /// Allows text to be pushed in fragments and wrapped correctly.
@@ -330,7 +330,7 @@ pub use maestro_local_host::color_utils;
 
 /// Streaming markdown collector for incremental rendering.
 /// Buffers text and commits only complete lines.
-pub mod markdown_stream;
+pub use maestro_tui_kit::markdown_stream;
 
 /// Terminal information and detection utilities.
 /// SSH, WSL, and terminal emulator detection.
@@ -350,7 +350,7 @@ pub use maestro_ui::key_binding;
 
 /// ANSI terminal commands for scroll regions and terminal control.
 /// Essential for proper scrolling over SSH.
-pub mod ansi_commands;
+pub use maestro_tui_kit::ansi_commands;
 
 /// Control-character sanitization for content that reaches a real terminal
 /// outside ratatui's `Buffer` (which filters it for the TUI chat pane).
@@ -367,7 +367,7 @@ pub use maestro_ui::viewport;
 
 /// Inline scrolling with scroll regions.
 /// For inline TUI mode with terminal scrollback integration.
-pub mod inline_scroll;
+pub use maestro_tui_kit::inline_scroll;
 
 /// Selection list rendering for popups and menus.
 /// Fuzzy match highlighting, aligned descriptions, smart wrapping.
@@ -391,7 +391,7 @@ pub use maestro_ui::field_format;
 
 /// Shimmer animation effect.
 /// Animated text highlights for loading indicators.
-pub mod shimmer;
+pub use maestro_tui_kit::shimmer;
 
 /// ANSI code tracker with surgical resets.
 /// Stateful tracking of ANSI SGR codes for preventing visual artifacts.
@@ -443,7 +443,7 @@ pub use maestro_ui::confirm_dialog;
 
 /// OSC-8 terminal hyperlinks.
 /// Clickable links in modern terminals.
-pub mod hyperlink;
+pub use maestro_tui_kit::hyperlink;
 
 /// ASCII animation system.
 /// Frame-based animations with built-in presets.
@@ -472,7 +472,7 @@ pub use maestro_swarm as swarm;
 /// Main application struct and event loop.
 /// This is the top-level coordinator that ties everything together.
 mod app;
-mod loop_wake;
+pub use maestro_tui_kit::loop_wake;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EXPORTS
@@ -1422,6 +1422,6 @@ pub use maestro_local_host::code_authority;
 /// Session-backed product issue drafts and the product feedback client.
 pub(crate) use maestro_local_host::bug_report;
 
+pub use maestro_cli_commands::mcp_catalog;
 pub use maestro_local_host::localization;
-pub mod mcp_catalog;
 pub mod transcript_copy;

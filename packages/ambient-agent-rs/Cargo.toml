@@ -22,7 +22,7 @@ tokio-stream.workspace = true
 futures.workspace = true
 
 # HTTP client for GitHub API and AI
-reqwest = { workspace = true, features = ["json", "stream", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json", "stream", "rustls"] }
 async-nats = "0.48"
 
 # Serialization

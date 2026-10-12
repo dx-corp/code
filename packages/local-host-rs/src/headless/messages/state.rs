@@ -241,7 +241,7 @@ pub struct ActiveFileWatch {
     pub owner_connection_id: Option<String>,
 }
 
-pub(crate) fn codex_subagent_operation(tool: &str) -> Option<&'static str> {
+pub fn codex_subagent_operation(tool: &str) -> Option<&'static str> {
     let suffix = tool
         .strip_prefix(CODEX_SUBAGENT_TOOL_PREFIX)
         .unwrap_or(tool);
@@ -255,7 +255,7 @@ pub(crate) fn codex_subagent_operation(tool: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn active_codex_subagent_status(operation: &str) -> &'static str {
+pub fn active_codex_subagent_status(operation: &str) -> &'static str {
     match operation {
         "send_input" => "waiting_for_input_ack",
         "wait_agent" => "wait_pending",
@@ -278,7 +278,7 @@ fn terminal_codex_subagent_status(operation: &str, success: bool) -> &'static st
     }
 }
 
-pub(crate) fn codex_subagent_status_is_terminal(status: &str) -> bool {
+pub fn codex_subagent_status_is_terminal(status: &str) -> bool {
     let normalized = status
         .trim()
         .to_ascii_lowercase()
@@ -351,15 +351,13 @@ fn has_codex_work_graph(args: Option<&serde_json::Value>) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodexSubagentChildRun {
+pub struct CodexSubagentChildRun {
     pub child_run_id: Option<String>,
     pub thread_id: Option<String>,
     pub status: Option<String>,
 }
 
-pub(crate) fn codex_subagent_child_runs(
-    args: Option<&serde_json::Value>,
-) -> Vec<CodexSubagentChildRun> {
+pub fn codex_subagent_child_runs(args: Option<&serde_json::Value>) -> Vec<CodexSubagentChildRun> {
     let Some(args) = args.and_then(serde_json::Value::as_object) else {
         return Vec::new();
     };
@@ -482,7 +480,7 @@ fn codex_subagent_tool_end_args(
     source_args.cloned()
 }
 
-pub(crate) fn codex_subagent_edge_key(edge: &CodexSubagentContinuityEdge) -> String {
+pub fn codex_subagent_edge_key(edge: &CodexSubagentContinuityEdge) -> String {
     [
         edge.spawn_tool_call_id.as_deref().unwrap_or_default(),
         edge.wait_tool_call_id.as_deref().unwrap_or_default(),

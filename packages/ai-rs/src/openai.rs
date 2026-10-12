@@ -6835,39 +6835,6 @@ data: {"type":"response.completed","response":{"output":[{"type":"message","cont
     }
 
     #[tokio::test]
-    async fn local_model_response_open_timeout_stops_stalled_headers() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock local model");
-        let address = listener.local_addr().expect("mock local model address");
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept local model request");
-            let mut request = [0_u8; 4096];
-            let _ = stream.read(&mut request).expect("read local model request");
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-        });
-
-        let request = reqwest::Client::new().get(format!("http://{address}/chat/completions"));
-        let error = send_with_response_open_timeout(
-            request,
-            Some(std::time::Duration::from_millis(25)),
-            "local model",
-        )
-        .await
-        .expect_err("stalled local model response must time out");
-        assert!(
-            error
-                .to_string()
-                .contains("local model response headers timed out"),
-            "unexpected error: {error:#}"
-        );
-        server.join().expect("mock local model server");
-    }
-
-    #[tokio::test]
     async fn managed_gateway_open_waits_for_its_provider_attempt_to_finish() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

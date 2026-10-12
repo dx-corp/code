@@ -201,7 +201,7 @@
 use tokio::sync::{Notify, mpsc};
 
 mod async_transport;
-pub(crate) mod controller_binding;
+pub mod controller_binding;
 #[cfg(test)]
 mod controller_binding_test;
 mod framing;
@@ -236,9 +236,10 @@ fn local_controller_capabilities() -> messages::ClientCapabilities {
 /// approval metadata. A client must not recreate this list or infer a
 /// per-call decision from it; the native tool event remains authoritative for
 /// argument-aware approval and action-firewall outcomes.
-pub(crate) fn native_server_capabilities() -> messages::ServerCapabilities {
-    let mut native_tools = crate::tools::ToolRegistry::new()
-        .tools()
+pub fn native_server_capabilities() -> messages::ServerCapabilities {
+    let mut native_tools = crate::agent::tool_host::tool_host()
+        .registry_tool_definitions()
+        .into_iter()
         .map(|definition| {
             let name = definition.tool.name.clone();
             messages::NativeToolCapability {
@@ -336,7 +337,7 @@ pub(crate) fn send_transport_event<T>(
 // shared with `tools::registry::execute` and `agent::native`, not part of
 // this crate's public surface.
 pub(crate) use supervisor::report_diagnostic_nonblocking;
-pub(crate) use supervisor::{ResponseAcknowledgement, response_ack_request_id};
+pub use supervisor::{ResponseAcknowledgement, response_ack_request_id};
 
 // Message framing
 pub use framing::{

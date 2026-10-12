@@ -44,7 +44,6 @@ maestro-presentation.workspace = true
 # Async runtime
 async-trait = "0.1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "signal", "fs", "net", "process", "time"] }
-tokio-rustls.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 futures.workspace = true
 
@@ -57,7 +56,7 @@ maestro-session-history.workspace = true
 maestro-session.workspace = true
 
 # HTTP client for AI APIs
-reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "json", "stream", "rustls"] }
 rcgen.workspace = true
 rustls.workspace = true
 semver = "1"
@@ -99,7 +98,6 @@ tree-sitter-bash.workspace = true
 pdf-extract.workspace = true
 urlencoding = "2"
 zeroize.workspace = true
-x509-parser.workspace = true
 
 # Diff generation
 similar.workspace = true

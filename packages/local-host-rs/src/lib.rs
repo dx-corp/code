@@ -77,9 +77,6 @@ pub mod video;
 pub mod workflow_runtime;
 pub use sandbox::SandboxPolicy;
 
-pub mod hosted_runner;
-pub mod hosted_runner_cli;
-pub mod hosted_runner_conformance;
 pub mod subagents;
 
 /// Generated bindings for the independently owned public application contract.

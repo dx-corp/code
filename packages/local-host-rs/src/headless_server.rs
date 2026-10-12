@@ -1015,8 +1015,8 @@ fn validate_governed_grant_shape(grant: &GovernedToolGrant) -> Result<()> {
 pub(crate) const GOVERNED_GRANT_ISSUER: &str = "evalops.platform";
 pub(crate) const GOVERNED_GRANT_AUDIENCE: &str = "evalops.maestro";
 const GOVERNED_GRANT_PUBLIC_KEYS_ENV: &str = "MAESTRO_PLATFORM_TOOL_GRANT_ED25519_PUBLIC_KEYS";
-#[cfg(test)]
-pub(crate) static GOVERNED_GRANT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(any(test, feature = "test-support"))]
+pub static GOVERNED_GRANT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1041,7 +1041,7 @@ enum GovernedGrantPublicKeyState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GovernedGrantVerificationContext<'a> {
+pub struct GovernedGrantVerificationContext<'a> {
     pub organization_id: &'a str,
     pub workspace_id: &'a str,
     pub thread_id: &'a str,
@@ -1092,10 +1092,8 @@ fn governed_grant_canonical_bytes(grant: &GovernedToolGrant) -> Result<Vec<u8>> 
         .context("serialize governed tool grant canonical payload")
 }
 
-#[cfg(test)]
-pub(crate) fn governed_tool_grant_canonical_bytes_for_test(
-    grant: &GovernedToolGrant,
-) -> Result<Vec<u8>> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn governed_tool_grant_canonical_bytes_for_test(grant: &GovernedToolGrant) -> Result<Vec<u8>> {
     governed_grant_canonical_bytes(grant)
 }
 
@@ -1154,7 +1152,7 @@ fn governed_grant_keys_from_json(raw: &str) -> Result<HashMap<String, GovernedGr
     Ok(keys)
 }
 
-pub(crate) fn verify_governed_tool_grant(
+pub fn verify_governed_tool_grant(
     grant: &GovernedToolGrant,
     context: &GovernedGrantVerificationContext<'_>,
     now_ms: i64,
@@ -3362,7 +3360,7 @@ fn managed_provider_override() -> Option<String> {
         .filter(|provider| !provider.is_empty())
 }
 
-pub(crate) fn resolve_headless_model(
+pub fn resolve_headless_model(
     model_override: Option<String>,
     env: &HashMap<String, String>,
 ) -> String {
@@ -5548,10 +5546,10 @@ mod tests {
         let script = root.path().join("app-server.js");
         let log = root.path().join("app-server.log");
         let output = root.path().join("headless.log");
-        // This fixture uses only loopback HTTP. Do not enumerate the developer's
-        // macOS certificate Keychain while building its Identity client.
+        // Loopback HTTP only: one throwaway root, because the platform verifier rejects an empty file.
         let roots = root.path().join("roots.pem");
-        std::fs::write(&roots, "").expect("isolated certificate roots");
+        std::fs::write(&roots, include_str!("../tests/isolated_root.pem"))
+            .expect("isolated certificate roots");
         let home = root.path().join("maestro-home");
         std::fs::write(
             &script,

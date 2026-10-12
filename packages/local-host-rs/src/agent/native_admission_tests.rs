@@ -62,7 +62,7 @@ fn tui_host(config: NativeAgentConfig) -> NativeExecutionHostHandle {
     super::build_local_host(
         &config,
         CredentialVault::new(),
-        None,
+        false,
         None,
         None,
         Arc::new(RwLock::new(None)),

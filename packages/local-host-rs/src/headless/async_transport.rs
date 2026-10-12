@@ -458,7 +458,7 @@ impl AsyncAgentTransport {
         );
     }
 
-    pub(crate) fn event_notification(&self) -> Arc<Notify> {
+    pub fn event_notification(&self) -> Arc<Notify> {
         Arc::clone(&self.event_notification)
     }
 

@@ -637,10 +637,7 @@ fn identity_verification_client(
         if certificates.is_empty() {
             bail!("hosted EvalOps Identity CA contains no certificates");
         }
-        builder = builder.use_rustls_tls().tls_built_in_root_certs(false);
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate);
-        }
+        builder = builder.tls_backend_rustls().tls_certs_only(certificates);
     }
     builder
         .build()

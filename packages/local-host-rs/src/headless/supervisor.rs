@@ -50,7 +50,7 @@ fn workspace_capability_replay_cursor(request: &ApplyWorkspaceCapabilitySet) -> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResponseAcknowledgement {
+pub enum ResponseAcknowledgement {
     NotExpected,
     Consumed,
     Queued,
@@ -464,7 +464,7 @@ pub struct AgentSupervisor {
 }
 
 impl AgentSupervisor {
-    pub(crate) async fn wait_for_response_acknowledgement_async(
+    pub async fn wait_for_response_acknowledgement_async(
         supervisor: Arc<std::sync::Mutex<Self>>,
         request_id: String,
         timeout: Duration,
@@ -788,7 +788,7 @@ impl AgentSupervisor {
 
     /// Bind the local child to the immutable resident controller identity.
     /// The configured extension is replayed on every later child spawn.
-    pub(crate) fn set_local_controller_binding(
+    pub fn set_local_controller_binding(
         &mut self,
         binding: ControllerBindingHello,
     ) -> Result<(), AsyncTransportError> {
@@ -830,7 +830,7 @@ impl AgentSupervisor {
 
     /// Send a message and report whether the native response consumer
     /// explicitly acknowledged accepting a control response.
-    pub(crate) fn send_and_drain_agent_messages_with_ack(
+    pub fn send_and_drain_agent_messages_with_ack(
         &mut self,
         msg: ToAgentMessage,
     ) -> Result<(Vec<FromAgentMessage>, ResponseAcknowledgement), AsyncTransportError> {
@@ -946,22 +946,22 @@ impl AgentSupervisor {
         messages
     }
 
-    pub(crate) fn wait_for_response_acknowledgement(
+    pub fn wait_for_response_acknowledgement(
         &mut self,
         request_id: &str,
     ) -> (Vec<FromAgentMessage>, ResponseAcknowledgement) {
         self.drain_agent_messages_until_ack(Some(request_id), RESPONSE_ACK_TIMEOUT)
     }
 
-    pub(crate) fn has_response_acknowledgement(&self, request_id: &str) -> bool {
+    pub fn has_response_acknowledgement(&self, request_id: &str) -> bool {
         self.pending_response_acknowledgements.contains(request_id)
     }
 
-    pub(crate) fn has_response_rejection(&self, request_id: &str) -> bool {
+    pub fn has_response_rejection(&self, request_id: &str) -> bool {
         self.pending_response_rejections.contains_key(request_id)
     }
 
-    pub(crate) fn take_response_rejection(&mut self, request_id: &str) -> Option<String> {
+    pub fn take_response_rejection(&mut self, request_id: &str) -> Option<String> {
         let rejection = self.pending_response_rejections.remove(request_id);
         if rejection.is_some() {
             self.expected_response_acknowledgements.remove(request_id);
@@ -970,7 +970,7 @@ impl AgentSupervisor {
         rejection
     }
 
-    pub(crate) fn take_response_acknowledgement(&mut self, request_id: &str) -> bool {
+    pub fn take_response_acknowledgement(&mut self, request_id: &str) -> bool {
         let acknowledged = self.pending_response_acknowledgements.remove(request_id);
         if acknowledged {
             self.expected_response_acknowledgements.remove(request_id);
@@ -978,7 +978,7 @@ impl AgentSupervisor {
         acknowledged
     }
 
-    pub(crate) fn discard_response_acknowledgement(
+    pub fn discard_response_acknowledgement(
         &mut self,
         request_id: &str,
         transport_generation: u64,
@@ -1014,13 +1014,13 @@ impl AgentSupervisor {
         true
     }
 
-    #[cfg(test)]
-    pub(crate) fn response_acknowledgement_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn response_acknowledgement_count(&self) -> usize {
         self.expected_response_acknowledgements.len()
     }
 
     #[must_use]
-    pub(crate) fn transport_generation(&self) -> u64 {
+    pub fn transport_generation(&self) -> u64 {
         self.transport_generation
     }
 
@@ -1561,7 +1561,7 @@ impl AgentSupervisor {
         self.transport.is_some()
     }
 
-    pub(crate) fn event_notification(&self) -> Option<Arc<Notify>> {
+    pub fn event_notification(&self) -> Option<Arc<Notify>> {
         self.transport
             .as_ref()
             .map(ManagedTransport::event_notification)
@@ -1596,7 +1596,7 @@ impl AgentSupervisor {
     }
 
     /// Shutdown the supervisor and wait for its active transport to be reaped.
-    pub(crate) async fn shutdown_and_wait(&mut self) {
+    pub async fn shutdown_and_wait(&mut self) {
         self.shutdown();
         self.wait_for_pending_transport_shutdown().await;
     }
@@ -1616,7 +1616,7 @@ impl AgentSupervisor {
     }
 }
 
-pub(crate) fn response_ack_request_id(message: &ToAgentMessage) -> Option<&str> {
+pub fn response_ack_request_id(message: &ToAgentMessage) -> Option<&str> {
     match message {
         ToAgentMessage::ToolResponse { call_id, .. }
         | ToAgentMessage::ClientToolResult { call_id, .. }

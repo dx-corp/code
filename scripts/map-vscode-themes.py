@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 COMMIT = "d9637b3f2faa8f8ce0636e556291fdb1ba714c0b"
-DEST = Path(__file__).resolve().parents[1] / "packages/tui-rs/src/themes/vscode"
+DEST = Path(__file__).resolve().parents[1] / "packages/tui-kit-rs/src/themes/vscode"
 
 
 def rgba(value):

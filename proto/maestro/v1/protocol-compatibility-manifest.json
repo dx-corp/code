@@ -5,7 +5,7 @@
     "canonicalization": "rfc8785",
     "encoding": "utf-8"
   },
-  "compatibilityDigest": "sha256:ead85aae8385c4b3aefbe70ba595ab30319041c16e2be22e6129c3c1796cd322",
+  "compatibilityDigest": "sha256:1683cb2ec7703bb3af52a0935a2726cadf7391c732a011c3a77ea831bbb87eda",
   "buildIdentity": {
     "sourceSha": null,
     "buildDigest": null,
@@ -25,11 +25,11 @@
     "packages/runtime-contracts-rs/fixtures/runtime-receipt-v1.json",
     "packages/runtime-contracts-rs/fixtures/runtime-receipt-contract-v1.json",
     "packages/local-host-rs/src/transcript.rs",
-    "packages/local-host-rs/src/hosted_runner/thread_protocol.rs",
+    "packages/hosted-runner-rs/src/hosted_runner/thread_protocol.rs",
     "proto/maestro/v1/hosted-thread-compatibility-matrix.json",
-    "packages/local-host-rs/src/hosted_runner_cli.rs",
-    "packages/local-host-rs/src/hosted_runner.rs",
-    "packages/local-host-rs/src/hosted_runner/rendezvous_protocol.rs"
+    "packages/hosted-runner-rs/src/hosted_runner_cli.rs",
+    "packages/hosted-runner-rs/src/hosted_runner.rs",
+    "packages/hosted-runner-rs/src/hosted_runner/rendezvous_protocol.rs"
   ],
   "compatibility": {
     "headless": {
@@ -38,7 +38,7 @@
       ],
       "schemaDeclaredVersion": "2026-08-08",
       "schemaContractDigest": "sha256:5888b53b9771d2f67376c61386c0071b8d28ab928617bd7c51fe38f63d5b838e",
-      "runtimeContractDigest": "sha256:c2483714ba8ad6b5f4b8bf19dc7670df5a784300c99a8216c023299d822046e8",
+      "runtimeContractDigest": "sha256:b0124f38d2a1616ee04c9514462eb12b9049cd6de36f5f7e70c5512afd1dc9a6",
       "messages": {
         "toRuntime": [
           "managed_authorization_result",

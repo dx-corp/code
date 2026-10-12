@@ -1,6 +1,6 @@
 //! The opt-in coding companion shares the hosted resident's supervised lifetime.
 use anyhow::{Context, Result, bail};
-use maestro_local_host::hosted_runner_cli::resolve_hosted_runner_launch_config;
+use maestro_hosted_runner_lib::hosted_runner_cli::resolve_hosted_runner_launch_config;
 use std::{collections::HashMap, ffi::OsString, future::Future, net::TcpListener, path::PathBuf};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
