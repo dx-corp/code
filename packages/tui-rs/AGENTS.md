@@ -156,7 +156,7 @@ All widgets implement ratatui's `Widget` trait.
 - **`reader.rs`**: Parses JSONL session files
 - **`writer.rs`**: Writes session entries
 
-### `terminal/` - Terminal Setup
+### `products/maestro/packages/tui-kit-rs/src/terminal/` - Terminal Setup
 - **`setup.rs`**: Raw mode, alternate screen, mouse capture
 - **`history.rs`**: Scrollback buffer management
 

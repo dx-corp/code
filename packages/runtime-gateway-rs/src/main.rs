@@ -5,6 +5,7 @@ use std::{env, process};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     match parse_cli_action(env::args().skip(1)) {
         Ok(CliAction::Serve) => serve(RuntimeGatewayConfig::from_env()).await,
         Ok(CliAction::Help) => {

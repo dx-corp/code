@@ -26,6 +26,7 @@ fn sync_command_output(command: &Command) -> Option<&'static str> {
 }
 
 fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if raw_args.get(1).and_then(|value| value.to_str()) == Some("native-code-effect") {
         std::process::exit(native_effect::run(&raw_args)?);
