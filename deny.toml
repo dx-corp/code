@@ -24,6 +24,7 @@ targets = []
 
 [advisories]
 ignore = [
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml 0.2.11 unmaintained (repository archived), pulled in by serde_yaml_ng 0.10.0 (production). No known vulnerability; no maintained serde_yaml_ng release drops it yet. expires: 2026-10-26" },
     # --- Unmaintained crates (no known vulnerability) ---
     { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 unmaintained; pulled in by syntect (production, tui-rs syntax highlighting). No upstream fix / maintained fork adopted by syntect yet. expires: 2026-10-23" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash 0.2.1 unmaintained; pulled in transitively via criterion's fxprof-processed-profile (dev-dependency / benchmarks only, not in the shipped binary). expires: 2026-10-23" },

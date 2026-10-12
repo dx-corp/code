@@ -25,6 +25,7 @@ default = []
 test-support = ["maestro-tui/test-support"]
 
 [dependencies]
+rustls.workspace = true
 anyhow.workspace = true
 ctor.workspace = true
 maestro-runtime-gateway.workspace = true

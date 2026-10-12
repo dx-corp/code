@@ -134,6 +134,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
 
     // Setup logging

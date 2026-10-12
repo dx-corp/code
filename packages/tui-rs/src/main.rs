@@ -7,6 +7,7 @@ use anyhow::Result;
 const TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_BYTES)
