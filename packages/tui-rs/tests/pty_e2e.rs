@@ -418,6 +418,9 @@ impl PtySession {
             }
         }
         command.env("TERM", "xterm-256color");
+        // Bash scenarios need an executable shell independent of the runner's login shell.
+        // Scenario-specific extra_env below retains its explicit override.
+        command.env("SHELL", "/bin/bash");
         command.env("HOME", workdir);
         command.env("MAESTRO_HOME", &maestro_home);
         command.env("MAESTRO_TELEMETRY", "0");
@@ -1865,9 +1868,27 @@ fn pty_grouped_model_menu_opens_selector_and_escape_returns_to_chat() {
 
     session.wait_for_text("PTY_GROUPED_MODEL_MENU_READY", READY_TIMEOUT);
     session.submit_prompt("/model");
-    session.wait_for_text("Model and effort", TURN_TIMEOUT);
-    session.wait_for_text("Choose model", TURN_TIMEOUT);
-    let grouped_menu = session.screen_text();
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    let grouped_menu = loop {
+        let frame = session
+            .output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .completed_current_text();
+        if let Some(frame) = frame.filter(|frame| {
+            frame.contains("Model and effort")
+                && frame.contains("Choose model")
+                && frame.contains("Effort")
+        }) {
+            break frame;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "grouped model menu never completed its labels:\n{}",
+            session.screen_text()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(
         grouped_menu.contains("Model and effort")
             && grouped_menu.contains("Choose model")
