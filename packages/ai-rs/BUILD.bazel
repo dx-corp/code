@@ -18,7 +18,7 @@ rust_library(
         "@crates//:eventsource-stream-0.2.3",
         "@crates//:futures-0.3.32",
         "//products/maestro/packages/runtime-contracts-rs:maestro_runtime_contracts",
-        "@crates//:reqwest-0.12.28",
+        "@crates//reqwest",
         "@crates//:serde-1.0.228",
         "@crates//:serde_json-1.0.150",
         "@crates//:sha2-0.10.9",
