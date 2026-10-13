@@ -763,6 +763,10 @@ where
         // terminal event. `Context::observe` sums `Usage` regardless of
         // position in the batch, so budget accounting is unaffected.
         let mut pending_usage = Vec::new();
+        // Thinking summaries are batched the same way: each one used to
+        // cost its own fenced transaction (issue #11136). They flush as
+        // one append before answer text and at the end of the stream.
+        let mut pending_thinking: Vec<Event> = Vec::new();
         // The step's provider continuation state, committed with the step
         // (the model sends it only after a clean terminal). A second chunk
         // replaces the first: one step has one.
@@ -829,8 +833,7 @@ where
                             if content_policy.is_some() {
                                 visible_thinking.push(summary);
                             } else {
-                                let event = [Event::ThinkingDelta { text: summary }];
-                                prefetch.reads.drive(self.log.append(&event)).await?;
+                                pending_thinking.push(Event::ThinkingDelta { text: summary });
                             }
                         }
                     }
@@ -839,14 +842,19 @@ where
                             if content_policy.is_some() {
                                 visible_thinking.push(summary);
                             } else {
-                                let event = [Event::ThinkingDelta { text: summary }];
-                                prefetch.reads.drive(self.log.append(&event)).await?;
+                                pending_thinking.push(Event::ThinkingDelta { text: summary });
                             }
                         }
                         let safe = filter.push(&delta);
                         if !safe.is_empty() {
                             text.push_str(&safe);
                             if content_policy.is_none() {
+                                // Thinking precedes answer text in the log;
+                                // write it first, in one append.
+                                if !pending_thinking.is_empty() {
+                                    let events = std::mem::take(&mut pending_thinking);
+                                    prefetch.reads.drive(self.log.append(&events)).await?;
+                                }
                                 prefetch.reads.drive(self.log.append_text(safe)).await?;
                             }
                         }
@@ -911,9 +919,12 @@ where
                     if content_policy.is_some() {
                         visible_thinking.push(summary);
                     } else {
-                        let event = [Event::ThinkingDelta { text: summary }];
-                        prefetch.reads.drive(self.log.append(&event)).await?;
+                        pending_thinking.push(Event::ThinkingDelta { text: summary });
                     }
+                }
+                if !pending_thinking.is_empty() {
+                    let events = std::mem::take(&mut pending_thinking);
+                    prefetch.reads.drive(self.log.append(&events)).await?;
                 }
                 let tail = filter.finish();
                 if !tail.is_empty() {
@@ -923,6 +934,12 @@ where
                     }
                 }
             }
+        }
+
+        // A failed or cut-off stream keeps the thinking already shown.
+        if !pending_thinking.is_empty() {
+            let events = std::mem::take(&mut pending_thinking);
+            self.log.append(&events).await?;
         }
 
         if failure.is_none()
