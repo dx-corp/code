@@ -256,7 +256,7 @@ mod tests {
             thread: "t".into(),
         });
         let mut packet: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../platform/cerebro/evals/context_pockets/native_brief.json"
+            "../../../../../platform/cerebro/evals/context_pockets/native_brief.json"
         ))
         .unwrap();
         packet["items"][0]["title"] = serde_json::json!("\"".repeat(590));

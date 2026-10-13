@@ -35,7 +35,7 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 	for (const [, member] of cargoManifest.matchAll(/"(packages\/[^"\n]+)"/g)) {
 		crate(`products/maestro/${member}`, member === "packages/codemode-rs" ? "agent-codemode" : member.split("/").at(-1),
 			member === "packages/dex-host-rs"
-				? `[dependencies]\ndex-loop = { path = "${viaVendor ? "../../vendor/bridge" : standalone ? "../../vendor/dex-loop" : "../../../../rust/crates/dex-loop"}" }\n`
+				? `[dependencies]\ndex-loop = { path = "${viaVendor ? "../../vendor/bridge" : standalone ? "../../vendor/dex-loop" : "../../../../rust/crates/dex/loop"}" }\n`
 					+ (platformCrate ? 'extra-client = { path = "../../../../rust/crates/extra-client" }\n' : "")
 				: member === "packages/codemode-rs" ? codemodeDependencies : "");
 	}
@@ -48,7 +48,7 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 	} else {
 		mkdirSync(join(directory, "rust"), { recursive: true });
 		writeFileSync(join(directory, "rust/Cargo.toml"),
-			`[workspace]\nresolver = "3"\nmembers = ["crates/dex-loop", "crates/managed-inference-contract"${platformCrate ? ', "crates/extra-client"' : ""}]\n`
+			`[workspace]\nresolver = "3"\nmembers = ["crates/dex/loop", "crates/managed-inference-contract"${platformCrate ? ', "crates/extra-client"' : ""}]\n`
 			+ '[workspace.dependencies]\nmanaged-inference-contract = { path = "crates/managed-inference-contract" }\n'
 			+ (crossWorkspace ? 'agent-codemode = { path = "../products/maestro/packages/codemode-rs" }\n' : "")
 			+ (platformCrate ? 'extra-handle = { path = "../platform/extras/crates/extra-handle" }\n' : ""));
@@ -56,7 +56,7 @@ function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitiv
 			crate("rust/crates/extra-client", "extra-client", "[dependencies]\nextra-handle.workspace = true\n");
 			crate("platform/extras/crates/extra-handle", "extra-handle", "[workspace]\n");
 		}
-		crate("rust/crates/dex-loop", "dex-loop",
+		crate("rust/crates/dex/loop", "dex-loop",
 			'[dependencies]\nmanaged-inference-contract.workspace = true\n'
 			+ (crossWorkspace ? 'agent-codemode.workspace = true\n' : ""));
 		crate("rust/crates/managed-inference-contract", "managed-inference-contract",
