@@ -174,8 +174,11 @@ impl SubagentManager {
             retry_config: crate::agent::retry::RetryConfig::default(),
             external_tool_schema_policy: crate::agent::ExternalToolSchemaPolicy::Eager,
         };
-        let allowed_tools =
-            child_allowed_tools_for_role(record.role, record.profile_tools.as_deref());
+        let allowed_tools = child_allowed_tools_for_role(
+            self.tool_host.as_ref(),
+            record.role,
+            record.profile_tools.as_deref(),
+        );
         let (agent, mut events) = match self.child_factory.spawn(ChildLaunchRequest {
             config,
             allowed_tools,

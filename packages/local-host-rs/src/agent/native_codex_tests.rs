@@ -457,8 +457,12 @@ async fn hosted_hard_kill_at_terminal_restores_prior_user_and_assistant_turn() {
         crate::ai::OpenAiClient::with_base_url("test-key", base_url.clone())
             .expect("owner-1 client"),
     );
-    let (source, mut source_events) =
-        NativeAgent::new_with_test_client(config.clone(), source_client).expect("owner-1");
+    let (source, mut source_events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config.clone(),
+        source_client,
+    )
+    .expect("owner-1");
     source
         .prompt("owner-1-user-sentinel".to_owned(), vec![])
         .await
@@ -517,8 +521,12 @@ async fn hosted_hard_kill_at_terminal_restores_prior_user_and_assistant_turn() {
     let restored_client = UnifiedClient::OpenAI(
         crate::ai::OpenAiClient::with_base_url("test-key", base_url).expect("owner-2 client"),
     );
-    let (restored, mut restored_events) =
-        NativeAgent::new_with_test_client(config, restored_client).expect("owner-2");
+    let (restored, mut restored_events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        restored_client,
+    )
+    .expect("owner-2");
     restored.replace_history(restored_history);
     restored
         .prompt("owner-2-user-sentinel".to_owned(), vec![])
@@ -562,8 +570,12 @@ async fn hosted_fast_tool_search_cannot_reactivate_rlm_mutations() {
     let client = UnifiedClient::OpenAI(
         crate::ai::OpenAiClient::with_base_url("test-key", base_url).expect("scripted client"),
     );
-    let (agent, mut events) =
-        NativeAgent::new_with_test_client(config, client).expect("hosted agent");
+    let (agent, mut events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        client,
+    )
+    .expect("hosted agent");
 
     agent
         .prompt(
@@ -649,7 +661,12 @@ async fn injected_user_note_is_consumed_only_after_a_successful_turn() {
         crate::ai::OpenAiClient::with_base_url("test-key", format!("http://{address}/v1"))
             .expect("test client"),
     );
-    let (agent, _events) = NativeAgent::new_with_test_client(config, client).expect("native agent");
+    let (agent, _events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        client,
+    )
+    .expect("native agent");
     let (applied, consumed) = agent
         .inject_user_note("Subagent child-1 completed.")
         .expect("queue user note");
@@ -686,8 +703,12 @@ async fn native_provider_checkpoint_survives_process_death_and_restores_tool_con
         crate::ai::OpenAiClient::with_base_url("test-key", base_url.clone())
             .expect("source client"),
     );
-    let (source, mut source_events) =
-        NativeAgent::new_with_test_client(config.clone(), source_client).expect("source agent");
+    let (source, mut source_events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config.clone(),
+        source_client,
+    )
+    .expect("source agent");
     source
         .prompt("first turn".to_owned(), vec![])
         .await
@@ -732,8 +753,12 @@ async fn native_provider_checkpoint_survives_process_death_and_restores_tool_con
     let restored_client = UnifiedClient::OpenAI(
         crate::ai::OpenAiClient::with_base_url("test-key", base_url).expect("restored client"),
     );
-    let (restored, mut restored_events) =
-        NativeAgent::new_with_test_client(config, restored_client).expect("restored agent");
+    let (restored, mut restored_events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        restored_client,
+    )
+    .expect("restored agent");
     restored.replace_history(restored_history);
     restored
         .prompt("second turn".to_owned(), vec![])
@@ -776,7 +801,11 @@ async fn codex_process_continuation_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex fixture agent");
     if role == "restore" {
         let history =
             serde_json::from_slice(&std::fs::read(&checkpoint).expect("hydrated checkpoint"))
@@ -854,7 +883,11 @@ async fn codex_usage_notification_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex usage fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex usage fixture agent");
     agent
         .prompt("usage notification prompt".to_owned(), vec![])
         .await
@@ -903,7 +936,11 @@ async fn codex_cancel_lifecycle_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex cancel fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex cancel fixture agent");
     agent
         .prompt("cancel lifecycle prompt".to_owned(), vec![])
         .await
@@ -983,7 +1020,11 @@ async fn codex_terminal_response_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex terminal fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex terminal fixture agent");
     agent
         .prompt("terminal response prompt".to_owned(), vec![])
         .await
@@ -1032,7 +1073,11 @@ async fn codex_file_change_completion_before_approval_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex file-change fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex file-change fixture agent");
     agent
         .prompt(
             "use the file-change tool and then finish".to_owned(),
@@ -1791,7 +1836,11 @@ async fn codex_pre_turn_failure_fixture() {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex fixture agent");
     agent.replace_history(history);
 
     let prompts: &[&str] = match scenario.as_str() {
@@ -2430,8 +2479,12 @@ async fn set_model_normalizes_nonreasoning_target_before_next_request() {
         "fixture",
         vec![crate::ai::ScriptedResponse::text("unused")],
     ));
-    let (agent, mut events) =
-        NativeAgent::new_with_test_client(config, client).expect("fixture agent");
+    let (agent, mut events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        client,
+    )
+    .expect("fixture agent");
     agent
         .set_model("openrouter/openai/gpt-4o")
         .expect("queue model switch");
@@ -2566,7 +2619,11 @@ setTimeout(() => {
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new(config).expect("Codex fixture agent");
+    let (agent, mut events) = NativeAgent::new(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+    )
+    .expect("Codex fixture agent");
     agent
         .prompt("Start the preserved session.".to_owned(), vec![])
         .await

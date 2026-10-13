@@ -348,7 +348,11 @@ impl EmbeddedAgentBuilder {
     /// Compose the local host and start its native actor.
     pub fn start(self) -> Result<EmbeddedAgentSession> {
         self.validate()?;
-        let (agent, events) = NativeAgent::new_with_tools(self.config, self.external_tools)?;
+        let (agent, events) = NativeAgent::new_with_tools(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+            self.config,
+            self.external_tools,
+        )?;
         Ok(EmbeddedAgentSession {
             agent: EmbeddedAgent { inner: agent },
             events,
@@ -364,7 +368,11 @@ impl EmbeddedAgentBuilder {
     pub fn start_runner(self) -> Result<EmbeddedAgentRunner> {
         self.validate_runner_limits()?;
         let external_tools = external_tool_names(&self.external_tools);
-        let (agent, events) = NativeAgent::new_with_tools(self.config, self.external_tools)?;
+        let (agent, events) = NativeAgent::new_with_tools(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+            self.config,
+            self.external_tools,
+        )?;
         Ok(EmbeddedAgentRunner {
             agent: Some(agent),
             events,
@@ -406,8 +414,12 @@ impl EmbeddedAgentBuilder {
         client: crate::ai::UnifiedClient,
     ) -> Result<EmbeddedAgentSession> {
         self.validate()?;
-        let (agent, events) =
-            NativeAgent::new_with_tools_and_test_client(self.config, self.external_tools, client)?;
+        let (agent, events) = NativeAgent::new_with_tools_and_test_client(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+            self.config,
+            self.external_tools,
+            client,
+        )?;
         Ok(EmbeddedAgentSession {
             agent: EmbeddedAgent { inner: agent },
             events,
@@ -421,8 +433,12 @@ impl EmbeddedAgentBuilder {
     ) -> Result<EmbeddedAgentRunner> {
         self.validate_runner_limits()?;
         let external_tools = external_tool_names(&self.external_tools);
-        let (agent, events) =
-            NativeAgent::new_with_tools_and_test_client(self.config, self.external_tools, client)?;
+        let (agent, events) = NativeAgent::new_with_tools_and_test_client(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+            self.config,
+            self.external_tools,
+            client,
+        )?;
         Ok(EmbeddedAgentRunner {
             agent: Some(agent),
             events,

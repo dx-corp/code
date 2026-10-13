@@ -1354,24 +1354,6 @@ impl ToolExecutor {
         self.credential_vault.generation()
     }
 
-    /// Supply child construction while retaining the shared lifecycle owner.
-    pub fn with_child_agent_factory(
-        mut self,
-        factory: Arc<dyn crate::subagents::factory::ChildAgentFactory>,
-    ) -> Self {
-        self.subagents = Arc::new((*self.subagents).clone().with_child_agent_factory(factory));
-        self
-    }
-
-    pub(crate) fn with_subagent_parent_scope(mut self, parent_scope_id: String) -> Self {
-        let factory = self.subagents.child_agent_factory();
-        self.subagents = Arc::new(
-            SubagentManager::with_parent_scope(PathBuf::from(&self.cwd), parent_scope_id)
-                .with_child_agent_factory(factory),
-        );
-        self
-    }
-
     pub(crate) fn with_mailbox_identity(mut self, identity: impl Into<String>) -> Self {
         self.mailbox_identity = identity.into();
         self
@@ -2987,6 +2969,7 @@ mod background;
 mod coding_task;
 mod execute;
 mod mcp_output;
+mod subagent_host;
 mod tool_registry;
 pub use tool_registry::ToolRegistry;
 #[cfg(test)]

@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
             };
             // Use ordinary authenticated local composition, with an empty tool allowlist.
             let (agent, mut events) = NativeAgent::new_with_allowed_tools_and_credential_vault(
+                std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
                 config,
                 &HashSet::new(),
                 CredentialVault::new(),

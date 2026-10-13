@@ -972,7 +972,8 @@ async fn handle_doctor(params: &[String]) -> Result<i32> {
         }
 
         let cwd = std::env::current_dir()?;
-        let dynamic_tools = runtime_codex_dynamic_tools(&cwd);
+        let dynamic_tools =
+            runtime_codex_dynamic_tools(&crate::agent::tool_host::BuiltInToolHost, &cwd);
         let diagnostics = codex_dynamic_tool_schema_diagnostics(&dynamic_tools);
         println!(
             "{}",
@@ -1297,12 +1298,15 @@ pub fn codex_schema_diagnostics() -> Result<Vec<String>> {
 
 fn codex_schema_diagnostics_for_cwd(cwd: &Path) -> Result<Vec<String>> {
     Ok(codex_dynamic_tool_schema_diagnostics(
-        &runtime_codex_dynamic_tools(cwd),
+        &runtime_codex_dynamic_tools(&crate::agent::tool_host::BuiltInToolHost, cwd),
     ))
 }
 
-fn runtime_codex_dynamic_tools(cwd: &Path) -> Vec<crate::agent::DynamicToolSpec> {
-    let tools = crate::agent::tool_host::tool_host()
+fn runtime_codex_dynamic_tools(
+    tool_host: &dyn crate::agent::tool_host::ToolHost,
+    cwd: &Path,
+) -> Vec<crate::agent::DynamicToolSpec> {
+    let tools = tool_host
         .executor_tool_definitions(cwd)
         .into_iter()
         .map(|definition| (definition.tool.name.clone(), definition))

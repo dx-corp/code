@@ -147,7 +147,12 @@ fn host_tools(workspace: &Path, mode: ApprovalMode) -> HostTools {
         cwd: workspace.to_string_lossy().into_owned(),
         ..NativeAgentConfig::default()
     };
-    let host = dex_loop_execution_host(&config, CredentialVault::new()).expect("compose host");
+    let host = dex_loop_execution_host(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+        &config,
+        CredentialVault::new(),
+    )
+    .expect("compose host");
     HostTools::new(host, mode)
 }
 

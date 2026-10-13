@@ -69,7 +69,12 @@ fn tools(workspace: &Path) -> HostTools {
         cwd: workspace.to_string_lossy().into_owned(),
         ..NativeAgentConfig::default()
     };
-    let host = dex_loop_execution_host(&config, CredentialVault::new()).unwrap();
+    let host = dex_loop_execution_host(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+        &config,
+        CredentialVault::new(),
+    )
+    .unwrap();
     HostTools::new(host, maestro_runtime::agent::ApprovalMode::Selective).with_client_tools([
         ToolSpec {
             name: ToolName::new("fixture.read"),

@@ -60,6 +60,7 @@ fn identity_env_names(include_base_url: bool, include_authority: bool) -> Vec<&'
 
 fn tui_host(config: NativeAgentConfig) -> NativeExecutionHostHandle {
     super::build_local_host(
+        Arc::new(super::tool_host::BuiltInToolHost),
         &config,
         CredentialVault::new(),
         false,
@@ -271,6 +272,7 @@ fn injected_network_client_requires_evalops_identity() {
             .expect("test client"),
     );
     let error = match NativeAgent::new_with_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "openai/gpt-5.5".to_owned(),
             ..NativeAgentConfig::default()
@@ -306,6 +308,7 @@ fn injected_scripted_client_requires_evalops_identity() {
         vec![ScriptedResponse::text("replay")],
     ));
     let error = match NativeAgent::new_with_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "scripted-replay/maestro-replay-v1".to_owned(),
             ..NativeAgentConfig::default()
@@ -343,6 +346,7 @@ async fn injected_scripted_client_admits_after_verified_identity() {
         vec![ScriptedResponse::text("replay")],
     ));
     NativeAgent::new_with_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "scripted-replay/maestro-replay-v1".to_owned(),
             ..NativeAgentConfig::default()
@@ -376,6 +380,7 @@ fn injected_network_client_rejects_caller_selected_identity_authority() {
             .expect("test client"),
     );
     let error = match NativeAgent::new_with_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "openai/gpt-5.5".to_owned(),
             ..NativeAgentConfig::default()
@@ -412,6 +417,7 @@ fn injected_allowed_tools_client_requires_evalops_identity() {
             .expect("test client"),
     );
     let error = match NativeAgent::new_with_client_and_allowed_tools(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "openai/gpt-5.5".to_owned(),
             ..NativeAgentConfig::default()

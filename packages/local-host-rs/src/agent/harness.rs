@@ -55,7 +55,11 @@ impl AgentHarness {
             "scripted-replay/maestro-replay-v1",
             responses,
         ));
-        let (agent, events) = NativeAgent::new_with_test_client(config, client)?;
+        let (agent, events) = NativeAgent::new_with_test_client(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+            config,
+            client,
+        )?;
         // Point the runner's hook logger at our file without requiring the
         // temp workspace to be marked trusted in global config.
         agent.set_hook_log_file(hook_log.display().to_string())?;
@@ -936,7 +940,12 @@ async fn bash_capture_survives_native_compaction_and_continuation_replay() {
         context_window: Some(4_096),
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new_with_test_client(config, client).expect("agent");
+    let (agent, mut events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        config,
+        client,
+    )
+    .expect("agent");
     agent
         .prompt("Read the evidence file.".into(), vec![])
         .await

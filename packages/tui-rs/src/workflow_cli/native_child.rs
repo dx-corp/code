@@ -134,7 +134,9 @@ pub(super) async fn run_native_workflow_child(
         bail!("native workflow child timed out during admission");
     }
 
-    let factory = LocalChildAgentFactory;
+    let factory = LocalChildAgentFactory::new(std::sync::Arc::new(
+        maestro_local_host::agent::tool_host::BuiltInToolHost,
+    ));
     let (agent, events) = factory
         .spawn(ChildLaunchRequest {
             config,

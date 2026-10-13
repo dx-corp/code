@@ -236,8 +236,10 @@ fn local_controller_capabilities() -> messages::ClientCapabilities {
 /// approval metadata. A client must not recreate this list or infer a
 /// per-call decision from it; the native tool event remains authoritative for
 /// argument-aware approval and action-firewall outcomes.
-pub fn native_server_capabilities() -> messages::ServerCapabilities {
-    let mut native_tools = crate::agent::tool_host::tool_host()
+pub fn native_server_capabilities(
+    tool_host: &dyn crate::agent::tool_host::ToolHost,
+) -> messages::ServerCapabilities {
+    let mut native_tools = tool_host
         .registry_tool_definitions()
         .into_iter()
         .map(|definition| {

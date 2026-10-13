@@ -323,9 +323,18 @@ pub async fn execute_scripted_scenario_with_options(
         .map(|tool| tool.to_lowercase())
         .collect();
     let (agent, mut events) = if allowed_tools.is_empty() {
-        NativeAgent::new_with_client(config, client)
+        NativeAgent::new_with_client(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+            config,
+            client,
+        )
     } else {
-        NativeAgent::new_with_client_and_allowed_tools(config, &allowed_tools, client)
+        NativeAgent::new_with_client_and_allowed_tools(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+            config,
+            &allowed_tools,
+            client,
+        )
     }
     .context("create scripted-replay agent")?;
 

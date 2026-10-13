@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
             ..Default::default()
         };
         let (agent, mut events) = NativeAgent::new_with_allowed_tools_and_credential_vault(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
             config,
             &HashSet::new(),
             CredentialVault::new(),

@@ -7,6 +7,7 @@ async fn test_tab_submits_when_idle_with_non_shell_input() {
     // regression below and must never invent a user-history entry.
     let temp = tempdir().unwrap();
     let (agent, _events) = crate::agent::NativeAgent::new_with_test_client(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
         crate::agent::NativeAgentConfig {
             model: "openai/gpt-4o".into(),
             cwd: temp.path().display().to_string(),

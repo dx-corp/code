@@ -429,6 +429,7 @@ async fn drive_review(model: &str, cwd: &str, prompt: &str) -> Result<String> {
         .collect();
     let credential_vault = CredentialVault::new();
     let (agent, mut event_rx) = NativeAgent::new_with_allowed_tools_and_credential_vault(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
         config,
         &allowed_tools,
         credential_vault.clone(),

@@ -1,3 +1,4 @@
+mod subagent_host;
 use super::*;
 
 mod explore;
@@ -404,49 +405,6 @@ fn repository_symbols_requires_explicit_schema_activation() {
             .all(|name| name.as_str() != Some("repository_symbols")),
         "the initially visible explore schema must not bypass tool_search activation"
     );
-}
-
-#[test]
-fn test_registry_exposes_subagent_lifecycle_tools() {
-    let registry = ToolRegistry::new();
-
-    for tool in crate::tools::subagents::SUBAGENT_TOOL_NAMES {
-        assert!(registry.get(tool).is_some(), "missing tool {tool}");
-    }
-
-    assert!(registry.requires_approval(
-        "spawn_subagent",
-        &serde_json::json!({"task": "inspect the parser"})
-    ));
-    assert!(registry.requires_approval(
-        "resume_subagent",
-        &serde_json::json!({"subagent_id": "child-1", "task": "continue"})
-    ));
-    assert!(registry.requires_approval(
-        "cleanup_subagent",
-        &serde_json::json!({"subagent_id": "child-1"})
-    ));
-    assert!(
-        registry
-            .missing_required(
-                "resume_subagent",
-                &serde_json::json!({
-                    "subagent_id": "child-1",
-                    "follow_up": "continue"
-                })
-            )
-            .is_empty()
-    );
-    for tool in [
-        "list_subagents",
-        "get_subagent",
-        "wait_subagent",
-        "cancel_subagent",
-        "control_subagent",
-        "inspect_subagent",
-    ] {
-        assert!(!registry.requires_approval(tool, &serde_json::json!({"subagent_id": "child-1"})));
-    }
 }
 
 #[test]
