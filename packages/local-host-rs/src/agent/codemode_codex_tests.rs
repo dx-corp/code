@@ -29,7 +29,7 @@ fn codemode_images_reach_app_server_and_semantic_checkpoint() {
                 requires_approval: true,
             }).collect();
             let replacement = vec![external[0].clone()];
-            let (agent, mut events) = NativeAgent::new_with_tools(config, external).unwrap();
+            let (agent, mut events) = NativeAgent::new_with_tools(std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost), config, external).unwrap();
             let mut snapshots = Vec::new();
             let mut caller_executions = 0;
             for (index, prompt) in ["Emit the image", "Emit again with updated tools"].into_iter().enumerate() {

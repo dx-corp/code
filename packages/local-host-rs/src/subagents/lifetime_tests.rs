@@ -34,6 +34,7 @@ impl ChildAgentFactory for LifetimeFactory {
         );
         let hook_log = PathBuf::from(&request.config.cwd).join("child-hook-events.log");
         let (agent, mut source) = crate::agent::NativeAgent::new_with_test_client(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
             request.config,
             UnifiedClient::Scripted(self.client.clone()),
         )?;

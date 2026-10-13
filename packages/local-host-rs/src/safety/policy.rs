@@ -2144,6 +2144,7 @@ fn is_private_ip(ip: &IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     mod deployment_tests;
+    mod native_admission;
     use crate::safety::disconnected_deployment_contract;
 
     use super::*;
@@ -2411,44 +2412,6 @@ mod tests {
                 .to_string()
                 .contains("Vendor connections are disabled")
         );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn disconnected_native_and_subagent_admission_preserve_policy() {
-        let _lock = test_env_guard();
-        let fixture = MachineFixture::new();
-        fixture.install(private_profile());
-        let config = crate::agent::NativeAgentConfig {
-            model: "ollama/customer-model".into(),
-            cwd: fixture.directory.path().to_string_lossy().into_owned(),
-            ..Default::default()
-        };
-        let (agent, _) =
-            crate::agent::NativeAgent::new(config.clone()).expect("private native agent");
-        let (child, _) = crate::agent::NativeAgent::new_with_credential_vault_and_subagent_scope(
-            config.clone(),
-            crate::agent::CredentialVault::new(),
-            "parent-scope".into(),
-        )
-        .expect("private child agent");
-        drop(child);
-        drop(agent);
-        let forbidden = crate::agent::NativeAgentConfig {
-            model: "evalops/default".into(),
-            ..config.clone()
-        };
-        assert!(crate::agent::NativeAgent::new(forbidden.clone()).is_err());
-        assert!(
-            crate::agent::NativeAgent::new_with_credential_vault_and_subagent_scope(
-                forbidden,
-                crate::agent::CredentialVault::new(),
-                "parent-scope".into()
-            )
-            .is_err()
-        );
-        let injected =
-            crate::ai::UnifiedClient::OpenAI(crate::ai::OpenAiClient::new("fixture").unwrap());
-        assert!(crate::agent::NativeAgent::new_with_client(config, injected).is_err());
     }
 
     #[test]

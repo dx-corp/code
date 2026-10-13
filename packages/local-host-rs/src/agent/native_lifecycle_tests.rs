@@ -64,7 +64,11 @@ fn scripted_agent(
         "scripted-replay/maestro-replay-v1",
         responses,
     ));
-    NativeAgent::new_with_test_client(scripted_config(cwd), client)
+    NativeAgent::new_with_test_client(
+        std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
+        scripted_config(cwd),
+        client,
+    )
 }
 
 fn scripted_agent_with_tui_host(

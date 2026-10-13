@@ -13,6 +13,8 @@ use maestro_runtime_contracts::tool_wire;
 pub mod factory;
 mod handoff;
 mod lifecycle;
+mod tool_host;
+use tool_host::child_allowed_tools_for_role;
 #[cfg(test)]
 mod lifetime_tests;
 
@@ -923,6 +925,7 @@ pub(crate) struct SubagentManager {
     parent_requests: Arc<Mutex<Vec<String>>>,
     runtime: Arc<RuntimeRegistry>,
     child_factory: Arc<dyn ChildAgentFactory>,
+    tool_host: Arc<dyn crate::agent::tool_host::ToolHost>,
     mailbox_path: PathBuf,
     last_lifecycle_poll: Arc<Mutex<Instant>>,
     last_lifecycle_reconciliation: Arc<Mutex<Instant>>,
@@ -1035,7 +1038,10 @@ impl SubagentManager {
             parent_model: Arc::new(Mutex::new(None)),
             parent_requests: Arc::new(Mutex::new(Vec::new())),
             runtime: runtime_registry(),
-            child_factory: Arc::new(LocalChildAgentFactory),
+            child_factory: Arc::new(LocalChildAgentFactory::new(Arc::new(
+                crate::agent::tool_host::BuiltInToolHost,
+            ))),
+            tool_host: Arc::new(crate::agent::tool_host::BuiltInToolHost),
             mailbox_path,
             last_lifecycle_poll: Arc::new(Mutex::new(
                 Instant::now()
@@ -4863,61 +4869,6 @@ fn parse_wait_timeout(args: &serde_json::Value) -> Result<u64, String> {
         .as_u64()
         .map(|timeout_ms| timeout_ms.min(MAX_WAIT_MS))
         .ok_or_else(|| "timeout_ms must be a non-negative integer".to_string())
-}
-
-const READ_ONLY_CHILD_TOOLS: [&str; 21] = [
-    "read",
-    "glob",
-    "grep",
-    "list",
-    "diff",
-    "status",
-    "parallel_ripgrep",
-    "search",
-    "web_fetch",
-    "websearch",
-    "codesearch",
-    "read_image",
-    "screenshot",
-    "vscode_get_diagnostics",
-    "jetbrains_get_diagnostics",
-    "vscode_get_definition",
-    "jetbrains_get_definition",
-    "vscode_find_references",
-    "jetbrains_find_references",
-    "mcp_list_resources",
-    "mcp_read_resource",
-];
-
-fn child_allowed_tools_for_role(
-    role: SubagentRole,
-    profile_tools: Option<&[String]>,
-) -> HashSet<String> {
-    let mut tools = crate::agent::tool_host::tool_host()
-        .registry_tool_definitions()
-        .into_iter()
-        .filter(|definition| {
-            let name = definition.tool.name.to_ascii_lowercase();
-            let globally_allowed = !SUBAGENT_TOOL_NAMES.contains(&name.as_str())
-                && !matches!(
-                    name.as_str(),
-                    "get_goal" | "update_goal" | "todo" | "background_tasks" | "coding_task"
-                );
-            let role_allowed = matches!(role, SubagentRole::Code)
-                || READ_ONLY_CHILD_TOOLS.contains(&name.as_str());
-            globally_allowed && role_allowed
-        })
-        .map(|definition| definition.tool.name.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
-
-    if let Some(profile_tools) = profile_tools {
-        let requested = profile_tools
-            .iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        tools.retain(|name| requested.contains(name));
-    }
-    tools
 }
 
 fn git_worktree_command<const N: usize>(
@@ -9464,7 +9415,11 @@ mod tests {
 
     #[test]
     fn child_tool_set_excludes_parent_global_tools() {
-        let tools = child_allowed_tools_for_role(SubagentRole::Code, None);
+        let tools = child_allowed_tools_for_role(
+            &crate::agent::tool_host::BuiltInToolHost,
+            SubagentRole::Code,
+            None,
+        );
         for name in SUBAGENT_TOOL_NAMES {
             assert!(!tools.contains(name), "child advertised {name}");
         }
@@ -9482,7 +9437,8 @@ mod tests {
             SubagentRole::Plan,
             SubagentRole::Review,
         ] {
-            let tools = child_allowed_tools_for_role(role, None);
+            let tools =
+                child_allowed_tools_for_role(&crate::agent::tool_host::BuiltInToolHost, role, None);
             assert!(tools.contains("read"), "{role:?} should read files");
             assert!(tools.contains("grep"), "{role:?} should search files");
             assert!(
@@ -9493,7 +9449,11 @@ mod tests {
             assert!(!tools.contains("edit"), "{role:?} must not edit files");
         }
 
-        let code_tools = child_allowed_tools_for_role(SubagentRole::Code, None);
+        let code_tools = child_allowed_tools_for_role(
+            &crate::agent::tool_host::BuiltInToolHost,
+            SubagentRole::Code,
+            None,
+        );
         assert!(code_tools.contains("bash"));
         assert!(code_tools.contains("write"));
         assert!(code_tools.contains("edit"));
@@ -9518,7 +9478,11 @@ mod tests {
         resolve_spawn_profile_with_trust(&mut request, root.path(), true).unwrap();
         assert_eq!(request.model.as_deref(), Some("small-model"));
         assert_eq!(
-            child_allowed_tools_for_role(request.role, request.profile_tools.as_deref()),
+            child_allowed_tools_for_role(
+                &crate::agent::tool_host::BuiltInToolHost,
+                request.role,
+                request.profile_tools.as_deref()
+            ),
             HashSet::from(["read".to_string()])
         );
         let mut explicit = parse_spawn_request(&serde_json::json!({
@@ -9532,10 +9496,18 @@ mod tests {
     #[test]
     fn profile_tools_only_narrow_a_role_policy() {
         let requested = ["read".to_string(), "write".to_string(), "bash".to_string()];
-        let explore_tools = child_allowed_tools_for_role(SubagentRole::Explore, Some(&requested));
+        let explore_tools = child_allowed_tools_for_role(
+            &crate::agent::tool_host::BuiltInToolHost,
+            SubagentRole::Explore,
+            Some(&requested),
+        );
         assert_eq!(explore_tools, HashSet::from(["read".to_string()]));
 
-        let code_tools = child_allowed_tools_for_role(SubagentRole::Code, Some(&requested));
+        let code_tools = child_allowed_tools_for_role(
+            &crate::agent::tool_host::BuiltInToolHost,
+            SubagentRole::Code,
+            Some(&requested),
+        );
         assert_eq!(
             code_tools,
             HashSet::from(["read".to_string(), "write".to_string(), "bash".to_string()])

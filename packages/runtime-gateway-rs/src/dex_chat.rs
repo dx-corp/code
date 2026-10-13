@@ -99,8 +99,12 @@ async fn compose_for_mode(
         background_task_access: request.background_task_access,
         ..NativeAgentConfig::default()
     };
-    let host = dex_loop_execution_host(&config, CredentialVault::new())
-        .map_err(|error| error.to_string())?;
+    let host = dex_loop_execution_host(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+        &config,
+        CredentialVault::new(),
+    )
+    .map_err(|error| error.to_string())?;
     // Hooks can run commands independently of model tools. Discuss admits
     // neither boundary; this fresh host is private to this turn.
     if interaction_mode == crate::chat::InteractionMode::Discuss {
@@ -1209,7 +1213,12 @@ mod tests {
             cwd: workspace.path().to_string_lossy().into_owned(),
             ..NativeAgentConfig::default()
         };
-        let host = dex_loop_execution_host(&config, CredentialVault::new()).unwrap();
+        let host = dex_loop_execution_host(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+            &config,
+            CredentialVault::new(),
+        )
+        .unwrap();
         let client_tools = vec![ToolDefinition {
             tool: Tool::new("client_write", "write the source"),
             requires_approval: false,

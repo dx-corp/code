@@ -232,6 +232,12 @@ impl Deref for NativeAgent {
     }
 }
 
+#[derive(Default)]
+struct NativeAgentScope {
+    subagent_parent_scope_id: Option<String>,
+    mailbox_identity: Option<String>,
+}
+
 impl NativeAgent {
     /// Transfer the one runtime actor to a host-owned lifecycle manager.
     /// The event relay continues to preserve the existing telemetry stream.
@@ -240,27 +246,27 @@ impl NativeAgent {
     }
 
     fn start(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         external_tool_definitions: Vec<ToolDefinition>,
         credential_vault: CredentialVault,
         allowed_tools: Option<&HashSet<String>>,
         client_override: Option<ClientOverride>,
-        subagent_parent_scope_id: Option<String>,
-        mailbox_identity: Option<String>,
+        scope: NativeAgentScope,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         let (resolved, initial_identity_scope) =
             resolve_native_client(&config.model, client_override.clone())?;
         let telemetry_identity_scope = Arc::new(RwLock::new(initial_identity_scope));
         let provider_name = resolved.provider_name.clone();
         let telemetry_config = config.clone();
-        let host = tool_host::tool_host().build_local_host(tool_host::LocalHostBuild {
+        let host = tool_host.build_local_host(tool_host::LocalHostBuild {
             config: &config,
             credential_vault: credential_vault.clone(),
             skip_identity_verification: client_override
                 .as_ref()
                 .is_some_and(ClientOverride::skips_identity_verification),
-            subagent_parent_scope_id: subagent_parent_scope_id.clone(),
-            mailbox_identity: mailbox_identity.clone(),
+            subagent_parent_scope_id: scope.subagent_parent_scope_id,
+            mailbox_identity: scope.mailbox_identity,
             telemetry_identity_scope: Arc::clone(&telemetry_identity_scope),
         })?;
         let runtime_config = config.into_runtime();
@@ -284,72 +290,90 @@ impl NativeAgent {
     }
 
     pub fn new(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
-        Self::new_with_tools_and_credential_vault(config, Vec::new(), CredentialVault::new())
+        Self::new_with_tools_and_credential_vault(
+            tool_host,
+            config,
+            Vec::new(),
+            CredentialVault::new(),
+        )
     }
 
     pub fn new_with_credential_vault(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         credential_vault: CredentialVault,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
-        Self::new_with_tools_and_credential_vault(config, Vec::new(), credential_vault)
+        Self::new_with_tools_and_credential_vault(tool_host, config, Vec::new(), credential_vault)
     }
 
     pub fn new_with_credential_vault_and_subagent_scope(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         credential_vault: CredentialVault,
         subagent_parent_scope_id: String,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             credential_vault,
             None,
             None,
-            Some(subagent_parent_scope_id),
-            None,
+            NativeAgentScope {
+                subagent_parent_scope_id: Some(subagent_parent_scope_id),
+                ..NativeAgentScope::default()
+            },
         )
     }
 
     pub fn new_with_allowed_tools_and_credential_vault(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         allowed_tools: &HashSet<String>,
         credential_vault: CredentialVault,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             credential_vault,
             Some(allowed_tools),
             None,
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
     pub fn new_with_allowed_tools_and_credential_vault_runner(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         allowed_tools: &HashSet<String>,
         credential_vault: CredentialVault,
         mailbox_identity: String,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             credential_vault,
             Some(allowed_tools),
             None,
-            None,
-            Some(mailbox_identity),
+            NativeAgentScope {
+                mailbox_identity: Some(mailbox_identity),
+                ..NativeAgentScope::default()
+            },
         )
     }
 
     pub fn new_with_tools(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         external_tool_definitions: Vec<ToolDefinition>,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::new_with_tools_and_credential_vault(
+            tool_host,
             config,
             external_tool_definitions,
             CredentialVault::new(),
@@ -357,18 +381,19 @@ impl NativeAgent {
     }
 
     pub fn new_with_tools_and_credential_vault(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         external_tool_definitions: Vec<ToolDefinition>,
         credential_vault: CredentialVault,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             external_tool_definitions,
             credential_vault,
             None,
             None,
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
@@ -379,82 +404,87 @@ impl NativeAgent {
     /// [`Self::new_with_tools`].
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_tools_and_test_client(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         external_tool_definitions: Vec<ToolDefinition>,
         client: UnifiedClient,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             external_tool_definitions,
             CredentialVault::new(),
             None,
             Some(ClientOverride::UnverifiedTest(client)),
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
     pub fn new_with_governed_tools_and_credential_vault(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         allowed_tools: &HashSet<String>,
         external_tool_definitions: Vec<ToolDefinition>,
         credential_vault: CredentialVault,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             external_tool_definitions,
             credential_vault,
             Some(allowed_tools),
             None,
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
     pub fn new_with_client(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         client: UnifiedClient,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             CredentialVault::new(),
             None,
             Some(ClientOverride::Production(client)),
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
     pub fn new_with_client_and_allowed_tools(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         allowed_tools: &HashSet<String>,
         client: UnifiedClient,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             CredentialVault::new(),
             Some(allowed_tools),
             Some(ClientOverride::Production(client)),
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_with_test_client(
+        tool_host: Arc<dyn tool_host::ToolHost>,
         config: NativeAgentConfig,
         client: UnifiedClient,
     ) -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<FromAgent>)> {
         Self::start(
+            tool_host,
             config,
             Vec::new(),
             CredentialVault::new(),
             None,
             Some(ClientOverride::UnverifiedTest(client)),
-            None,
-            None,
+            NativeAgentScope::default(),
         )
     }
 
@@ -619,10 +649,11 @@ fn resolve_native_client(
 /// serve both loops; resolve the turn's model client with
 /// [`NativeExecutionHostHandle::resolve_model`].
 pub fn dex_loop_execution_host(
+    tool_host: Arc<dyn tool_host::ToolHost>,
     config: &NativeAgentConfig,
     credential_vault: CredentialVault,
 ) -> Result<NativeExecutionHostHandle> {
-    tool_host::tool_host().build_local_host(tool_host::LocalHostBuild {
+    tool_host.build_local_host(tool_host::LocalHostBuild {
         config,
         credential_vault,
         skip_identity_verification: false,
@@ -633,6 +664,7 @@ pub fn dex_loop_execution_host(
 }
 
 fn build_local_host(
+    tool_host: Arc<dyn tool_host::ToolHost>,
     config: &NativeAgentConfig,
     credential_vault: CredentialVault,
     skip_identity_verification: bool,
@@ -641,6 +673,7 @@ fn build_local_host(
     telemetry_identity_scope: Arc<RwLock<Option<crate::telemetry::TelemetryIdentityScope>>>,
 ) -> Result<NativeExecutionHostHandle> {
     let mut executor = ToolExecutor::with_credential_vault(&config.cwd, credential_vault)
+        .with_tool_host(tool_host)
         .with_code_authority()
         .with_managed_mcp_policy(config.managed_mcp_policy.clone())
         .with_background_task_access(config.background_task_access.clone());

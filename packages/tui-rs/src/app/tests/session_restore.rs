@@ -76,6 +76,7 @@ async fn assert_session_restore_provider_history(interactive: bool) {
         crate::ai::OpenAiClient::with_base_url("fixture", "http://127.0.0.1:1/v1").unwrap(),
     );
     let (agent, _events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "openai/gpt-5.5".into(),
             cwd: "/tmp".into(),
@@ -202,6 +203,7 @@ async fn resumed_continuation_survives_the_next_compaction() {
     let saved = crate::session::SessionReader::read_file(&child_path).unwrap();
 
     let (agent, mut events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
         NativeAgentConfig {
             model: "openai/gpt-4o".into(),
             cwd: "/tmp".into(),

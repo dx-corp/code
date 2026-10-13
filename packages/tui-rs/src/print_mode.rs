@@ -581,11 +581,16 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
     let credential_vault = CredentialVault::new();
     let (agent, mut event_rx) = match &limits.allowed_tools {
         Some(allowed_tools) => NativeAgent::new_with_allowed_tools_and_credential_vault(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
             config,
             allowed_tools,
             credential_vault.clone(),
         ),
-        None => NativeAgent::new_with_credential_vault(config, credential_vault.clone()),
+        None => NativeAgent::new_with_credential_vault(
+            std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+            config,
+            credential_vault.clone(),
+        ),
     }
     .context("Failed to create native agent for print mode")?;
     let tool_tx = agent.tool_response_sender();

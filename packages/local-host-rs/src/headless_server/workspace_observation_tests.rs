@@ -2,7 +2,8 @@
 use super::*;
 #[test]
 fn native_server_capabilities_match_the_registry_and_request_surface() {
-    let capabilities = crate::headless::native_server_capabilities();
+    let capabilities =
+        crate::headless::native_server_capabilities(&crate::agent::tool_host::BuiltInToolHost);
     assert_eq!(
         capabilities.utility_operations,
         vec![

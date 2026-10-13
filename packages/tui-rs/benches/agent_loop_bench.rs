@@ -24,7 +24,12 @@ async fn run_scripted_session(
         approval_mode: ApprovalMode::Yolo,
         ..NativeAgentConfig::default()
     };
-    let (agent, mut events) = NativeAgent::new_with_test_client(config, client).expect("agent");
+    let (agent, mut events) = NativeAgent::new_with_test_client(
+        std::sync::Arc::new(maestro_local_host::agent::tool_host::BuiltInToolHost),
+        config,
+        client,
+    )
+    .expect("agent");
 
     for prompt in prompts {
         agent.prompt(prompt, vec![]).await.expect("prompt");

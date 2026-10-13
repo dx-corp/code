@@ -118,13 +118,13 @@ async fn native_summary_is_applied_before_probe_and_grader_answer_never_enters_r
             OpenAiClient::with_base_url("fixture-key", format!("http://{address}/v1")).unwrap(),
         );
         let (agent, mut events) = NativeAgent::start(
+            std::sync::Arc::new(crate::agent::tool_host::BuiltInToolHost),
             config,
             vec![],
             CredentialVault::new(),
             Some(&HashSet::new()),
             Some(super::ClientOverride::UnverifiedTest(client)),
-            None,
-            None,
+            super::NativeAgentScope::default(),
         )
         .unwrap();
         assert!(agent.runtime_audit_snapshot().tools.is_empty());

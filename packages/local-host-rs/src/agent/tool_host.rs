@@ -3,11 +3,12 @@
 //! The host asks this trait for the three things it needs from the tool layer:
 //! composing the native execution host, and listing tool definitions for
 //! capability and subagent policy decisions. [`BuiltInToolHost`] is the
-//! in-tree implementation; a different crate can supply its own through
-//! [`install_tool_host`].
+//! in-tree implementation. Each agent and dex-loop execution host requires
+//! an explicit `Arc<dyn ToolHost>` at construction; host selection is never
+//! shared process state.
 
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use maestro_runtime::agent::{NativeExecutionHostHandle, ToolDefinition};
@@ -28,7 +29,11 @@ pub struct LocalHostBuild<'a> {
 
 pub trait ToolHost: Send + Sync {
     /// Compose the tool executor, hooks, firewall and model resolver for one actor.
-    fn build_local_host(&self, build: LocalHostBuild<'_>) -> Result<NativeExecutionHostHandle>;
+    /// The owned receiver lets composition pass this same host to child agents.
+    fn build_local_host(
+        self: Arc<Self>,
+        build: LocalHostBuild<'_>,
+    ) -> Result<NativeExecutionHostHandle>;
 
     /// Definitions of the built-in tool registry.
     fn registry_tool_definitions(&self) -> Vec<ToolDefinition>;
@@ -41,8 +46,12 @@ pub trait ToolHost: Send + Sync {
 pub struct BuiltInToolHost;
 
 impl ToolHost for BuiltInToolHost {
-    fn build_local_host(&self, build: LocalHostBuild<'_>) -> Result<NativeExecutionHostHandle> {
+    fn build_local_host(
+        self: Arc<Self>,
+        build: LocalHostBuild<'_>,
+    ) -> Result<NativeExecutionHostHandle> {
         build_local_host(
+            self,
             build.config,
             build.credential_vault,
             build.skip_identity_verification,
@@ -64,18 +73,5 @@ impl ToolHost for BuiltInToolHost {
     }
 }
 
-static INSTALLED: OnceLock<Arc<dyn ToolHost>> = OnceLock::new();
-static BUILT_IN: BuiltInToolHost = BuiltInToolHost;
-
-/// Replace the in-tree tool implementation. Returns the rejected host when one
-/// was already installed.
-pub fn install_tool_host(host: Arc<dyn ToolHost>) -> Result<(), Arc<dyn ToolHost>> {
-    INSTALLED.set(host)
-}
-
-pub(crate) fn tool_host() -> &'static dyn ToolHost {
-    match INSTALLED.get() {
-        Some(host) => host.as_ref(),
-        None => &BUILT_IN,
-    }
-}
+#[cfg(test)]
+mod tests;
