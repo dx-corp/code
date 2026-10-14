@@ -85,6 +85,8 @@ mod tests {
         std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let legacy = temp.path().join("effects");
         std::fs::create_dir(&legacy).unwrap();
+        // Exercise the legacy permission migration independently of host umask.
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(legacy.join("baseline"), b"original").unwrap();
         assert_eq!(
             prepare_private_temp_directory(temp.path(), "effects").unwrap(),
@@ -92,6 +94,24 @@ mod tests {
         );
         assert_eq!(std::fs::read(legacy.join("baseline")).unwrap(), b"original");
         assert_eq!(std::fs::metadata(&legacy).unwrap().mode() & 0o777, 0o700);
+    }
+
+    #[test]
+    fn current_owner_legacy_root_rejects_group_write_without_changing_it() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let legacy = temp.path().join("effects");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o775)).unwrap();
+        std::fs::write(legacy.join("baseline"), b"original").unwrap();
+        assert_eq!(
+            prepare_private_temp_directory(temp.path(), "effects")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(std::fs::metadata(&legacy).unwrap().mode() & 0o777, 0o775);
+        assert_eq!(std::fs::read(legacy.join("baseline")).unwrap(), b"original");
     }
 
     #[test]
