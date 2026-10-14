@@ -278,7 +278,7 @@ async fn explicit_policy_controls_proactive_compaction_but_allows_hard_recovery(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn legacy_and_disabled_policies_do_not_wait_for_unused_pressure_reads() {
     struct SlowPressure {
         inner: FakeModel,

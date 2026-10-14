@@ -3,7 +3,8 @@ description: >
   Install sccache and select a backend. GCS on ARC when GCE metadata
   identity is present and an objects.list probe of evalops-prod-ci-sccache
   succeeds. Else local disk when the runner service exports
-  SCCACHE_LOCAL_DIR to an absolute writable path (WSL:
+  SCCACHE_LOCAL_DIR to an absolute writable path, or Borg exports its owned
+  BORG_CACHE_ROOT/sccache as SCCACHE_DIR (WSL:
   /var/cache/evalops-sccache, SCCACHE_CACHE_SIZE default 40G). GitHub
   Actions cache is an opt-out fallback for callers that still require it.
   Callers compile with RUSTC_WRAPPER=sccache.
@@ -18,7 +19,7 @@ inputs:
       sccache storage backend. `auto` (default) probes the GCE metadata
       server and uses `gcs` when the runner identity answers and an
       objects.list probe of the sccache prefix returns HTTP 200; else
-      `local` when SCCACHE_LOCAL_DIR is an absolute writable directory;
+      `local` when SCCACHE_LOCAL_DIR or Borg's owned SCCACHE_DIR is writable;
       else `gha`. The GCS probe is GET .../b/<bucket>/o?maxResults=1&prefix=...
       (storage.objects.list), not buckets.get, because the runner GSA
       is roles/storage.objectUser. A 404 or 403 warns and falls back to
