@@ -210,7 +210,7 @@ jobs:
               tar -xzf "release-binaries/deixic-code-device-${platform}.app.tar.gz" -C release-binaries
             fi
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: maestro-verified-native
           path: release-binaries/*
@@ -281,7 +281,7 @@ jobs:
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
           PACKED_TARBALL: ${{ steps.pack.outputs.tarball }}
         run: node scripts/smoke-packed-cli.js "$PACKED_TARBALL"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           retention-days: 14
           name: npm-tarball-${{ needs.prepare.outputs.release_tag }}
@@ -626,7 +626,7 @@ jobs:
         run: node scripts/verify-published-replay-evidence.js --evidence-dir published-replay-evidence
       - name: Upload published replay evidence
         if: ${{ always() && hashFiles('published-replay-evidence/*.json') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           retention-days: 14
           name: published-replay-evidence-${{ needs.prepare.outputs.release_tag }}
