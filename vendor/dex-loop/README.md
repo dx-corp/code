@@ -30,8 +30,8 @@ connector writes and flag internal calls on their receipts. Major destructive
 connector actions require a typed confirmation bound to the exact call;
 headless turns deny them. Interactive calls carrying an explicit confirmation
 checkpoint also use that question path. See
-[`DexTools::policy`](../dex-tools/src/lib.rs) and
-[policy checks](../dex-tools/src/policy.rs).
+[`DexTools::policy`](../tools/src/lib.rs) and
+[policy checks](../tools/src/policy.rs).
 
 `Engine::run(&mut ctx, &cancel)` returns `Done`, `Asked(call)`,
 `AwaitingClientTool(call)`, `Interrupted`, or `Failed` on active paths.

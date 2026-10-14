@@ -1,5 +1,5 @@
 {
-  "generated_at": 1791618482,
+  "generated_at": 1791993243,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -1299,6 +1299,44 @@
       }
     },
     {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "provider": "google",
+      "description": "Google's flagship reasoning model for complex software engineering, deep math and science, and long-horizon autonomous…",
+      "capabilities": {
+        "protocol": "google",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 32768,
+        "temperature": true
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "input_audio": 2
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
       "id": "gemini-flash-latest",
       "name": "Gemini Flash Latest",
       "provider": "google",
@@ -1395,9 +1433,9 @@
       ],
       "reasoning_efforts": [],
       "cost": {
-        "input": 0.0675,
-        "output": 0.225,
-        "cache_read": 0.0375
+        "input": 0.09,
+        "output": 0.3,
+        "cache_read": 0.05
       },
       "open_weights": true,
       "verification": {
@@ -3197,9 +3235,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0015,
-        "output": 0.6,
-        "cache_read": 0.005
+        "input": 0.02016,
+        "output": 0.891,
+        "cache_read": 0.0054
       },
       "verification": {
         "state": "catalog",
@@ -3218,12 +3256,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 5,
-        "cache_read": 0.219
+        "input": 0.1307,
+        "output": 8,
+        "cache_read": 0.13
       },
       "verification": {
         "state": "catalog",
@@ -3245,9 +3284,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0068,
-        "output": 1.28,
-        "cache_read": 0.0068
+        "input": 0.0144,
+        "output": 0.576,
+        "cache_read": 0.0108
       },
       "verification": {
         "state": "catalog",
@@ -3321,8 +3360,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.4,
-        "output": 15,
+        "input": 0.536,
+        "output": 14,
         "cache_read": 0.3
       },
       "verification": {
@@ -3460,6 +3499,31 @@
       }
     },
     {
+      "id": "~unbiased/pareto-latest",
+      "name": "Pareto Latest",
+      "provider": "openrouter",
+      "description": "This model always redirects to the latest model in the Pareto family.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 2.5,
+        "output": 7.5,
+        "cache_read": 0.25
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "~x-ai/grok-latest",
       "name": "xAI: Grok Latest",
       "provider": "openrouter",
@@ -3495,13 +3559,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.04,
-        "output": 0.5,
-        "cache_read": 0.0125
+        "input": 0.036,
+        "output": 0.9,
+        "cache_read": 0.0108
       },
       "verification": {
         "state": "catalog",
@@ -3520,12 +3583,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.039,
-        "output": 4.8,
-        "cache_read": 0.038
+        "input": 0.063,
+        "output": 4.4,
+        "cache_read": 0.0586
       },
       "verification": {
         "state": "catalog",
@@ -4242,29 +4306,6 @@
       }
     },
     {
-      "id": "apodex/apodex-1.1-mini:free",
-      "name": "Apodex: Apodex 1.1 Mini (free)",
-      "provider": "openrouter",
-      "description": "Apodex 1.1 Mini is a reasoning-first model from Apodex, built for complex, long-horizon research and forecasting…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "arcee-ai/trinity-large-thinking",
       "name": "Arcee AI: Trinity Large Thinking",
       "provider": "openrouter",
@@ -4834,9 +4875,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0121,
-        "output": 1.28,
-        "cache_read": 0.0121
+        "input": 0.091,
+        "output": 0.182,
+        "cache_read": 0.0182
       },
       "status": "deprecated",
       "verification": {
@@ -4859,9 +4900,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0068,
-        "output": 1.28,
-        "cache_read": 0.0068
+        "input": 0.016,
+        "output": 0.64,
+        "cache_read": 0.016
       },
       "verification": {
         "state": "catalog",
@@ -4910,9 +4951,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.9483,
-        "output": 1.8966,
-        "cache_read": 0.079025
+        "input": 0.418992,
+        "output": 0.837984,
+        "cache_read": 0.034916
       },
       "verification": {
         "state": "catalog",
@@ -4959,9 +5000,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 1.2,
-        "cache_read": 0.006
+        "input": 0.02016,
+        "output": 0.891,
+        "cache_read": 0.0054
       },
       "verification": {
         "state": "catalog",
@@ -5530,6 +5571,32 @@
       }
     },
     {
+      "id": "google/gemini-4-argon",
+      "name": "Google: Gemini 4 Argon",
+      "provider": "openrouter",
+      "description": "Gemini 4 Argon is Google's flagship reasoning model, built for complex software engineering, deep mathematical and…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 0.1875
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "google/gemini-nano-banana-2.1",
       "name": "Google: Nano Banana 2.1",
       "provider": "openrouter",
@@ -5664,9 +5731,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0675,
-        "output": 0.225,
-        "cache_read": 0.0375
+        "input": 0.09,
+        "output": 0.3,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -5940,56 +6007,6 @@
       }
     },
     {
-      "id": "inclusionai/ling-3.0-flash-fin",
-      "name": "inclusionAI: Ling 3.0 Flash Fin",
-      "provider": "openrouter",
-      "description": "Ling 3.0 Flash Fin is a finance-focused mixture-of-experts model from InclusionAI, built on Ling 3.0 Flash with 5.1B…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.042,
-        "output": 0.1232,
-        "cache_read": 0.0084
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "inclusionai/ling-3.0-flash-sante",
-      "name": "inclusionAI: Ling 3.0 Flash Sante",
-      "provider": "openrouter",
-      "description": "Ling 3.0 Flash Sante is a health and medicine-focused mixture-of-experts model from InclusionAI, built on Ling 3.0…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.042,
-        "output": 0.1232,
-        "cache_read": 0.0084
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "inclusionai/ling-3.0-flash-vl",
       "name": "inclusionAI: Ling 3.0 Flash VL",
       "provider": "openrouter",
@@ -6000,14 +6017,14 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
+        "context_tokens": 131072,
         "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.021,
-        "output": 0.0616,
-        "cache_read": 0.0042
+        "input": 0.06,
+        "output": 0.18,
+        "cache_read": 0.012
       },
       "verification": {
         "state": "catalog",
@@ -6026,12 +6043,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0,
-        "output": 0
+        "input": 0.075,
+        "output": 0.225,
+        "cache_read": 0.015
       },
       "verification": {
         "state": "catalog",
@@ -6106,6 +6123,31 @@
       "cost": {
         "input": 0,
         "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "liquid/lfm-2.5-24b-a2b",
+      "name": "LiquidAI: LFM2.5-24B-A2B",
+      "provider": "openrouter",
+      "description": "LFM2.5-24B-A2B is a mixture-of-experts reasoning model from Liquid AI with 24B total and 2.45B active parameters. It…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 128000,
+        "output_tokens": 8192,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.05,
+        "output": 0.7,
+        "cache_read": 0.025
       },
       "verification": {
         "state": "catalog",
@@ -6267,13 +6309,13 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.22,
-        "output": 0.5,
-        "cache_read": 0.11
+        "input": 0.59,
+        "output": 0.79,
+        "cache_read": 0.295
       },
       "verification": {
         "state": "catalog",
@@ -6317,12 +6359,11 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1310720,
-        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 0.3
+        "input": 0.18,
+        "output": 0.59
       },
       "verification": {
         "state": "catalog",
@@ -6504,6 +6545,30 @@
       }
     },
     {
+      "id": "meta/muse-wonder",
+      "name": "Meta: Muse Wonder",
+      "provider": "openrouter",
+      "description": "Muse Wonder is a frontier reasoning model from Meta, designed for complex personal and professional agentic tasks. It…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.2
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "microsoft/phi-4",
       "name": "Microsoft: Phi 4",
       "provider": "openrouter",
@@ -6609,11 +6674,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 1.2
+        "input": 0.255,
+        "output": 1.02
       },
       "verification": {
         "state": "catalog",
@@ -6707,12 +6773,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.21,
-        "output": 0.84,
-        "cache_read": 0.042
+        "input": 0.3,
+        "output": 1.2,
+        "cache_read": 0.06
       },
       "verification": {
         "state": "catalog",
@@ -7351,9 +7418,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.465,
-        "output": 2.45,
-        "cache_read": 0.0875
+        "input": 0.65,
+        "output": 3.41,
+        "cache_read": 0.15
       },
       "verification": {
         "state": "catalog",
@@ -7399,9 +7466,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.64,
-        "output": 13.5,
-        "cache_read": 0.28
+        "input": 0.7,
+        "output": 15,
+        "cache_read": 0.32
       },
       "verification": {
         "state": "catalog",
@@ -7680,13 +7747,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.5,
-        "output": 2.2,
-        "cache_read": 0.1
+        "input": 0.6,
+        "output": 2.4,
+        "cache_read": 0.12
       },
       "verification": {
         "state": "catalog",
@@ -9568,13 +9634,13 @@
       "description": "The Pareto Router maintains a tiered shortlist of strong coding models, ranked by [Artificial…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": false,
+        "tools": true,
         "vision": false,
-        "reasoning": false,
+        "reasoning": true,
         "streaming": true,
         "context_tokens": 2000000,
         "output_tokens": 200000,
-        "temperature": false
+        "temperature": true
       },
       "verification": {
         "state": "catalog",
@@ -10003,11 +10069,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 40960,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 0.22
+        "input": 0.12,
+        "output": 0.24
       },
       "verification": {
         "state": "catalog",
@@ -10434,13 +10501,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.08,
-        "output": 0.75,
-        "cache_read": 0.04
+        "input": 0.15,
+        "output": 1,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -10462,9 +10529,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.55,
-        "output": 3.5,
-        "cache_read": 0.225
+        "input": 0.5,
+        "output": 3.6,
+        "cache_read": 0.3
       },
       "verification": {
         "state": "catalog",
@@ -10604,12 +10671,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 1,
-        "cache_read": 0.05
+        "input": 0.1,
+        "output": 0.95,
+        "cache_read": 0.1
       },
       "verification": {
         "state": "catalog",
@@ -10781,14 +10849,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1000000,
-        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.425,
-        "output": 2.55,
-        "cache_read": 0.085,
-        "cache_write": 0.53125
+        "input": 0.04,
+        "output": 2.3,
+        "cache_read": 0.0198
       },
       "verification": {
         "state": "catalog",
@@ -11154,6 +11220,53 @@
       "cost": {
         "input": 0.65,
         "output": 0.75
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "scaledown/extract",
+      "name": "ScaleDown: Extract",
+      "provider": "openrouter",
+      "description": "Extract is a description-driven entity extraction model from ScaleDown. Instead of a fixed set of entity types,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 0.04,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "scaledown/summarize",
+      "name": "ScaleDown: Summarize",
+      "provider": "openrouter",
+      "description": "Summarize is an abstractive summarization model from ScaleDown. It condenses long text and documents into a fluent,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 4000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 0.04,
+        "output": 0
       },
       "verification": {
         "state": "catalog",
@@ -11591,31 +11704,6 @@
       }
     },
     {
-      "id": "unbiased/pareto",
-      "name": "Pareto",
-      "provider": "openrouter",
-      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 2.5,
-        "output": 7.5,
-        "cache_read": 0.25
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "unbiased/pareto-26.10-preview",
       "name": "Pareto 26.10 Preview",
       "provider": "openrouter",
@@ -11634,6 +11722,31 @@
         "input": 0.8,
         "output": 3.2,
         "cache_read": 0.03
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "unbiased/pareto-26.9",
+      "name": "Pareto 26.9",
+      "provider": "openrouter",
+      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 2.5,
+        "output": 7.5,
+        "cache_read": 0.25
       },
       "verification": {
         "state": "catalog",
@@ -12290,13 +12403,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.966,
-        "output": 3.036,
-        "cache_read": 0.1794
+        "input": 1.33,
+        "output": 4.18,
+        "cache_read": 0.247
       },
       "verification": {
         "state": "catalog",
@@ -12319,9 +12432,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.06,
+        "input": 0.05,
         "output": 7,
-        "cache_read": 0.059
+        "cache_read": 0.049
       },
       "verification": {
         "state": "catalog",
@@ -12344,9 +12457,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.039,
+        "input": 0.079,
         "output": 4.8,
-        "cache_read": 0.038
+        "cache_read": 0.059
       },
       "verification": {
         "state": "catalog",
@@ -12369,9 +12482,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 0.5,
-        "cache_read": 0.03
+        "input": 0.036,
+        "output": 0.9,
+        "cache_read": 0.0108
       },
       "verification": {
         "state": "catalog",
