@@ -66,7 +66,7 @@ async fn plain_answer_streams_text_then_final() {
 
 // 2. Three reads run as one wave: they overlap, take about one tool delay, and
 // their results enter history in call order although they finish in reverse.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn read_only_wave_overlaps_and_keeps_call_order() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
@@ -85,7 +85,7 @@ async fn read_only_wave_overlaps_and_keeps_call_order() {
     let engine = engine(&log, &model, &tools, budget());
     let mut ctx = log.start_turn("t1", "look");
 
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let exit = engine.run(&mut ctx, &CancellationToken::new()).await;
     let elapsed = started.elapsed();
 
@@ -128,7 +128,7 @@ async fn read_only_wave_overlaps_and_keeps_call_order() {
 
 // 3. A mutation waits for the wave before it; a read after it starts a new
 // wave. The mutation is claimed in the ledger and its outcome recorded.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mutating_call_runs_serially_after_the_wave() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![

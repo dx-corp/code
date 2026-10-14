@@ -3,8 +3,8 @@
 # Precedence: GCS on ARC when GCE metadata identity is present AND an
 # objects.list probe against the bucket prefix succeeds; else local disk.
 # GCP runners never fall through to GitHub's Azure-hosted cache data plane.
-# Off-GCP runners use SCCACHE_LOCAL_DIR when it is an absolute writable
-# directory (WSL: /var/cache/evalops-sccache, 40G by default). GHA is only
+# Off-GCP runners use SCCACHE_LOCAL_DIR or Borg's owned SCCACHE_DIR when it
+# is absolute and writable (WSL: /var/cache/evalops-sccache, 40G default). GHA is only
 # selected when the caller explicitly permits that fallback.
 # Hard-fail only if GCS or local disk was selected and sccache then reports
 # a different Cache location.
@@ -77,6 +77,12 @@ gce_identity="${gce_identity//$'\n'/}"
 # runner service environment. Ephemeral ARC pods do not; they keep GCS/GHA.
 # Default size cap 40G; override with SCCACHE_CACHE_SIZE on the host.
 SCCACHE_LOCAL_DIR="${SCCACHE_LOCAL_DIR:-}"
+if [[ -z "${SCCACHE_LOCAL_DIR}" && -n "${BORG_CACHE_ROOT:-}" \
+  && "${SCCACHE_DIR:-}" == "${BORG_CACHE_ROOT}/sccache" ]]; then
+  # Borg already owns and probes this persistent cache. Keep explicit local
+  # configuration first, and retain the existing writable/backend checks.
+  SCCACHE_LOCAL_DIR="${SCCACHE_DIR}"
+fi
 SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-40G}"
 
 local_disk_ready() {
