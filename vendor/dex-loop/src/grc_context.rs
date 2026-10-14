@@ -3,7 +3,7 @@
 //! the actual transcript, including every call in a parallel proposed step.
 use crate::{Context, Message, Output, ProposedCall, ToolResult};
 
-pub const GRC_GRAPH_TOOL_NAME: &str = "cerebro.grc_graph";
+pub const GRC_GRAPH_TOOL_NAME: &str = "grc.graph";
 pub const GRC_CONTEXT_BYTES: usize = 12_000;
 pub const GRC_RESULT_BYTES: usize = 4_000;
 const STOP: &str = "not executed: GRC context is partial; retained context cannot admit another graph read. Continue in a fresh bounded context with owner revision and permission checks.";
