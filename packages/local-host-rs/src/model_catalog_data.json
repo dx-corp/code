@@ -1,5 +1,5 @@
 {
-  "generated_at": 1791993243,
+  "generated_at": 1792050939,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -1464,9 +1464,8 @@
       ],
       "reasoning_efforts": [],
       "cost": {
-        "input": 0.09,
-        "output": 0.34,
-        "cache_read": 0.05
+        "input": 0.2,
+        "output": 0.4
       },
       "open_weights": true,
       "verification": {
@@ -3235,7 +3234,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.02016,
+        "input": 0.01368,
         "output": 0.891,
         "cache_read": 0.0054
       },
@@ -3260,9 +3259,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.1307,
+        "input": 0.225,
         "output": 8,
-        "cache_read": 0.13
+        "cache_read": 0.23
       },
       "verification": {
         "state": "catalog",
@@ -3336,9 +3335,9 @@
       },
       "cost": {
         "input": 2,
-        "output": 12,
-        "cache_read": 0.2,
-        "cache_write": 0.375
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 0.1875
       },
       "verification": {
         "state": "catalog",
@@ -3360,9 +3359,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.536,
-        "output": 14,
-        "cache_read": 0.3
+        "input": 0.33,
+        "output": 24,
+        "cache_read": 0.32
       },
       "verification": {
         "state": "catalog",
@@ -3564,7 +3563,7 @@
       "cost": {
         "input": 0.036,
         "output": 0.9,
-        "cache_read": 0.0108
+        "cache_read": 0.01125
       },
       "verification": {
         "state": "catalog",
@@ -3583,13 +3582,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.063,
-        "output": 4.4,
-        "cache_read": 0.0586
+        "input": 0.05,
+        "output": 4.8,
+        "cache_read": 0.049
       },
       "verification": {
         "state": "catalog",
@@ -4951,9 +4949,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.418992,
-        "output": 0.837984,
-        "cache_read": 0.034916
+        "input": 0.95526,
+        "output": 1.91052,
+        "cache_read": 0.079605
       },
       "verification": {
         "state": "catalog",
@@ -4976,9 +4974,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.66,
-        "output": 1.98,
-        "cache_read": 0.022
+        "input": 1.32,
+        "output": 3.96,
+        "cache_read": 0.044
       },
       "verification": {
         "state": "catalog",
@@ -5000,7 +4998,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.02016,
+        "input": 0.01368,
         "output": 0.891,
         "cache_read": 0.0054
       },
@@ -5780,9 +5778,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 0.34,
-        "cache_read": 0.05
+        "input": 0.2,
+        "output": 0.4
       },
       "verification": {
         "state": "catalog",
@@ -6289,8 +6286,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.05,
-        "output": 0.33
+        "input": 0.0509,
+        "output": 0.335
       },
       "verification": {
         "state": "catalog",
@@ -6748,13 +6745,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
         "input": 0.27,
-        "output": 1.08,
-        "cache_read": 0.027
+        "output": 0.95,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -7248,8 +7245,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.09375,
-        "output": 0.25
+        "input": 0.075,
+        "output": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -7466,9 +7463,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.7,
+        "input": 0.45,
         "output": 15,
-        "cache_read": 0.32
+        "cache_read": 0.28
       },
       "verification": {
         "state": "catalog",
@@ -8882,10 +8879,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 2,
-        "output": 10,
-        "cache_read": 0.2,
-        "cache_write": 2.5
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.4,
+        "cache_write": 5
       },
       "verification": {
         "state": "catalog",
@@ -8908,10 +8905,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 2,
-        "output": 10,
-        "cache_read": 0.2,
-        "cache_write": 2.5
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.4,
+        "cache_write": 5
       },
       "verification": {
         "state": "catalog",
@@ -9263,11 +9260,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
+        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.037,
-        "output": 0.17
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.075
       },
       "verification": {
         "state": "catalog",
@@ -10671,13 +10670,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 0.95,
-        "cache_read": 0.1
+        "input": 0.15,
+        "output": 1,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -10852,9 +10850,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.04,
-        "output": 2.3,
-        "cache_read": 0.0198
+        "input": 0.24,
+        "output": 2.2,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -11332,7 +11330,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000,
+        "context_tokens": 1048576,
         "output_tokens": 64000,
         "temperature": true
       },
@@ -12353,13 +12351,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 1.92,
-        "cache_read": 0.12
+        "input": 1,
+        "output": 3.2,
+        "cache_read": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -12403,13 +12401,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 131072,
+        "output_tokens": 128000,
         "temperature": true
       },
       "cost": {
-        "input": 1.33,
-        "output": 4.18,
-        "cache_read": 0.247
+        "input": 0.966,
+        "output": 3.036,
+        "cache_read": 0.1794
       },
       "verification": {
         "state": "catalog",
@@ -12432,9 +12430,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.05,
+        "input": 0.0341,
         "output": 7,
-        "cache_read": 0.049
+        "cache_read": 0.0331
       },
       "verification": {
         "state": "catalog",
@@ -12457,9 +12455,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.079,
+        "input": 0.05,
         "output": 4.8,
-        "cache_read": 0.059
+        "cache_read": 0.049
       },
       "verification": {
         "state": "catalog",
@@ -12482,9 +12480,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.036,
-        "output": 0.9,
-        "cache_read": 0.0108
+        "input": 0.15,
+        "output": 0.5,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
