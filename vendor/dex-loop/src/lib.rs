@@ -30,6 +30,7 @@ mod content_policy;
 mod context;
 mod engine;
 mod event;
+mod page;
 mod ports;
 mod rehydrate;
 mod sanitize;
@@ -63,6 +64,7 @@ pub use event::{
     ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
+pub use page::{PageCollection, PageContext, PageFilter, PageRead, PageRecord};
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
     RequestSize, ToolSpec, Tools, Verdict, model_tool_name,

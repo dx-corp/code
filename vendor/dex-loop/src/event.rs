@@ -594,6 +594,11 @@ pub enum Event {
         /// authority. Older turns carry none and render no voice.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         voice: Option<Box<crate::TurnVoice>>,
+        /// The Deixic page the person asked from, validated by the
+        /// authenticated host. A locator only: it carries no data and no
+        /// authority. Older turns carry none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<Box<crate::PageContext>>,
     },
     /// Control: becomes a user message from `principal` before the next model
     /// call. Calls the model then proposes act under `principal`.
@@ -1094,6 +1099,7 @@ mod tests {
                     read_only: true,
                     label: "Reading your tab".into(),
                 }],
+                page: None,
             },
             Event::ClientToolRequested {
                 call: CallId::new("t1-1-0"),
@@ -1204,6 +1210,7 @@ mod tests {
             context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
+            page: None,
         };
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -1236,6 +1243,7 @@ mod tests {
                 context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
+                page: None,
             }
         );
     }

@@ -362,6 +362,7 @@ pub async fn run_actions(seed: u64, actions: &[Action]) -> Vec<Violation> {
                         context_window_tokens: None,
                         voice: None,
                         approval_mode: dex_loop::ApprovalMode::Interactive,
+                        page: None,
                     });
                 }
                 // else: a real ingress makes a repeated turn id a no-op.

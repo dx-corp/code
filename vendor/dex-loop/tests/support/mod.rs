@@ -98,6 +98,25 @@ pub struct FakeLog {
     state: Arc<Mutex<LogState>>,
 }
 
+/// Alice's `UserMessage` for `turn`, with no attachments or client tools.
+pub fn user_message(turn: &str, text: &str) -> Event {
+    Event::UserMessage {
+        interaction_mode: dex_loop::InteractionMode::Unspecified,
+        turn: TurnId::new(turn),
+        message_id: None,
+        principal: alice(),
+        text: text.into(),
+        attachments: Vec::new(),
+        client_tools: Vec::new(),
+        authorized_tools: Vec::new(),
+        model_binding: None,
+        context_window_tokens: None,
+        voice: None,
+        approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
+    }
+}
+
 impl FakeLog {
     /// A host-side write (ingress). Never fenced.
     pub fn host_append(&self, event: Event) -> Cursor {
@@ -130,6 +149,7 @@ impl FakeLog {
             context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
+            page: None,
         });
         self.rehydrate()
     }
@@ -155,6 +175,7 @@ impl FakeLog {
             context_window_tokens: None,
             voice: None,
             approval_mode,
+            page: None,
         });
         self.rehydrate()
     }
@@ -909,6 +930,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
+            page: None,
         },
         Event::StepStarted {
             step: 1,

@@ -173,6 +173,7 @@ async fn scratch_state_is_partitioned_by_the_accepted_principal() {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     });
     ctx = log.rehydrate();
     let second = FakeModel::new(vec![

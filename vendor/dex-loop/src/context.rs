@@ -214,6 +214,7 @@ pub struct Context {
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
     context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
+    page: Option<crate::PageContext>,
     /// Last completed serving route in this turn, derived from existing events.
     /// Kept outside compactable history so recovery does not retry a failed primary.
     last_served: Option<ServedBy>,
@@ -270,6 +271,7 @@ struct PendingTurn {
     model_binding: Option<crate::ManagedInferenceProviderBinding>,
     context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
+    page: Option<crate::PageContext>,
 }
 
 impl Context {
@@ -301,6 +303,7 @@ impl Context {
             model_binding: None,
             context_window_tokens: None,
             voice: None,
+            page: None,
             last_served: None,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
@@ -404,6 +407,11 @@ impl Context {
     /// The current turn's host-resolved writing policy and voice choice.
     pub fn voice(&self) -> Option<&crate::TurnVoice> {
         self.voice.as_ref()
+    }
+
+    /// The Deixic page the current turn was asked from, when it was.
+    pub fn page(&self) -> Option<&crate::PageContext> {
+        self.page.as_ref()
     }
 
     /// The last completed model step's route in the current turn. New turns
@@ -656,6 +664,7 @@ impl Context {
                 context_window_tokens,
                 voice,
                 interaction_mode,
+                page,
             } => {
                 let next = PendingTurn {
                     turn: turn.clone(),
@@ -670,6 +679,7 @@ impl Context {
                     model_binding: model_binding.clone(),
                     context_window_tokens: *context_window_tokens,
                     voice: voice.as_deref().cloned(),
+                    page: page.as_deref().cloned(),
                 };
                 if self.status == Status::Running {
                     // This message's cursor landed while the current turn was
@@ -1187,6 +1197,7 @@ impl Context {
             context_window_tokens,
             voice,
             interaction_mode,
+            page,
         } = next;
         self.turn = Some(turn.clone());
         self.acting = Some(principal.clone());
@@ -1214,6 +1225,7 @@ impl Context {
         self.model_binding = model_binding;
         self.context_window_tokens = context_window_tokens;
         self.voice = voice;
+        self.page = page;
         self.interaction_mode = interaction_mode;
         self.last_served = None;
         self.authorized_principal = Some(principal.clone());

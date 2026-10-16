@@ -231,6 +231,7 @@ impl<M: Model> Summarize for ModelSummarizer<M> {
                 context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
+                page: None,
             },
         );
         input.retain_owner_evidence_from(ctx);
@@ -664,6 +665,7 @@ mod tests {
                 context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
+                page: None,
             },
         );
         ctx
@@ -728,6 +730,7 @@ mod tests {
                 context_window_tokens: None,
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
+                page: None,
             },
         )];
         for step in 1..=4 {
@@ -778,6 +781,7 @@ mod tests {
             context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
+            page: None,
         };
         events.push((Cursor(11), current_event));
         let mut current = rehydrate(context().thread().clone(), &events);
@@ -1556,6 +1560,7 @@ mod tests {
             context_window_tokens: None,
             voice: None,
             approval_mode: ApprovalMode::Interactive,
+            page: None,
         };
         let blocks = vec![
             OutputBlock::Text {

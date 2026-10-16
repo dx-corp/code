@@ -16,6 +16,8 @@ exports_files([
 rust_library(
     name = "calamine",
     srcs = glob(["calamine-0.36.0/src/**/*.rs"]),
+    # src/changelog.rs documents the crate with include_str!("../Changelog.md").
+    compile_data = ["calamine-0.36.0/Changelog.md"],
     crate_name = "calamine",
     crate_root = "calamine-0.36.0/src/lib.rs",
     edition = "2021",
