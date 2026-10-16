@@ -814,7 +814,7 @@ fn read_pictures<RS: Read + Seek>(
     let mut pics = Vec::new();
     for i in 0..zip.len() {
         let mut zfile = zip.by_index(i)?;
-        let zname = zfile.name()?;
+        let zname = zfile.name()?.into_owned();
         // no Thumbnails
         if zname.starts_with("Pictures") {
             if let Some(ext) = zname.split('.').next_back() {

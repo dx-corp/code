@@ -131,7 +131,7 @@ tracing-opentelemetry = "0.33"
 wait-timeout = "0.2"
 windows-sys = "0.61"
 x509-parser = "0.18"
-zip = { version = "8", default-features = false, features = ["aes-crypto", "deflate64", "deflate", "lzma", "ppmd", "time", "zstd", "xz"] }
+zip = { version = "=9.0.3", default-features = false, features = ["aes-crypto", "deflate64", "deflate", "lzma", "ppmd", "time", "zstd", "xz"] }
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25.1"
 
@@ -191,6 +191,7 @@ lto = false
 codegen-units = 16
 
 [patch.crates-io]
+zip = { path = "vendor/zip-9.0.3" }
 rquickjs-core = { path = "vendor/rquickjs-core-0.13.0" }
 zstd = { path = "vendor/zstd-0.13.3" }
 zstd-safe = { path = "vendor/zstd-safe-7.2.4" }
