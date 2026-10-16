@@ -80,3 +80,19 @@ runtime acceptance test. Platform API retains its 8 MiB decoder-window and
 1 MiB decoded-request limits. Normal cargo-vet coverage for the remaining
 third-party dependency graph remains required; no exemption or trust import is
 introduced by this source repair.
+
+## Calamine zip 9 source repair
+
+Every `zip` 8.x release is yanked on crates.io, so `cargo audit --deny warnings`
+rejects the 8.6.0 release that `calamine` 0.36 requires. Calamine has no release
+built on `zip` 9 yet. `calamine-0.36.0` is the published archive with the same
+five-line change as upstream tafia/calamine#741: the manifest requires `zip`
+9.0, `ZipFile::name()` errors propagate through the existing `?` conversions,
+and the entry-name cache skips names that `zip` 9 reports as invalid.
+`calamine-provenance.json` records the archive checksum, original file hashes
+and patch hash. Only the `rust` workspace consumes it. A patched registry
+archive cannot change calamine's dependency requirements, so its record sets
+`"bazel": "vendored-target"`: Bazel compiles this directory through
+`//products/maestro/vendor:calamine` instead of `@crates//calamine`, and the
+Cargo projection carries calamine's direct registry dependencies. Remove this
+repair when a calamine release on `zip` 9 is available.
