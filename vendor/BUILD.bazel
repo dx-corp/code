@@ -1,3 +1,5 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
 exports_files([
     "rquickjs-core-0.13.0.patch",
     "email-encoding-0.4.2.patch",
@@ -5,4 +7,29 @@ exports_files([
     "zstd-0.13.3.patch",
     "zstd-safe-7.2.4.patch",
     "zstd-sys-2.0.16+zstd.1.5.7.patch",
+    "calamine-0.36.0.patch",
 ])
+
+# Reviewed calamine source repair (calamine-provenance.json). Its zip 9
+# requirement cannot resolve as a patched registry archive, so Bazel compiles
+# the vendored source with the same direct dependencies Cargo resolves.
+rust_library(
+    name = "calamine",
+    srcs = glob(["calamine-0.36.0/src/**/*.rs"]),
+    crate_name = "calamine",
+    crate_root = "calamine-0.36.0/src/lib.rs",
+    edition = "2021",
+    rustc_flags = ["--cap-lints=allow"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//atoi_simd",
+        "@crates//byteorder",
+        "@crates//codepage",
+        "@crates//encoding_rs",
+        "@crates//fast-float2",
+        "@crates//log",
+        "@crates//quick-xml",
+        "@crates//serde",
+        "@crates//zip",
+    ],
+)
