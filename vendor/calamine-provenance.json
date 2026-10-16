@@ -58,7 +58,8 @@
     "path": "calamine-0.36.0",
     "version": "0.36.0",
     "workspaces": [
-      "rust"
+      "rust",
+      "tests/business-objects-integration"
     ]
   }
 ]
