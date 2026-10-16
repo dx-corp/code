@@ -296,6 +296,7 @@ fn pending_events(call: &ProposedCall) -> Vec<Event> {
             model_binding: None,
             context_window_tokens: None,
             voice: None,
+            page: None,
         },
         Event::StepStarted {
             step: 1,

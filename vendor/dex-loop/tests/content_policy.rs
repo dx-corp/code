@@ -37,6 +37,7 @@ fn start(log: &FakeLog, policy: TurnContentPolicy) -> Context {
             tone: Vec::new(),
         })),
         approval_mode: ApprovalMode::Interactive,
+        page: None,
     });
     log.rehydrate()
 }

@@ -16,6 +16,7 @@ fn message(turn: &str, principal: &str, tools: &[&str]) -> Event {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     }
 }
 

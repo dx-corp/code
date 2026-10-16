@@ -199,6 +199,7 @@ fn stale_control_kinds_would_release_a_lease_with_unprocessed_control_event() {
                 context_window_tokens: None,
                 voice: None,
                 approval_mode: dex_loop::ApprovalMode::Interactive,
+                page: None,
             },
         ),
         (
@@ -315,6 +316,7 @@ async fn dst_two_replicas_racing_the_same_generation_dispatch_once() {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     });
 
     let build = || {
@@ -378,6 +380,7 @@ async fn dst_two_replica_lease_fencing() {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     });
 
     // Replica A: generation 0, crashes immediately.

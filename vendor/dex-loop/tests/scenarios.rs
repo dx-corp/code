@@ -368,6 +368,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
             context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
+            page: None,
         },
         Event::StepStarted {
             step: 1,
@@ -968,6 +969,7 @@ async fn crash_mid_stream_abandons_the_attempt_and_reissues_it() {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     });
     log.host_append(Event::StepStarted {
         step: 1,
@@ -1190,6 +1192,7 @@ async fn same_turn_id_in_two_threads_dispatches_under_distinct_threads() {
             context_window_tokens: None,
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
+            page: None,
         });
         let model = FakeModel::new(vec![vec![call("update", json!({}))], vec![text("done")]]);
         let tools = FakeTools::new(vec![write_tool("update")]);
@@ -2220,36 +2223,10 @@ async fn model_failure_abandons_the_attempt_and_fails() {
 #[tokio::test]
 async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the_new_turn() {
     let log = FakeLog::default();
-    log.host_append(Event::UserMessage {
-        interaction_mode: dex_loop::InteractionMode::Unspecified,
-        turn: TurnId::new("t1"),
-        message_id: None,
-        principal: alice(),
-        text: "long task".into(),
-        attachments: Vec::new(),
-        client_tools: Vec::new(),
-        authorized_tools: Vec::new(),
-        model_binding: None,
-        context_window_tokens: None,
-        voice: None,
-        approval_mode: dex_loop::ApprovalMode::Interactive,
-    }); // cursor 1
+    log.host_append(user_message("t1", "long task")); // cursor 1
     log.host_append(Event::Interrupt { principal: alice() }); // cursor 2 -- excluded from the suffix below
     log.host_append(Event::Interrupted); // cursor 3
-    log.host_append(Event::UserMessage {
-        interaction_mode: dex_loop::InteractionMode::Unspecified,
-        turn: TurnId::new("t2"),
-        message_id: None,
-        principal: alice(),
-        text: "fresh task".into(),
-        attachments: Vec::new(),
-        client_tools: Vec::new(),
-        authorized_tools: Vec::new(),
-        model_binding: None,
-        context_window_tokens: None,
-        voice: None,
-        approval_mode: dex_loop::ApprovalMode::Interactive,
-    }); // cursor 4
+    log.host_append(user_message("t2", "fresh task")); // cursor 4
 
     // Exactly what `read_for_rehydrate` returns when a compaction boundary
     // lands between an old turn's `Interrupt` and its `Interrupted`: the
@@ -2284,20 +2261,7 @@ async fn a_stale_interrupt_excluded_from_the_rehydrated_suffix_must_not_kill_the
 #[tokio::test]
 async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_turn() {
     let log = FakeLog::default();
-    log.host_append(Event::UserMessage {
-        interaction_mode: dex_loop::InteractionMode::Unspecified,
-        turn: TurnId::new("t1"),
-        message_id: None,
-        principal: alice(),
-        text: "long task".into(),
-        attachments: Vec::new(),
-        client_tools: Vec::new(),
-        authorized_tools: Vec::new(),
-        model_binding: None,
-        context_window_tokens: None,
-        voice: None,
-        approval_mode: dex_loop::ApprovalMode::Interactive,
-    }); // cursor 1 -- excluded from the suffix below
+    log.host_append(user_message("t1", "long task")); // cursor 1 -- excluded from the suffix below
     log.host_append(Event::Steer {
         principal: bob(),
         text: "focus on the renewal date".into(),
@@ -2305,20 +2269,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
     log.host_append(Event::Final {
         text: "done".into(),
     }); // cursor 3
-    log.host_append(Event::UserMessage {
-        interaction_mode: dex_loop::InteractionMode::Unspecified,
-        turn: TurnId::new("t2"),
-        message_id: None,
-        principal: alice(),
-        text: "a completely different question".into(),
-        attachments: Vec::new(),
-        client_tools: Vec::new(),
-        authorized_tools: Vec::new(),
-        model_binding: None,
-        context_window_tokens: None,
-        voice: None,
-        approval_mode: dex_loop::ApprovalMode::Interactive,
-    }); // cursor 4
+    log.host_append(user_message("t2", "a completely different question")); // cursor 4
 
     // Excludes t1's own `UserMessage` (cursor 1) but includes its orphaned
     // `Steer` (cursor 2) and everything after -- exactly what a compaction

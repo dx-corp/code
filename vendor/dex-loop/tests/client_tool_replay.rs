@@ -58,6 +58,7 @@ fn log_up_to_model_step(log: &FakeLog, call: &ProposedCall) {
         context_window_tokens: None,
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
+        page: None,
     });
     log.host_append(Event::StepStarted {
         step: 1,
