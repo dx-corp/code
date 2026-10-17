@@ -21,16 +21,16 @@ pub struct PageContext {
     /// The page record id, such as `page.test-detail`.
     pub page: String,
     /// The path the person is on, without query or fragment.
-    pub route: String,
+    route: String,
     /// The record the page shows, when it shows one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record: Option<PageRecord>,
+    record: Option<PageRecord>,
     /// Filters applied on the page, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<PageFilter>,
+    filters: Vec<PageFilter>,
     /// The rows the page lists, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visible: Option<PageCollection>,
+    visible: Option<PageCollection>,
     /// The owner reads that render the page, with their parameters.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reads: Vec<PageRead>,
@@ -39,43 +39,43 @@ pub struct PageContext {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageRecord {
-    pub kind: String,
-    pub id: String,
+    kind: String,
+    id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageFilter {
-    pub name: String,
-    pub value: String,
+    name: String,
+    value: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageCollection {
-    pub kind: String,
-    pub ids: Vec<String>,
+    kind: String,
+    ids: Vec<String>,
     /// How many rows the page says exist, when it knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
+    total: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageRead {
     /// A `dex.workspace_read` read name, such as `GetControlTestDetail`.
-    pub read: String,
+    read: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, String>,
 }
 
 impl PageContext {
     /// Maximum serialized snapshot size, shared by admission and runtime ingress.
-    pub const MAX_JSON_BYTES: usize = 16 * 1024;
-    pub const MAX_IDS: usize = 50;
-    pub const MAX_FILTERS: usize = 12;
-    pub const MAX_READS: usize = 8;
-    pub const MAX_PARAMS: usize = 8;
+    const MAX_JSON_BYTES: usize = 16 * 1024;
+    const MAX_IDS: usize = 50;
+    const MAX_FILTERS: usize = 12;
+    const MAX_READS: usize = 8;
+    const MAX_PARAMS: usize = 8;
     const MAX_TEXT: usize = 256;
 
     /// Refuses a snapshot whose fields are empty, oversized, or not plain
@@ -162,6 +162,21 @@ mod tests {
         let back: PageContext =
             serde_json::from_str(&serde_json::to_string(&page).unwrap()).unwrap();
         assert_eq!(back, page);
+    }
+
+    #[test]
+    fn page_snapshot_retains_its_declared_wire_fields() {
+        assert_eq!(
+            serde_json::to_value(test_page()).unwrap(),
+            json!({
+                "page": "page.test-detail",
+                "route": "/tests/test-github-branch",
+                "record": {"kind": "control_test", "id": "test-github-branch"},
+                "filters": [{"name": "result", "value": "failing"}],
+                "visible": {"kind": "resource", "ids": ["repo-1", "repo-2"], "total": 2},
+                "reads": [{"read": "GetControlTestDetail", "params": {"test_object_id": "test-github-branch"}}]
+            })
+        );
     }
 
     #[test]
