@@ -131,7 +131,7 @@ tracing-opentelemetry = "0.33"
 wait-timeout = "0.2"
 windows-sys = "0.61"
 x509-parser = "0.18"
-zip = { version = "=9.0.3", default-features = false, features = ["aes-crypto", "deflate64", "deflate", "lzma", "ppmd", "time", "zstd", "xz"] }
+zip = { version = "=9.0.3", default-features = false, features = ["deflate64", "deflate", "lzma", "ppmd", "time", "zstd", "xz"] }
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25.1"
 

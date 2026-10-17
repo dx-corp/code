@@ -3233,34 +3233,12 @@ mod tests {
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
         let workspace = tempfile::tempdir().expect("workspace");
         let fake_gh = workspace.path().join("gh");
-        let count_path = workspace.path().join("check-runs.count");
-        write_executable_script(
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh-checks-watch.sh"),
             &fake_gh,
-            &format!(
-                "#!/bin/sh\n\
-                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
-                 if [ \"$1\" = \"run\" ]; then\n\
-                 for i in $(seq 1 300); do echo \"log line $i\"; done\n\
-                 exit 0\n\
-                 fi\n\
-                 case \"$2\" in\n\
-                 *check-runs*)\n\
-                   count=$(cat '{count}' 2>/dev/null || echo 0)\n\
-                   count=$((count+1))\n\
-                   echo \"$count\" > '{count}'\n\
-                   if [ \"$count\" -lt 3 ]; then\n\
-                     echo '{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null,\"details_url\":\"https://github.com/acme/widget/actions/runs/111/job/222\"}}]}}'\n\
-                   else\n\
-                     echo '{{\"total_count\":1,\"check_runs\":[{{\"id\":1,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\",\"details_url\":\"https://github.com/acme/widget/actions/runs/111/job/222\"}}]}}'\n\
-                   fi\n\
-                   ;;\n\
-                 *)\n\
-                   echo '{{\"head\":{{\"sha\":\"deadbeefsha\"}}}}'\n\
-                   ;;\n\
-                 esac\n",
-                count = count_path.display(),
-            ),
-        );
+        )
+        .expect("link immutable fake gh script");
         let _override = TestGhOverride::install(fake_gh);
 
         let result = tokio::time::timeout(
