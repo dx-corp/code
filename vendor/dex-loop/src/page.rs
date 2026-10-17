@@ -69,7 +69,57 @@ pub struct PageRead {
     pub params: BTreeMap<String, String>,
 }
 
+/// What the authenticated host admits from a page locator: which reads are
+/// served and which filters a page's reads declare. The host builds it from
+/// `contracts/dex/page-reads.v1.json` and the reads' request schemas.
+pub trait PageAdmission {
+    /// Whether `read` is a served page read and `params` are its own
+    /// parameters with values of the right shape.
+    fn read(&self, read: &str, params: &BTreeMap<String, String>) -> bool;
+    /// Whether `name` is a parameter of one of `reads` and `value` has its
+    /// shape.
+    fn filter(&self, reads: &[PageRead], name: &str, value: &str) -> bool;
+}
+
+/// An owner record id: letters, digits and `_ . : @ -`, at most 256 bytes.
+pub fn is_record_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= PageContext::MAX_TEXT
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '@' | '-'))
+}
+
+impl PageRead {
+    /// The read name.
+    pub fn read(&self) -> &str {
+        &self.read
+    }
+}
+
 impl PageContext {
+    /// Drops every part of a validated locator the host does not serve: reads
+    /// that are not served or carry unknown or malformed parameters, filters
+    /// no remaining read declares, and record and row ids that are not
+    /// owner ids. The rest of the locator is unchanged.
+    pub fn narrow(&mut self, admission: &dyn PageAdmission) {
+        self.reads
+            .retain(|read| admission.read(&read.read, &read.params));
+        let reads = &self.reads;
+        self.filters
+            .retain(|filter| admission.filter(reads, &filter.name, &filter.value));
+        if self
+            .record
+            .as_ref()
+            .is_some_and(|record| !is_record_id(&record.id))
+        {
+            self.record = None;
+        }
+        if let Some(visible) = &mut self.visible {
+            visible.ids.retain(|id| is_record_id(id));
+        }
+    }
+
     /// Maximum serialized snapshot size, shared by admission and runtime ingress.
     const MAX_JSON_BYTES: usize = 16 * 1024;
     const MAX_IDS: usize = 50;
@@ -176,6 +226,67 @@ mod tests {
                 "visible": {"kind": "resource", "ids": ["repo-1", "repo-2"], "total": 2},
                 "reads": [{"read": "GetControlTestDetail", "params": {"test_object_id": "test-github-branch"}}]
             })
+        );
+    }
+
+    struct Contract;
+
+    impl PageAdmission for Contract {
+        fn read(&self, read: &str, params: &BTreeMap<String, String>) -> bool {
+            read == "GetControlTestDetail"
+                && params
+                    .iter()
+                    .all(|(field, value)| field == "test_object_id" && is_record_id(value))
+        }
+
+        fn filter(&self, reads: &[PageRead], name: &str, value: &str) -> bool {
+            reads
+                .iter()
+                .any(|read| read.read() == "GetControlTestDetail")
+                && name == "framework_ref"
+                && is_record_id(value)
+        }
+    }
+
+    #[test]
+    fn narrowing_keeps_only_served_reads_declared_filters_and_owner_ids() {
+        let mut page: PageContext = serde_json::from_value(json!({
+            "page": "page.test-detail",
+            "route": "/tests/t",
+            "record": {"kind": "control_test", "id": "test 1 <script>"},
+            "filters": [
+                {"name": "framework_ref", "value": "soc2"},
+                {"name": "result", "value": "failing"},
+                {"name": "framework_ref", "value": "a b"}
+            ],
+            "visible": {"kind": "resource", "ids": ["repo-1", "repo 2"]},
+            "reads": [
+                {"read": "GetControlTestDetail", "params": {"test_object_id": "test-1"}},
+                {"read": "GetControlTestDetail", "params": {"test_object_id": "test-1", "forged": "x"}},
+                {"read": "ListEverything"}
+            ]
+        }))
+        .expect("page");
+        assert_eq!(page.validate(), Ok(()));
+        page.narrow(&Contract);
+        assert_eq!(
+            serde_json::to_value(&page).unwrap(),
+            json!({
+                "page": "page.test-detail",
+                "route": "/tests/t",
+                "filters": [{"name": "framework_ref", "value": "soc2"}],
+                "visible": {"kind": "resource", "ids": ["repo-1"]},
+                "reads": [{"read": "GetControlTestDetail", "params": {"test_object_id": "test-1"}}]
+            })
+        );
+        // Without a read that declares it, no filter survives.
+        let mut bare = test_page();
+        bare.reads.clear();
+        bare.narrow(&Contract);
+        assert!(bare.filters.is_empty());
+        assert_eq!(
+            bare.record.as_ref().map(|r| r.id.as_str()),
+            Some("test-github-branch")
         );
     }
 
