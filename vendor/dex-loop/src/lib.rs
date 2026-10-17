@@ -64,7 +64,9 @@ pub use event::{
     ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
-pub use page::{PageCollection, PageContext, PageFilter, PageRead, PageRecord};
+pub use page::{
+    PageAdmission, PageCollection, PageContext, PageFilter, PageRead, PageRecord, is_record_id,
+};
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
     RequestSize, ToolSpec, Tools, Verdict, model_tool_name,
