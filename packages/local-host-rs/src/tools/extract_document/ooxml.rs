@@ -204,7 +204,12 @@ pub(super) fn decode_entities(input: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn open_archive(bytes: &[u8]) -> Option<Archive<'_>> {
-    ZipArchive::new(Cursor::new(bytes)).ok()
+    let archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
+    archive
+        .file_names()
+        .try_for_each(|name| name.map(|_| ()))
+        .ok()?;
+    Some(archive)
 }
 
 fn read_part(archive: &mut Archive<'_>, name: &str) -> Option<String> {
@@ -836,7 +841,7 @@ fn slide_number_from_name(name: &str) -> Option<u32> {
 }
 
 /// Slide part paths in presentation order, falling back to file numbering.
-fn pptx_slide_paths(archive: &mut Archive<'_>) -> Vec<String> {
+fn pptx_slide_paths(archive: &mut Archive<'_>) -> Option<Vec<String>> {
     let rels = read_relationships(archive, "ppt/_rels/presentation.xml.rels");
     let mut ordered = Vec::new();
     if let Some(presentation) = read_part(archive, "ppt/presentation.xml") {
@@ -854,12 +859,15 @@ fn pptx_slide_paths(archive: &mut Archive<'_>) -> Vec<String> {
         }
     }
     if !ordered.is_empty() {
-        return ordered;
+        return Some(ordered);
     }
     let mut names: Vec<String> = archive
         .file_names()
+        .map(|name| name.map(|name| name.into_owned()))
+        .collect::<zip::result::ZipResult<Vec<_>>>()
+        .ok()?
+        .into_iter()
         .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
-        .map(str::to_string)
         .collect();
     names.sort_by_key(|name| {
         (
@@ -867,7 +875,7 @@ fn pptx_slide_paths(archive: &mut Archive<'_>) -> Vec<String> {
             name.clone(),
         )
     });
-    names
+    Some(names)
 }
 
 fn pptx_notes_path(archive: &mut Archive<'_>, slide_path: &str) -> Option<String> {
@@ -880,7 +888,7 @@ fn pptx_notes_path(archive: &mut Archive<'_>, slide_path: &str) -> Option<String
 
 pub(super) fn pptx_to_markdown(bytes: &[u8]) -> Option<Extracted> {
     let mut archive = open_archive(bytes)?;
-    let slide_paths = pptx_slide_paths(&mut archive);
+    let slide_paths = pptx_slide_paths(&mut archive)?;
     if slide_paths.is_empty() {
         return None;
     }
@@ -1173,8 +1181,11 @@ pub(super) fn xlsx_to_markdown(bytes: &[u8]) -> Option<Extracted> {
     if sheets.is_empty() {
         let mut names: Vec<String> = archive
             .file_names()
+            .map(|name| name.map(|name| name.into_owned()))
+            .collect::<zip::result::ZipResult<Vec<_>>>()
+            .ok()?
+            .into_iter()
             .filter(|n| n.starts_with("xl/worksheets/") && n.ends_with(".xml"))
-            .map(str::to_string)
             .collect();
         names.sort();
         sheets = names

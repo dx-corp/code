@@ -89,6 +89,7 @@ async fn read_then_write_then_done_with_no_approval() {
         model_binding: None,
         context_window_tokens: None,
         voice: None,
+        page: None,
         principal: alice(),
         text: "read notes.txt, then write out.txt".into(),
         attachments: Vec::new(),

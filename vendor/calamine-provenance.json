@@ -1,5 +1,8 @@
 [
   {
+    "added_files_sha256": {
+      "BUILD.bazel": "8fdc65923a86bdd2f1fd7f01df87509b0ce49696c886312045b0593ab5c59de8"
+    },
     "archive_files_sha256": {
       ".cargo_vcs_info.json": "749dd0ec4c5b0917ba9b01ad13ae879ce4eb3efff63a3095e0b0d0bd2e57ab0b",
       ".github/ISSUE_TEMPLATE/bug_report.yml": "d1e158140db87e9f04b098a3923e22ec0ff1a76ad46ce0f520ceb63c8b8dfa43",
@@ -48,17 +51,21 @@
       "src/xlsx/mod.rs": "f27a949e067081a58c29e9001ed1ac0f5f8d3c5b7d219f3909621880f10536a6"
     },
     "archive_sha256": "6975084f43060e56343ffba7f9731fa52a7dcf2e1cd8e2459fd4c6bf4a1bff59",
-    "bazel": "vendored-target",
+    "archive_url": "https://static.crates.io/crates/calamine/calamine-0.36.0.crate",
+    "bazel_source": "local",
     "crate": "calamine",
+    "difference_from_upstream": "Propagate fallible ZIP entry-name errors instead of silently omitting entries from the workbook path cache.",
     "omitted_archive_files": [
       "Cargo.lock"
     ],
     "patch": "calamine-0.36.0.patch",
-    "patch_sha256": "a5302df521e9b9af7a7a0e3092f190441bd1dc401659c35739f03fe9e17a6e07",
+    "patch_sha256": "32da2e43c976c42c57e92528aa85ccb821b42a40f3a50a378558f5ecf148246c",
     "path": "calamine-0.36.0",
+    "upstream_reference": "https://github.com/tafia/calamine/pull/741",
     "version": "0.36.0",
     "workspaces": [
-      "rust"
+      "rust",
+      "tests/business-objects-integration"
     ]
   }
 ]

@@ -1590,7 +1590,10 @@ where
         let mut file = archive
             .by_index(index)
             .map_err(|error| format!("Failed to read document entry: {error}"))?;
-        let name = file.name().to_string();
+        let name = file
+            .name()
+            .map_err(|error| format!("Failed to read document entry name: {error}"))?
+            .into_owned();
         if !accept(&name) {
             continue;
         }

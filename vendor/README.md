@@ -81,18 +81,44 @@ runtime acceptance test. Platform API retains its 8 MiB decoder-window and
 third-party dependency graph remains required; no exemption or trust import is
 introduced by this source repair.
 
-## Calamine zip 9 source repair
+## Calamine ZIP 9 compatibility
 
-Every `zip` 8.x release is yanked on crates.io, so `cargo audit --deny warnings`
-rejects the 8.6.0 release that `calamine` 0.36 requires. Calamine has no release
-built on `zip` 9 yet. `calamine-0.36.0` is the published archive with the same
-five-line change as upstream tafia/calamine#741: the manifest requires `zip`
-9.0, `ZipFile::name()` errors propagate through the existing `?` conversions,
-and the entry-name cache skips names that `zip` 9 reports as invalid.
-`calamine-provenance.json` records the archive checksum, original file hashes
-and patch hash. Only the `rust` workspace consumes it. A patched registry
-archive cannot change calamine's dependency requirements, so its record sets
-`"bazel": "vendored-target"`: Bazel compiles this directory through
-`//products/maestro/vendor:calamine` instead of `@crates//calamine`, and the
-Cargo projection carries calamine's direct registry dependencies. Remove this
-repair when a calamine release on `zip` 9 is available.
+`calamine-0.36.0` retains the exact published source and licenses except for the
+recorded compatibility patch. `calamine-provenance.json` pins the archive,
+original file inventory, and patch hashes. The Rust workspace dependency uses
+this path so downstream standalone workspaces inherit the same source; its
+matching root patch also declares the source for the Bazel dependency projection.
+The packaged development lockfile is omitted; consumers resolve their own locks.
+
+ZIP 8.6.0 is yanked. The repair uses ZIP 9 and adapts its fallible archive entry
+names. Unlike upstream calamine PR 741, this repair propagates invalid entry-name
+errors from the workbook path cache instead of omitting entries. ZIP 9.0.3
+currently decodes non-UTF-8 names through CP437; the compatibility suite verifies
+that those entries remain present, existing spreadsheet cells survive, and
+structurally malformed archives fail. Typed entry-name errors remain propagated.
+This is a source compatibility repair, not an audit exemption or approval of
+unmodified upstream releases.
+
+`zip-9.0.3` keeps its published implementation and licenses. Its recorded local
+manifest patch changes only the optional Zstandard requirement to `^0.13.3`,
+which preserves the repository's reviewed codec repairs and existing ZIP
+compression features. This dependency adjustment is locally maintained; neither
+ZIP 9.0.3 nor 9.0.4 publishes that requirement. The Rust and Maestro workspaces
+apply the patch; standalone consumers using only Deflate can retain the
+unmodified ZIP 9 registry source. The compatibility suite exercises ZIP Zstandard
+write/read with the reviewed codec as well as spreadsheet parsing.
+
+Bazel resolves these two manifest-changing repairs as local source mirrors,
+including their actual dependency edges and features. Each crate's generated
+`BUILD.bazel` is the sole permitted added file, pinned in `added_files_sha256`
+and included in the repair patch. Reversing the patch must remove that metadata
+and restore every original archive file hash. The registry projection rejects
+these local records instead of attaching published archive coordinates to their
+modified dependency manifests.
+
+Run `python3 scripts/ci/test-vendored-calamine.py` through the normal on-premises
+Cargo admission route. `--sources-only` checks provenance, rejects five metadata
+inventory/digest/symlink mutations, and rejects registry-coordinate projection
+for local sources without invoking Cargo. Regenerate patches with the existing
+`update-vendored-zstd-patches.py` command after intentional reviewed edits; it
+requires the checksum-pinned published archives and preserves their hashes.

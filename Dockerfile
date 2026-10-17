@@ -10,6 +10,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
+COPY vendor/zip-9.0.3 ./vendor/zip-9.0.3
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
@@ -56,6 +57,7 @@ COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
 # External dex-loop imports the actual shared library during dependency cooking.
 COPY packages/codemode-rs ./packages/codemode-rs
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
+COPY vendor/zip-9.0.3 ./vendor/zip-9.0.3
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
