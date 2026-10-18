@@ -3079,7 +3079,7 @@ async fn remote_transport_reader_exits_after_malformed_event_when_receiver_is_dr
     tokio::time::timeout(
         Duration::from_secs(1),
         reader_loop(
-            Client::new(),
+            Client::builder().build().expect("reader HTTP client"),
             RemoteTransportConfig {
                 base_url: format!("http://{addr}"),
                 ..RemoteTransportConfig::default()
