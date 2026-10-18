@@ -439,6 +439,15 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    /// Same request bound as the production device-login client, so a stalled
+    /// fixture fails the test instead of hanging it.
+    fn test_http_client() -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("test HTTP client")
+    }
+
     fn device_authorization() -> DeviceAuthorization {
         DeviceAuthorization {
             device_code: "device-secret".into(),
@@ -700,7 +709,7 @@ mod tests {
         .await;
         let started = std::time::Instant::now();
         let credentials = device_login(
-            &Client::new(),
+            &test_http_client(),
             &identity,
             "deixic-code-cli",
             "llm_gateway:invoke sessions:read",
@@ -766,7 +775,7 @@ mod tests {
         )
         .await;
         let error = device_login(
-            &Client::new(),
+            &test_http_client(),
             &identity,
             "deixic-code-cli",
             "s",
@@ -785,7 +794,7 @@ mod tests {
             spawn_device_identity((404, "<html>404 Not Found</html>".into()), Vec::new(), true)
                 .await;
         let error = device_login(
-            &Client::new(),
+            &test_http_client(),
             &identity,
             "deixic-code-cli",
             "s",
@@ -808,7 +817,7 @@ mod tests {
         )
         .await;
         let error = device_login(
-            &Client::new(),
+            &test_http_client(),
             &identity,
             "deixic-code-cli",
             "s",
@@ -830,7 +839,7 @@ mod tests {
         )
         .await;
         let error = device_login(
-            &Client::new(),
+            &test_http_client(),
             &identity,
             "deixic-code-cli",
             "s",

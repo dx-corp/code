@@ -88,10 +88,7 @@ async fn login_with_output(
         .url
         .as_deref()
         .context("HTTP MCP server is missing its URL")?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("build OAuth client")?;
+    let client = oauth_http_client().context("build OAuth client")?;
     let resource_metadata_url = discover_resource_metadata_url(&client, server_url).await?;
     require_secure_endpoint(&resource_metadata_url, "protected-resource metadata")?;
     let resource: ProtectedResourceMetadata = client
@@ -297,6 +294,15 @@ fn save_credential(name: &str, credential: &StoredCredential) -> Result<()> {
         .context("store MCP OAuth credential")
 }
 
+/// Bounded client for OAuth discovery, authorization-code exchange, and
+/// refresh. Refresh runs on the MCP connect path, so an unresponsive token
+/// endpoint must fail the connection rather than hang it.
+fn oauth_http_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+}
+
 async fn refresh_credential(
     config: &McpServerConfig,
     credential: &mut StoredCredential,
@@ -307,7 +313,8 @@ async fn refresh_credential(
             config.name
         ))
     })?;
-    let token = reqwest::Client::new()
+    let token = oauth_http_client()
+        .map_err(|error| McpError::ConnectionFailed(format!("OAuth refresh failed: {error}")))?
         .post(&credential.token_endpoint)
         .form(&[
             ("grant_type", "refresh_token"),
