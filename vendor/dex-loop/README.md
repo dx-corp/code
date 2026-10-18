@@ -1,18 +1,26 @@
 # dex-loop
 
-The one Dex agent loop. Web, Slack, Teams and every later surface run the same
-engine over the same event log; a surface only writes ingress events and
-renders the stream.
+`dex-loop` implements the shared Dex agent loop. Hosts append user and control
+events to a thread's log, supply model and tool adapters, and render the
+resulting event stream.
 
-## The loop
+The crate performs no I/O and spawns no tasks. Hosts implement the ports for
+storage, inference, and tool execution. Surface integrations and coding-specific
+tools live outside this crate.
+
+## Execution
+
+The host appends a `UserMessage`, rebuilds the context with `rehydrate`, and
+calls `Engine::run(&mut ctx, &cancel)`. The same context reconstruction path
+handles an active thread and recovery after a crash.
+
+The main dispatch sequence is:
 
 ```text
-host appends UserMessage { principal, text }
-ctx = rehydrate(thread, log)                  // warm or after a crash: same path
 loop {
     read control events (steer, interrupt, approval decisions, answers)
     StepStarted -> stream the model -> text to the log as it arrives
-    ModelStepCompleted { text, calls }        // commit point, before any policy
+    ModelStepCompleted { text, calls }        // persisted model response
     no calls?  Final, return Done
     per call, in the model's order:
         policy (under the call's principal) -> deny? record refusal, continue
@@ -23,86 +31,106 @@ loop {
 }
 ```
 
+Allowed reads can run concurrently; their results enter history in the model's
+call order. Mutations use the effect ledger before dispatch and after execution.
+See the [engine](src/engine.rs) and [context reconstruction
+logic](src/rehydrate.rs).
+
+### Policy and confirmation
+
 Ordinary `NeedsApproval` verdicts are granted immediately and recorded as
 `AutoApproved` before the effect. Deterministic denials and unavailable policy
-checks still deny. In the hosted `dex-tools` policy, guardian objections block
-connector writes and flag internal calls on their receipts. Major destructive
-connector actions require a typed confirmation bound to the exact call;
-headless turns deny them. Interactive calls carrying an explicit confirmation
-checkpoint also use that question path. See
-[`DexTools::policy`](../tools/src/lib.rs) and
+checks still deny. In the hosted `dex-tools` policy, a guardian denial blocks
+the reviewed call. Major destructive connector actions and saved artifact
+revisions require typed confirmation bound to the exact call; headless turns
+deny them. Interactive calls carrying an explicit confirmation checkpoint also
+use that question path. See [`DexTools::policy`](../tools/src/lib.rs) and
 [policy checks](../tools/src/policy.rs).
 
-`Engine::run(&mut ctx, &cancel)` returns `Done`, `Asked(call)`,
-`AwaitingClientTool(call)`, `Interrupted`, or `Failed` on active paths.
-`Parked(approval)` remains a compatibility variant; ordinary approval verdicts
-do not park. After a question answer or client-tool result, the host appends
-the event and runs again; pending calls come from the log, not memory.
+### Return states
 
-## Ports
+`Engine::run` returns `Result<Exit, Fenced>`. A fenced write stops the engine;
+the next lease holder rebuilds the context from durable events.
+
+| Exit | Meaning |
+| --- | --- |
+| `Done` | The model answered without tool calls. |
+| `Asked(call)` | Waiting for an `Answer` event for the call. |
+| `AwaitingClientTool(call)` | Waiting for a `ClientToolResult` event for the call. |
+| `Interrupted` | The turn was interrupted. |
+| `Failed` | The engine appended an `Error` event. |
+| `Parked(approval)` | Legacy compatibility variant; the current engine does not return it. |
+
+After an answer or client-tool result, the host appends the event and calls
+`run` again. Pending calls are reconstructed from the log.
+
+Interrupts cancel the model stream and signal cancellation to running tools. The
+engine waits for an in-flight mutation to return or reach its deadline, records
+the result or an unknown outcome, and stops before the next effect. A tool that
+honors cancellation may return a partial outcome.
+
+## Host ports
+
+The host supplies these interfaces, defined in [ports.rs](src/ports.rs) and
+[compaction.rs](src/compaction.rs):
 
 | Port | Job |
 | --- | --- |
 | `Log` | Append events (fenced by the thread lease), coalesce text into `TextDelta` rows, read control events after a cursor. |
 | `Model` | Stream one response for the history and the offered tool schemas. |
 | `Tools` | Catalog, `search`, `policy` (governance, grants, guardrails, guardian) and `run`. |
-| `Effects` | The durable ledger for mutations: claim before dispatch, record after. A mutation is dispatched at most once per call id; an unknown outcome is never replayed. |
-| `Sanitizer` | Customer-safe text: replaces tool names and internal names before any delta is written. `Lexicon` is the built-in implementation. |
-| `Compactor` | Optional. `Threshold` summarizes old history when it grows past a size. |
+| `Effects` | Claim mutations before dispatch and record their results. Mutation dispatch is at most once per call ID within a thread; an unknown outcome is never replayed. |
+| `Sanitizer` | Filter customer-visible text before writing deltas. `Lexicon` replaces tool names and internal names. |
+| `Compactor` | Optionally compact older history. `Threshold` triggers summarization when history exceeds a configured size. |
 
 The engine offers `tools.search` plus core tools on every step; tools that
-search matches are exposed from the next step and recorded as `ToolsExposed`.
+search matches become available on the next step and are recorded as
+`ToolsExposed`.
 
 ## Events
 
-Ingress (hosts write): `UserMessage`, `Steer`, `Interrupt`, `ApprovalDecided`,
-`Answer`, `ToolProgress`. Each ingress event carries its principal.
+The [event definitions](src/event.rs) describe the persisted log vocabulary:
 
-Engine: `StepStarted`, `TextDelta`, `Usage`, `ModelStepCompleted`,
-`ModelAttemptAbandoned`, `ToolStarted`, `ToolsExposed`, `ToolFinished`
-(`succeeded | failed | running | unknown`), `AutoApproved`,
-`Question`, `ClientToolRequested`,
-`Compaction`, `Final`, `Error`, `Interrupted`.
-
-Interrupt cancels the model stream and running reads; a mutation that has
-started completes, and the turn stops before the next effect.
+- Hosts write ingress events such as `UserMessage`, `Steer`, `Interrupt`,
+  `ApprovalDecided`, `Answer`, `ClientToolResult`, and `ToolProgress`.
+- The engine writes model steps, text deltas, usage, tool lifecycle events,
+  approval receipts, questions, client-tool requests, compaction, and terminal
+  events. `ToolFinished` records `succeeded`, `failed`, `running`, or `unknown`.
 
 ## Shared host recovery contracts
 
-Host dev-dependencies can enable dex-loop's `testing` feature and implement
-`testing::RecoveryHost` using their real `Log` and `Effects` adapters. Run each
-`RecoveryScenario` with a fresh thread. `restart` reopens durable storage and
-acquires a new log generation; it must fence the old handle. The suite covers
-lost leases, crashes on either side of the dispatch boundary, exact recorded
-result replay, duplicate claims, and cancellation that persists the partial
-outcome. `testing::tenant_isolation` uses matching thread/call IDs in separate
-organization and workspace scopes over shared storage.
+Host dev-dependencies can enable the `testing` feature and implement
+[`testing::RecoveryHost`](src/testing/mod.rs) using their real `Log` and
+`Effects` adapters. Run each `RecoveryScenario` with a fresh thread. `restart`
+reopens durable storage and acquires a new log generation; it must fence the old
+handle. The suite covers lost leases, crashes on either side of the dispatch
+boundary, exact recorded result replay, duplicate claims, and cancellation that
+persists the partial outcome. `testing::tenant_isolation` uses matching
+thread/call IDs in separate organization and workspace scopes over shared
+storage.
 
-The filesystem host (`maestro-dex-host --test recovery_contract`) and hosted
-PostgreSQL host (`dex-runtime --test suite postgres::recovery_contract`) run the same
-assertions. The latter uses real `PgLog` and `DexEffects` over `PgLedger`,
-requires PostgreSQL, and refuses all external calls. The model and mutation
-are deterministic probes. These tests prove port recovery and persisted replay;
-they do not prove process-kill/fsync durability, live provider reconciliation,
-or cross-process locking for the single-process local effect ledger.
+The [filesystem host
+tests](../../../../products/maestro/packages/dex-host-rs/tests/recovery_contract.rs)
+and [PostgreSQL host
+tests](../../../services/dex-runtime/tests/postgres/recovery_contract.rs) run
+the same assertions. The PostgreSQL tests use `PgLog` and `DexEffects` over
+`PgLedger`. They require PostgreSQL and refuse external calls. The model and
+mutation are deterministic probes. These tests prove port recovery and persisted
+replay; they do not prove process-kill/fsync durability, live provider
+reconciliation, or cross-process locking for the single-process local effect
+ledger.
 
-After the normal build-capacity prerequisite, focused commands are:
+Run these commands from the repository root after the [build-capacity
+check](../../../../docs/testing-ci.md):
 
 ```bash
 cargo test --manifest-path products/maestro/Cargo.toml --locked -p maestro-dex-host --test recovery_contract
-scripts/ci/run-with-postgres cargo test --manifest-path rust/Cargo.toml --locked -p dex-runtime --test postgres recovery_contract
+scripts/ci/run-with-postgres cargo test --manifest-path rust/Cargo.toml --locked -p dex-runtime --test suite postgres::recovery_contract
 ```
 
-## What this crate will never contain
-
-- Surface logic: no Slack, Teams, web or renderer code, and no per-surface
-  behavior in the loop.
-- Coding concepts: no coding task kinds, validation rules or workflows. Coding is
-  tools run through this same loop.
-- Provider or service clients: no HTTP, SQL, model SDKs or `tokio::spawn`.
-  Hosts implement the ports.
-
 ## Checks
+
+From the repository root, after the same build-capacity check:
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml -p dex-loop
