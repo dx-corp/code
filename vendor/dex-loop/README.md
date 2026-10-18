@@ -40,12 +40,7 @@ logic](src/rehydrate.rs).
 
 Ordinary `NeedsApproval` verdicts are granted immediately and recorded as
 `AutoApproved` before the effect. Deterministic denials and unavailable policy
-checks still deny. In the hosted `dex-tools` policy, a guardian denial blocks
-the reviewed call. Major destructive connector actions and saved artifact
-revisions require typed confirmation bound to the exact call; headless turns
-deny them. Interactive calls carrying an explicit confirmation checkpoint also
-use that question path. See [`DexTools::policy`](../tools/src/lib.rs) and
-[policy checks](../tools/src/policy.rs).
+checks still deny.
 
 ### Return states
 
@@ -109,30 +104,25 @@ persists the partial outcome. `testing::tenant_isolation` uses matching
 thread/call IDs in separate organization and workspace scopes over shared
 storage.
 
-The [filesystem host
-tests](../../../../products/maestro/packages/dex-host-rs/tests/recovery_contract.rs)
-and [PostgreSQL host
-tests](../../../services/dex-runtime/tests/postgres/recovery_contract.rs) run
-the same assertions. The PostgreSQL tests use `PgLog` and `DexEffects` over
-`PgLedger`. They require PostgreSQL and refuse external calls. The model and
-mutation are deterministic probes. These tests prove port recovery and persisted
-replay; they do not prove process-kill/fsync durability, live provider
-reconciliation, or cross-process locking for the single-process local effect
-ledger.
+The [filesystem host tests](../../packages/dex-host-rs/tests/recovery_contract.rs)
+run these assertions against the public host's real storage adapters. The
+model and mutation are deterministic probes. These tests prove port recovery
+and persisted replay; they do not prove process-kill/fsync durability, live
+provider reconciliation, or cross-process locking for the single-process
+local effect ledger.
 
-Run these commands from the repository root after the [build-capacity
-check](../../../../docs/testing-ci.md):
+Run from the public repository root after reviewing the
+[build guidance](../../docs/BUILD_TESTING.md):
 
 ```bash
-cargo test --manifest-path products/maestro/Cargo.toml --locked -p maestro-dex-host --test recovery_contract
-scripts/ci/run-with-postgres cargo test --manifest-path rust/Cargo.toml --locked -p dex-runtime --test suite postgres::recovery_contract
+cargo test --locked -p maestro-dex-host --test recovery_contract
 ```
 
 ## Checks
 
-From the repository root, after the same build-capacity check:
+From the public repository root:
 
 ```bash
-cargo test --manifest-path rust/Cargo.toml -p dex-loop
-cargo clippy --manifest-path rust/Cargo.toml -p dex-loop --all-targets -- -D warnings
+cargo test --manifest-path vendor/dex-loop/Cargo.toml -p dex-loop
+cargo clippy --manifest-path vendor/dex-loop/Cargo.toml -p dex-loop --all-targets -- -D warnings
 ```
