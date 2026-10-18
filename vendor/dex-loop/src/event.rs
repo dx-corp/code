@@ -462,7 +462,11 @@ impl ErrorClass {
     /// Explicit wire-code boundary; human-readable details are never classified.
     pub fn of_gateway_code(code: &str) -> Self {
         match code {
-            "context_length_exceeded" | "context_capacity" => Self::ContextCapacity,
+            // Governance refused the request's size or surface count; the
+            // same request is refused on every route, a shorter one is not.
+            "context_length_exceeded" | "context_capacity" | "governance_input_too_large" => {
+                Self::ContextCapacity
+            }
             "rate_limit_error"
             | "rate_limit_exceeded"
             | "resource_exhausted"
@@ -483,6 +487,7 @@ impl ErrorClass {
             "authentication_error" | "unauthorized" => Self::Auth,
             "invalid_request"
             | "invalid_request_error"
+            | "governance_input_rejected"
             | "bad_request"
             | "permission_error"
             | "forbidden"
@@ -1433,6 +1438,14 @@ mod tests {
         assert_eq!(
             ErrorClass::of_gateway_code("rate_limit_error"),
             ErrorClass::RateLimited
+        );
+        assert_eq!(
+            ErrorClass::of_gateway_code("governance_input_too_large"),
+            ErrorClass::ContextCapacity
+        );
+        assert_eq!(
+            ErrorClass::of_gateway_code("governance_input_rejected"),
+            ErrorClass::Rejected
         );
     }
 }
