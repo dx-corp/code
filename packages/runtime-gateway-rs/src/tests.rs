@@ -3764,9 +3764,9 @@ const JWKS_TEST_ENV_NAMES: &[&str] = &[
     "MAESTRO_RUNNER_KIND",
 ];
 
-// Throwaway 2048-bit RSA key generated for these tests only; the private half
-// is intentionally checked in so tokens can be signed without a network or
-// key-generation dependency.
+// Throwaway 2048-bit RSA key for these tests only, checked in so tokens can be
+// signed without a network or key-generation dependency.
+// nosemgrep: generic.secrets.security.detected-private-key.detected-private-key
 const TEST_RSA_PRIVATE_KEY_PEM: &str = r"-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDSPe792Sabb2ly
 LMi7j5tRTebUUK5SL8AbgCu7osi5dl/zlJNtffBlJrMmBR6kIjEhvFsX5flMp0Nm
