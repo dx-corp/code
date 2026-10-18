@@ -1377,5 +1377,7 @@ impl Context {
     }
 }
 
+mod principal_view;
+
 #[cfg(test)]
 mod evidence_contract;
