@@ -191,6 +191,10 @@ pub struct Context {
     acting: Option<PrincipalId>,
     status: Status,
     history: Vec<Entry>,
+    /// Every principal whose turns or tool results any compaction summary has
+    /// covered. A summary is model-written over all of them, so only a
+    /// principal that is the sole member may be shown it.
+    summarised_principals: Vec<PrincipalId>,
     tool_evidence: Vec<ToolEvidence>,
     context_pocket_authority_lost: bool,
     /// Script proposals are evidence, never assistant/provider messages.
@@ -283,6 +287,7 @@ impl Context {
             acting: None,
             status: Status::Idle,
             history: Vec::new(),
+            summarised_principals: Vec::new(),
             tool_evidence: Vec::new(),
             context_pocket_authority_lost: false,
             nested_calls: Vec::new(),
@@ -766,7 +771,22 @@ impl Context {
                         }
                     }
                 }
-                if let Some(CallState::Asked { answer }) = self.state_mut(call)
+                // Only the principal the asking call runs under answers a plain
+                // question. In a shared thread another person's reply is not an
+                // answer; ingress rejects it too, so this is the replay guard.
+                let asker_answered = self
+                    .open_step
+                    .as_ref()
+                    .and_then(|step| step.calls.iter().find(|c| &c.id == call))
+                    .is_some_and(|asked| &asked.principal == principal)
+                    || self
+                        .action_confirmations
+                        .iter()
+                        .any(|(question, binding, _, _)| {
+                            question == call && &binding.principal_id == principal
+                        });
+                if asker_answered
+                    && let Some(CallState::Asked { answer }) = self.state_mut(call)
                     && answer.is_none()
                 {
                     *answer = Some(text.clone());
@@ -1134,6 +1154,25 @@ impl Context {
                 summary,
             } => {
                 self.last_compaction = Some(cursor);
+                let covered_users = self
+                    .history
+                    .iter()
+                    .filter_map(|entry| match &entry.message {
+                        Message::User { principal, .. } if entry.cursor <= *covers_to_cursor => {
+                            Some(principal)
+                        }
+                        _ => None,
+                    });
+                let covered_evidence = self
+                    .tool_evidence
+                    .iter()
+                    .filter(|evidence| evidence.cursor <= *covers_to_cursor)
+                    .map(|evidence| &evidence.call.principal);
+                for principal in covered_users.chain(covered_evidence) {
+                    if !self.summarised_principals.contains(principal) {
+                        self.summarised_principals.push(principal.clone());
+                    }
+                }
                 // Input and applied steers of the current turn retain their
                 // exact text, principal, and attachments across compaction.
                 // Covered inputs precede the new summary, keeping history

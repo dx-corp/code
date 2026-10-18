@@ -58,6 +58,9 @@ mod scenarios;
 #[path = "sim.rs"]
 mod sim;
 
+#[path = "slack_first_multiplayer.rs"]
+mod slack_first_multiplayer;
+
 #[path = "storage_contract.rs"]
 mod storage_contract;
 

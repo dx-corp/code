@@ -2078,6 +2078,37 @@ async fn question_parks_and_answer_resumes() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
+// In a shared thread only the person the call runs for answers a plain
+// question; another member's Answer row on the log does not unpark the turn.
+#[tokio::test]
+async fn answer_from_another_principal_does_not_resume_a_question() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("ask_user", json!({"question": "Which region?"}))],
+        vec![text("using eu")],
+    ]);
+    let tools = FakeTools::new(vec![ask_tool("ask_user")]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "deploy");
+    let cancel = CancellationToken::new();
+    assert_eq!(
+        engine.run(&mut ctx, &cancel).await,
+        Ok(Exit::Asked(call_id("t1", 1, 0)))
+    );
+    log.host_append(Event::Answer {
+        call: call_id("t1", 1, 0),
+        principal: dex_loop::PrincipalId::new("principal-bob"),
+        text: "us".into(),
+        confirmation_decision: dex_loop::ConfirmationDecision::Unspecified,
+        args_digest: String::new(),
+    });
+    assert_eq!(
+        engine.run(&mut ctx, &cancel).await,
+        Ok(Exit::Asked(call_id("t1", 1, 0))),
+        "bob's reply is not the answer"
+    );
+}
+
 // `Context` stores a turn's client-declared tools exactly as logged, for a
 // host to compose into `Tools::catalog()` on rehydrate.
 #[tokio::test]

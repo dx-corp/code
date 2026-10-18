@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use super::{Context, Entry, Message};
-use crate::event::PrincipalId;
+use crate::event::{Output, PrincipalId};
 
 impl Context {
     /// The history as the acting principal may see it. Borrowed unchanged
@@ -34,16 +34,57 @@ impl Context {
             .attachment_inputs
             .iter()
             .any(|input| &input.principal != current);
-        if !foreign_history && !foreign_evidence && !foreign_inputs {
+        let foreign_summary = self.summarised_principals.iter().any(|p| p != current);
+        if !foreign_history && !foreign_evidence && !foreign_inputs && !foreign_summary {
             return Cow::Borrowed(self);
         }
         let mut view = self.clone();
         view.history = scoped_history(&self.history, current);
+        if foreign_summary {
+            // The summary text was written over another principal's tool
+            // activity; it cannot be split by author, so it is not shown.
+            view.history
+                .retain(|entry| !matches!(entry.message, Message::Summary { .. }));
+        }
         view.tool_evidence
             .retain(|evidence| &evidence.call.principal == current);
         view.attachment_inputs
             .retain(|input| &input.principal == current);
         Cow::Owned(view)
+    }
+}
+
+impl Context {
+    /// True when `reference` is a stored output only other principals' calls
+    /// produced in this thread's retained records. A reference this context
+    /// has no record of is not hidden: it stays bound to the thread by the
+    /// store, which pins refs to immutable versions.
+    pub fn output_ref_hidden_from(&self, reference: &str, principal: &PrincipalId) -> bool {
+        let reference = reference.trim();
+        let is_ref = |output: &Output| matches!(output, Output::Ref(r) if r.as_str() == reference);
+        let mut foreign = false;
+        let mut own = false;
+        let mut note = |owner: &PrincipalId| {
+            if owner == principal {
+                own = true;
+            } else {
+                foreign = true;
+            }
+        };
+        for evidence in &self.tool_evidence {
+            if is_ref(&evidence.result.output) {
+                note(&evidence.call.principal);
+            }
+        }
+        for entry in &self.history {
+            if let Message::Tool { call, output, .. } = &entry.message
+                && is_ref(output)
+                && let Some(proposed) = self.proposed_call(call)
+            {
+                note(&proposed.principal);
+            }
+        }
+        foreign && !own
     }
 }
 
