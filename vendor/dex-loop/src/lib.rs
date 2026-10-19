@@ -22,19 +22,33 @@
 #[cfg(test)]
 extern crate self as dex_loop;
 
+#[path = "execution/budget/mod.rs"]
 mod budget;
+#[path = "execution/codemode_output.rs"]
 mod codemode_output;
+#[path = "execution/codemode_state.rs"]
 mod codemode_state;
+#[path = "context/compaction.rs"]
 mod compaction;
+#[path = "safety/content_policy.rs"]
 mod content_policy;
+#[path = "context/mod.rs"]
 mod context;
+#[path = "execution/engine/mod.rs"]
 mod engine;
+#[path = "contracts/event.rs"]
 mod event;
+#[path = "context/page.rs"]
 mod page;
+#[path = "contracts/ports.rs"]
 mod ports;
+#[path = "context/rehydrate.rs"]
 mod rehydrate;
+#[path = "safety/sanitize.rs"]
 mod sanitize;
+#[path = "context/summary.rs"]
 mod summary;
+#[path = "contracts/voice.rs"]
 mod voice;
 
 #[cfg(feature = "testing")]
@@ -83,9 +97,11 @@ pub use voice::{
 pub use agent_codemode::{ModelBinding, ModelOperation, OutputBlock};
 pub use codemode_output::validate_codemode_blocks;
 
+#[path = "context/grc_context.rs"]
 mod grc_context;
 pub use grc_context::{GRC_CONTEXT_BYTES, GRC_GRAPH_TOOL_NAME};
 
+#[path = "context/context_pocket.rs"]
 mod context_pocket;
 pub use context_pocket::{
     CONTEXT_POCKET_BYTES, CONTEXT_POCKET_RESULT_BYTES, CONTEXT_POCKET_TOOL_NAME,
