@@ -1,6 +1,6 @@
 //! Drive the real VM and claim/dispatch boundary with explicit ordering.
 #[allow(dead_code)]
-#[path = "../../../tests/support/mod.rs"]
+#[path = "../../../../tests/support/mod.rs"]
 mod support;
 
 use super::*;

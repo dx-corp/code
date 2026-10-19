@@ -33,8 +33,8 @@ loop {
 
 Allowed reads can run concurrently; their results enter history in the model's
 call order. Mutations use the effect ledger before dispatch and after execution.
-See the [engine](src/engine.rs) and [context reconstruction
-logic](src/rehydrate.rs).
+See the [engine](src/execution/engine/mod.rs) and [context reconstruction
+logic](src/context/rehydrate.rs).
 
 ### Policy and confirmation
 
@@ -66,8 +66,8 @@ honors cancellation may return a partial outcome.
 
 ## Host ports
 
-The host supplies these interfaces, defined in [ports.rs](src/ports.rs) and
-[compaction.rs](src/compaction.rs):
+The host supplies these interfaces, defined in [ports.rs](src/contracts/ports.rs) and
+[compaction.rs](src/context/compaction.rs):
 
 | Port | Job |
 | --- | --- |
@@ -84,7 +84,7 @@ search matches become available on the next step and are recorded as
 
 ## Events
 
-The [event definitions](src/event.rs) describe the persisted log vocabulary:
+The [event definitions](src/contracts/event.rs) describe the persisted log vocabulary:
 
 - Hosts write ingress events such as `UserMessage`, `Steer`, `Interrupt`,
   `ApprovalDecided`, `Answer`, `ClientToolResult`, and `ToolProgress`.
