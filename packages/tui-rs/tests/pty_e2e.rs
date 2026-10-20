@@ -312,6 +312,67 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // PTY session driving the real binary
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Count each complete query once while retaining split-query suffixes.
+fn terminal_query_counts(tail: &mut Vec<u8>, bytes: &[u8]) -> (usize, usize) {
+    const DSR_QUERY: &[u8] = b"\x1b[6n";
+    const DA_QUERY: &[u8] = b"\x1b[c";
+    let mut window = std::mem::take(tail);
+    let retained_bytes = window.len();
+    window.extend_from_slice(bytes);
+    let count = |query: &[u8]| {
+        window
+            .windows(query.len())
+            .enumerate()
+            .filter(|(index, candidate)| {
+                index + query.len() > retained_bytes && *candidate == query
+            })
+            .count()
+    };
+    let counts = (count(DSR_QUERY), count(DA_QUERY));
+    *tail = window
+        .get(window.len().saturating_sub(DSR_QUERY.len() - 1)..)
+        .unwrap_or_default()
+        .to_vec();
+    counts
+}
+
+#[test]
+fn terminal_query_replies_are_chunk_invariant() {
+    fn counts(chunks: &[&[u8]]) -> (usize, usize) {
+        let mut tail = Vec::new();
+        chunks.iter().fold((0, 0), |total, chunk| {
+            let next = terminal_query_counts(&mut tail, chunk);
+            (total.0 + next.0, total.1 + next.1)
+        })
+    }
+
+    assert_eq!(
+        counts(&[b"\x1b[?u\x1b[c", b"\x1b[?2004h"]),
+        (0, 1),
+        "one captured DA query followed by setup output must get one reply"
+    );
+    for (bytes, expected) in [
+        (b"\x1b[c".as_slice(), (0, 1)),
+        (b"\x1b[6n".as_slice(), (1, 0)),
+        (b"\x1b[cpaint\x1b[c".as_slice(), (0, 2)),
+        (b"\x1b[6npaint\x1b[6n".as_slice(), (2, 0)),
+        (b"\x1b[6n\x1b[cpaint\x1b[c\x1b[6n".as_slice(), (2, 2)),
+    ] {
+        for split in 0..=bytes.len() {
+            assert_eq!(
+                counts(&[&bytes[..split], &bytes[split..]]),
+                expected,
+                "query stream {bytes:?} split at {split}"
+            );
+        }
+        assert_eq!(
+            counts(&bytes.chunks(1).collect::<Vec<_>>()),
+            expected,
+            "bytewise query stream {bytes:?}"
+        );
+    }
+}
+
 struct PtySession {
     child: Box<dyn Child + Send + Sync>,
     // Kept alive so the PTY master (and the reader thread's source) stays open.
@@ -469,16 +530,14 @@ impl PtySession {
             .name("pty-e2e-reader".to_owned())
             .spawn(move || {
                 // The TUI probes the "terminal" with a cursor-position
-                // report (DSR, ESC[6n) at startup and on each inline-viewport
-                // frame; a real terminal answers, so we must too, or init
+                // report (DSR, ESC[6n) when constructing the inline viewport.
+                // A real terminal answers, so we must too, or init
                 // fails with "cursor position could not be read". Init moves
                 // the cursor to the last row before the first query, so the
                 // truthful answer for this 36-row PTY is the bottom row.
-                const DSR_QUERY: &[u8] = b"\x1b[6n";
                 const DSR_REPLY: &[u8] = b"\x1b[36;1R";
                 // Also answer primary device attributes like a real terminal.
                 // Otherwise keyboard detection waits for its two-second timeout.
-                const DA_QUERY: &[u8] = b"\x1b[c";
                 const DA_REPLY: &[u8] = b"\x1b[?1;2c";
                 let mut tail: Vec<u8> = Vec::new();
                 let mut buf = [0_u8; 8192];
@@ -490,16 +549,8 @@ impl PtySession {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .process(&buf[..n]);
-                            let mut window = std::mem::take(&mut tail);
-                            window.extend_from_slice(&buf[..n]);
-                            let query_count = window
-                                .windows(DSR_QUERY.len())
-                                .filter(|window| *window == DSR_QUERY)
-                                .count();
-                            let da_count = window
-                                .windows(DA_QUERY.len())
-                                .filter(|window| *window == DA_QUERY)
-                                .count();
+                            let (query_count, da_count) =
+                                terminal_query_counts(&mut tail, &buf[..n]);
                             if query_count > 0 || da_count > 0 {
                                 let mut writer =
                                     reader_writer.lock().unwrap_or_else(|e| e.into_inner());
@@ -511,10 +562,6 @@ impl PtySession {
                                 }
                                 let _ = writer.flush();
                             }
-                            tail = window
-                                .get(window.len().saturating_sub(DSR_QUERY.len() - 1)..)
-                                .unwrap_or_default()
-                                .to_vec();
                         }
                     }
                 }
