@@ -789,13 +789,15 @@ mod tests {
                 .build()
                 .expect("build signal-test runtime");
             runtime.block_on(async {
-                let _monitor = ShutdownMonitor::register().expect("register shutdown monitor");
+                let mut monitor = ShutdownMonitor::register().expect("register shutdown monitor");
                 let pid = std::process::id() as i32;
 
                 // SAFETY: both signals have registered Tokio handlers. The
                 // first is intentionally never acknowledged; the second must
                 // make the detached monitor call force_exit_during_shutdown.
                 assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+                // Observe delivery while retaining the pending acknowledgement.
+                let _unacknowledged = monitor.receiver.recv().await.expect("first signal event");
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
                 std::future::pending::<()>().await;
