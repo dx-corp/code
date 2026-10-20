@@ -20,7 +20,9 @@ mod codemode;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::{Pin, pin};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+
+use sha2::{Digest, Sha256};
 use std::task::Poll;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -2463,10 +2465,47 @@ fn non_empty_str<'a>(call: &'a ProposedCall, key: &str) -> Option<&'a str> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Compiled argument schemas, keyed by the schema document. Arguments and
+/// caller authority are checked on every call and are not stored. A full
+/// cache returns a fresh validator without evicting an older schema.
+const COMPILED_ARGUMENT_SCHEMAS: usize = 4096;
+
+fn argument_schema_cache() -> &'static Mutex<HashMap<[u8; 32], Arc<jsonschema::Validator>>> {
+    static CACHE: OnceLock<Mutex<HashMap<[u8; 32], Arc<jsonschema::Validator>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn compiled_validator(schema: &serde_json::Value) -> Result<Arc<jsonschema::Validator>, String> {
+    let bytes =
+        serde_json::to_vec(schema).map_err(|error| format!("invalid tool schema: {error}"))?;
+    let key: [u8; 32] = Sha256::digest(bytes).into();
+    {
+        let cache = argument_schema_cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(validator) = cache.get(&key) {
+            return Ok(Arc::clone(validator));
+        }
+    }
+    let compiled = Arc::new(
+        jsonschema::validator_for(schema)
+            .map_err(|error| format!("invalid tool schema: {error}"))?,
+    );
+    let mut cache = argument_schema_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(validator) = cache.get(&key) {
+        return Ok(Arc::clone(validator));
+    }
+    if cache.len() < COMPILED_ARGUMENT_SCHEMAS {
+        cache.insert(key, Arc::clone(&compiled));
+    }
+    Ok(compiled)
+}
+
 /// Validate boolean and object JSON schemas; malformed schemas fail closed.
 fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
-    let validator = jsonschema::validator_for(&spec.schema)
-        .map_err(|error| format!("invalid tool schema: {error}"))?;
+    let validator = compiled_validator(&spec.schema)?;
     match validator.iter_errors(args).next() {
         None => Ok(()),
         Some(error) => Err(format!("invalid arguments: {error}")),
@@ -2519,5 +2558,49 @@ mod search_spec_tests {
         );
         // Sent on every step: keep the whole description small.
         assert!(spec.description.len() / 4 <= 70, "{}", spec.description);
+    }
+}
+
+#[cfg(test)]
+mod argument_schema_cache_tests {
+    use super::*;
+
+    #[test]
+    fn argument_schema_compiles_once_per_document() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "q": { "type": "string" } },
+            "required": ["q"]
+        });
+        let first = compiled_validator(&schema).expect("schema");
+        let second = compiled_validator(&schema).expect("same schema");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(
+            first
+                .iter_errors(&serde_json::json!({"q": "one"}))
+                .next()
+                .is_none()
+        );
+        assert!(
+            first
+                .iter_errors(&serde_json::json!({"q": "two"}))
+                .next()
+                .is_none()
+        );
+        assert!(first.iter_errors(&serde_json::json!({})).next().is_some());
+        let other = compiled_validator(&serde_json::json!({"type": "object"})).expect("object");
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        let invalid = serde_json::json!({"type": 1});
+        let before = argument_schema_cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert!(compiled_validator(&invalid).is_err());
+        let after = argument_schema_cache()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert_eq!(before, after);
     }
 }
