@@ -30,6 +30,12 @@ pub(crate) const A2A_LEDGER_LOCK_HEARTBEAT_FILE: &str = "heartbeat";
 /// cyclic alias reports an error instead of looping forever.
 const MAX_A2A_TASK_LEDGER_SYMLINK_HOPS: usize = 32;
 
+#[cfg(test)]
+tokio::task_local! {
+    // Only the store future scoped by the lock-ordering fixture observes this.
+    static LOCK_RETRY_PROBE: std::cell::RefCell<Option<tokio::sync::oneshot::Sender<()>>>;
+}
+
 async fn resolve_a2a_task_ledger_path(path: &Path) -> Result<PathBuf, String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -885,6 +891,12 @@ pub(crate) async fn acquire_a2a_task_ledger_file_lock(
                         lock_path.display()
                     ));
                 }
+                #[cfg(test)]
+                let _ = LOCK_RETRY_PROBE.try_with(|probe| {
+                    if let Some(waiting) = probe.borrow_mut().take() {
+                        let _ = waiting.send(());
+                    }
+                });
                 tokio::time::sleep(Duration::from_millis(A2A_LEDGER_LOCK_RETRY_MS)).await;
             }
             Err(error) => {
@@ -1528,6 +1540,80 @@ fn ledger_entry_task_id(entry: &Value) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a2a_task_store_waits_for_shared_ledger_file_lock() {
+        // Bound a stuck fixture as a whole, without making disk speed part of
+        // the lock-ordering contract. The production lock deadline is shorter.
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let root = tempfile::tempdir().expect("test directory should be created");
+            let mut state = crate::tests::test_app_state_with_sessions(HashMap::new());
+            let mut config = (*state.config).clone();
+            config.a2a_tasks_file_path = root.path().join("tasks.json");
+            state.config = std::sync::Arc::new(config);
+            let lock_path = a2a_task_ledger_lock_path(&state.config.a2a_tasks_file_path);
+            tokio::fs::create_dir_all(&lock_path)
+                .await
+                .expect("test lock should be created");
+            let task = a2a_task_value(
+                "maestro-task-locked",
+                "ctx-1",
+                "TASK_STATE_COMPLETED",
+                a2a_agent_message("ctx-1", "complete"),
+                Vec::new(),
+                Vec::new(),
+                serde_json::json!({}),
+            );
+            let state_for_store = state.clone();
+            let task_for_store = task.clone();
+            let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+            let mut store = tokio::spawn(LOCK_RETRY_PROBE.scope(
+                std::cell::RefCell::new(Some(waiting_tx)),
+                async move {
+                    super::super::tasks::store_a2a_task_unless_canceled(
+                        &state_for_store,
+                        "maestro-task-locked",
+                        task_for_store,
+                    )
+                    .await
+                },
+            ));
+
+            tokio::select! {
+                result = &mut store => panic!("store finished before lock release: {result:?}"),
+                waiting = waiting_rx => waiting.expect("store should reach shared lock contention"),
+            }
+            let database_path =
+                maestro_a2a_ledger::database_path(&state.config.a2a_tasks_file_path);
+            assert!(
+                !tokio::fs::try_exists(&database_path)
+                    .await
+                    .expect("database existence should be checkable"),
+                "persist should wait for the shared ledger lock before writing"
+            );
+            assert!(
+                !store.is_finished(),
+                "store should still be waiting for the lock"
+            );
+            tokio::fs::remove_dir_all(&lock_path)
+                .await
+                .expect("test lock should be released");
+            assert_eq!(store.await.expect("store task should join"), task);
+
+            let ledger = maestro_a2a_ledger::load(&state.config.a2a_tasks_file_path)
+                .expect("database should be readable after lock release");
+            let persisted = ledger["tasks"]
+                .as_array()
+                .expect("persisted tasks should be an array")
+                .iter()
+                .find(|entry| entry["taskId"] == "maestro-task-locked")
+                .expect("task should be persisted after lock release");
+            assert_eq!(persisted["a2aTask"], task);
+            assert!(!lock_path.exists(), "store should release its ledger lock");
+        })
+        .await
+        .expect("shared ledger lock fixture should complete");
+    }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]

@@ -7285,58 +7285,6 @@ async fn a2a_task_load_refreshes_history_messages_with_matching_ids() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a2a_task_store_waits_for_shared_ledger_file_lock() {
-    let root = TestDir::new("a2a-task-ledger-lock");
-    let base_state = test_app_state_with_sessions(HashMap::new());
-    let mut config = auth_test_config();
-    config.a2a_tasks_file_path = root.path().join("tasks.json");
-    let state = AppState {
-        config: Arc::new(config),
-        ..base_state
-    };
-    let lock_path = a2a_task_ledger_lock_path(&state.config.a2a_tasks_file_path);
-    tokio::fs::create_dir_all(&lock_path)
-        .await
-        .expect("test lock should be created");
-    let task = a2a_task_value(
-        "maestro-task-locked",
-        "ctx-1",
-        "TASK_STATE_COMPLETED",
-        a2a_agent_message("ctx-1", "complete"),
-        Vec::new(),
-        Vec::new(),
-        serde_json::json!({}),
-    );
-    let state_for_store = state.clone();
-    let store = tokio::spawn(async move {
-        store_a2a_task_unless_canceled(&state_for_store, "maestro-task-locked", task).await;
-    });
-
-    tokio::time::sleep(Duration::from_millis(A2A_LEDGER_LOCK_RETRY_MS * 3)).await;
-    let database_path = maestro_a2a_ledger::database_path(&state.config.a2a_tasks_file_path);
-    assert!(
-        !tokio::fs::try_exists(&database_path)
-            .await
-            .expect("database existence should be checkable"),
-        "persist should wait for the shared ledger lock before writing"
-    );
-    tokio::fs::remove_dir_all(&lock_path)
-        .await
-        .expect("test lock should be released");
-    tokio::time::timeout(Duration::from_secs(2), store)
-        .await
-        .expect("store should finish after lock release")
-        .expect("store task should join");
-
-    assert!(
-        tokio::fs::try_exists(&database_path)
-            .await
-            .expect("database existence should be checkable"),
-        "database should be written after lock release"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn a2a_task_ledger_lock_heartbeat_refreshes_while_owned() {
     let root = TestDir::new("a2a-task-ledger-lock-heartbeat");
     let tasks_path = root.path().join("tasks.json");
