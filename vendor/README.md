@@ -122,3 +122,11 @@ inventory/digest/symlink mutations, and rejects registry-coordinate projection
 for local sources without invoking Cargo. Regenerate patches with the existing
 `update-vendored-zstd-patches.py` command after intentional reviewed edits; it
 requires the checksum-pinned published archives and preserves their hashes.
+
+The reviewed `tls-provenance.json` profile changes only the normalized trust-root
+requirements in SQLx-core 0.8.6, tokio-websockets 0.10.1 and Computer-only
+tokio-tungstenite 0.24.0 to webpki-roots 1.0.10. Published source, public APIs
+and package versions remain unchanged. SQLx-core and tokio-websockets retain
+their generated, hash-pinned local BUILD targets. Computer-only source is
+excluded from Rust and Bazel metadata. SQLx does not package a Cargo.lock;
+the two websocket archives package locks, omitted exactly as provenance records.
