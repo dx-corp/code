@@ -41,9 +41,28 @@ fn main() {
                 );
             }
         }
-        for name in ["HEAD", "index", "refs", "packed-refs"] {
-            if let Some(path) = git(directory, &["rev-parse", "--git-path", name]) {
-                let path = directory.join(path);
+        let mut inputs = vec!["HEAD".to_owned(), "index".to_owned()];
+        if let Some(reference) = git(directory, &["symbolic-ref", "--quiet", "HEAD"]) {
+            inputs.push(reference);
+        }
+        for name in inputs {
+            if let Some(path) = git(directory, &["rev-parse", "--git-path", &name]) {
+                let mut path = directory.join(path);
+                // Watch only this checkout's branch. Watching all shared refs
+                // makes another worktree's fetch or commit invalidate this build.
+                if !path.exists() && name.starts_with("refs/") {
+                    if let Some(packed) =
+                        git(directory, &["rev-parse", "--git-path", "packed-refs"])
+                    {
+                        let packed = directory.join(packed);
+                        if packed.exists() {
+                            println!("cargo:rerun-if-changed={}", packed.display());
+                        }
+                    }
+                    // A packed branch can acquire a loose ref on its next
+                    // commit. Watch its existing parent until that ref exists.
+                    while !path.exists() && path.pop() {}
+                }
                 // A missing watched input makes Cargo rebuild perpetually.
                 if path.exists() {
                     println!("cargo:rerun-if-changed={}", path.display());
