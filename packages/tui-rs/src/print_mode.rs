@@ -233,7 +233,22 @@ fn effective_run_tools(
     Ok(Some(effective))
 }
 
-pub(crate) fn print_available_tools(json: bool) -> Result<()> {
+/// Report native run selection, not authorization for individual tool calls.
+pub(crate) fn print_available_tools(
+    json: bool,
+    only: &[String],
+    add: &[String],
+    remove: &[String],
+    specialist: Option<&str>,
+) -> Result<()> {
+    let mut selected = effective_run_tools(allowed_tools_from_env()?, only, add, remove)?;
+    if let Some(name) = specialist {
+        let workspace = dunce::canonicalize(std::env::current_dir()?)?;
+        let profile = crate::agents_cli::resolve_specialist(name, &workspace)?;
+        if let Some(tools) = profile.tools.as_ref() {
+            selected = Some(specialist_tool_ceiling(selected, tools));
+        }
+    }
     let registry = crate::tools::ToolRegistry::new();
     let mut tools = registry
         .tools()
@@ -241,6 +256,9 @@ pub(crate) fn print_available_tools(json: bool) -> Result<()> {
             serde_json::json!({
                 "name": definition.tool.name,
                 "requiresApproval": definition.requires_approval,
+                "selected": selected.as_ref().is_none_or(|tools| {
+                    tools.contains(&definition.tool.name.to_ascii_lowercase())
+                }),
             })
         })
         .collect::<Vec<_>>();
@@ -251,11 +269,14 @@ pub(crate) fn print_available_tools(json: bool) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({"tools": tools}))?
         );
     } else {
+        println!("Native run selection (approval and sandbox checks still apply):");
         for tool in tools {
             println!(
                 "{:<28} {}",
                 tool["name"].as_str().unwrap_or_default(),
-                if tool["requiresApproval"].as_bool().unwrap_or(false) {
+                if tool["selected"] == false {
+                    "not selected"
+                } else if tool["requiresApproval"].as_bool().unwrap_or(false) {
                     "approval may be required"
                 } else {
                     "available"
