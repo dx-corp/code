@@ -31,6 +31,19 @@ curl -fsSL https://raw.githubusercontent.com/evalops/maestro/main/scripts/instal
 deixic-code --version
 ```
 
+To build and install the checked-out source from the Mono root:
+
+```sh
+bash products/maestro/scripts/install-native-local.sh
+```
+
+The source installer checks build capacity, builds the release binary, signs it
+on macOS, and runs native smoke checks before activation. macOS builds use at
+most four Cargo jobs at reduced priority and require a Developer ID certificate.
+It installs all three command names through one active-build pointer and retains
+previous builds. See [local installation](docs/release-ops.md#macos-keychain-identity-and-local-installs)
+for signing, build-cache, and installation-directory options.
+
 Opt into a preview channel when you want builds ahead of stable. Alpha tracks
 the newest source; beta is deliberately one source commit and one patch line
 behind alpha:
