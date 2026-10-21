@@ -22,6 +22,8 @@ fn direct_binary_help_remains_a_successful_early_exit() {
 fn direct_binary_supported_noninteractive_commands_exit_successfully() {
     let cases: &[(&[&str], &str)] = &[
         (&["a2a", "--help"], "a2a"),
+        (&["exec", "--help"], "deixic-code exec"),
+        (&["print", "-h"], "deixic-code print"),
         (&["hosted-runner", "--help"], "hosted-runner"),
         (&["init", "--help"], "init"),
         (&["remote", "--help"], "remote"),
@@ -41,6 +43,36 @@ fn direct_binary_supported_noninteractive_commands_exit_successfully() {
             "{args:?}: expected help output to contain {marker:?}"
         );
     }
+}
+
+#[test]
+fn exec_help_precedes_execution_options_but_respects_literal_prompts() {
+    let output = Command::new(maestro_tui_binary())
+        .args(["exec", "--help", "--prompt-stdin"])
+        .env("MAESTRO_SANDBOX_MODE", "invalid-help-probe")
+        .env("OPENAI_API_KEY", "help-must-not-print-this-value")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for marker in [
+        "--only-tools",
+        "--approval-mode fail",
+        "Examples:",
+        "Exit status:",
+    ] {
+        assert!(stdout.contains(marker), "missing {marker}: {stdout}");
+    }
+    assert!(!stdout.contains("help-must-not-print-this-value"));
+    assert!(output.stderr.is_empty(), "{output:?}");
+
+    let literal = Command::new(maestro_tui_binary())
+        .args(["exec", "--sandbox", "invalid-help-probe", "--", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(literal.status.code(), Some(2), "{literal:?}");
+    assert!(String::from_utf8_lossy(&literal.stderr).contains("Unsupported exec sandbox"));
+    assert!(!String::from_utf8_lossy(&literal.stdout).contains("Examples:"));
 }
 
 #[test]
@@ -71,6 +103,124 @@ fn specialists_are_discoverable_and_unknown_selection_fails_before_inference() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("authorized scope"));
+}
+
+#[test]
+fn tool_listing_reports_run_selection_without_widening_policy() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(maestro_tui_binary())
+            .args(args)
+            .env("MAESTRO_HOME", home.path())
+            .env("MAESTRO_PRINT_ALLOWED_TOOLS", "read,grep,write")
+            .current_dir(home.path())
+            .output()
+            .unwrap()
+    };
+    for entry in ["exec", "--print"] {
+        let output = run(&[
+            entry,
+            "--list-tools",
+            "--json",
+            "--only-tools",
+            "READ,write",
+            "--add-tools",
+            "grep,bash",
+            "--remove-tools",
+            "write",
+        ]);
+        assert!(output.status.success(), "{entry}: {output:?}");
+        let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let tools = catalog["tools"].as_array().unwrap();
+        let selected: Vec<_> = tools
+            .iter()
+            .filter(|tool| tool["selected"] == true)
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(selected, ["grep", "read"], "{entry}: {catalog}");
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "bash" && tool["selected"] == false)
+        );
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["requiresApproval"].is_boolean())
+        );
+    }
+
+    let output = run(&[
+        "exec",
+        "--list-tools",
+        "--json",
+        "--only-tools",
+        "read",
+        "--remove-tools",
+        "read",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        catalog["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["selected"] == false)
+    );
+
+    let output = run(&["exec", "--list-tools", "--only-tools", "read"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("approval and sandbox checks still apply"));
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("write ") && line.ends_with("not selected"))
+    );
+
+    let output = run(&[
+        "exec",
+        "--list-tools",
+        "--json",
+        "--only-tools",
+        "missing-tool-9f64",
+    ]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing-tool-9f64"));
+}
+
+#[test]
+fn tool_listing_honors_specialist_limits_and_rejects_unknown_profiles() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("agent-profiles")).unwrap();
+    std::fs::write(
+        home.path().join("agent-profiles/listing-probe.md"),
+        "---\nname: listing-probe\ntools: [read,write]\n---\nInspect the repository.\n",
+    )
+    .unwrap();
+    for (profile, success) in [("listing-probe", true), ("missing-profile-9f64", false)] {
+        let output = Command::new(maestro_tui_binary())
+            .args(["exec", "--list-tools", "--json", "--specialist", profile])
+            .env("MAESTRO_HOME", home.path())
+            .env("MAESTRO_PRINT_ALLOWED_TOOLS", "read,grep")
+            .current_dir(home.path())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), success, "{output:?}");
+        if success {
+            let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let selected: Vec<_> = catalog["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|tool| tool["selected"] == true)
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(selected, ["read"]);
+        } else {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("authorized scope"));
+        }
+    }
 }
 
 #[test]

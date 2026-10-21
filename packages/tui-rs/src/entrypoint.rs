@@ -530,6 +530,7 @@ struct Args {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct NativeExecOptions {
+    help: bool,
     specialist: Option<String>,
     json: bool,
     model: Option<String>,
@@ -561,6 +562,8 @@ fn parse_native_exec_options(raw_args: &[std::ffi::OsString]) -> NativeExecOptio
             prompt_parts.push(arg.into_owned());
         } else if arg == "--" {
             positional_only = true;
+        } else if arg == "--help" || arg == "-h" {
+            options.help = true;
         } else if arg == "--json" || arg == "--mode=json" {
             options.json = true;
         } else if arg == "--list-tools" {
@@ -1124,8 +1127,62 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
             // maestro print|exec [--json] [--model X] [--output-last-message P]
             //   [--output-schema S] <prompt...>
             let mut options = parse_native_exec_options(&raw_args[2..]);
+            if options.help {
+                println!(
+                    r#"Usage: deixic-code exec [options] <prompt...>
+       deixic-code print [options] <prompt...>
+
+Run one coding task without the interactive terminal interface.
+Prompt arguments are joined with spaces; use -- before literal flag-like text.
+
+Options:
+  -h, --help                   Show this help and exit without inference
+  -m, --model <id>             Select a model, optionally as provider/model
+      --provider <id>          Select the provider for the model
+      --specialist <name>      Apply a named specialist profile
+      --prompt-stdin           Read the prompt from standard input
+      --json                   Emit newline-delimited JSON events
+      --output-last-message <path>
+                               Write the final answer to a file on success
+      --output-schema <path|json>
+                               Check final JSON types and required properties
+      --list-tools             List native tools and exit without inference
+      --only-tools <names>     Restrict tools (comma- or space-separated)
+      --add-tools <names>      Add tools within the configured tool ceiling
+      --remove-tools <names>   Remove tools from the selection
+      --approval-mode fail     Reject calls requiring approval
+      --sandbox <mode>         Subprocess sandbox: read-only, workspace-write,
+                               native, or danger-full-access
+      --plugin <path>          Load a plugin for this process; repeatable
+      --tag <name|json>        Attach run metadata; repeatable
+      --log-group-id <id>      Correlate related runs
+  -w, --worktree <name>        Run in an isolated Git worktree
+
+Safety:
+  Tool selection cannot widen MAESTRO_PRINT_ALLOWED_TOOLS.
+  Exec has no interactive approval dialog. Use --approval-mode fail to reject
+  calls requiring approval; subprocess sandbox bypass requests are rejected.
+
+Examples:
+  deixic-code exec --only-tools read,grep,glob "Review this repository"
+  deixic-code exec --approval-mode fail --json "Fix the failing test"
+  cat task.txt | deixic-code exec --prompt-stdin
+  deixic-code exec --output-last-message answer.txt "Explain the parser"
+
+Exit status:
+  0 on success; nonzero for execution or validation failures.
+  Missing prompts and invalid sandbox modes exit with status 2."#
+                );
+                return Ok(0);
+            }
             if options.list_tools {
-                crate::print_mode::print_available_tools(options.json)?;
+                crate::print_mode::print_available_tools(
+                    options.json,
+                    &options.only_tools,
+                    &options.add_tools,
+                    &options.remove_tools,
+                    options.specialist.as_deref(),
+                )?;
                 return Ok(0);
             }
             let env_sandbox = std::env::var("MAESTRO_SANDBOX_MODE").ok();
@@ -1303,7 +1360,13 @@ async fn run_agent(raw_args: Vec<std::ffi::OsString>) -> Result<i32> {
     }
 
     if args.list_tools {
-        crate::print_mode::print_available_tools(args.json)?;
+        crate::print_mode::print_available_tools(
+            args.json,
+            &args.only_tools,
+            &args.add_tools,
+            &args.remove_tools,
+            args.specialist.as_deref(),
+        )?;
         return Ok(0);
     }
 
