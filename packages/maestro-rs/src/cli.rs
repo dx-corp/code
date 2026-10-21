@@ -21,6 +21,7 @@ pub enum Command {
     Forward,
     Help,
     Version,
+    BuildInfo,
 }
 
 pub fn classify<I, S>(args: I) -> Result<Command, String>
@@ -40,6 +41,12 @@ where
     }
     if matches!(first, Some("--version" | "-V" | "-v")) {
         return Ok(Command::Version);
+    }
+    if first == Some("--build-info") {
+        if strings.len() != 1 {
+            return Err("--build-info does not accept additional arguments".to_owned());
+        }
+        return Ok(Command::BuildInfo);
     }
     if matches!(
         first,

@@ -16,11 +16,24 @@ fn pre_main_hardening() {
 
 const HELP: &str = "Deixic Code\n\nUsage:\n  deixic-code [options] [prompt]\n  deixic-code exec <prompt>\n  deixic-code -w <name> [prompt]\n  deixic-code doctor [--json] [--live] [--verbose] [--timeout <ms>] [probe groups]\n  deixic-code setup [--json] [--live] [--model <provider/model>]\n  deixic-code --list-tools [--json]\n  deixic-code --headless\n  deixic-code serve [--port <port>] [--parent-pid <pid> | --liveness-fd <fd>]\n  deixic-code hosted-runner [options]\n\nCommon commands:\n  deixic-code setup       Check authentication and show the next setup step\n  deixic-code config      Inspect or change Deixic Code configuration\n  deixic-code experiments Review or change tool experiment participation\n  deixic-code models      List available models and providers\n  deixic-code sessions    List, export, or import saved sessions\n  deixic-code thread      Attach to a hosted Dex thread\n  deixic-code scenario    Run or inspect scripted scenarios\n  deixic-code run         Inspect or replay a saved session\n\nAdvanced commands:\n  deixic-code diagnostics Project compiler JSONL, optionally against a prior observation\n  deixic-code codex       Manage Codex authentication and app-server access\n  deixic-code mcp         Configure MCP servers\n  deixic-code plugins     Inspect and manage plugins\n  deixic-code connections Manage API keys and delegated accounts\n  deixic-code init        Register a Deixic agent integration\n\nCompatibility:\n  maestro remains available as an alias; MAESTRO_* variables and .maestro paths are unchanged.\n\nOptions:\n  -w, --worktree <name>  Run the session in a new git worktree at ../<repo>-wt-<name>\n                         on a new branch; interactive worktrees and branches are kept\n                         exec removes only clean worktrees with no new commits\n\nThe product runtime is native Rust; no Node.js or Bun runtime is required.";
 const VERSION: &str = concat!("deixic-code ", env!("CARGO_PKG_VERSION"));
+const BUILD_INFO: &str = concat!(
+    "deixic-code ",
+    env!("CARGO_PKG_VERSION"),
+    "\ncommit: ",
+    env!("MAESTRO_BUILD_COMMIT"),
+    "\ntree: ",
+    env!("MAESTRO_BUILD_TREE"),
+    "\ntarget: ",
+    env!("MAESTRO_BUILD_TARGET"),
+    "\nprofile: ",
+    env!("MAESTRO_BUILD_PROFILE"),
+);
 
 fn sync_command_output(command: &Command) -> Option<&'static str> {
     match command {
         Command::Help => Some(maestro_tui::localization::cli_locale().translate(HELP)),
         Command::Version => Some(VERSION),
+        Command::BuildInfo => Some(BUILD_INFO),
         _ => None,
     }
 }
@@ -95,7 +108,7 @@ fn main() -> Result<()> {
                     Some(companion) => companion.run(maestro_tui::run_cli(raw_args)).await,
                     None => maestro_tui::run_cli(raw_args).await,
                 },
-                Command::Help | Command::Version => unreachable!("handled before runtime startup"),
+                Command::Help | Command::Version | Command::BuildInfo => unreachable!("handled before runtime startup"),
             }
         })
 }

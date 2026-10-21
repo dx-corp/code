@@ -195,3 +195,65 @@ fn diagnostics_help_reaches_native_utility_without_starting_agent() {
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("--previous-sha256"));
 }
+
+#[test]
+fn build_info_is_a_standalone_native_command() {
+    assert_eq!(classify(["--build-info"]).unwrap(), Command::BuildInfo);
+    assert!(classify(["--build-info", "--json"]).is_err());
+    assert_eq!(
+        classify(["exec", "--build-info"]).unwrap(),
+        Command::Forward
+    );
+}
+
+#[test]
+fn build_info_reports_embedded_metadata_without_runtime_startup() {
+    let output = ProcessCommand::new(maestro_binary())
+        .arg("--build-info")
+        .env("MAESTRO_NATIVE_CODE_ENABLED", "1")
+        .env("PORT", "invalid")
+        .output()
+        .expect("run --build-info");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5, "{stdout}");
+    assert_eq!(
+        lines[0],
+        format!("deixic-code {}", env!("CARGO_PKG_VERSION"))
+    );
+    let commit = lines[1].strip_prefix("commit: ").expect("commit field");
+    assert!(
+        commit == "unknown"
+            || (matches!(commit.len(), 40 | 64) && commit.bytes().all(|b| b.is_ascii_hexdigit())),
+        "{stdout}"
+    );
+    assert!(matches!(
+        lines[2],
+        "tree: clean" | "tree: dirty" | "tree: unknown"
+    ));
+    assert!(lines[3].starts_with(&format!("target: {}-", std::env::consts::ARCH)));
+    assert!(
+        !lines[4]
+            .strip_prefix("profile: ")
+            .expect("profile field")
+            .is_empty()
+    );
+}
+
+#[test]
+fn build_info_preserves_exact_version_output() {
+    for flag in ["--version", "-V", "-v"] {
+        let output = ProcessCommand::new(maestro_binary())
+            .arg(flag)
+            .output()
+            .expect("run version flag");
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("deixic-code {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
