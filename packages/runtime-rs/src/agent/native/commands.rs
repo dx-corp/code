@@ -1604,7 +1604,7 @@ impl NativeAgentRunner {
                                 Some(FromAgent::ProviderError { kind, message });
                         } else {
                             request_failure_event = Some(FromAgent::Error {
-                                message: format!("Agent error: {e}"),
+                                message: format!("Agent error: {e:#}"),
                                 fatal: false,
                                 terminal: true,
                                 retryable: matches!(

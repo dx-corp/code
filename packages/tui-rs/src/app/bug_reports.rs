@@ -20,6 +20,9 @@ pub(super) struct FeedbackUi {
     cards_shown: usize,
     pub quick_send: bool,
     send: Option<tokio::sync::oneshot::Receiver<(PathBuf, BugReport, Result<String>)>>,
+    gateway_request_id: Option<String>,
+    gateway_record_id: Option<String>,
+    gateway_lineage_id: Option<String>,
 }
 
 #[derive(Default, PartialEq)]
@@ -32,6 +35,37 @@ enum FeedbackMode {
 }
 
 impl FeedbackUi {
+    pub(super) fn note_gateway_receipt(
+        &mut self,
+        request_id: &str,
+        record_id: &str,
+        lineage_id: &str,
+    ) {
+        self.gateway_request_id = bug_report::correlation_token(request_id);
+        self.gateway_record_id = bug_report::correlation_token(record_id);
+        self.gateway_lineage_id = bug_report::correlation_token(lineage_id);
+    }
+
+    pub(super) fn clear_gateway_receipt(&mut self) {
+        self.gateway_request_id = None;
+        self.gateway_record_id = None;
+        self.gateway_lineage_id = None;
+    }
+
+    fn gateway_correlation(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(id) = &self.gateway_request_id {
+            parts.push(format!("request={id}"));
+        }
+        if let Some(id) = &self.gateway_record_id {
+            parts.push(format!("record={id}"));
+        }
+        if let Some(id) = &self.gateway_lineage_id {
+            parts.push(format!("lineage={id}"));
+        }
+        parts.join(" ")
+    }
+
     pub fn card_visible(&self) -> bool {
         self.cards_shown <= 3
             && std::env::var("MAESTRO_FEEDBACK_DRAFTS").as_deref() != Ok("quiet")
@@ -350,7 +384,7 @@ impl App {
         }
     }
 
-    pub(super) fn suggest_bug_report(&mut self) {
+    pub(super) fn suggest_bug_report(&mut self, terminal_error: &str) {
         if std::env::var("MAESTRO_FEEDBACK_DRAFTS").as_deref() == Ok("off") {
             return;
         }
@@ -367,6 +401,66 @@ impl App {
             serde_json::json!({"description":"A Deixic Code turn ended with an unrecoverable error.","expected_behavior":"The requested turn completes or provides a recoverable error.","reproduction_steps":"Describe the request and select relevant evidence in /feedback."}),
         );
         self.accept_feedback_tool("draft_feedback", &report);
+        self.attach_unrecoverable_trace(terminal_error);
+    }
+
+    /// The model draft stays diagnostics-off. The client attaches the trace after that reset.
+    fn attach_unrecoverable_trace(&mut self, terminal_error: &str) {
+        let Some(path) = self.session_manager.current_session_path() else {
+            return;
+        };
+        let Ok(Some(mut report)) = bug_report::load(Some(path.as_path())) else {
+            return;
+        };
+        if report.description != "A Deixic Code turn ended with an unrecoverable error."
+            || !matches!(report.status, DraftStatus::Draft)
+        {
+            return;
+        }
+        let text = bug_report::terminal_error_trace(
+            terminal_error,
+            &self.feedback_ui.gateway_correlation(),
+        );
+        if text.is_empty() {
+            return;
+        }
+        let source_id = self
+            .feedback_ui
+            .gateway_request_id
+            .clone()
+            .or_else(|| {
+                self.state
+                    .session_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| {
+                        !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_whitespace)
+                    })
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "unrecoverable-turn".to_owned());
+        report.include_diagnostics = true;
+        if report
+            .set_evidence(vec![ReportEvidence {
+                kind: "trace".into(),
+                source_id,
+                text,
+            }])
+            .is_err()
+        {
+            return;
+        }
+        if self.feedback_save(&path, &report).is_err() {
+            return;
+        }
+        if self
+            .feedback_ui
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.id == report.id)
+        {
+            self.feedback_ui.draft = Some(report);
+        }
     }
 
     fn feedback_candidates(&mut self) -> Result<()> {
