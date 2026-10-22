@@ -560,6 +560,71 @@ pub fn redact(text: &str) -> String {
         .to_owned()
 }
 
+/// Closed label for a local terminal failure. The phrases are the stable
+/// `Display` text of the native stop conditions.
+pub fn terminal_fault_class(message: &str) -> &'static str {
+    let text = message.to_ascii_lowercase();
+    if text.contains("provider admission denied") {
+        "admission"
+    } else if text.contains("three discarded model attempts") {
+        "discarded_attempts"
+    } else if text.contains("three identical tool proposals") {
+        "identical_tool"
+    } else if text.contains("empty_assistant_response") {
+        "empty_response"
+    } else if text.contains("process budget") {
+        "process_budget"
+    } else if text.contains("step_budget") || text.contains("step budget") {
+        "step_budget"
+    } else if text.contains("managed gateway request") || text.contains("managed_gateway") {
+        "managed_request"
+    } else if text.contains("agent error:") {
+        "agent_error"
+    } else {
+        "other"
+    }
+}
+
+/// Gateway correlation ids are single tokens. Prompts and paths are not.
+pub fn correlation_token(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 255 || value.chars().any(char::is_whitespace) {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+/// One redacted line of a terminal error for a product-issue `trace` item.
+///
+/// `class=` and `correlation` stay at the front. Truncation removes the cause
+/// tail, so a long chain still names the fault and the last gateway request.
+pub fn terminal_error_trace(message: &str, correlation: &str) -> String {
+    const MAX: usize = 1200;
+    let class = terminal_fault_class(message);
+    let correlation = correlation.trim();
+    let prefix = if correlation.is_empty() {
+        format!("class={class}")
+    } else {
+        format!("class={class} {correlation}")
+    };
+    let collapsed = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let body = if collapsed.is_empty() {
+        prefix
+    } else {
+        format!("{prefix} {collapsed}")
+    };
+    let redacted = redact(&body);
+    if redacted.len() <= MAX {
+        return redacted;
+    }
+    let mut end = MAX;
+    while !redacted.is_char_boundary(end) {
+        end -= 1;
+    }
+    redacted[..end].to_owned()
+}
+
 impl BugReport {
     pub fn outgoing_context(&self) -> Option<ReportContext> {
         let mut context = self.context.clone();
@@ -661,6 +726,77 @@ mod parity_tests {
         assert_eq!(report.status, DraftStatus::Draft);
         assert!(report.context.evidence.is_empty());
         assert!(report.destination.is_none());
+    }
+    #[test]
+    fn crash_diag_terminal_error_trace_is_one_redacted_line() {
+        let secret = "sk-abcdefghijklmnopqrst";
+        let trace = terminal_error_trace(
+            &format!("Agent error: budget exhausted\n{secret}\tnext"),
+            "",
+        );
+        assert!(!trace.contains('\n'));
+        assert!(!trace.contains(secret));
+        assert!(trace.starts_with("class=agent_error "));
+        assert!(trace.contains("Agent error: budget exhausted"));
+        let capped = terminal_error_trace(&"x".repeat(4000), "");
+        assert!(capped.len() <= 1200);
+        assert!(capped.starts_with("class=other "));
+    }
+    #[test]
+    fn crash_diag_terminal_error_trace_keeps_the_class_and_gateway_ids() {
+        let secret = "sk-abcdefghijklmnopqrst";
+        let trace = terminal_error_trace(
+            &format!(
+                "Agent error: provider admission denied for chat request req-1: lease {secret} exhausted\ncaused by: process budget runner unavailable"
+            ),
+            "request=req-1 record=rec-1 lineage=maestro-turn-v2:abc",
+        );
+        assert!(trace.starts_with(
+            "class=admission request=req-1 record=rec-1 lineage=maestro-turn-v2:abc "
+        ));
+        assert!(trace.contains("provider admission denied"));
+        assert!(trace.contains("process budget runner unavailable"));
+        assert!(!trace.contains(secret));
+        assert!(!trace.contains('\n'));
+        let long = format!(
+            "Agent error: provider admission denied {}",
+            "y".repeat(4000)
+        );
+        let capped = terminal_error_trace(&long, "request=req-1");
+        assert!(capped.len() <= 1200);
+        assert!(capped.starts_with("class=admission request=req-1 "));
+        assert_eq!(
+            terminal_fault_class("Native turn stopped after three discarded model attempts"),
+            "discarded_attempts"
+        );
+        assert_eq!(
+            terminal_fault_class("Native turn stopped after three identical tool proposals"),
+            "identical_tool"
+        );
+        assert_eq!(
+            terminal_fault_class("empty_assistant_response: provider completed"),
+            "empty_response"
+        );
+        assert_eq!(
+            terminal_fault_class("process budget admission was not acknowledged"),
+            "process_budget"
+        );
+        assert_eq!(
+            terminal_fault_class("step_budget_exhausted: reached the per-turn budget"),
+            "step_budget"
+        );
+        assert_eq!(
+            terminal_fault_class("managed gateway request requires an active session context"),
+            "managed_request"
+        );
+        assert_eq!(
+            terminal_fault_class("Agent error: something else"),
+            "agent_error"
+        );
+        assert_eq!(terminal_fault_class("attachment blocked"), "other");
+        assert!(correlation_token("req-1").is_some());
+        assert!(correlation_token("has space").is_none());
+        assert!(correlation_token(&"z".repeat(256)).is_none());
     }
     #[test]
     fn evidence_edit_invalidates_consent_and_freezes_on_send() {

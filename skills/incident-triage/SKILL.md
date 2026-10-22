@@ -57,9 +57,8 @@ query:
 3. **Load incident history**: `cerebro_get_thing` on each matched Thing for its
    recent Facts, Events, and Evidence — prior incidents, deploys, and alerts
    involving the same entity.
-4. **Check open risk**: `cerebro_list_predictions` with `subject_thing_id` for
-   active predictions about the entity, and `cerebro_attention_lifecycle` for
-   attention items already tracking it.
+4. **Check open risk**: `cerebro_attention_lifecycle` for attention items
+   already tracking the entity.
 5. **Recover the last-known resolution**: `cerebro_action_experiences`
    (optionally filtered by `target_system` / `kind`) for lessons and replay
    hints from terminal remediation actions on similar past incidents.

@@ -1396,7 +1396,8 @@ fn canonical_cloud_projection(event: &CanonicalTurnEvent) -> Option<FirstPartyTu
         if diagnostics.attempts.is_empty() {
             return None;
         }
-        diagnostics.attempts.pop();
+        // The crash is the last attempt. The outbox budget drops the oldest ones.
+        diagnostics.attempts.remove(0);
         diagnostics.omitted_attempts = diagnostics.omitted_attempts.saturating_add(1);
     }
     Some(first_party)

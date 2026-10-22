@@ -53,6 +53,53 @@ pub(super) fn canonical_event(status: TurnStatus) -> CanonicalTurnEvent {
     event
 }
 
+#[test]
+fn crash_diag_cloud_projection_keeps_the_newest_attempts() {
+    let mut event = canonical_event(TurnStatus::Error);
+    let mut diagnostics = super::super::operation::OperationDiagnostics {
+        completion_observed: true,
+        ..Default::default()
+    };
+    for index in 0..32 {
+        diagnostics
+            .attempts
+            .push(super::super::operation::AttemptDiagnostics {
+                response_id: format!("resp-{index:02}-{}", "r".repeat(200)),
+                model_id: format!("model-{index:02}-{}", "m".repeat(180)),
+                model_provider: "fireworks".into(),
+                duration_ms: 1000 + index as u64,
+                usage: None,
+                reported_cost_usd: None,
+                gateway_request_id: Some(format!("req-{index:02}")),
+                gateway_record_id: None,
+                gateway_lineage_id: None,
+                provider_tools_sha256: None,
+                provider_tool_count: None,
+            });
+    }
+    event.diagnostics = Some(diagnostics);
+    let projected = canonical_cloud_projection(&event).expect("projection");
+    let bytes = serde_json::to_vec(&projected).unwrap();
+    let diagnostics = projected.diagnostics.expect("diagnostics");
+    assert!(diagnostics.omitted_attempts > 0);
+    assert_eq!(
+        diagnostics.omitted_attempts as usize + diagnostics.attempts.len(),
+        32
+    );
+    let kept: Vec<_> = diagnostics
+        .attempts
+        .iter()
+        .map(|attempt| attempt.gateway_request_id.clone().unwrap())
+        .collect();
+    let expected: Vec<_> = (0..32u32)
+        .map(|index| format!("req-{index:02}"))
+        .skip(diagnostics.omitted_attempts as usize)
+        .collect();
+    assert_eq!(kept, expected);
+    assert_eq!(kept.last().map(String::as_str), Some("req-31"));
+    assert!(bytes.len() <= OUTBOX_MAX_EVENT_BYTES - 2048);
+}
+
 fn test_identity_scope(organization_id: &str, workspace_id: &str) -> TelemetryIdentityScope {
     TelemetryIdentityScope::new(organization_id, Some(workspace_id))
         .expect("complete test Identity scope")

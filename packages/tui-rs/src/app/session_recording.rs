@@ -144,6 +144,7 @@ impl App {
                 record!(event);
             }
             FromAgent::TurnStarted => {
+                self.feedback_ui.clear_gateway_receipt();
                 record!(self.new_session_event(Lane::User, "turn.started", Phase::Started,));
             }
             FromAgent::RequestContextPrepared { .. } => {
@@ -163,7 +164,14 @@ impl App {
                 }
                 record!(event);
             }
-            FromAgent::ManagedGatewayReceipt { request_id, .. } => {
+            FromAgent::ManagedGatewayReceipt {
+                request_id,
+                record_id,
+                lineage_id,
+                ..
+            } => {
+                self.feedback_ui
+                    .note_gateway_receipt(request_id, record_id, lineage_id);
                 let mut event =
                     self.new_session_event(Lane::Model, "model.gateway.receipt", Phase::Info);
                 if let Some(event) = &mut event {

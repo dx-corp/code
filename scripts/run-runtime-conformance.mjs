@@ -25,6 +25,9 @@ const RUNNER_SESSION_ID = "runtime-conformance-runner-v1";
 const CONFORMANCE_FIXTURE_FILE = "runtime-conformance-fixture.txt";
 const CONFORMANCE_PROFILE = CONFORMANCE_FIXTURE.profile;
 const FETCH_TIMEOUT_MS = 15_000;
+// Container creation on a loaded publisher runner can exceed an HTTP fetch
+// budget right after a large image export; bound the Docker CLI separately.
+const DOCKER_CLI_TIMEOUT_MS = 120_000;
 const CONFORMANCE_EXECUTION_CASES = Object.freeze([
 	"startup_identity_and_readiness",
 	"wrong_session_rejected",
@@ -277,7 +280,7 @@ async function startRuntime(options, workspace) {
 	const containerName = `maestro-runtime-conformance-${process.pid}`;
 	const dockerExec = (args) =>
 		execFileAsync("docker", args, {
-			timeout: FETCH_TIMEOUT_MS,
+			timeout: DOCKER_CLI_TIMEOUT_MS,
 			killSignal: "SIGTERM",
 			maxBuffer: 1024 * 1024,
 		});

@@ -8,6 +8,7 @@
 //! evidence from those turns stay out of the request.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use super::{Context, Entry, Message};
 use crate::event::{Output, PrincipalId};
@@ -39,11 +40,11 @@ impl Context {
             return Cow::Borrowed(self);
         }
         let mut view = self.clone();
-        view.history = scoped_history(&self.history, current);
+        view.history = Arc::new(scoped_history(self.history.as_slice(), current));
         if foreign_summary {
             // The summary text was written over another principal's tool
             // activity; it cannot be split by author, so it is not shown.
-            view.history
+            Arc::make_mut(&mut view.history)
                 .retain(|entry| !matches!(entry.message, Message::Summary { .. }));
         }
         view.tool_evidence
@@ -76,7 +77,7 @@ impl Context {
                 note(&evidence.call.principal);
             }
         }
-        for entry in &self.history {
+        for entry in self.history.iter() {
             if let Message::Tool { call, output, .. } = &entry.message
                 && is_ref(output)
                 && let Some(proposed) = self.proposed_call(call)

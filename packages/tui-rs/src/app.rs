@@ -4033,14 +4033,14 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     ) -> Result<()> {
         if allow_terminal_notifications {
             if let FromAgent::Error {
+                message,
                 fatal,
                 terminal,
                 retryable,
-                ..
             } = &msg
             {
                 if (*fatal || *terminal) && !retryable {
-                    self.suggest_bug_report();
+                    self.suggest_bug_report(message);
                 }
             }
         }

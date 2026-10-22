@@ -5,6 +5,8 @@
 //! it for every event in the log. The same events therefore always produce
 //! the same context, whether the actor stayed warm or restarted.
 
+use std::sync::Arc;
+
 use crate::event::{
     ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec,
     ConfirmationDecision, Cursor, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output,
@@ -190,7 +192,13 @@ pub struct Context {
     turn: Option<TurnId>,
     acting: Option<PrincipalId>,
     status: Status,
-    history: Vec<Entry>,
+    /// Shared until a fold writes it. `for_model` and the compaction
+    /// projection clone the context and only set budget or step fields.
+    #[expect(
+        clippy::rc_buffer,
+        reason = "copy-on-write history needs Vec growth and retain through Arc::make_mut"
+    )]
+    history: Arc<Vec<Entry>>,
     /// Every principal whose turns or tool results any compaction summary has
     /// covered. A summary is model-written over all of them, so only a
     /// principal that is the sole member may be shown it.
@@ -286,7 +294,7 @@ impl Context {
             turn: None,
             acting: None,
             status: Status::Idle,
-            history: Vec::new(),
+            history: Arc::new(Vec::new()),
             summarised_principals: Vec::new(),
             tool_evidence: Vec::new(),
             context_pocket_authority_lost: false,
@@ -455,7 +463,7 @@ impl Context {
 
     /// The model's view of the thread.
     pub fn history(&self) -> &[Entry] {
-        &self.history
+        self.history.as_slice()
     }
 
     pub fn proposed_call(&self, id: &CallId) -> Option<&ProposedCall> {
@@ -1177,14 +1185,15 @@ impl Context {
                 // exact text, principal, and attachments across compaction.
                 // Covered inputs precede the new summary, keeping history
                 // cursors non-decreasing even after repeated compaction.
-                self.history.retain(|entry| {
+                let running = self.status == Status::Running;
+                let current_turn = self.turn.clone();
+                let history = Arc::make_mut(&mut self.history);
+                history.retain(|entry| {
                     entry.cursor > *covers_to_cursor
-                        || matches!(&entry.message, Message::User { turn, .. } if self.status == Status::Running && Some(turn) == self.turn.as_ref())
+                        || matches!(&entry.message, Message::User { turn, .. } if running && Some(turn) == current_turn.as_ref())
                 });
-                let position = self
-                    .history
-                    .partition_point(|entry| entry.cursor <= *covers_to_cursor);
-                self.history.insert(
+                let position = history.partition_point(|entry| entry.cursor <= *covers_to_cursor);
+                history.insert(
                     position,
                     Entry {
                         cursor: *covers_to_cursor,
@@ -1324,7 +1333,7 @@ impl Context {
             }
             self.attachment_inputs = retained;
         }
-        self.history.push(Entry { cursor, message });
+        Arc::make_mut(&mut self.history).push(Entry { cursor, message });
     }
 
     fn state_mut(&mut self, call: &CallId) -> Option<&mut CallState> {
@@ -1420,3 +1429,5 @@ mod principal_view;
 
 #[cfg(test)]
 mod evidence_contract;
+#[cfg(test)]
+mod history_share;

@@ -1110,7 +1110,8 @@
 				"arguments": {
 					"thread_id": "thread-retry",
 					"idempotency_key": "retry-case-1",
-					"provisioner": "nimbus"
+					"provisioner": "sandboxwich",
+					"require_approval": true
 				}
 			},
 			"response": {
