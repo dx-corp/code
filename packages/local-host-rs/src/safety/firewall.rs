@@ -202,6 +202,28 @@ fn has_egress_primitives(command: &str) -> bool {
     ["curl", "wget", "ssh", "scp", "nc", "netcat", "/dev/tcp"]
         .iter()
         .any(|token| lowered.contains(token))
+        || analyze_bash_command(command)
+            .commands
+            .iter()
+            .any(super::command_catalog::known_command_uses_network)
+}
+
+#[cfg(test)]
+mod command_catalog_egress_tests {
+    use super::has_egress_primitives;
+    #[test]
+    fn github_reads_still_obey_no_shell_egress_policy() {
+        for command in [
+            "gh pr list",
+            "gh\tpr list",
+            "gh -R dx-corp/mono issue view 1",
+            "gh pr list | head",
+        ] {
+            assert!(has_egress_primitives(command), "{command}");
+        }
+        assert!(!has_egress_primitives("gh --version"));
+        assert!(!has_egress_primitives("python3 --version"));
+    }
 }
 
 fn is_mcp_tool_name(tool_name: &str) -> bool {

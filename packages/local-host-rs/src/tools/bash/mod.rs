@@ -47,7 +47,8 @@
 //! - File inspection: `ls`, `cat`, `head`, `tail`, `grep`, `find`
 //! - System info: `pwd`, `whoami`, `hostname`, `uname`, `date`
 //! - Git queries: `git status`, `git log`, `git diff`, `git branch`
-//! - Version checks: `cargo --version`, `node --version`, etc.
+//! - Reviewed version/help probes: `python3 --version`, `gh --help`
+//! - Argument-checked GitHub queries: `gh pr list`, `gh issue view 123`
 //!
 //! ## Tier 3: User Approval Required
 //!
@@ -149,7 +150,7 @@ use crate::agent::ToolResult;
 use crate::ai::Tool;
 use crate::safety::{
     RunAttendance, analyze_bash_command, analyze_bash_command_with_attendance,
-    find_has_dangerous_predicate, git_args_are_mutating, tokenize,
+    classify_known_command, find_has_dangerous_predicate, git_args_are_mutating, tokenize,
 };
 use crate::sandbox::{SandboxPolicy, spawn_sandboxed_command, spawn_unsandboxed_command};
 
@@ -431,12 +432,6 @@ fn current_requires_approval(command: &str) -> bool {
             "git branch",
             "git remote",
             "git show",
-            "cargo --version",
-            "rustc --version",
-            "node --version",
-            "npm --version",
-            "bun --version",
-            "python --version",
         ];
 
         for prefix in safe_prefixes {
@@ -482,7 +477,13 @@ fn current_requires_approval(command: &str) -> bool {
     if analysis
         .commands
         .iter()
-        .all(|cmd| is_safe_segment(cmd.raw.trim()))
+        .all(|cmd| match classify_known_command(cmd) {
+            Some((risk, _)) => {
+                risk == crate::safety::CommandRisk::Safe
+                    && analysis.risk == crate::safety::CommandRisk::Safe
+            }
+            None => is_safe_segment(cmd.raw.trim()),
+        })
     {
         return false;
     }
@@ -2308,6 +2309,9 @@ impl BashTool {
 }
 
 #[cfg(test)]
+mod command_catalog_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::pin::Pin;
@@ -3255,16 +3259,6 @@ mod tests {
         ));
         assert!(BashTool::requires_approval("git remote remove origin"));
         assert!(BashTool::requires_approval("git remote prune origin"));
-    }
-
-    #[test]
-    fn test_requires_approval_version_checks() {
-        assert!(!BashTool::requires_approval("cargo --version"));
-        assert!(!BashTool::requires_approval("rustc --version"));
-        assert!(!BashTool::requires_approval("node --version"));
-        assert!(!BashTool::requires_approval("npm --version"));
-        assert!(!BashTool::requires_approval("bun --version"));
-        assert!(!BashTool::requires_approval("python --version"));
     }
 
     #[test]
