@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["examples/hooks/wasm-plugin", "vendor/*", "vendor/dex-loop"]
+exclude = ["examples/hooks/wasm-plugin", "vendor"]
 members = [
     "packages/codemode-rs",
     "packages/maestro-rs",
