@@ -32,7 +32,7 @@ rust_library(
         "@crates__rand-0.8.6//:rand",
         "@crates__ring-0.17.14//:ring",
         "@crates__rustls-pki-types-1.15.0//:rustls_pki_types",
-        "@crates__tokio-1.52.3//:tokio",
+        "@crates__tokio-1.53.3//:tokio",
         "@crates__tokio-rustls-0.26.4//:tokio_rustls",
         "@crates__tokio-util-0.7.18//:tokio_util",
         "@crates__webpki-roots-1.0.10//:webpki_roots",

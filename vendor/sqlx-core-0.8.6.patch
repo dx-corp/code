@@ -64,7 +64,7 @@ diff --git a/BUILD.bazel b/BUILD.bazel
 +        "@crates__smallvec-1.15.2//:smallvec",
 +        "@crates__thiserror-2.0.18//:thiserror",
 +        "@crates__time-0.3.52//:time",
-+        "@crates__tokio-1.52.3//:tokio",
++        "@crates__tokio-1.53.3//:tokio",
 +        "@crates__tokio-stream-0.1.18//:tokio_stream",
 +        "@crates__tracing-0.1.44//:tracing",
 +        "@crates__url-2.5.8//:url",
