@@ -1345,3 +1345,272 @@ async fn spawn_sandboxed_command_does_not_leak_process_environment() {
          environment underneath its filtered env map (HOME must not leak through)"
     );
 }
+
+#[test]
+fn metadata_protection_survives_broader_writable_roots() {
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("workspace");
+    let git = workspace.join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    let mut policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![parent.path().to_path_buf()],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    assert!(policy.allows_write_to(&workspace, &workspace.join("source.rs")));
+    assert!(!policy.allows_write_to(&workspace, &git.join("config")));
+    // An intentional narrow metadata grant still permits exactly that subtree.
+    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut policy {
+        writable_roots.push(git.join("allowed"));
+    }
+    assert!(policy.allows_write_to(&workspace, &git.join("allowed/new")));
+    assert!(!policy.allows_write_to(&workspace, &git.join("private/new")));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_native_metadata_case_aliases_preserve_restrictions_and_grants() {
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    let case_insensitive = workspace.join(".GIT").exists();
+    let mut policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![parent.path().to_path_buf()],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    for root in [&workspace, &parent.path().join("WORKSPACE")] {
+        assert_eq!(
+            policy.allows_write_to(&workspace, &root.join(".GIT/config")),
+            !case_insensitive,
+            "case aliases must not bypass the metadata exclusion: {root:?}",
+        );
+    }
+    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut policy {
+        writable_roots.push(workspace.join(".git/allowed"));
+    }
+    assert!(policy.allows_write_to(&workspace, &workspace.join(".git/allowed/new")));
+    assert!(policy.allows_write_to(&workspace, &workspace.join(".GIT/ALLOWED/new")));
+    assert_eq!(
+        policy.allows_write_to(&workspace, &workspace.join(".GIT/private/new")),
+        !case_insensitive,
+    );
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn sandbox_is_installed_before_executing_replaceable_lookup_paths() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    if !is_sandbox_available() {
+        return;
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let bin = workspace.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    // Sticky parents still allow their owner to replace these symlinks.
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    let script = bin.join("payload");
+    std::fs::write(&script, "#!/bin/sh\nprintf compromised > \"$PROBE\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    symlink(&script, bin.join("sandbox-exec")).unwrap();
+    symlink(&script, bin.join("bwrap")).unwrap();
+    symlink("/bin/sh", bin.join("shell")).unwrap();
+    let alias = workspace.path().join("alias");
+    symlink(&bin, &alias).unwrap();
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    for shell in [
+        PathBuf::from("/bin/sh"),
+        bin.join("shell"),
+        alias.join("shell"),
+    ] {
+        let probe = outside.path().join("must-not-exist");
+        let env = HashMap::from([
+            ("PATH".to_string(), bin.to_string_lossy().into_owned()),
+            ("PROBE".to_string(), probe.to_string_lossy().into_owned()),
+        ]);
+        let output = spawn_sandboxed_command(
+            vec![
+                shell.to_string_lossy().into_owned(),
+                "-c".to_string(),
+                "printf denied > \"$PROBE\"".to_string(),
+            ],
+            workspace.path().to_path_buf(),
+            &policy,
+            env,
+        )
+        .await
+        .expect("available sandbox must start")
+        .wait_with_output()
+        .await
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "outside write through {shell:?} succeeded"
+        );
+        assert!(
+            !probe.exists(),
+            "lookup executable ran before sandbox enforcement"
+        );
+    }
+    // The protected system executable remains usable under the same policy.
+    let output = spawn_sandboxed_command(
+        vec!["/bin/sh".into(), "-c".into(), "printf protected".into()],
+        workspace.path().to_path_buf(),
+        &policy,
+        HashMap::new(),
+    )
+    .await
+    .unwrap()
+    .wait_with_output()
+    .await
+    .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"protected");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn macos_seatbelt_metadata_aliases_cannot_use_broader_grant() {
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("workspace");
+    let git = workspace.join(".git");
+    std::fs::create_dir_all(&git).unwrap();
+    std::fs::write(git.join("config"), "original").unwrap();
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![parent.path().to_path_buf()],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let case_insensitive = workspace.join(".GIT").exists();
+    for spelling in [".git/config", ".GIT/config"] {
+        if !case_insensitive && spelling.starts_with(".GIT") {
+            continue;
+        }
+        let output = spawn_sandboxed_command(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf changed > \"$TARGET\"".into(),
+            ],
+            workspace.clone(),
+            &policy,
+            HashMap::from([("TARGET".into(), spelling.into())]),
+        )
+        .await
+        .unwrap()
+        .wait_with_output()
+        .await
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "metadata alias {spelling} was writable"
+        );
+        assert_eq!(
+            std::fs::read_to_string(git.join("config")).unwrap(),
+            "original"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_native_metadata_aliases_are_protected_before_creation() {
+    let workspace = tempfile::tempdir().unwrap();
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    // Determine the containing filesystem without creating the metadata path.
+    std::fs::write(workspace.path().join("case-probe"), "").unwrap();
+    let case_insensitive = workspace.path().join("CASE-PROBE").exists();
+    assert!(!policy.allows_write_to(workspace.path(), &workspace.path().join(".git/config")));
+    assert_eq!(
+        policy.allows_write_to(workspace.path(), &workspace.path().join(".GIT/config")),
+        !case_insensitive,
+    );
+    assert!(policy.allows_write_to(
+        workspace.path(),
+        &workspace.path().join("nested/.git/config")
+    ));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn macos_seatbelt_metadata_aliases_are_protected_before_creation() {
+    let workspace = tempfile::tempdir().unwrap();
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    std::fs::write(workspace.path().join("case-probe"), "").unwrap();
+    let case_insensitive = workspace.path().join("CASE-PROBE").exists();
+    for spelling in [".git", ".GIT"] {
+        if !case_insensitive && spelling == ".GIT" {
+            continue;
+        }
+        let output = spawn_sandboxed_command(
+            vec!["/bin/mkdir".into(), spelling.into()],
+            workspace.path().to_path_buf(),
+            &policy,
+            HashMap::new(),
+        )
+        .await
+        .unwrap()
+        .wait_with_output()
+        .await
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "metadata alias {spelling} was created"
+        );
+        assert!(!workspace.path().join(spelling).exists());
+    }
+    let output = spawn_sandboxed_command(
+        vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf allowed > ordinary".into(),
+        ],
+        workspace.path().to_path_buf(),
+        &policy,
+        HashMap::new(),
+    )
+    .await
+    .unwrap()
+    .wait_with_output()
+    .await
+    .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("ordinary")).unwrap(),
+        "allowed"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_metadata_alias_query_failure_does_not_grant_access() {
+    // An invalid parent cannot establish filesystem equivalence. It must not
+    // be treated as a case-sensitive volume that skips the metadata denial.
+    let workspace = Path::new("/invalid\0parent");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    assert!(!policy.allows_write_to(workspace, &workspace.join(".GIT/config")));
+}

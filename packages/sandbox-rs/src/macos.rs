@@ -2,8 +2,71 @@ use super::{
     HashMap, Path, PathBuf, SANDBOX_ENV_VAR, SEATBELT_BASE_POLICY, SEATBELT_EXECUTABLE,
     SEATBELT_NETWORK_POLICY, SandboxPolicy, SandboxResult,
 };
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
+use std::os::unix::ffi::OsStrExt;
 use tokio::process::{Child, Command};
+
+/// Compare native path prefixes without treating case-sensitive volumes as
+/// case-insensitive. Check each differing component in its parent filesystem:
+/// mounts can change case behavior partway through a path.
+pub(super) fn path_starts_with(path: &Path, root: &Path) -> std::io::Result<bool> {
+    let mut actual = path.components();
+    let mut parent = PathBuf::new();
+    for expected in root.components() {
+        let Some(component) = actual.next() else {
+            return Ok(false);
+        };
+        if component != expected
+            && (!component
+                .as_os_str()
+                .as_bytes()
+                .eq_ignore_ascii_case(expected.as_os_str().as_bytes())
+                || !is_case_insensitive_filesystem(&parent)?)
+        {
+            return Ok(false);
+        }
+        parent.push(expected.as_os_str());
+    }
+    Ok(true)
+}
+
+fn is_case_insensitive_filesystem(path: &Path) -> std::io::Result<bool> {
+    // New metadata paths inherit their nearest existing parent's semantics.
+    for ancestor in path.ancestors() {
+        let path = CString::new(ancestor.as_os_str().as_bytes())?;
+        // SAFETY: path is NUL-terminated; __error addresses this thread's errno.
+        // Reset errno to distinguish an unsupported pathconf name from failure.
+        let result = unsafe {
+            *libc::__error() = 0;
+            libc::pathconf(path.as_ptr(), libc::_PC_CASE_SENSITIVE)
+        };
+        match result {
+            0 => return Ok(true),
+            1 => return Ok(false),
+            -1 => {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(0) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "filesystem case sensitivity is unavailable",
+                    ));
+                }
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(error);
+                }
+            }
+            value => {
+                return Err(std::io::Error::other(format!(
+                    "unexpected filesystem case sensitivity: {value}"
+                )));
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "no existing filesystem parent",
+    ))
+}
 
 /// Get Darwin user cache directory via confstr.
 ///

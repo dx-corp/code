@@ -90,7 +90,7 @@ mod tests {
         std::fs::write(legacy.join("baseline"), b"original").unwrap();
         assert_eq!(
             prepare_private_temp_directory(temp.path(), "effects").unwrap(),
-            legacy
+            dunce::canonicalize(&legacy).unwrap()
         );
         assert_eq!(std::fs::read(legacy.join("baseline")).unwrap(), b"original");
         assert_eq!(std::fs::metadata(&legacy).unwrap().mode() & 0o777, 0o700);
