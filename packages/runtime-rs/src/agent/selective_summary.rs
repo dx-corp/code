@@ -75,10 +75,7 @@ pub fn preview(messages: &[Message]) -> Result<SelectiveSummaryPreview> {
                 MessageContent::Text(text) => text.clone(),
                 MessageContent::Blocks(blocks) => blocks
                     .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
+                    .filter_map(ContentBlock::text_content)
                     .collect::<Vec<_>>()
                     .join(" "),
             };
@@ -178,10 +175,19 @@ pub(crate) fn rewrite(
     let summary = safe.as_str().context("Invalid summary text")?.to_owned();
     // Escape the envelope delimiter so generated text cannot close its own data boundary.
     let contained = summary.replace('<', "&lt;").replace('>', "&gt;");
+    let origins =
+        super::compaction::build_continuation_record(&messages[range.clone()]).content_origins;
     let mut rewritten = messages[..range.start].to_vec();
     rewritten.push(Message {
         role: Role::User,
-        content: MessageContent::text(super::compaction::render_context_summary(&contained)),
+        content: MessageContent::Blocks(vec![ContentBlock::AttributedText {
+            text: super::compaction::render_context_summary(&contained),
+            provenance: crate::ai::ContentProvenance {
+                source: crate::ai::ContentSource::Harness,
+                origin: Some("selective_summary".into()),
+                derived_from: origins,
+            },
+        }]),
     });
     rewritten.extend_from_slice(&messages[range.end..]);
     Ok(SelectiveSummaryResult {
@@ -207,6 +213,57 @@ mod tests {
             role: Role::Assistant,
             content: MessageContent::text(s),
         }
+    }
+    #[test]
+    fn preview_preserves_attributed_text_and_mixed_legacy_parts() {
+        let history = vec![Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::attributed_text(
+                    "current request",
+                    crate::ai::ContentSource::User,
+                    None,
+                ),
+                ContentBlock::Text {
+                    text: "legacy context".into(),
+                },
+                ContentBlock::attributed_text("hook context", crate::ai::ContentSource::Hook, None),
+            ]),
+        }];
+        let before = serde_json::to_value(&history).unwrap();
+        let result = preview(&history).unwrap();
+        assert_eq!(result.turns.len(), 1);
+        assert_eq!(
+            result.turns[0].preview,
+            "current request legacy context hook context"
+        );
+        assert_eq!(serde_json::to_value(&history).unwrap(), before);
+        let summary = rewrite(
+            &history,
+            RangeSelection::ThroughTurn(1),
+            &result.history_digest,
+            "summarized context",
+        )
+        .unwrap();
+        let MessageContent::Blocks(blocks) = &summary.messages[0].content else {
+            panic!("summary must retain typed origins");
+        };
+        let ContentBlock::AttributedText { provenance, .. } = &blocks[0] else {
+            panic!("summary must be attributed to the harness");
+        };
+        assert_eq!(provenance.source, crate::ai::ContentSource::Harness);
+        assert_eq!(
+            provenance
+                .derived_from
+                .iter()
+                .map(|origin| origin.source)
+                .collect::<Vec<_>>(),
+            vec![
+                crate::ai::ContentSource::User,
+                crate::ai::ContentSource::Unknown,
+                crate::ai::ContentSource::Hook
+            ]
+        );
     }
     #[test]
     fn preserves_unselected_history_and_rejects_stale_selection() {

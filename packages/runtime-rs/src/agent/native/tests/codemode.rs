@@ -1997,3 +1997,105 @@ async fn codemode_unknown_classifier_blocks_read_from_same_mixed_wave() {
                 .is_some_and(|receipt| receipt.status == ExecutionStatus::Succeeded)
     }));
 }
+
+#[tokio::test]
+async fn codemode_interrupt_preserves_committed_store_and_cancels_nested_read() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (client, server) = codemode_sequence_fixture(&[
+        "store('cursor', {page:2}); text('saved');",
+        "store('cursor', {page:99}); await tools.read({path:'blocked.json'}); await tools.write({content:'must not run'});",
+        "text(load('cursor').page);",
+    ]).await;
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let mut host =
+        RuntimeTestHost::new(workspace.path(), client).with_tool_operation_journal(journal.clone());
+    host.read_gates
+        .insert("blocked.json".into(), Arc::new(tokio::sync::Notify::new()));
+    let waves = host.read_only_waves.clone();
+    let config = NativeAgentConfig {
+        model: "openai/gpt-4o".into(),
+        cwd: workspace.path().display().to_string(),
+        approval_mode: ApprovalMode::Yolo,
+        ..Default::default()
+    };
+    let (agent, mut events) = new_runtime_test_agent_with_host(config, host).unwrap();
+    agent
+        .prompt("Save then interrupt".into(), vec![])
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if waves
+                .lock()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|id| id == "sequence-1/0")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("nested read must reach its active host boundary");
+    agent.cancel();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await.unwrap() {
+                FromAgent::TurnInterrupted { .. } => break,
+                FromAgent::ToolCall { tool, .. } if tool == "write" => {
+                    panic!("cancelled cell ran its suffix")
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("interrupt must stop the cell and nested tool promptly");
+    agent
+        .prompt("Read the saved cursor".into(), vec![])
+        .await
+        .unwrap();
+    wait_for_turn_completed(&mut events).await;
+    agent.shutdown().await;
+    let requests = server.await.unwrap();
+    assert!(
+        requests.last().unwrap()["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "tool"
+                && m["tool_call_id"] == "sequence-2"
+                && m["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("\n2\n"))),
+        "the prior successful cell's store must survive interruption"
+    );
+    let records = journal.lock().unwrap();
+    for id in ["sequence-1", "sequence-1/0"] {
+        let outcome = records
+            .iter()
+            .rev()
+            .find(|r| r.call_id == id)
+            .unwrap()
+            .outcome
+            .as_ref()
+            .unwrap();
+        assert!(
+            matches!(
+                outcome.receipt.as_ref().unwrap().status,
+                ExecutionStatus::Cancelled { .. }
+            ),
+            "{id}"
+        );
+        assert!(
+            outcome.codemode_store.is_none(),
+            "interrupted store writes cannot commit"
+        );
+    }
+    assert!(
+        !records.iter().any(|r| r.call_id == "sequence-1/1"),
+        "the suffix was never admitted"
+    );
+}

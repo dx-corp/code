@@ -561,6 +561,13 @@ message AssistantTextObservedMessage {
   string response_id = 1;
 }
 
+// Independent auxiliary inference usage, without a foreground terminal transition.
+message BackgroundUsageMessage {
+  string request_id = 1;
+  string model = 2;
+  ResponseUsage usage = 3;
+}
+
 message ResponseEndMessage {
   string response_id = 1;
   ResponseUsage usage = 2;
@@ -927,5 +934,6 @@ message FromAgentEnvelope {
     WorkspaceCapabilitySetAppliedMessage workspace_capability_set_applied = 34;
     ManagedAuthorizationRequestMessage managed_authorization_request = 35;
     AssistantTextObservedMessage assistant_text_observed = 36;
+    BackgroundUsageMessage background_usage = 37;
   }
 }

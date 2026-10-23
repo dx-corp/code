@@ -1877,6 +1877,15 @@ pub fn agent_event_to_message(event: &AgentEvent) -> FromAgentMessage {
             content: content.clone(),
             is_thinking: *is_thinking,
         },
+        AgentEvent::BackgroundUsage {
+            request_id,
+            model,
+            usage,
+        } => FromAgentMessage::BackgroundUsage {
+            request_id: request_id.clone(),
+            model: model.clone(),
+            usage: usage.clone(),
+        },
         AgentEvent::ResponseEnd {
             response_id,
             usage,

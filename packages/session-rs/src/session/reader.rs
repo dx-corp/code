@@ -447,11 +447,18 @@ pub struct ParsedSession {
     /// `thinking_level_changes`.
     pub header: SessionHeader,
 
+    /// Latest supported session preferences; absent in legacy transcripts.
+    pub settings: Option<super::SessionSettings>,
+
+    /// Historical request provenance, never applied as current instructions.
+    pub system_prompt_parts: Vec<maestro_ai::ContentBlock>,
+
     /// Complete conversation history in chronological order.
     pub messages: Vec<AppMessage>,
 
-    /// Exact rewritten provider history and the length of its display projection.
-    pub selective_summary_context: Option<(Vec<maestro_ai::Message>, usize)>,
+    /// Exact provider history, display projection length, and the number of
+    /// compactions already reflected in that checkpoint.
+    pub selective_summary_context: Option<(Vec<maestro_ai::Message>, usize, usize)>,
 
     /// User-provided session metadata (title, summary, tags).
     ///
@@ -636,6 +643,12 @@ impl SessionReader {
         let mut header: Option<SessionHeader> = None;
         let mut messages: Vec<AppMessage> = Vec::new();
         let mut selective_summary_context = None;
+        let mut pending_runtime_checkpoint =
+            super::runtime_checkpoint::PendingCheckpoint::default();
+        let mut settings: Option<super::SessionSettings> = None;
+        let mut system_prompt_parts = Vec::new();
+        let mut effective_model: Option<String> = None;
+        let mut effective_thinking = None;
         let mut meta: Option<SessionMeta> = None;
         let mut stats = SessionStats::default();
         let mut extracted_by_id: HashMap<String, String> = HashMap::new();
@@ -679,6 +692,9 @@ impl SessionReader {
                 }
             };
 
+            let Some(entry) = pending_runtime_checkpoint.consume(entry) else {
+                continue;
+            };
             match entry {
                 SessionEntry::Session(h) => {
                     if header.is_some() {
@@ -740,9 +756,17 @@ impl SessionReader {
                     meta = Some(m);
                 }
                 SessionEntry::ThinkingLevelChange(change) => {
+                    effective_thinking = Some(change.thinking_level);
+                    if let Some(settings) = &mut settings {
+                        settings.thinking_level = change.thinking_level;
+                    }
                     thinking_level_changes.push(change);
                 }
                 SessionEntry::ModelChange(change) => {
+                    effective_model = Some(change.model.clone());
+                    if let Some(settings) = &mut settings {
+                        settings.model = change.model.clone();
+                    }
                     model_changes.push(change);
                 }
                 SessionEntry::Compaction(mut entry) => {
@@ -810,7 +834,18 @@ impl SessionReader {
                 SessionEntry::SideQuestion(entry) => side_questions.push(entry),
                 SessionEntry::PlanReview(entry) => plan_review_events.push(entry),
                 SessionEntry::Custom(entry) => {
-                    if entry.custom_type == super::selective_summary::CONTEXT_TYPE {
+                    if entry.custom_type == super::checkpoint_updates::SYSTEM_PARTS_TYPE {
+                        system_prompt_parts = super::checkpoint_updates::decode_parts(entry.data)
+                            .map_err(SessionReadError::InvalidFormat)?;
+                    } else if entry.custom_type == super::SESSION_SETTINGS_CUSTOM_TYPE {
+                        let checkpoint = super::settings::decode_settings(entry.data)
+                            .map_err(SessionReadError::InvalidFormat)?;
+                        effective_model = Some(checkpoint.model.clone());
+                        effective_thinking = Some(checkpoint.thinking_level);
+                        settings = Some(checkpoint);
+                    } else if entry.custom_type == super::selective_summary::CONTEXT_TYPE
+                        || entry.custom_type == super::selective_summary::RUNTIME_CONTEXT_TYPE
+                    {
                         let checkpoint = super::selective_summary::decode_context(entry.data)
                             .map_err(SessionReadError::InvalidFormat)?;
                         let mut projected =
@@ -823,10 +858,12 @@ impl SessionReader {
                         )
                         .map_err(|error| SessionReadError::InvalidFormat(error.to_string()))?;
                         messages = projected;
-                        compactions.clear();
-                        lifecycle_notifications.clear();
-                        lifecycle_agent_notes.clear();
-                        consumed_lifecycle_agent_notes.clear();
+                        if entry.custom_type == super::selective_summary::CONTEXT_TYPE {
+                            compactions.clear();
+                            lifecycle_notifications.clear();
+                            lifecycle_agent_notes.clear();
+                            consumed_lifecycle_agent_notes.clear();
+                        }
                         compaction_context_entries.clear();
                         visible_context_len = 0;
                         for message in &checkpoint.messages {
@@ -838,7 +875,18 @@ impl SessionReader {
                                 visible_context_len += 1;
                             }
                         }
-                        selective_summary_context = Some((checkpoint.messages, messages.len()));
+                        // Runtime snapshots describe the current provider history, not
+                        // whether lifecycle notes have been delivered to its runner.
+                        // Keep those independent delivery receipts and remap display
+                        // notification boundaries to the checkpoint's entry positions.
+                        for notification in &mut lifecycle_notifications {
+                            notification.context_position = compaction_context_entries
+                                .partition_point(|entry| {
+                                    entry.visible_index < notification.entry.visible_index
+                                });
+                        }
+                        selective_summary_context =
+                            Some((checkpoint.messages, messages.len(), compactions.len()));
                     } else if entry.custom_type == super::selective_summary::USAGE_TYPE {
                         let usage = super::selective_summary::decode_usage(entry.data)
                             .map_err(SessionReadError::InvalidFormat)?;
@@ -925,19 +973,15 @@ impl SessionReader {
         let mut header = header
             .ok_or_else(|| SessionReadError::InvalidFormat("Missing session header".to_string()))?;
 
-        apply_effective_preferences(
-            &mut header,
-            model_changes.last().map(|change| change.model.as_str()),
-            thinking_level_changes
-                .last()
-                .map(|change| change.thinking_level),
-        );
+        apply_effective_preferences(&mut header, effective_model.as_deref(), effective_thinking);
 
         lifecycle_agent_notes
             .retain(|note| !consumed_lifecycle_agent_notes.contains(note.application_id.as_str()));
 
         Ok(ParsedSession {
             header,
+            settings,
+            system_prompt_parts,
             messages,
             selective_summary_context,
             meta,
@@ -1009,6 +1053,18 @@ impl SessionReader {
                         serde_json::from_str::<SessionEntry>(&line)
                     {
                         meta = Some(m);
+                    }
+                }
+                Some("custom") => {
+                    if let Ok(SessionEntry::Custom(entry)) =
+                        serde_json::from_str::<SessionEntry>(&line)
+                    {
+                        if entry.custom_type == super::SESSION_SETTINGS_CUSTOM_TYPE {
+                            let settings = super::settings::decode_settings(entry.data)
+                                .map_err(SessionReadError::InvalidFormat)?;
+                            last_model_change = Some(settings.model);
+                            last_thinking_level_change = Some(settings.thinking_level);
+                        }
                     }
                 }
                 Some("model_change") => {

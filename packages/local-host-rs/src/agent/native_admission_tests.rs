@@ -646,6 +646,7 @@ fn test_request_config_building() {
         .map(|definition| definition.tool.clone())
         .collect();
     let request_config = RequestConfig {
+        system_parts: Vec::new(),
         model: config.model.clone(),
         max_tokens: config.max_tokens,
         temperature: Some(0.7),

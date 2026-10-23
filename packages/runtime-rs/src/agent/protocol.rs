@@ -782,6 +782,17 @@ pub struct InlineToolApprovalContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromAgent {
+    /// Measured auxiliary usage, independent of finalized foreground responses.
+    BackgroundUsage {
+        request_id: String,
+        model: String,
+        usage: TokenUsage,
+    },
+    /// Already admitted tool pixels for transcript rendering; never a file-read grant.
+    LocalToolImages {
+        call_id: String,
+        images: Vec<maestro_runtime_contracts::tool_operation::CodeModeImage>,
+    },
     /// Request a fresh opaque capability; contains no authority or secret.
     ManagedAuthorizationRequest { request_id: String },
     /// In-process content for local transcript persistence, before tool dispatch.
@@ -801,6 +812,11 @@ pub enum FromAgent {
     },
     /// Private durable checkpoint of the compacted provider conversation.
     ConversationSnapshot {
+        /// Private local transcript checkpoint; excluded from external transport.
+        #[serde(skip)]
+        local_messages: Vec<maestro_ai::Message>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        system_prompt_parts: Vec<maestro_ai::ContentBlock>,
         protocol_version: String,
         messages: Vec<maestro_ai::Message>,
         /// Explicit queue ids whose prompts are represented by this snapshot.

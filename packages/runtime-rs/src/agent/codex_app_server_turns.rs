@@ -1287,10 +1287,10 @@ fn semantic_messages_to_codex_items(messages: &[Message]) -> Vec<Value> {
             MessageContent::Blocks(blocks) => {
                 for block in blocks {
                     match block {
-                        ContentBlock::Text { text } if !text.is_empty() => {
+                        ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } if !text.is_empty() => {
                             items.push(codex_message_item(message.role, text));
                         }
-                        ContentBlock::Text { .. } => {}
+                        ContentBlock::Text { .. } | ContentBlock::AttributedText { .. } => {}
                         ContentBlock::ToolUse {
                             id, name, input, ..
                         } => items.push(json!({

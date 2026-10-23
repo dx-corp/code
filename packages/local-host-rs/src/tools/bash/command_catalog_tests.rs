@@ -1,6 +1,127 @@
 use super::BashTool;
 
 #[test]
+fn command_catalog_rejects_writes_helpers_and_lookalike_commands_at_both_boundaries() {
+    for command in [
+        "git branch",
+        "git tag",
+        "git branch --list",
+        "git tag --list",
+        "git branch --list --sort=refname",
+        "git tag --list --sort=signature",
+        "git status",
+        "git diff",
+        "git show",
+        "git ls-files",
+        "git log",
+        "git log --no-show-signature --format=\"%G?\"",
+        "git log --no-show-signature --pretty=custom",
+        "git branch --list --format=\"%(signature)\"",
+        "git tag --list --format=\"%(signature)\"",
+        "PATH=./bin; git branch",
+        "for PATH in ./bin; do git -c core.fsmonitor=false status; done",
+        "git() { printf marker; }; git -c core.fsmonitor=false status",
+        "export PATH=./bin; git branch",
+        "gh pr list &",
+        "X=1; cat file",
+        "git -c core.fsmonitor=false diff --no-ext-diff --no-textconv --ext-diff",
+        "git branch -C copied",
+        "date 20300101",
+        "pwd-helper",
+        "git status-helper",
+        "git log-helper",
+        "CAT file",
+        "git diff --output=/tmp/report",
+        "git log --output /tmp/report",
+        "git diff --ext-diff",
+        "git show --textconv",
+        "git log --show-signature",
+        "git branch --unset-upstream",
+        "git branch --list --delete topic",
+        "git remote update origin",
+        "git remote show origin",
+        "git -c core.pager=evil log",
+        "git --exec-path=/tmp log",
+        "sort -o output input",
+        "sort --compress-program=evil input",
+        "uniq input output",
+        "sed -i.bak s/a/b/ file",
+        r#"awk 'BEGIN { system("touch /tmp/marker") }'"#,
+        "file -C",
+        "date -s 2030-01-01",
+        "hostname changed",
+        "nohup cat file",
+        "command touch file",
+        "env X=y cat file",
+        "rg -nF --pre sh pattern .",
+        "rg -nFx pattern .",
+        "jq --arg name",
+        "jq --arg name --from-file evil",
+        "fd -x rm",
+        "cat file > output",
+        "python3 -m pip install package",
+    ] {
+        for candidate in [command.to_string(), format!("{command} | head -n 5")] {
+            assert!(BashTool::requires_approval(&candidate), "tool: {candidate}");
+            assert!(
+                !crate::safety::ActionFirewall::new(".")
+                    .check_bash(&candidate)
+                    .is_allowed(),
+                "firewall: {candidate}"
+            );
+        }
+    }
+}
+
+#[test]
+fn command_catalog_understands_read_arguments_without_blanket_tool_approval() {
+    for command in [
+        "rg -nF TODO src",
+        "rg -n -g '*.rs' -- '-TODO' src",
+        "fd -HI --type f Cargo",
+        "jq -cr '.name' package.json",
+        r"jq --arg name 'hello world' --argjson count 2 '{name: $name, count: $count}'",
+        "cat -- -filename",
+        "head -n 5 file",
+        "sort -rn input",
+        "uniq -c input",
+        "cut -d : -f 1 file",
+        "ls -lah",
+        "git -C repo -c core.fsmonitor=false status --short",
+        "git --no-pager log --no-show-signature --oneline -n 5",
+        "git -c core.fsmonitor=false diff --no-ext-diff --no-textconv --stat -- src",
+        "git branch --list --no-sort 'feature/*'",
+        "git remote -v",
+        "git remote get-url origin",
+        "git tag --list --no-sort 'v*'",
+        "git -c core.fsmonitor=false ls-files --cached",
+        "git ls-tree -r HEAD",
+        "git stash list --no-show-signature --oneline",
+        "git config --get user.name",
+        "git describe --tags --always",
+        "find . -maxdepth 2 -name '*.rs' -print",
+        "date -u '+%Y-%m-%d'",
+        "hostname",
+        "pwd -P",
+        "uname -a",
+        "wc -lw file",
+    ] {
+        for candidate in [command.to_string(), format!("{command} | head -n 5")] {
+            assert!(
+                !BashTool::requires_approval(&candidate),
+                "tool: {candidate}"
+            );
+            assert!(
+                crate::safety::ActionFirewall::new(".")
+                    .check_bash(&candidate)
+                    .is_allowed(),
+                "firewall: {candidate}"
+            );
+        }
+    }
+}
+
+#[test]
 fn common_command_catalog_uses_the_same_rules_at_the_tool_boundary() {
     for command in [
         "gh pr list",

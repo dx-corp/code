@@ -57,125 +57,6 @@ pub struct ParsedCommand {
     pub raw: String,
 }
 
-/// Safe read-only commands that don't require approval
-static SAFE_COMMANDS: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLock::new(|| {
-    [
-        // File reading
-        "cat", "head", "tail", "less", "more", "bat", // Search
-        "grep", "rg", "ag", "find", "fd", "locate", // Directory
-        "ls", "pwd", "tree", "exa", // Output
-        "echo", "printf", // Text processing (read-only)
-        "wc", "sort", "uniq", "diff", "cut", "tr", "awk", "sed", // Metadata
-        "file", "stat", "du", "df", // Lookup
-        "which", "whereis", "type", "command", // Docs
-        "man", "help", "info", // System info
-        "date", "cal", "whoami", "id", "groups", "hostname", "uname", "env", "printenv",
-        // Modern tools
-        "jq", "yq", "fzf", // Testing
-        "test", "[", "true",
-        "false",
-        // NOTE: `tee` and `xargs` are intentionally NOT in this set. Both are
-        // always-writes-or-executes commands as bare program names: `tee`'s
-        // sole purpose is writing its arguments to files (there is no
-        // read-only invocation), and `xargs` executes whatever command is
-        // handed to it (including one built from piped-in, attacker-influenced
-        // data). See CONDITIONALLY_DANGEROUS below.
-    ]
-    .into_iter()
-    .collect()
-});
-
-/// Safe git subcommands that don't modify the repository
-static SAFE_GIT_SUBCOMMANDS: std::sync::LazyLock<HashSet<&'static str>> =
-    std::sync::LazyLock::new(|| {
-        [
-            "status",
-            "log",
-            "diff",
-            "show",
-            "branch",
-            "tag",
-            "remote",
-            "config",
-            "describe",
-            "rev-parse",
-            "ls-files",
-            "ls-tree",
-            "blame",
-            "shortlog",
-            "reflog",
-            "stash",
-        ]
-        .into_iter()
-        .collect()
-    });
-
-/// Check whether arguments to a nominally read-only git subcommand actually
-/// mutate repository state (e.g. `git branch -D`, `git remote set-url`,
-/// `git tag -d`, `git stash drop`, `git config name value`).
-pub(crate) fn git_args_are_mutating(subcommand: &str, args: &[String]) -> bool {
-    // Tokens that turn a nominally read-only subcommand into a mutation.
-    const MUTATING_TOKENS: &[&str] = &[
-        "-d", "-D", "--delete", "add", "remove", "rm", "set-url", "prune", "drop", "clear",
-    ];
-    if args
-        .iter()
-        .any(|arg| MUTATING_TOKENS.contains(&arg.as_str()))
-    {
-        return true;
-    }
-
-    match subcommand {
-        // `git branch foo` creates a branch; `git tag v1` creates a tag.
-        // List mode (`-l`/`--list`) takes a pattern argument and stays read-only.
-        "branch" | "tag" => {
-            if args.iter().any(|arg| arg == "-l" || arg == "--list") {
-                return false;
-            }
-            args.iter().any(|arg| !arg.starts_with('-'))
-        }
-        "config" => {
-            const MUTATING_CONFIG_FLAGS: &[&str] = &[
-                "--add",
-                "--unset",
-                "--unset-all",
-                "--remove-section",
-                "--rename-section",
-                "--edit",
-                "-e",
-            ];
-            if args
-                .iter()
-                .any(|arg| MUTATING_CONFIG_FLAGS.contains(&arg.as_str()))
-            {
-                return true;
-            }
-            // `git config <name>` reads; `git config <name> <value>` writes.
-            args.iter().filter(|arg| !arg.starts_with('-')).count() > 1
-        }
-        _ => false,
-    }
-}
-
-/// Dangerous git subcommands that require approval
-static DANGEROUS_GIT_SUBCOMMANDS: std::sync::LazyLock<HashSet<&'static str>> =
-    std::sync::LazyLock::new(|| {
-        [
-            "reset",
-            "clean",
-            "rm",
-            "push",
-            "rebase",
-            "merge",
-            "cherry-pick",
-            "checkout",
-            "restore",
-            "switch",
-        ]
-        .into_iter()
-        .collect()
-    });
-
 /// Commands that are always dangerous
 static DANGEROUS_COMMANDS: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| {
@@ -361,8 +242,9 @@ pub fn analyze_bash_command_with_attendance(
             let (risk, reason) = determine_risk(
                 &parsed.commands,
                 parsed.has_pipes,
-                parsed.has_redirects,
+                parsed.has_write_redirects,
                 parsed.has_command_substitution,
+                parsed.has_background || parsed.has_shell_effects,
             );
             if risk > analysis.risk {
                 analysis.risk = risk;
@@ -400,8 +282,9 @@ fn analyze_command_form(trimmed: &str, attendance: RunAttendance) -> BashAnalysi
     let (risk, reason) = determine_risk(
         &parsed.commands,
         parsed.has_pipes,
-        parsed.has_redirects,
+        parsed.has_write_redirects,
         parsed.has_command_substitution,
+        parsed.has_background || parsed.has_shell_effects,
     );
 
     BashAnalysis {
@@ -420,6 +303,8 @@ struct ParsedShell {
     commands: Vec<ParsedCommand>,
     has_pipes: bool,
     has_redirects: bool,
+    has_write_redirects: bool,
+    has_shell_effects: bool,
     has_subshell: bool,
     has_background: bool,
     has_command_substitution: bool,
@@ -459,6 +344,8 @@ fn parse_commands(input: &str) -> Result<ParsedShell, ()> {
         commands: Vec::new(),
         has_pipes: false,
         has_redirects: false,
+        has_write_redirects: false,
+        has_shell_effects: false,
         has_subshell: false,
         has_background: false,
         has_command_substitution: false,
@@ -480,6 +367,21 @@ fn parse_commands(input: &str) -> Result<ParsedShell, ()> {
 }
 
 fn classify_syntax_node(node: Node<'_>, source: &str, parsed: &mut ParsedShell) {
+    // Only ordinary command composition can inherit read-only status. These
+    // structures can redefine an executable or environment outside command argv.
+    if (node.kind().ends_with("_statement") && node.kind() != "redirected_statement")
+        || matches!(
+            node.kind(),
+            "variable_assignment"
+                | "function_definition"
+                | "declaration_command"
+                | "unset_command"
+                | "arithmetic_expansion"
+                | "test_command"
+        )
+    {
+        parsed.has_shell_effects = true;
+    }
     match node.kind() {
         "command" => {
             if let Ok(raw) = node.utf8_text(source.as_bytes()) {
@@ -489,8 +391,17 @@ fn classify_syntax_node(node: Node<'_>, source: &str, parsed: &mut ParsedShell) 
             }
         }
         "pipeline" => parsed.has_pipes = true,
-        "redirected_statement" | "file_redirect" | "heredoc_redirect" => {
+        "file_redirect" => {
             parsed.has_redirects = true;
+            let mut cursor = node.walk();
+            // Only a plain input redirect is read-only. Descriptor duplication,
+            // read/write opens, here-documents and output redirects retain review.
+            let plain_input = node.children(&mut cursor).any(|child| child.kind() == "<");
+            parsed.has_write_redirects |= !plain_input;
+        }
+        "heredoc_redirect" | "herestring_redirect" => {
+            parsed.has_redirects = true;
+            parsed.has_write_redirects = true;
         }
         "subshell" => parsed.has_subshell = true,
         "command_substitution" | "process_substitution" => {
@@ -823,9 +734,10 @@ fn skip_wrappers(tokens: &[String]) -> (&str, &[String]) {
 /// Determine the risk level of parsed commands
 fn determine_risk(
     commands: &[ParsedCommand],
-    has_pipes: bool,
+    _has_pipes: bool,
     has_redirects: bool,
     has_command_substitution: bool,
+    has_shell_effects: bool,
 ) -> (CommandRisk, String) {
     // Command substitution is always risky
     if has_command_substitution {
@@ -877,29 +789,8 @@ fn determine_risk(
             continue;
         }
 
-        // Check git subcommands
-        if program == "git" && !cmd.args.is_empty() {
-            let subcommand = cmd.args[0].to_lowercase();
-            if DANGEROUS_GIT_SUBCOMMANDS.contains(subcommand.as_str()) {
-                highest_risk = CommandRisk::RequiresApproval;
-                reason = format!("Git {subcommand} can modify repository");
-            } else if SAFE_GIT_SUBCOMMANDS.contains(subcommand.as_str()) {
-                if git_args_are_mutating(&subcommand, &cmd.args[1..])
-                    && highest_risk == CommandRisk::Safe
-                {
-                    highest_risk = CommandRisk::RequiresApproval;
-                    reason = format!("Git {subcommand} arguments can modify repository");
-                }
-            } else if highest_risk == CommandRisk::Safe {
-                highest_risk = CommandRisk::RequiresApproval;
-                reason = format!("Unknown git subcommand: {subcommand}");
-            }
-            continue;
-        }
-
-        // `find` is in SAFE_COMMANDS (a bare directory walk is read-only),
-        // but several of its predicates write files, delete paths, or exec
-        // arbitrary commands. Those must not inherit `find`'s safe rating.
+        // Retain the explicit dangerous-predicate signal if catalog loading
+        // fails. A missing catalog never grants read-only status.
         if program == "find" && find_has_dangerous_predicate(&cmd.args) {
             if highest_risk == CommandRisk::Safe {
                 highest_risk = CommandRisk::RequiresApproval;
@@ -918,40 +809,17 @@ fn determine_risk(
         }
 
         // Check if command is safe
-        if !SAFE_COMMANDS.contains(program) && highest_risk == CommandRisk::Safe {
+        if highest_risk == CommandRisk::Safe {
             highest_risk = CommandRisk::RequiresApproval;
             reason = format!("Unknown command: {program}");
         }
     }
 
-    // Pipes with non-safe commands need approval
-    if has_pipes && highest_risk == CommandRisk::Safe {
-        // Check if ALL commands in pipe are safe
-        let all_safe = commands.iter().all(|cmd| {
-            let program = cmd.program.to_lowercase();
-            if program == "find" && find_has_dangerous_predicate(&cmd.args) {
-                return false;
-            }
-            if let Some((risk, _)) = classify_known_command(cmd) {
-                return risk == CommandRisk::Safe;
-            }
-            SAFE_COMMANDS.contains(program.as_str())
-                || (program == "git"
-                    && !cmd.args.is_empty()
-                    && SAFE_GIT_SUBCOMMANDS.contains(cmd.args[0].to_lowercase().as_str())
-                    && !git_args_are_mutating(&cmd.args[0].to_lowercase(), &cmd.args[1..]))
-        });
-
-        if !all_safe {
-            highest_risk = CommandRisk::RequiresApproval;
-            reason = "Pipeline contains potentially unsafe commands".to_string();
-        }
-    }
-
     // Redirects to files need approval (could overwrite)
-    if has_redirects && highest_risk == CommandRisk::Safe {
+    if (has_redirects || has_shell_effects) && highest_risk == CommandRisk::Safe {
         highest_risk = CommandRisk::RequiresApproval;
-        reason = "Command uses file redirection".to_string();
+        reason =
+            "Command uses redirection, background execution, or stateful shell syntax".to_string();
     }
 
     (highest_risk, reason)
@@ -1051,10 +919,16 @@ mod tests {
     }
 
     #[test]
-    fn test_benign_ansi_c_quoting_keeps_prior_risk() {
-        // `echo` is a safe command and stays safe once `$'hello\n'` is decoded.
+    fn test_ansi_c_arguments_do_not_grant_approval() {
+        // ANSI-C decoding is only a risk signal, not an argument parser that
+        // can grant approval. Literal ordinary quoted arguments remain supported.
         let analysis = analyze_bash_command(r"echo $'hello\n'");
-        assert_eq!(analysis.risk, CommandRisk::Safe, "{}", analysis.reason);
+        assert_eq!(
+            analysis.risk,
+            CommandRisk::RequiresApproval,
+            "{}",
+            analysis.reason
+        );
 
         // A benign-but-unknown program keeps its pre-existing rating rather
         // than being escalated by canonicalization.
@@ -1204,8 +1078,8 @@ mod tests {
         assert!(is_likely_safe("ls -la"));
         assert!(is_likely_safe("cat file.txt"));
         assert!(is_likely_safe("grep pattern file"));
-        assert!(is_likely_safe("git status"));
-        assert!(is_likely_safe("git log"));
+        assert!(is_likely_safe("git -c core.fsmonitor=false status"));
+        assert!(is_likely_safe("git log --no-show-signature --oneline"));
         assert!(is_likely_safe("pwd"));
         assert!(is_likely_safe("echo hello"));
     }
@@ -1223,14 +1097,18 @@ mod tests {
     #[test]
     fn test_git_subcommands() {
         // Safe git commands
-        assert!(is_likely_safe("git status"));
-        assert!(is_likely_safe("git log"));
-        assert!(is_likely_safe("git diff"));
-        assert!(is_likely_safe("git branch"));
-        assert!(is_likely_safe("git branch -a"));
-        assert!(is_likely_safe("git tag"));
-        assert!(is_likely_safe("git tag -l 'v*'"));
-        assert!(is_likely_safe("git stash list"));
+        assert!(is_likely_safe("git -c core.fsmonitor=false status"));
+        assert!(is_likely_safe("git log --no-show-signature --oneline"));
+        assert!(is_likely_safe(
+            "git -c core.fsmonitor=false diff --no-ext-diff --no-textconv"
+        ));
+        assert!(is_likely_safe("git branch --no-sort"));
+        assert!(is_likely_safe("git branch --no-sort -a"));
+        assert!(is_likely_safe("git tag --no-sort"));
+        assert!(is_likely_safe("git tag -l --no-sort 'v*'"));
+        assert!(is_likely_safe(
+            "git stash list --no-show-signature --oneline"
+        ));
         assert!(is_likely_safe("git config user.name"));
         assert!(is_likely_safe("git config --get user.name"));
 
@@ -1311,7 +1189,12 @@ mod tests {
 
     #[test]
     fn attendance_does_not_change_parseable_commands() {
-        for command in ["ls -la", "rm -rf /", "cargo build", "git status"] {
+        for command in [
+            "ls -la",
+            "rm -rf /",
+            "cargo build",
+            "git -c core.fsmonitor=false status",
+        ] {
             assert_eq!(
                 analyze_bash_command_with_attendance(command, RunAttendance::Unattended).risk,
                 analyze_bash_command(command).risk,

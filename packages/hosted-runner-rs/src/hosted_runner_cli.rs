@@ -537,6 +537,7 @@ async fn start_resolved_hosted_runner_cli_runtime(
     let mut supervisor = AgentSupervisor::new(config.supervisor).with_session_recorder(recorder);
     if let Some(replay) = restore_replay {
         supervisor.restore_session_replay(crate::headless::SessionReplay {
+            system_prompt_parts: Vec::new(),
             semantic_conversation: replay
                 .semantic_conversation
                 .or(recorded_replay.semantic_conversation),

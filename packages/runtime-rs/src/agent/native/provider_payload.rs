@@ -3,6 +3,23 @@
 use super::*;
 
 pub(super) fn vault_history(messages: &[Message], vault: &CredentialVault) -> Result<Vec<Message>> {
+    vault_history_impl(messages, vault, false)
+}
+
+/// Local session checkpoint, never a provider payload. Retain projection identity
+/// so resume does not duplicate already admitted images.
+pub(super) fn vault_checkpoint(
+    messages: &[Message],
+    vault: &CredentialVault,
+) -> Result<Vec<Message>> {
+    vault_history_impl(messages, vault, true)
+}
+
+fn vault_history_impl(
+    messages: &[Message],
+    vault: &CredentialVault,
+    preserve_image_owner: bool,
+) -> Result<Vec<Message>> {
     let mut safe = messages.to_vec();
     for message in &mut safe {
         match &mut message.content {
@@ -11,6 +28,9 @@ pub(super) fn vault_history(messages: &[Message], vault: &CredentialVault) -> Re
                 for block in blocks {
                     match block {
                         ContentBlock::Text { text } => *text = vault.vault_in_text(text),
+                        ContentBlock::AttributedText { text, provenance } => {
+                            super::provenance::vault_attributed_text(text, provenance, vault);
+                        }
                         ContentBlock::Thinking { thinking, .. } => {
                             *thinking = vault.vault_in_text(thinking);
                         }
@@ -25,7 +45,11 @@ pub(super) fn vault_history(messages: &[Message], vault: &CredentialVault) -> Re
                         }
                         ContentBlock::Image {
                             source: ImageSource::Base64 { owner, .. },
-                        } => *owner = None,
+                        } => {
+                            if !preserve_image_owner {
+                                *owner = None;
+                            }
+                        }
                     }
                 }
             }
@@ -48,6 +72,20 @@ pub(super) fn attest_history(
                 for block in blocks {
                     match block {
                         ContentBlock::Text { text: value } => text(value)?,
+                        ContentBlock::AttributedText {
+                            text: value,
+                            provenance,
+                        } => {
+                            text(value)?;
+                            if let Some(origin) = &provenance.origin {
+                                text(origin)?;
+                            }
+                            for derived in &provenance.derived_from {
+                                if let Some(origin) = &derived.origin {
+                                    text(origin)?;
+                                }
+                            }
+                        }
                         ContentBlock::Thinking {
                             thinking,
                             signature,
@@ -202,6 +240,72 @@ pub(super) fn attest_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_checkpoint_retains_image_identity_but_provider_projection_strips_it() {
+        let vault = CredentialVault::new();
+        let owner = crate::ai::ToolImageOwner {
+            call_id: "image-call".into(),
+            index: 0,
+        };
+        let messages = vec![Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::Image {
+                source: ImageSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "aGVsbG8=".into(),
+                    owner: Some(owner.clone()),
+                },
+            }]),
+        }];
+        let local = vault_checkpoint(&messages, &vault).unwrap();
+        let provider = vault_history(&messages, &vault).unwrap();
+        assert_eq!(
+            serde_json::to_value(local).unwrap()[0]["content"][0]["source"]["owner"],
+            serde_json::to_value(owner).unwrap()
+        );
+        assert!(
+            serde_json::to_value(provider).unwrap()[0]["content"][0]["source"]
+                .get("owner")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn provenance_text_and_origins_are_vaulted_without_relabeling_sources() {
+        let vault = CredentialVault::new();
+        let reference = vault.store("source-secret", crate::agent::CredentialType::Password);
+        let messages = vec![Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::AttributedText {
+                text: "content source-secret".into(),
+                provenance: maestro_ai::ContentProvenance {
+                    source: maestro_ai::ContentSource::Repository,
+                    origin: Some("source-secret/AGENTS.md".into()),
+                    derived_from: vec![maestro_ai::ContentOrigin {
+                        source: maestro_ai::ContentSource::Hook,
+                        origin: Some("source-secret/hook".into()),
+                    }],
+                },
+            }]),
+        }];
+        assert!(attest_history(&messages, &vault).is_err());
+        let safe = vault_history(&messages, &vault).unwrap();
+        attest_history(&safe, &vault).unwrap();
+        let serialized = serde_json::to_string(&safe).unwrap();
+        assert!(!serialized.contains("source-secret"));
+        assert!(serialized.contains(&reference));
+        let MessageContent::Blocks(parts) = &safe[0].content else {
+            panic!("parts")
+        };
+        let ContentBlock::AttributedText { provenance, .. } = &parts[0] else {
+            panic!("attribution")
+        };
+        assert_eq!(provenance.source, maestro_ai::ContentSource::Repository);
+        assert_eq!(
+            provenance.derived_from[0].source,
+            maestro_ai::ContentSource::Hook
+        );
+    }
 
     #[test]
     fn a_short_password_cannot_rewrite_roles_tags_schema_or_continuation_bytes() {

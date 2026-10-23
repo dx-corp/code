@@ -111,6 +111,11 @@ fn config(model: &str) -> RequestConfig {
     RequestConfig {
         model: model.to_string(),
         system: Some(SYSTEM_PROMPT.to_string()),
+        system_parts: vec![ContentBlock::attributed_text(
+            SYSTEM_PROMPT,
+            crate::ContentSource::Developer,
+            Some("private-system-origin-sentinel".into()),
+        )],
         tools: Arc::new(vec![
             Tool::new(TOOL_A, "read a file"),
             Tool::new(TOOL_B, "run a shell command"),
@@ -431,4 +436,96 @@ fn every_provider_keeps_the_conversation_text_in_order_without_duplication() {
             "{provider}: conversation order changed"
         );
     }
+}
+
+#[test]
+fn provenance_is_durable_but_every_provider_receives_only_native_text_parts() {
+    let mut messages = vec![Message {
+        role: Role::User,
+        content: MessageContent::Blocks(vec![
+            ContentBlock::attributed_text("real user request", crate::ContentSource::User, None),
+            ContentBlock::attributed_text(
+                "repository context",
+                crate::ContentSource::Repository,
+                Some("private-origin-sentinel".into()),
+            ),
+            ContentBlock::Text {
+                text: "legacy unknown".into(),
+            },
+        ]),
+    }];
+    messages.push(Message {
+        role: Role::Assistant,
+        content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+            id: "call-provenance".into(),
+            name: "read".into(),
+            input: json!({}),
+            gemini_context: None,
+        }]),
+    });
+    messages.push(Message {
+        role: Role::User,
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "call-provenance".into(),
+                content: "actual tool result".into(),
+                is_error: None,
+            },
+            ContentBlock::attributed_text(
+                "hook context beside tool result",
+                crate::ContentSource::Hook,
+                Some("private-hook-sentinel".into()),
+            ),
+        ]),
+    });
+    let before = serde_json::to_value(&messages).unwrap();
+    let openai = OpenAiClient::new("test-key").unwrap();
+    let anthropic = AnthropicClient::new("test-key").unwrap();
+    let google = GoogleClient::new("test-key");
+    let vertex = VertexAiClient::new(
+        "matrix-project",
+        "us-central1",
+        Some("test-key".into()),
+        None,
+    );
+    let kimi = KimiK3Client::new("test-key", "https://kimi.test").unwrap();
+    let bodies = [
+        openai
+            .build_request_body_for_api(&messages, &config("openai/gpt-4.1"), false)
+            .unwrap(),
+        openai
+            .build_request_body_for_api(&messages, &config("openai/gpt-5.5"), true)
+            .unwrap(),
+        anthropic
+            .build_request_body(&messages, &config("anthropic/claude-sonnet-4-20250514"))
+            .unwrap(),
+        google
+            .request_body_json(&messages, &config("google/gemini-2.5-pro"))
+            .unwrap(),
+        vertex
+            .request_body_json(&messages, &config("vertex/gemini-2.5-pro"))
+            .unwrap(),
+        kimi.build_request_body(&messages, &config("moonshot/kimi-k3")),
+    ];
+    for body in bodies {
+        let wire = serde_json::to_string(&body).unwrap();
+        for text in [
+            "real user request",
+            "repository context",
+            "legacy unknown",
+            "actual tool result",
+            "hook context beside tool result",
+        ] {
+            assert_eq!(wire.matches(text).count(), 1, "{wire}");
+        }
+        for metadata in [
+            "attributed_text",
+            "private-origin-sentinel",
+            "private-hook-sentinel",
+            "private-system-origin-sentinel",
+        ] {
+            assert!(!wire.contains(metadata), "{wire}");
+        }
+    }
+    assert_eq!(serde_json::to_value(&messages).unwrap(), before);
 }

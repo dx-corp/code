@@ -336,6 +336,9 @@ impl App {
         }
 
         if self.session_manager.writer().is_some() || self.session_manager.is_ephemeral_session() {
+            if !self.record_session_settings() {
+                bail!("Failed to persist session settings before the request");
+            }
             return Ok(());
         }
 
@@ -396,8 +399,11 @@ impl App {
             ));
             return Err(anyhow::Error::new(error).context("Failed to start session"));
         }
-        self.flush_session();
+        if !self.record_session_settings() {
+            bail!("Failed to persist initial session settings");
+        }
 
+        self.startup_session_model_override = None;
         self.state.session_id = Some(session_id.clone());
         if let Some(event) = self.new_session_event(
             maestro_runtime_contracts::SessionEventLane::Runtime,
@@ -912,6 +918,32 @@ impl App {
         self.flush_session();
     }
 
+    pub(super) fn record_system_prompt_parts(&mut self, parts: &[crate::ai::ContentBlock]) {
+        let Some(path) = self.session_manager.current_session_path() else {
+            return;
+        };
+        let Ok(encoded) = serde_json::to_value(parts) else {
+            return;
+        };
+        if self
+            .persisted_system_prompt_parts
+            .as_ref()
+            .is_some_and(|(saved_path, saved)| saved_path == &path && saved == &encoded)
+        {
+            return;
+        }
+        match crate::session::system_prompt_parts_entry(parts) {
+            Ok(entry) => {
+                if self.write_session_entry(entry) && self.flush_session() {
+                    self.persisted_system_prompt_parts = Some((path, encoded));
+                }
+            }
+            Err(error) => {
+                self.state.error = Some(format!("Could not persist request provenance: {error}"));
+            }
+        }
+    }
+
     pub(super) fn record_model_change(&mut self, model: &str) {
         if self.session_manager.writer().is_none() {
             return;
@@ -923,6 +955,7 @@ impl App {
             model_metadata: None,
         });
         self.write_session_entry(entry);
+        self.record_session_settings();
     }
 
     pub(super) fn record_thinking_level_change(&mut self, level: ThinkingLevel) {
@@ -935,6 +968,7 @@ impl App {
             thinking_level: level,
         });
         self.write_session_entry(entry);
+        self.record_session_settings();
     }
 
     pub(super) fn record_compaction_entry(
@@ -1001,6 +1035,71 @@ impl App {
                 provider: None,
             };
             let _ = self.usage_tracker.add_turn_for_model(&entry.model, &usage);
+        }
+    }
+}
+
+impl App {
+    pub(super) fn record_runtime_context_event(&mut self, msg: &FromAgent) {
+        match msg {
+            FromAgent::ConversationSnapshot {
+                system_prompt_parts,
+                local_messages,
+                ..
+            } => {
+                self.record_system_prompt_parts(system_prompt_parts);
+                if !local_messages.is_empty() {
+                    match crate::session::runtime_context_entries(local_messages) {
+                        Ok(entries) => {
+                            for entry in entries {
+                                if !self.write_session_entry(entry) {
+                                    break;
+                                }
+                            }
+                            self.flush_session();
+                        }
+                        Err(error) => {
+                            self.state.error =
+                                Some(format!("Failed to persist local context: {error}"));
+                        }
+                    }
+                }
+            }
+            FromAgent::BackgroundUsage { model, usage, .. } => {
+                let mut metered = to_headless_usage(usage);
+                metered.model_id = Some(model.clone());
+                for alert in self.usage_tracker.add_turn(&metered) {
+                    self.state.add_system_message(alert);
+                }
+                let tokens = crate::goal::GoalStore::billable_tokens(
+                    metered.input_tokens,
+                    metered.output_tokens,
+                    metered.cache_read_tokens,
+                );
+                if self.goal_store.current.is_some() && tokens > 0 {
+                    match self.goal_store.account_tokens(tokens) {
+                        Ok(true) => {
+                            self.goal_auto_continue_armed = false;
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.state.error =
+                                Some(format!("Failed to account summary tokens: {error}"));
+                        }
+                    }
+                }
+                match crate::session::selective_summary_usage_entry(model, usage) {
+                    Ok(entry) => {
+                        self.write_session_entry(entry);
+                        self.flush_session();
+                    }
+                    Err(error) => {
+                        self.state.error =
+                            Some(format!("Failed to persist summary usage: {error}"));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

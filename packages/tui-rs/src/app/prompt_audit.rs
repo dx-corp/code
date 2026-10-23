@@ -33,6 +33,7 @@ pub(super) struct PromptFragment {
     source: String,
     content: String,
     rendered: bool,
+    provenance: maestro_ai::ContentProvenance,
 }
 
 impl PromptFragment {
@@ -46,7 +47,16 @@ impl PromptFragment {
             source: source.into(),
             content: content.into(),
             rendered: true,
+            provenance: maestro_ai::ContentProvenance::new(
+                maestro_ai::ContentSource::Unknown,
+                None,
+            ),
         }
+    }
+
+    pub(super) fn with_provenance(mut self, source: maestro_ai::ContentSource) -> Self {
+        self.provenance = maestro_ai::ContentProvenance::new(source, Some(self.source.clone()));
+        self
     }
 
     pub(super) fn audit_only(name: impl Into<String>, source: impl Into<String>) -> Self {
@@ -55,6 +65,10 @@ impl PromptFragment {
             source: source.into(),
             content: String::new(),
             rendered: false,
+            provenance: maestro_ai::ContentProvenance::new(
+                maestro_ai::ContentSource::Unknown,
+                None,
+            ),
         }
     }
 }
@@ -67,6 +81,18 @@ pub(super) struct PromptAssembly {
 impl PromptAssembly {
     pub(super) fn new(fragments: Vec<PromptFragment>) -> Self {
         Self { fragments }
+    }
+
+    /// Matches render byte-for-byte when text parts are joined with two newlines.
+    pub(super) fn content_parts(&self) -> Vec<maestro_ai::ContentBlock> {
+        self.fragments
+            .iter()
+            .filter(|fragment| fragment.rendered)
+            .map(|fragment| maestro_ai::ContentBlock::AttributedText {
+                text: fragment.content.clone(),
+                provenance: fragment.provenance.clone(),
+            })
+            .collect()
     }
 
     pub(super) fn render(&self) -> String {

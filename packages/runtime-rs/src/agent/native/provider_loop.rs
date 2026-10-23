@@ -173,13 +173,19 @@ impl NativeAgentRunner {
             .count() as u64;
         let cx = BatchEndContext {
             turn_id: self.current_turn_id.clone(),
-            batch_size: tool_results.len() as u64,
+            batch_size: tool_results
+                .iter()
+                .filter(|block| matches!(block, ContentBlock::ToolResult { .. }))
+                .count() as u64,
             error_count,
         };
 
         let Some(ContentBlock::ToolResult {
             content, is_error, ..
-        }) = tool_results.last_mut()
+        }) = tool_results
+            .iter_mut()
+            .rev()
+            .find(|block| matches!(block, ContentBlock::ToolResult { .. }))
         else {
             // Still announce the boundary; a tenant that only counts batches
             // must not miss one because the batch ended on a non-tool block.
@@ -256,6 +262,7 @@ impl NativeAgentRunner {
             // `record_step` above counts this attempt, so a count above one
             // means an earlier request in this turn already carried any
             // accepted user note to the provider.
+            self.poll_background_compaction();
             self.compact_before_request(step_budget.executed() > 1);
 
             // Make the API call
@@ -381,8 +388,30 @@ impl NativeAgentRunner {
             let mut extension_text_steer: Vec<String> = Vec::new();
             let mut detected_text_loop: Option<LoopKind> = None;
 
-            // Process stream events
-            while let Some(event) = rx.recv().await {
+            // Commands must be admitted while a provider is streaming, including
+            // when it stalls between chunks. Follow-ups remain queued.
+            let mut user_steered = false;
+            loop {
+                let event = match self.next_provider_input(rx.recv()).await? {
+                    commands::NativeStreamInput::Event(Some(event)) => event,
+                    commands::NativeStreamInput::Event(None) => break,
+                    commands::NativeStreamInput::Steer => {
+                        user_steered = true;
+                        saw_stream_terminal = true;
+                        abort_pending_tools_after_stream_error(
+                            &mut assistant_content,
+                            &mut pending_tool_calls,
+                        );
+                        if !current_text.is_empty() {
+                            assistant_content.push(ContentBlock::Text {
+                                text: std::mem::take(&mut current_text),
+                            });
+                        }
+                        // Unfinished thinking lacks its provider signature and
+                        // unfinished tool proposals have never been admitted.
+                        break;
+                    }
+                };
                 match event {
                     StreamEvent::ManagedGatewayReceipt(receipt) => {
                         let _ = self.event_tx.send(FromAgent::OperationObservation {
@@ -693,6 +722,43 @@ impl NativeAgentRunner {
                 };
             }
 
+            if user_steered {
+                rx.cancel_and_wait()
+                    .await
+                    .context("failed to stop steered provider stream")?;
+                self.output_tokens_spent =
+                    self.output_tokens_spent.saturating_add(usage.output_tokens);
+                let _ = self.event_tx.send(FromAgent::LocalAssistantContent {
+                    response_id: response_id.clone(),
+                    content: assistant_content.clone(),
+                });
+                if !assistant_content.is_empty() {
+                    self.messages_mut().push(Message {
+                        role: Role::Assistant,
+                        content: MessageContent::Blocks(assistant_content),
+                    });
+                }
+                let _ = self.event_tx.send(FromAgent::ResponseEnd {
+                    response_id: response_id.clone(),
+                    usage: saw_usage.then_some(usage),
+                });
+                // Respect cancellation ordered after the steer before admitting
+                // another request. Never replay an abandoned tool proposal.
+                if self.drain_pending_commands().await {
+                    return Err(anyhow::anyhow!("Request cancelled"));
+                }
+                let pending = self.dequeue_next_turn_messages(false);
+                self.workflow_state.reset();
+                self.announce_next_turn_messages(&pending);
+                if self.append_pending_messages_for_turn(pending).await? {
+                    begin_queued_user_turn(&mut reminders, &mut self.denial_memory, step_budget);
+                    continue 'turn;
+                }
+                // A hook may reject the queued correction. The previous
+                // response was interrupted, so it must not report completion.
+                return Err(anyhow::anyhow!("Request cancelled"));
+            }
+
             if let Some(kind) = detected_text_loop {
                 // The unified stream owns both its retry forwarder and the
                 // provider's HTTP/SSE producer. Confirm both have released
@@ -854,16 +920,12 @@ impl NativeAgentRunner {
             // the next request is built; `build_config` reads the running total.
             self.output_tokens_spent = self.output_tokens_spent.saturating_add(usage.output_tokens);
 
-            // Complete optional summarization while this response still owns
-            // the turn. Its billed usage is included in the response total.
             let prepared_compaction = if pending_tool_calls.is_empty()
                 && self.compactor.should_auto_compact(&self.messages)
             {
                 let compaction_started = Instant::now();
-                let result = self.compactor.compact_with_tokens(&self.messages);
-                let result = self
-                    .enhance_compaction(result, &mut usage, &mut saw_usage)
-                    .await;
+                let mut result = self.compactor.compact_with_tokens(&self.messages);
+                self.prepare_continuation(&mut result);
                 if result.was_compacted() {
                     let _ = self.event_tx.send(FromAgent::CompactionMeasured {
                         duration_ms: compaction_started
@@ -1067,6 +1129,7 @@ impl NativeAgentRunner {
                     let _ = self.event_tx.send(FromAgent::Status {
                         message: status_msg,
                     });
+                    self.start_background_compaction(&result, config);
                     // Adopt provenance only with its compacted message history. A
                     // cancelled preparation must not become the next merge's input.
                     if let Some(record) = result.continuation {

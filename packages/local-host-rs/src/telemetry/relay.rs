@@ -314,6 +314,11 @@ pub(crate) enum TelemetryEvent {
         response_id: InlineLabel,
         usage: Option<TokenUsage>,
     },
+    BackgroundUsage {
+        request_id: InlineLabel,
+        model: InlineLabel,
+        usage: TokenUsage,
+    },
     TurnCompleted,
     TurnInterrupted,
     SideQuestionStart {
@@ -808,6 +813,15 @@ impl TelemetryEvent {
                 response_id: response_id.as_str().to_owned(),
                 usage,
             },
+            Self::BackgroundUsage {
+                request_id,
+                model,
+                usage,
+            } => FromAgent::BackgroundUsage {
+                request_id: request_id.as_str().to_owned(),
+                model: model.as_str().to_owned(),
+                usage,
+            },
             Self::TurnCompleted => FromAgent::TurnCompleted {
                 response_id: String::new(),
                 coding_completion: None,
@@ -998,6 +1012,15 @@ fn sanitized_event(event: &FromAgent) -> Option<TelemetryEvent> {
         },
         FromAgent::ResponseEnd { response_id, usage } => TelemetryEvent::ResponseEnd {
             response_id: InlineLabel::new(response_id),
+            usage: usage.clone(),
+        },
+        FromAgent::BackgroundUsage {
+            request_id,
+            model,
+            usage,
+        } => TelemetryEvent::BackgroundUsage {
+            request_id: InlineLabel::new(request_id),
+            model: InlineLabel::new(model),
             usage: usage.clone(),
         },
         FromAgent::TurnCompleted { .. } => TelemetryEvent::TurnCompleted,
@@ -1460,5 +1483,29 @@ mod tests {
             pending_output_bytes: 0,
             pending_first_output_at: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod background_usage_tests {
+    use super::*;
+
+    #[test]
+    fn background_usage_retains_its_request_and_model_without_response_framing() {
+        let event = FromAgent::BackgroundUsage {
+            request_id: "summary-1".into(),
+            model: "summary-model".into(),
+            usage: TokenUsage {
+                output_tokens: 17,
+                cost: Some(0.12),
+                ..Default::default()
+            },
+        };
+        let observed = sanitized_event(&event).unwrap().into_agent_event();
+        assert!(
+            matches!(observed, FromAgent::BackgroundUsage { request_id, model, usage }
+            if request_id == "summary-1" && model == "summary-model"
+                && usage.output_tokens == 17 && usage.cost == Some(0.12))
+        );
     }
 }

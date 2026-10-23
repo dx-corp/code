@@ -150,7 +150,12 @@ mod tests {
     #[test]
     fn test_analyzer_and_firewall_agree_on_safe() {
         let firewall = ActionFirewall::new("/workspace");
-        let safe_commands = ["ls -la", "cat file.txt", "pwd", "git status"];
+        let safe_commands = [
+            "ls -la",
+            "cat file.txt",
+            "pwd",
+            "git -c core.fsmonitor=false status",
+        ];
 
         for cmd in safe_commands {
             let analysis = analyze_bash_command(cmd);
@@ -225,7 +230,7 @@ mod tests {
         assert!(validate_tool_call(&firewall, &mut safety, "read", &read_args).is_ok());
 
         // Agent runs a safe command
-        let bash_args = json!({"command": "git status"});
+        let bash_args = json!({"command": "git -c core.fsmonitor=false status"});
         assert!(validate_tool_call(&firewall, &mut safety, "bash", &bash_args).is_ok());
 
         // Agent writes to workspace
@@ -530,6 +535,6 @@ mod tests {
         // Unrelated read-only behavior remains eligible for auto-approval.
         assert!(would_auto_run("find . -name '*.rs'"));
         assert!(would_auto_run("cat file.txt"));
-        assert!(would_auto_run("git status"));
+        assert!(would_auto_run("git -c core.fsmonitor=false status"));
     }
 }

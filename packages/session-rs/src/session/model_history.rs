@@ -43,14 +43,18 @@ pub fn model_history(session: &ParsedSession) -> Vec<Message> {
             (Message { role, content }, visible)
         })
         .collect();
-    if let Some((checkpoint, display_len)) = &session.selective_summary_context {
+    if let Some((checkpoint, display_len, _)) = &session.selective_summary_context {
         let prefix = checkpoint.iter().cloned().map(|message| {
             let visible = super::selective_summary::context_message_visible(&message);
             (message, visible)
         });
         history.splice(..(*display_len).min(history.len()), prefix);
     }
-    for compaction in &session.compactions {
+    let applied_compactions = session
+        .selective_summary_context
+        .as_ref()
+        .map_or(0, |(_, _, count)| *count);
+    for compaction in session.compactions.iter().skip(applied_compactions) {
         if let Some(index) = compaction.first_kept_entry_index {
             let boundary = if index == 0 {
                 0

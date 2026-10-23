@@ -161,6 +161,9 @@ fn transform_block_for_target(
     target: OutboundTarget,
 ) -> Option<ContentBlock> {
     match block {
+        ContentBlock::AttributedText { text, .. } => {
+            Some(ContentBlock::Text { text: text.clone() })
+        }
         ContentBlock::Thinking {
             thinking,
             signature,

@@ -646,6 +646,7 @@ pub(super) async fn run_with_shutdown(
             drop(run);
             let code = result?;
             let target = app.resume_target.take();
+            let model_override = app.take_startup_session_model_override();
             if target.is_some() {
                 app.stop_agent_for_resume().await;
             }
@@ -659,22 +660,23 @@ pub(super) async fn run_with_shutdown(
                         // cannot compete with the resumed TUI for keystrokes.
                         use std::os::unix::process::CommandExt;
                         let error = tokio::task::spawn_blocking(move || {
-                            std::process::Command::new(executable)
-                                .current_dir(cwd)
-                                .arg("--resume-session")
-                                .arg(session_id)
-                                .exec()
+                            let mut command = std::process::Command::new(executable);
+                            command.current_dir(cwd).arg("--resume-session").arg(session_id);
+                            if let Some(model) = model_override {
+                                command.arg("--model").arg(model);
+                            }
+                            command.exec()
                         }).await?;
                         return Err(error.into());
                     }
                     #[cfg(not(unix))]
                     {
-                        let status = tokio::process::Command::new(executable)
-                            .current_dir(cwd)
-                            .arg("--resume-session")
-                            .arg(session_id)
-                            .status()
-                            .await?;
+                        let mut command = tokio::process::Command::new(executable);
+                        command.current_dir(cwd).arg("--resume-session").arg(session_id);
+                        if let Some(model) = model_override {
+                            command.arg("--model").arg(model);
+                        }
+                        let status = command.status().await?;
                         return Ok(status.code().unwrap_or(1));
                     }
                 }

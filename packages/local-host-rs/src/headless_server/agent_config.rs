@@ -14,6 +14,7 @@ impl HeadlessState {
             model_capabilities: Some(self.model_capabilities),
             max_tokens: crate::model_catalog::default_max_output_tokens(&self.model),
             max_tokens_source: MaxTokensSource::Catalog,
+            system_prompt_parts: Vec::new(),
             system_prompt: Some(self.system_prompt.clone()),
             thinking_enabled: self.thinking_enabled,
             thinking_budget: self.thinking_budget,

@@ -490,17 +490,7 @@ impl NativeAgentRunner {
             else {
                 continue;
             };
-            let mut text = match &message.content {
-                MessageContent::Text(text) => text.clone(),
-                MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .filter_map(|block| match block {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            };
+            let mut text = user_message_text(&message).unwrap_or_default();
             if let Some(context) = prompt_context {
                 text.push_str("\n\n");
                 text.push_str(&context);

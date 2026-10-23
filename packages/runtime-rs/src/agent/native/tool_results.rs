@@ -623,7 +623,7 @@ impl NativeAgentRunner {
         call: ToolCallContext,
         approved: bool,
         result: Option<ToolExecution>,
-    ) -> ContentBlock {
+    ) -> Vec<ContentBlock> {
         let ToolCallContext {
             call_id,
             tool_name,
@@ -670,11 +670,11 @@ impl NativeAgentRunner {
                 &tool_name,
                 spill_dir.as_deref(),
             );
-            return ContentBlock::ToolResult {
+            return vec![ContentBlock::ToolResult {
                 tool_use_id: call_id,
                 content: content.content,
                 is_error: Some(true),
-            };
+            }];
         }
         if approved && result.is_none() {
             let execution_args = tool_args_for_execution(&safe_args);
@@ -811,21 +811,12 @@ impl NativeAgentRunner {
         // workflow bookkeeping below records: the tool really did run.
         let reported_error = is_error || hook_outcome.rejected.is_some();
 
-        // Append injected context if any. A `PostToolUse` hook's context was
-        // computed and then dropped, so a hook that returned `contextToAdd`
-        // had no effect on the request that followed.
-        let mut result_content = append_hook_context(
-            &self.hooks,
-            content,
-            NativeHookEvent::PreToolUse,
+        let hook_parts = self.tool_hook_context_parts(
+            &call_id,
             extra_context.as_deref(),
-        );
-        result_content = append_hook_context(
-            &self.hooks,
-            result_content,
-            NativeHookEvent::PostToolUse,
             hook_outcome.context.as_deref(),
         );
+        let mut result_content = content;
         if let Some(reason) = &hook_outcome.rejected {
             result_content =
                 format!("{result_content}\n\n[Eval gate rejected this result: {reason}]");
@@ -879,12 +870,44 @@ impl NativeAgentRunner {
             );
         }
         self.complete_tool_operation(&call_id).await;
-        ContentBlock::ToolResult {
+        let mut parts = vec![ContentBlock::ToolResult {
             tool_use_id: call_id,
             content: result_content,
             is_error: Some(reported_error),
-        }
+        }];
+        parts.extend(hook_parts);
+        parts
     }
+
+    pub(super) fn tool_hook_context_parts(
+        &self,
+        call_id: &str,
+        pre_context: Option<&str>,
+        post_context: Option<&str>,
+    ) -> Vec<ContentBlock> {
+        [
+            (NativeHookEvent::PreToolUse, pre_context),
+            (NativeHookEvent::PostToolUse, post_context),
+        ]
+        .into_iter()
+        .filter_map(|(event, context)| {
+            let context = context?;
+            let (rendered, source) = match self.hooks.render_hook_context(event, context) {
+                Ok(rendered) => (rendered, maestro_ai::ContentSource::Hook),
+                Err(error) => (error, maestro_ai::ContentSource::Harness),
+            };
+            if rendered.is_empty() {
+                return None;
+            }
+            Some(ContentBlock::attributed_text(
+                self.credential_vault.vault_in_text(&rendered),
+                source,
+                Some(format!("{event:?}:{call_id}")),
+            ))
+        })
+        .collect()
+    }
+
     pub(super) async fn bound_final_tool_results(&mut self, results: &mut [ContentBlock]) {
         let session_id = self.hooks.hook_session_id().await;
         let spill_dir = model_tool_spill_dir_for_active_tools(
@@ -894,26 +917,39 @@ impl NativeAgentRunner {
             session_id.as_deref(),
             self.owns_persistent_tool_spills,
         );
+        let mut preceding_call_id = None;
         for block in results {
-            let ContentBlock::ToolResult {
-                tool_use_id,
-                content,
-                ..
-            } = block
-            else {
-                continue;
+            let (call_id, content, label) = match block {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
+                    preceding_call_id = Some(tool_use_id.clone());
+                    (tool_use_id.clone(), content, "tool-result")
+                }
+                ContentBlock::AttributedText { text, provenance }
+                    if matches!(
+                        provenance.source,
+                        maestro_ai::ContentSource::Hook | maestro_ai::ContentSource::Harness
+                    ) =>
+                {
+                    let Some(call_id) = preceding_call_id.clone() else {
+                        continue;
+                    };
+                    (call_id, text, "hook-context")
+                }
+                _ => continue,
             };
             // No prose-based dispatch: the name is only a safe spill-file label.
             let safe_content = self.credential_vault.vault_in_text(content);
-            let output = self.tool_executor.clamp_tool_output(
-                &safe_content,
-                "tool-result",
-                spill_dir.as_deref(),
-            );
+            let output =
+                self.tool_executor
+                    .clamp_tool_output(&safe_content, label, spill_dir.as_deref());
             *content = output.content;
             if let Some(path) = output.saved_path {
                 let reference = crate::agent::compaction::ToolOutputReference {
-                    tool_call_id: tool_use_id.clone(),
+                    tool_call_id: call_id,
                     path: path.to_string_lossy().into_owned(),
                 };
                 let references = &mut self

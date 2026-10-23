@@ -1277,6 +1277,8 @@ Exit status:
         Err(error) => return Err(error.into()),
     };
 
+    let has_explicit_session_model = args.model.is_some() || args.provider.is_some();
+
     if let Some(id) = &args.resume_session {
         let cwd = std::env::current_dir()?;
         let manager = crate::session::SessionManager::new(cwd.to_string_lossy().to_string());
@@ -1402,9 +1404,20 @@ Exit status:
     }
 
     run_interactive_with_shutdown(move || {
-        let mut app = App::new_with_initial_prompt(initial_prompt)?;
+        let mut app = App::new_with_initial_prompt_and_model_override(
+            initial_prompt,
+            selected_model
+                .clone()
+                .filter(|_| has_explicit_session_model && (args.resume || args.r#continue)),
+        )?;
         if let Some(id) = &args.resume_session {
+            app.set_startup_session_model_override(
+                selected_model
+                    .clone()
+                    .filter(|_| has_explicit_session_model),
+            );
             app.resume_session_at_startup(id);
+            app.finish_startup_session_model_override();
         }
         Ok(app)
     })

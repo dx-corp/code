@@ -33,17 +33,20 @@ impl MessageContent {
         Self::Text(s.into())
     }
 
+    /// Attach provenance at the owner that assembles a part, never by parsing its prose.
+    pub fn attributed_text(
+        text: impl Into<String>,
+        source: ContentSource,
+        origin: Option<String>,
+    ) -> Self {
+        Self::Blocks(vec![ContentBlock::attributed_text(text, source, origin)])
+    }
+
     #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(s) => Some(s),
-            Self::Blocks(blocks) => {
-                // Return first text block
-                blocks.iter().find_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-            }
+            Self::Blocks(blocks) => blocks.iter().find_map(ContentBlock::text_content),
         }
     }
 }
@@ -68,10 +71,59 @@ impl std::fmt::Debug for GeminiToolContext {
     }
 }
 
+/// Recorded origin of one content part. This is descriptive evidence, not an
+/// authorization or instruction-priority grant. Replayed metadata cannot change policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentSource {
+    #[default]
+    Unknown,
+    User,
+    Developer,
+    Repository,
+    Skill,
+    Hook,
+    Tool,
+    Harness,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ContentOrigin {
+    pub source: ContentSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentProvenance {
+    pub source: ContentSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Original origins represented by a generated summary. This deliberately
+    /// does not claim that generated prose was authored by those sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_from: Vec<ContentOrigin>,
+}
+
+impl ContentProvenance {
+    pub fn new(source: ContentSource, origin: Option<String>) -> Self {
+        Self {
+            source,
+            origin,
+            derived_from: Vec::new(),
+        }
+    }
+}
+
 /// Content block types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
+    AttributedText {
+        text: String,
+        provenance: ContentProvenance,
+    },
     Text {
         text: String,
     },
@@ -99,6 +151,26 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+}
+
+impl ContentBlock {
+    pub fn attributed_text(
+        text: impl Into<String>,
+        source: ContentSource,
+        origin: Option<String>,
+    ) -> Self {
+        Self::AttributedText {
+            text: text.into(),
+            provenance: ContentProvenance::new(source, origin),
+        }
+    }
+
+    pub fn text_content(&self) -> Option<&str> {
+        match self {
+            Self::Text { text } | Self::AttributedText { text, .. } => Some(text),
+            _ => None,
+        }
+    }
 }
 
 /// Runtime-bound image projection identity, retained in checkpoints only.
@@ -301,6 +373,9 @@ pub struct RequestConfig {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub system: Option<String>,
+    /// Descriptive parts of `system`, joined with two newlines. Empty is legacy
+    /// unknown provenance. Never used to choose role, grant access, or change wire text.
+    pub system_parts: Vec<ContentBlock>,
     pub tools: Arc<Vec<Tool>>,
     pub thinking: Option<ThinkingConfig>,
     /// Enable provider prompt caching for stable system, tool, and history prefixes.
@@ -313,6 +388,28 @@ pub struct RequestConfig {
     pub cache_topology: Option<crate::cache_topology::PreparedPrompt>,
 }
 
+impl RequestConfig {
+    /// Fail closed on stale provenance rather than silently mislabeling a prompt.
+    pub fn validate_system_parts(&self) -> anyhow::Result<()> {
+        if self.system_parts.is_empty() {
+            return Ok(());
+        }
+        let parts = self
+            .system_parts
+            .iter()
+            .map(|part| {
+                part.text_content()
+                    .ok_or_else(|| anyhow::anyhow!("system provenance contains a non-text part"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            self.system.as_deref() == Some(parts.join("\n\n").as_str()),
+            "system provenance does not match rendered prompt"
+        );
+        Ok(())
+    }
+}
+
 impl Default for RequestConfig {
     fn default() -> Self {
         Self {
@@ -320,6 +417,7 @@ impl Default for RequestConfig {
             max_tokens: 8192,
             temperature: None,
             system: None,
+            system_parts: Vec::new(),
             tools: Arc::new(Vec::new()),
             thinking: None,
             cache_system_prompt: false,
@@ -623,5 +721,60 @@ mod tests {
         let json = serde_json::to_value(&block).unwrap();
         assert_eq!(json["type"], "thinking");
         assert!(json.get("signature").is_none());
+    }
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_parts_roundtrip_without_promoting_legacy_text() {
+        let content = MessageContent::Blocks(vec![
+            ContentBlock::attributed_text("user request", ContentSource::User, None),
+            ContentBlock::attributed_text(
+                "repository instructions",
+                ContentSource::Repository,
+                Some("AGENTS.md".into()),
+            ),
+            ContentBlock::Text {
+                text: "legacy unknown".into(),
+            },
+        ]);
+        let value = serde_json::to_value(&content).unwrap();
+        let restored: MessageContent = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), value);
+        assert_eq!(value[0]["provenance"]["source"], "user");
+        assert_eq!(value[1]["provenance"]["source"], "repository");
+        assert!(value[2].get("provenance").is_none());
+        let legacy: MessageContent = serde_json::from_str(r#""plain legacy text""#).unwrap();
+        assert!(matches!(legacy, MessageContent::Text(_)));
+    }
+
+    #[test]
+    fn system_provenance_rejects_stale_or_nontext_parts() {
+        let mut config = RequestConfig {
+            system: Some("policy\n\nrepository".into()),
+            system_parts: vec![
+                ContentBlock::attributed_text("policy", ContentSource::Developer, None),
+                ContentBlock::attributed_text(
+                    "repository",
+                    ContentSource::Repository,
+                    Some("AGENTS.md".into()),
+                ),
+            ],
+            ..RequestConfig::default()
+        };
+        config.validate_system_parts().unwrap();
+        config.system = Some("changed policy".into());
+        assert!(config.validate_system_parts().is_err());
+        config.system_parts = vec![ContentBlock::Image {
+            source: ImageSource::Url {
+                url: "https://example.com/image.png".into(),
+            },
+        }];
+        assert!(config.validate_system_parts().is_err());
+        config.system_parts.clear();
+        config.validate_system_parts().unwrap();
     }
 }

@@ -1,3 +1,4 @@
+mod session_replay;
 use super::*;
 use crate::headless::messages::{
     ActiveFileWatch, ActiveUtilityCommand, PendingApproval, UtilityCommandTerminalMode,
@@ -863,69 +864,6 @@ fn test_supervisor_builder() {
 }
 
 #[test]
-fn test_supervisor_builder_restores_session_replay() {
-    let replay = SessionReplay {
-        state: AgentState {
-            model: Some("claude-3-opus".to_string()),
-            provider: Some("anthropic".to_string()),
-            is_ready: true,
-            ..AgentState::default()
-        },
-        last_init: Some(InitConfig {
-            system_prompt: Some("You are Maestro".to_string()),
-            append_system_prompt: None,
-            thinking_level: Some(super::super::messages::ThinkingLevel::High),
-            approval_mode: Some(super::super::messages::ApprovalMode::Prompt),
-            history: None,
-            code_mode: None,
-            tool_grant: None,
-        }),
-        semantic_conversation: None,
-        last_workspace_capability_set: None,
-        last_process_budget: None,
-    };
-
-    let supervisor = SupervisorBuilder::new().session_replay(replay).build();
-    assert_eq!(supervisor.state().model.as_deref(), Some("claude-3-opus"));
-    assert_eq!(supervisor.state().provider.as_deref(), Some("anthropic"));
-    assert!(supervisor.state().is_ready);
-}
-
-#[test]
-fn session_replay_does_not_override_explicit_remote_session_id() {
-    let replay = SessionReplay {
-        state: AgentState {
-            session_id: Some("sess_replayed".to_string()),
-            is_ready: true,
-            ..AgentState::default()
-        },
-        last_init: None,
-        semantic_conversation: None,
-        last_workspace_capability_set: None,
-        last_process_budget: None,
-    };
-
-    let supervisor = SupervisorBuilder::new()
-        .remote_base_url("http://127.0.0.1:8080")
-        .remote_session_id("sess_explicit")
-        .session_replay(replay)
-        .build();
-
-    assert_eq!(
-        supervisor
-            .config
-            .remote
-            .as_ref()
-            .and_then(|remote| remote.session_id.as_deref()),
-        Some("sess_explicit")
-    );
-    assert_eq!(
-        supervisor.state().session_id.as_deref(),
-        Some("sess_replayed")
-    );
-}
-
-#[test]
 fn snapshot_incoming_preserves_existing_event_queue_order() {
     let mut supervisor = AgentSupervisor::new(SupervisorConfig::default());
     let _ = supervisor.event_tx.send(SupervisorEvent::Connected);
@@ -975,6 +913,7 @@ fn unsupported_live_semantic_snapshot_clears_reconnect_history() {
     assert!(
         supervisor
             .apply_agent_message(FromAgentMessage::ConversationSnapshot {
+                system_prompt_parts: Vec::new(),
                 processed_queue_ids: vec![7, 9],
                 protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                     .to_owned(),
@@ -986,6 +925,7 @@ fn unsupported_live_semantic_snapshot_clears_reconnect_history() {
     assert!(supervisor.semantic_conversation.is_some());
 
     supervisor.apply_agent_message(FromAgentMessage::ConversationSnapshot {
+        system_prompt_parts: Vec::new(),
         processed_queue_ids: vec![7, 9],
         protocol_version: "evalops.maestro.semantic-conversation.v999".to_owned(),
         messages: vec![],
@@ -996,6 +936,7 @@ fn unsupported_live_semantic_snapshot_clears_reconnect_history() {
 #[test]
 fn replay_without_recorder_clears_history_after_unsupported_live_snapshot() {
     let replay = SessionReplay {
+        system_prompt_parts: Vec::new(),
         state: AgentState::default(),
         last_init: Some(InitConfig {
             system_prompt: Some("restore boundary".to_owned()),
@@ -1017,6 +958,7 @@ fn replay_without_recorder_clears_history_after_unsupported_live_snapshot() {
         AgentSupervisor::new(SupervisorConfig::default()).with_session_replay(replay);
 
     supervisor.apply_agent_message(FromAgentMessage::ConversationSnapshot {
+        system_prompt_parts: Vec::new(),
         processed_queue_ids: vec![7, 9],
         protocol_version: "evalops.maestro.semantic-conversation.v999".to_owned(),
         messages: vec![],
@@ -1826,6 +1768,7 @@ async fn connect_replays_saved_init_from_restored_session_snapshot() {
         tool_grant: None,
     };
     let replay = SessionReplay {
+        system_prompt_parts: Vec::new(),
         state: AgentState {
             session_id: Some("sess_replayed".to_string()),
             last_status: Some("Resuming session".to_string()),

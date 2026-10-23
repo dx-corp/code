@@ -10,11 +10,20 @@ use tokio::sync::oneshot::{self, error::TryRecvError};
 
 pub(super) enum TransitionAction {
     New(String),
-    Rewind { turns: usize, files: bool },
+    Rewind {
+        turns: usize,
+        files: bool,
+    },
+    Resume {
+        path: std::path::PathBuf,
+        session_id: String,
+    },
 }
 
 pub(super) enum SessionCleanupState {
     Ready,
+    /// A cleanup receipt applies only to the transition currently being adopted.
+    Settled,
     // The screen's busy flag is not an actor cleanup receipt. A kept parent
     // retains its receiver; a closed receiver keeps confirmation required.
     Awaiting(Option<oneshot::Receiver<()>>),
@@ -54,6 +63,9 @@ impl TransitionDialog {
                     TransitionAction::New(_) => maestro_ui::localization::tr(
                         "Stop the response and start a new conversation? The saved conversation stays available.",
                     ).to_owned(),
+                    TransitionAction::Resume { .. } => maestro_ui::localization::tr(
+                        "Stop the response and resume the selected conversation?"
+                    ).to_owned(),
                     TransitionAction::Rewind { turns, files } => maestro_ui::localization::format(
                         if *files {
                             "Stop the response and rewind the last {0} turn(s), including their file changes? The original conversation stays available."
@@ -83,10 +95,13 @@ impl App {
     }
 
     pub(super) fn session_change_requires_cleanup(&self) -> bool {
-        self.state.busy || self.session_cleanup_pending()
+        self.state.busy
+            || self.session_cleanup_pending()
+            || (self.native_agent.is_some()
+                && !matches!(self.session_cleanup, SessionCleanupState::Settled))
     }
 
-    async fn finish_session_cleanup_receipt(&mut self) -> Result<bool> {
+    async fn finish_session_cleanup_receipt(&mut self, for_transition: bool) -> Result<bool> {
         // Final snapshots and events belong to the parent even when the
         // transition dialog was dismissed while the actor was cleaning up.
         self.poll_agent().await?;
@@ -99,7 +114,11 @@ impl App {
             );
             return Ok(false);
         }
-        self.session_cleanup = SessionCleanupState::Ready;
+        self.session_cleanup = if for_transition {
+            SessionCleanupState::Settled
+        } else {
+            SessionCleanupState::Ready
+        };
         Ok(true)
     }
 
@@ -110,7 +129,7 @@ impl App {
         match settled.try_recv() {
             Ok(()) => {
                 self.session_cleanup = SessionCleanupState::Awaiting(None);
-                self.finish_session_cleanup_receipt().await?;
+                self.finish_session_cleanup_receipt(false).await?;
                 Ok(true)
             }
             Err(TryRecvError::Empty) => Ok(false),
@@ -150,6 +169,9 @@ impl App {
             previous_modal: self.active_modal,
         });
         self.active_modal = ActiveModal::SessionTransition;
+        if !self.state.busy && self.native_agent.is_some() {
+            self.begin_session_transition_cleanup();
+        }
     }
 
     pub(super) fn session_transition_waiting(&self) -> bool {
@@ -193,19 +215,24 @@ impl App {
         if code != KeyCode::Enter || self.session_transition_waiting() {
             return Ok(());
         }
+        self.begin_session_transition_cleanup();
+        Ok(())
+    }
+
+    fn begin_session_transition_cleanup(&mut self) {
         let Some(agent) = &self.native_agent else {
             self.keep_current_session_after_transition();
             self.state.error = Some(self.state.locale.translate(
                 "Could not confirm that the response stopped. The current conversation was kept.",
             ).to_owned());
-            return Ok(());
+            return;
         };
         let settled = match agent.cancel_for_session_transition() {
             Ok(settled) => settled,
             Err(error) => {
                 self.keep_current_session_after_transition();
                 self.state.error = Some(error.to_string());
-                return Ok(());
+                return;
             }
         };
         self.session_cleanup = SessionCleanupState::Awaiting(None);
@@ -220,7 +247,6 @@ impl App {
                 started: Instant::now(),
             };
         }
-        Ok(())
     }
 
     pub(super) async fn poll_session_transition(&mut self) -> Result<bool> {
@@ -248,7 +274,7 @@ impl App {
             ).to_owned());
             return Ok(true);
         }
-        if !self.finish_session_cleanup_receipt().await? {
+        if !self.finish_session_cleanup_receipt(true).await? {
             self.keep_current_session_after_transition();
             return Ok(true);
         }
@@ -262,10 +288,14 @@ impl App {
         let prompts = self.drain_queued_prompts_for_restore();
         match dialog.action {
             TransitionAction::New(status) => self.start_new_session(&status),
+            TransitionAction::Resume { path, session_id } => {
+                self.resume_session_path(&path, &session_id);
+            }
             TransitionAction::Rewind { turns, files } => {
                 self.rewind_saved_turns(turns, false, files);
             }
         }
+        self.session_cleanup = SessionCleanupState::Ready;
         self.restore_queued_prompts_to_input(prompts);
         Ok(true)
     }
@@ -644,5 +674,45 @@ mod tests {
                 .unwrap()
                 .contains("No saved session")
         );
+    }
+    #[tokio::test]
+    async fn idle_transition_drains_background_usage_before_changing_writer() {
+        let mut app = app();
+        let saved = tempfile::tempdir().unwrap();
+        app.session_manager = SessionManager::with_sessions_dir("/tmp", saved.path());
+        app.current_model = "openai/gpt-5.5".into();
+        app.ensure_session_started().unwrap();
+        let old_path = app.session_manager.current_session_path().unwrap();
+        app.state.busy = false;
+        let (events, rx) = mpsc::unbounded_channel();
+        app.native_event_rx = Some(rx);
+        let (reply, settled) = oneshot::channel();
+        waiting(&mut app, settled, Instant::now());
+        assert!(!app.poll_session_transition().await.unwrap());
+        assert_eq!(
+            app.session_manager.current_session_path().as_ref(),
+            Some(&old_path)
+        );
+        events
+            .send(FromAgent::BackgroundUsage {
+                request_id: "summary-old-session".into(),
+                model: "test-model".into(),
+                usage: crate::agent::TokenUsage {
+                    input_tokens: 23,
+                    output_tokens: 7,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        reply.send(()).unwrap();
+        assert!(app.poll_session_transition().await.unwrap());
+        let old = crate::session::SessionReader::read_file(&old_path).unwrap();
+        assert_eq!(old.stats.total_input_tokens, 23);
+        assert_eq!(old.stats.total_output_tokens, 7);
+        app.ensure_session_started().unwrap();
+        let new_path = app.session_manager.current_session_path().unwrap();
+        assert_ne!(new_path, old_path);
+        let new = crate::session::SessionReader::read_file(new_path).unwrap();
+        assert_eq!(new.stats.total_input_tokens, 0);
     }
 }

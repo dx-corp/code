@@ -2791,8 +2791,12 @@ async fn handle_agent_event(
                 emit(&FromAgentMessage::WorkspaceCapabilitySetApplied { receipt })?;
             }
         }
-        FromAgent::LocalAssistantContent { .. } => return Ok(()),
+        FromAgent::LocalAssistantContent { .. } | FromAgent::LocalToolImages { .. } => {
+            return Ok(());
+        }
         FromAgent::ConversationSnapshot {
+            local_messages: _,
+            system_prompt_parts,
             protocol_version,
             messages,
             processed_queue_ids,
@@ -2801,6 +2805,7 @@ async fn handle_agent_event(
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .conversation_snapshot = Some(messages.clone());
             emit(&FromAgentMessage::ConversationSnapshot {
+                system_prompt_parts,
                 protocol_version,
                 messages,
                 processed_queue_ids,
@@ -2899,6 +2904,17 @@ async fn handle_agent_event(
             is_thinking,
         } => {
             semantic_stream::publish_response_chunk(meta, response_id, content, is_thinking)?;
+        }
+        FromAgent::BackgroundUsage {
+            request_id,
+            model,
+            usage,
+        } => {
+            emit(&FromAgentMessage::BackgroundUsage {
+                request_id,
+                usage: to_headless_usage(usage, &model, routed_provider),
+                model,
+            })?;
         }
         FromAgent::ResponseEnd { response_id, usage } => {
             semantic_stream::flush_and_emit(meta, SemanticFlushReason::Finalization)?;
@@ -5625,6 +5641,24 @@ else if(x.method==='turn/interrupt'){send({id:x.id,result:{}});send({method:'tur
         let requests = std::fs::read_to_string(log).expect("app-server log");
         assert_eq!(requests.matches(r#""method":"turn/start""#).count(), 1);
         assert_eq!(requests.matches(r#""method":"turn/steer""#).count(), 1);
+        let requests: Vec<serde_json::Value> = requests
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("fixture request JSON"))
+            .collect();
+        for (method, expected_text) in [
+            ("turn/start", "start work"),
+            ("turn/steer", "inspect the logs too"),
+        ] {
+            let request = requests
+                .iter()
+                .find(|request| request["method"] == method)
+                .expect("fixture observed prompt request");
+            assert_eq!(
+                request["params"]["input"],
+                json!([{"type": "text", "text": expected_text}]),
+                "{method} must preserve attributed prompt text without provenance wire fields"
+            );
+        }
     }
 
     #[tokio::test]
@@ -7036,110 +7070,7 @@ else if(x.method==="turn/start"){const turnId="turn-"+x.id;send({id:x.id,result:
         assert_eq!(normalize_session_id(None), None);
     }
 
-    #[test]
-    fn candidate_prompt_experiment_reaches_provider_bound_system_prompt() {
-        let artifact_content = "When debugging, state the causal path before proposing a fix.";
-        let mut state = HeadlessState::new(
-            Arc::new(crate::agent::tool_host::BuiltInToolHost),
-            Some("gpt-test".to_string()),
-        );
-        apply_init_settings(
-            &mut state,
-            Some("base prompt".to_string()),
-            None,
-            None,
-            None,
-            None,
-        );
-        configure_prompt_experiment(
-            &mut state,
-            PromptExperimentAssignment {
-                experiment_id: "debug-causal-path-v1".to_string(),
-                assignment_id: "assignment-1".to_string(),
-                arm: PromptExperimentArm::Candidate,
-                artifact_id: "skill-debug-causal-path".to_string(),
-                artifact_version: "1".to_string(),
-                artifact_sha256: sha256_prefixed(artifact_content),
-                artifact_content: artifact_content.to_string(),
-            },
-        )
-        .expect("candidate assignment is valid");
-
-        assert!(state.system_prompt.contains(artifact_content));
-        let exposure = state
-            .meta
-            .lock()
-            .expect("runtime metadata")
-            .prompt_experiment
-            .clone()
-            .expect("exposure prepared");
-        let provider_prompt = crate::agent::provider_system_prompt(
-            &state.system_prompt,
-            &state.model,
-            state.model_capabilities,
-        );
-        assert!(exposure.applied);
-        assert_eq!(
-            exposure.provider_prompt_sha256,
-            sha256_prefixed(&provider_prompt)
-        );
-    }
-
-    #[test]
-    fn control_prompt_experiment_leaves_provider_bound_system_prompt_unchanged() {
-        let artifact_content = "When debugging, state the causal path before proposing a fix.";
-        let mut state = HeadlessState::new(
-            Arc::new(crate::agent::tool_host::BuiltInToolHost),
-            Some("gpt-test".to_string()),
-        );
-        apply_init_settings(
-            &mut state,
-            Some("base prompt".to_string()),
-            None,
-            None,
-            None,
-            None,
-        );
-        let provider_prompt_before = crate::agent::provider_system_prompt(
-            &state.system_prompt,
-            &state.model,
-            state.model_capabilities,
-        );
-
-        configure_prompt_experiment(
-            &mut state,
-            PromptExperimentAssignment {
-                experiment_id: "debug-causal-path-v1".to_string(),
-                assignment_id: "assignment-control-1".to_string(),
-                arm: PromptExperimentArm::Control,
-                artifact_id: "skill-debug-causal-path".to_string(),
-                artifact_version: "1".to_string(),
-                artifact_sha256: sha256_prefixed(artifact_content),
-                artifact_content: artifact_content.to_string(),
-            },
-        )
-        .expect("control assignment is valid");
-
-        let provider_prompt_after = crate::agent::provider_system_prompt(
-            &state.system_prompt,
-            &state.model,
-            state.model_capabilities,
-        );
-        let exposure = state
-            .meta
-            .lock()
-            .expect("runtime metadata")
-            .prompt_experiment
-            .clone()
-            .expect("exposure prepared");
-        assert_eq!(provider_prompt_after, provider_prompt_before);
-        assert!(!provider_prompt_after.contains(artifact_content));
-        assert!(!exposure.applied);
-        assert_eq!(
-            exposure.provider_prompt_sha256,
-            sha256_prefixed(&provider_prompt_before)
-        );
-    }
+    mod prompt_experiment_tests;
 
     fn process_cost_wire_result(cost: Option<u64>) -> ToAgentMessage {
         let mut wire = json!({

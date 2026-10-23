@@ -189,6 +189,7 @@ impl VertexAiClient {
     }
 
     fn build_request(&self, messages: &[Message], config: &RequestConfig) -> Result<VertexRequest> {
+        config.validate_system_parts()?;
         let messages = crate::cache_topology::messages_with_volatile_tail(messages, config);
         let messages = super::transform::google_messages_for_wire(&messages);
         let contents = messages
@@ -244,7 +245,9 @@ impl VertexAiClient {
             MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(Part::Text { text: text.clone() }),
+                    ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                        Some(Part::Text { text: text.clone() })
+                    }
                     ContentBlock::Image {
                         source:
                             ImageSource::Base64 {

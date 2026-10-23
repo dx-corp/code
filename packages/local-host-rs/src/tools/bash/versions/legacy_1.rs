@@ -194,18 +194,20 @@ mod tests {
         // cargo check runs build scripts; only legacy treated it as read-only.
         assert!(!requires_approval("cargo check"));
         assert!(BashVersion::Current.requires_approval("cargo check"));
+
+        // Legacy remains pinned; current Git reads must disable configured helpers.
+        for cmd in ["git status", "git log --oneline", "git branch"] {
+            assert!(!requires_approval(cmd), "legacy: {cmd}");
+            assert!(
+                BashVersion::Current.requires_approval(cmd),
+                "current: {cmd}"
+            );
+        }
     }
 
     #[test]
     fn legacy_approval_matches_current_where_untouched() {
-        for cmd in [
-            "ls -la",
-            "git status",
-            "git log --oneline",
-            "git branch",
-            "git remote -v",
-            "find . -name '*.rs'",
-        ] {
+        for cmd in ["ls -la", "git remote -v", "find . -name '*.rs'"] {
             assert_eq!(
                 requires_approval(cmd),
                 BashVersion::Current.requires_approval(cmd),

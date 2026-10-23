@@ -101,12 +101,14 @@ impl NativeAgentRunner {
             pending.id,
             self.system_prompt_revision,
             &mut self.config.system_prompt,
+            &mut self.config.system_prompt_parts,
             &mut self.runtime_prompt_revision,
         ) {
             self.refresh_runtime_audit();
         }
 
         let mut prompt = pending.content.clone();
+        let mut prompt_source = maestro_ai::ContentSource::User;
         let mut attachments = pending.attachments.clone();
         let mut prompt_context: Option<String> = None;
 
@@ -125,6 +127,7 @@ impl NativeAgentRunner {
                 return Ok(None);
             }
             NativeHookResult::ModifyInput { new_input } => {
+                prompt_source = maestro_ai::ContentSource::Hook;
                 Self::apply_message_hook_modification(&mut prompt, &mut attachments, new_input);
             }
             NativeHookResult::InjectContext { context } => {
@@ -148,6 +151,7 @@ impl NativeAgentRunner {
                 return Ok(None);
             }
             NativeHookResult::ModifyInput { new_input } => {
+                prompt_source = maestro_ai::ContentSource::Hook;
                 Self::apply_message_hook_modification(&mut prompt, &mut attachments, new_input);
             }
             NativeHookResult::InjectContext { context } => {
@@ -156,18 +160,11 @@ impl NativeAgentRunner {
             NativeHookResult::Continue => {}
         }
 
-        let mut blocks = vec![ContentBlock::Text { text: prompt }];
+        let mut blocks = vec![ContentBlock::attributed_text(prompt, prompt_source, None)];
         let attachment_blocks = self.load_attachment_blocks(&attachments).await;
         blocks.extend(attachment_blocks);
 
-        let content = if blocks.len() == 1 {
-            match &blocks[0] {
-                ContentBlock::Text { text } => MessageContent::text(text.clone()),
-                _ => MessageContent::Blocks(blocks),
-            }
-        } else {
-            MessageContent::Blocks(blocks)
-        };
+        let content = MessageContent::Blocks(blocks);
 
         Ok(Some((
             Message {
@@ -327,15 +324,17 @@ impl NativeAgentRunner {
             if let Some(mime) = video_mime {
                 match self.tool_executor.extract_video_frames(&path).await {
                     Ok(frames) => {
-                        blocks.push(ContentBlock::Text {
-                            text: format!(
+                        blocks.push(ContentBlock::attributed_text(
+                            format!(
                                 "\n\n[Video: {} ({mime}); {} sampled frames follow]",
                                 path.file_name()
                                     .and_then(|name| name.to_str())
                                     .unwrap_or(raw),
                                 frames.len()
                             ),
-                        });
+                            maestro_ai::ContentSource::Harness,
+                            Some(path.to_string_lossy().into_owned()),
+                        ));
                         blocks.extend(frames.into_iter().map(|data| ContentBlock::Image {
                             source: ImageSource::Base64 {
                                 media_type: "image/jpeg".to_string(),
@@ -387,9 +386,11 @@ impl NativeAgentRunner {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or(raw.as_str());
-                    blocks.push(ContentBlock::Text {
-                        text: format!("\n\n[Document: {file_name}]\n{truncated}"),
-                    });
+                    blocks.push(ContentBlock::attributed_text(
+                        format!("\n\n[Document: {file_name}]\n{truncated}"),
+                        maestro_ai::ContentSource::Repository,
+                        Some(path.to_string_lossy().into_owned()),
+                    ));
                 }
                 Err(e) => {
                     let _ = self.event_tx.send(FromAgent::Error {

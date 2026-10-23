@@ -460,7 +460,7 @@ impl NativeAgentRunner {
             let result_block = self
                 .finalize_tool_call_result(call, true, Some(result))
                 .await;
-            tool_results.push(result_block);
+            tool_results.extend(result_block);
             // Serial tools may mutate state through bash, inline, MCP,
             // or external execution. Reads that follow in this model
             // batch must not reuse entries cached before that call.
@@ -760,7 +760,7 @@ impl NativeAgentRunner {
                     };
                     let tool_name_for_cache = call.tool_name.clone();
                     let result_block = self.finalize_tool_call_result(call, approved, result).await;
-                    tool_results.push(result_block);
+                    tool_results.extend(result_block);
                     invalidate_cache_after_serial_tool(
                         &self.tool_executor,
                         &tool_name_for_cache,
@@ -960,7 +960,7 @@ impl NativeAgentRunner {
                         let result_block = self
                             .finalize_tool_call_result(call, true, Some(result))
                             .await;
-                        tool_results.push(result_block);
+                        tool_results.extend(result_block);
                         invalidate_cache_after_serial_tool(
                             &self.tool_executor,
                             &tool_name_for_cache,

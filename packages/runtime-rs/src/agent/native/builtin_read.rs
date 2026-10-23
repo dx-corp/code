@@ -190,10 +190,13 @@ impl NativeAgentRunner {
         });
         // Shared finalization enforces vaulting, output bounds, PostToolUse,
         // EvalGate, workflow bookkeeping and result extensions before parsing.
-        let mut results = [self
+        let mut results = self
             .finalize_tool_call_result(call, approved, execution)
-            .await];
+            .await;
         self.apply_tool_batch_end_extensions(&mut results);
+        if results.len() != 1 {
+            bail!("Typed read result requires model reconsideration after hook context");
+        }
         let ContentBlock::ToolResult {
             content,
             is_error: Some(false),

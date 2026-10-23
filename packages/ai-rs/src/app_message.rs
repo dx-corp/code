@@ -366,7 +366,8 @@ pub fn from_api_messages(messages: &[Message]) -> Vec<AppMessage> {
                         let text: String = blocks
                             .iter()
                             .filter_map(|b| match b {
-                                ContentBlock::Text { text } => Some(text.as_str()),
+                                ContentBlock::Text { text }
+                                | ContentBlock::AttributedText { text, .. } => Some(text.as_str()),
                                 _ => None,
                             })
                             .collect::<Vec<_>>()
@@ -394,7 +395,8 @@ pub fn from_api_messages(messages: &[Message]) -> Vec<AppMessage> {
                     MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
+                            ContentBlock::Text { text }
+                            | ContentBlock::AttributedText { text, .. } => Some(text.as_str()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()

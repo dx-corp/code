@@ -363,6 +363,7 @@ pub const MAX_ALERT_HISTORY: usize = 50;
 /// we might make fields private and use methods for access. But for internal
 /// use, direct field access is simpler and faster.
 pub struct AppState {
+    pub transcript_images: RefCell<crate::components::TranscriptImages>,
     /// Display-only language, independent of model context.
     pub locale: crate::localization::Locale,
     /// All messages in the conversation.
@@ -575,6 +576,7 @@ impl AppState {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            transcript_images: RefCell::new(Default::default()),
             locale: crate::localization::Locale::default(),
             messages: Vec::new(), // Empty message list
             codemode_progress: Default::default(),
@@ -712,8 +714,14 @@ impl AppState {
     /// we add a handler for it.
     pub fn handle_agent_message(&mut self, msg: FromAgent) {
         match msg {
+            FromAgent::LocalToolImages { call_id, images } => {
+                self.transcript_images
+                    .borrow_mut()
+                    .record_images(&call_id, &images);
+            }
             // Private durable provider state is not interactive UI state.
             FromAgent::LocalAssistantContent { .. }
+            | FromAgent::BackgroundUsage { .. }
             | FromAgent::QueuedPromptConfiguration { .. }
             | FromAgent::ConversationSnapshot { .. } => {}
             // Managed receipts are forwarded to headless consumers but carry
@@ -950,8 +958,14 @@ impl AppState {
                 call_id,
                 success,
                 receipt,
+                result,
                 ..
             } => {
+                if let Some(result) = &result {
+                    self.transcript_images
+                        .borrow_mut()
+                        .record_tool_result(&call_id, result);
+                }
                 for tool in self
                     .messages
                     .iter_mut()
@@ -1040,6 +1054,7 @@ impl AppState {
                 git_branch,
             } => {
                 if self.session_id != session_id {
+                    self.transcript_images.borrow_mut().reset();
                     self.codemode_progress.clear();
                 }
                 self.session_id = session_id;
@@ -1869,6 +1884,7 @@ impl AppState {
     }
 
     pub fn clear_conversation_messages(&mut self) {
+        self.transcript_images.borrow_mut().reset();
         self.messages.clear();
         self.codemode_progress.clear();
     }

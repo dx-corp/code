@@ -17384,6 +17384,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Resolve the pending permission decision before starting another request.",
+        [
+            "Resuelve la solicitud de permiso pendiente antes de iniciar otra solicitud.",
+            "Réglez la demande d’autorisation en attente avant de lancer une autre requête.",
+            "Entscheiden Sie über die ausstehende Berechtigung, bevor Sie eine weitere Anfrage starten.",
+            "別のリクエストを開始する前に、保留中の権限確認に回答してください。",
+            "다른 요청을 시작하기 전에 대기 중인 권한 요청을 처리하세요.",
+            "请先处理待定的权限请求，再发起其他请求。",
+        ],
+    ),
+    (
         "Resource: {0}",
         [
             "Recursos: {0}",
@@ -19996,6 +20007,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Steering interrupts the current response; active tools settle first.",
+        [
+            "La nueva indicación interrumpe la respuesta actual; primero finalizan las herramientas activas.",
+            "La nouvelle instruction interrompt la réponse en cours ; les outils actifs se terminent d’abord.",
+            "Die neue Anweisung unterbricht die aktuelle Antwort; aktive Werkzeuge werden zuerst abgeschlossen.",
+            "追加の指示で現在の応答を中断します。実行中のツールが終了するまで待ちます。",
+            "새 지시는 현재 응답을 중단합니다. 실행 중인 도구가 먼저 종료됩니다.",
+            "新指令会中断当前回复；正在运行的工具会先结束。",
+        ],
+    ),
+    (
         "Steering mode set to one-at-a-time. Use /queue mode steer all to allow multiple steering messages.",
         [
             "Modo de dirección fijado a una sola vez. Use /queue módem steer todos para permitir múltiples mensajes de dirección.",
@@ -20037,6 +20059,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "ワークスペース拡張機能の受け入れを停止",
             "작업 공간 확장 기능 허용 중지",
             "停止允许工作区扩展",
+        ],
+    ),
+    (
+        "Stop the response and resume the selected conversation?",
+        [
+            "¿Detener la respuesta y reanudar la conversación seleccionada?",
+            "Arrêter la réponse et reprendre la conversation sélectionnée ?",
+            "Die Antwort stoppen und das ausgewählte Gespräch fortsetzen?",
+            "応答を停止して、選択した会話を再開しますか？",
+            "응답을 중단하고 선택한 대화를 재개할까요?",
+            "停止回复并恢复所选会话？",
         ],
     ),
     (
@@ -26754,6 +26787,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "実行中",
             "실행 중",
             "运行中",
+        ],
+    ),
+    (
+        "save the session settings",
+        [
+            "guardar la configuración de la sesión",
+            "enregistrer les paramètres de la session",
+            "die Sitzungseinstellungen speichern",
+            "セッション設定を保存",
+            "세션 설정 저장",
+            "保存会话设置",
         ],
     ),
     (

@@ -250,6 +250,9 @@ pub struct ActiveToolCheckpoint {
 pub struct SemanticConversationCheckpoint {
     protocol_version: String,
     messages: Vec<maestro_ai::Message>,
+    /// Historical request attribution, never restored as current instructions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    system_prompt_parts: Vec<maestro_ai::ContentBlock>,
 }
 
 /// Atomically replaced latest replay state. The JSONL remains the complete
@@ -851,7 +854,8 @@ fn rebuild_metadata(id: &str, entries: &[SessionEntry]) -> SessionMetadata {
                     }
                     FromAgentMessage::ResponseEnd {
                         usage: Some(usage), ..
-                    } => {
+                    }
+                    | FromAgentMessage::BackgroundUsage { usage, .. } => {
                         metadata.add_usage(usage);
                     }
                     _ => {}
@@ -979,6 +983,7 @@ impl SessionRecorder {
                         protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                             .to_string(),
                         messages,
+                        system_prompt_parts: replay.system_prompt_parts,
                     })
             }),
             semantic_conversation_attempt,
@@ -1031,6 +1036,16 @@ impl SessionRecorder {
                         == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                 })
                 .map(|checkpoint| checkpoint.messages.clone()),
+            system_prompt_parts: self
+                .semantic_conversation
+                .as_ref()
+                .filter(|checkpoint| {
+                    checkpoint.protocol_version
+                        == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
+                })
+                .map_or_else(Vec::new, |checkpoint| {
+                    checkpoint.system_prompt_parts.clone()
+                }),
             last_workspace_capability_set: self.last_workspace_capability_set.clone(),
             last_process_budget: self.last_process_budget.clone(),
         }
@@ -1078,6 +1093,7 @@ impl SessionRecorder {
             messages: portable_redacted_semantic_conversation(&sanitize_semantic_conversation(
                 &messages,
             ))?,
+            system_prompt_parts: Vec::new(),
         });
         Ok(())
     }
@@ -1122,11 +1138,13 @@ impl SessionRecorder {
             protocol_version,
             messages,
             processed_queue_ids,
+            system_prompt_parts,
         } = &portable_message
         {
             return self.record_conversation_snapshot(
                 protocol_version,
                 messages,
+                system_prompt_parts,
                 None,
                 processed_queue_ids,
             );
@@ -1161,6 +1179,7 @@ impl SessionRecorder {
                 message,
                 FromAgentMessage::ProcessBudgetCheckpoint { .. }
                     | FromAgentMessage::ResponseEnd { .. }
+                    | FromAgentMessage::BackgroundUsage { .. }
                     | FromAgentMessage::Error { .. }
                     | FromAgentMessage::Compaction { .. }
                     | FromAgentMessage::ConversationSnapshot { .. }
@@ -1195,7 +1214,8 @@ impl SessionRecorder {
             }
             FromAgentMessage::ResponseEnd {
                 usage: Some(usage), ..
-            } => {
+            }
+            | FromAgentMessage::BackgroundUsage { usage, .. } => {
                 self.metadata.add_usage(usage);
             }
             _ => {}
@@ -1245,10 +1265,12 @@ impl SessionRecorder {
             FromAgentMessage::ConversationSnapshot {
                 protocol_version,
                 messages,
+                system_prompt_parts,
                 ..
             } => self.record_conversation_snapshot(
                 protocol_version,
                 messages,
+                system_prompt_parts,
                 snapshot_attempt,
                 processed_queue_ids,
             ),
@@ -1260,6 +1282,7 @@ impl SessionRecorder {
         &mut self,
         protocol_version: &str,
         messages: &[maestro_ai::Message],
+        system_prompt_parts: &[maestro_ai::ContentBlock],
         snapshot_attempt: Option<u32>,
         processed_queue_ids: &[u64],
     ) -> std::io::Result<()> {
@@ -1270,6 +1293,7 @@ impl SessionRecorder {
             self.semantic_conversation = Some(SemanticConversationCheckpoint {
                 protocol_version: protocol_version.to_string(),
                 messages: messages.to_vec(),
+                system_prompt_parts: portable_redacted_system_prompt_parts(system_prompt_parts)?,
             });
         } else {
             self.semantic_processed_queue_ids.clear();
@@ -1279,6 +1303,7 @@ impl SessionRecorder {
             self.semantic_conversation = Some(SemanticConversationCheckpoint {
                 protocol_version: protocol_version.to_string(),
                 messages: Vec::new(),
+                system_prompt_parts: Vec::new(),
             });
         }
         // Semantic snapshots are private checkpoint material, never an
@@ -1384,9 +1409,15 @@ fn portable_redacted_message(message: &FromAgentMessage) -> std::io::Result<From
     if let Some(args) = args {
         *args = crate::agent::credential_store::redact_credentials_in_json(args);
     }
-    if let FromAgentMessage::ConversationSnapshot { messages, .. } = &mut redacted {
+    if let FromAgentMessage::ConversationSnapshot {
+        messages,
+        system_prompt_parts,
+        ..
+    } = &mut redacted
+    {
         *messages =
             portable_redacted_semantic_conversation(&sanitize_semantic_conversation(messages))?;
+        *system_prompt_parts = portable_redacted_system_prompt_parts(system_prompt_parts)?;
     }
     Ok(redacted)
 }
@@ -1402,9 +1433,9 @@ fn sanitize_semantic_conversation(messages: &[maestro_ai::Message]) -> Vec<maest
                 let blocks: Vec<ContentBlock> = blocks
                     .iter()
                     .filter_map(|block| match block {
-                        ContentBlock::Text { .. } | ContentBlock::ToolUse { .. } => {
-                            Some(block.clone())
-                        }
+                        ContentBlock::Text { .. }
+                        | ContentBlock::AttributedText { .. }
+                        | ContentBlock::ToolUse { .. } => Some(block.clone()),
                         ContentBlock::ToolResult {
                             tool_use_id,
                             is_error,
@@ -1424,6 +1455,27 @@ fn sanitize_semantic_conversation(messages: &[maestro_ai::Message]) -> Vec<maest
             }
         })
         .collect()
+}
+
+fn portable_redacted_system_prompt_parts(
+    parts: &[maestro_ai::ContentBlock],
+) -> std::io::Result<Vec<maestro_ai::ContentBlock>> {
+    let text_parts = parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part,
+                maestro_ai::ContentBlock::Text { .. }
+                    | maestro_ai::ContentBlock::AttributedText { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let serialized = serde_json::to_value(text_parts)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    serde_json::from_value(redact_semantic_checkpoint_value(
+        crate::agent::credential_store::redact_credentials_in_json(&serialized),
+    ))
+    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 fn portable_redacted_semantic_conversation(
@@ -1539,6 +1591,8 @@ pub struct SessionReplay {
     /// Latest private provider conversation, if the session wrote a semantic
     /// checkpoint using the supported snapshot protocol.
     pub semantic_conversation: Option<Vec<maestro_ai::Message>>,
+    /// Historical request-source evidence. Never installed as current policy.
+    pub system_prompt_parts: Vec<maestro_ai::ContentBlock>,
     /// Last workspace capability set proven accepted by a matching receipt.
     pub last_workspace_capability_set: Option<ApplyWorkspaceCapabilitySet>,
     /// Latest native process budget observation, retained as evidence only.
@@ -1570,6 +1624,15 @@ fn replay_from_sidecar_tail(
     let mut last_workspace_capability_set = sidecar.last_workspace_capability_set;
     let mut last_process_budget = sidecar.last_process_budget;
     let mut pending_workspace_capability_sets = HashMap::new();
+    let mut system_prompt_parts = sidecar
+        .semantic_conversation
+        .as_ref()
+        .filter(|checkpoint| {
+            checkpoint.protocol_version == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
+        })
+        .map_or_else(Vec::new, |checkpoint| {
+            checkpoint.system_prompt_parts.clone()
+        });
     let mut semantic_conversation = sidecar.semantic_conversation.and_then(|checkpoint| {
         (checkpoint.protocol_version == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL)
             .then_some(checkpoint.messages)
@@ -1579,6 +1642,7 @@ fn replay_from_sidecar_tail(
             state,
             last_init,
             semantic_conversation,
+            system_prompt_parts,
             last_workspace_capability_set,
             last_process_budget,
         });
@@ -1606,7 +1670,7 @@ fn replay_from_sidecar_tail(
                 &entry,
                 &mut state,
                 &mut last_init,
-                &mut semantic_conversation,
+                (&mut semantic_conversation, &mut system_prompt_parts),
                 &mut last_workspace_capability_set,
                 &mut last_process_budget,
                 &mut pending_workspace_capability_sets,
@@ -1617,6 +1681,7 @@ fn replay_from_sidecar_tail(
         state,
         last_init,
         semantic_conversation,
+        system_prompt_parts,
         last_workspace_capability_set,
         last_process_budget,
     })
@@ -1668,11 +1733,15 @@ fn apply_replay_entry(
     entry: &SessionEntry,
     state: &mut AgentState,
     last_init: &mut Option<InitConfig>,
-    semantic_conversation: &mut Option<Vec<maestro_ai::Message>>,
+    semantic_context: (
+        &mut Option<Vec<maestro_ai::Message>>,
+        &mut Vec<maestro_ai::ContentBlock>,
+    ),
     last_workspace_capability_set: &mut Option<ApplyWorkspaceCapabilitySet>,
     last_process_budget: &mut Option<ProcessBudgetState>,
     pending_workspace_capability_sets: &mut HashMap<String, ApplyWorkspaceCapabilitySet>,
 ) {
+    let (semantic_conversation, system_prompt_parts) = semantic_context;
     apply_process_budget_evidence(entry, last_process_budget);
     match entry {
         SessionEntry::Sent { message, .. } => {
@@ -1696,9 +1765,17 @@ fn apply_replay_entry(
             if let FromAgentMessage::ConversationSnapshot {
                 protocol_version,
                 messages,
+                system_prompt_parts: parts,
                 ..
             } = message
             {
+                *system_prompt_parts = if protocol_version
+                    == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
+                {
+                    parts.clone()
+                } else {
+                    Vec::new()
+                };
                 *semantic_conversation = (protocol_version
                     == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL)
                     .then_some(messages.clone());
@@ -1719,6 +1796,13 @@ fn apply_replay_entry(
             *last_workspace_capability_set = checkpoint_capability_set.as_deref().cloned();
             pending_workspace_capability_sets.clear();
             if let Some(checkpoint) = checkpoint_conversation {
+                *system_prompt_parts = if checkpoint.protocol_version
+                    == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
+                {
+                    checkpoint.system_prompt_parts.clone()
+                } else {
+                    Vec::new()
+                };
                 *semantic_conversation = (checkpoint.protocol_version
                     == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL)
                     .then_some(checkpoint.messages.clone());
@@ -1855,6 +1939,7 @@ impl SessionReader {
         let mut state = AgentState::default();
         let mut last_init = None;
         let mut semantic_conversation = None;
+        let mut system_prompt_parts = Vec::new();
         let mut last_workspace_capability_set = None;
         // Budget receipts are evidence independent of the state checkpoint.
         // Scan the complete journal so a legacy checkpoint that omits the
@@ -1885,8 +1970,12 @@ impl SessionReader {
                             == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL =>
                     {
                         semantic_conversation = Some(checkpoint.messages.clone());
+                        system_prompt_parts = checkpoint.system_prompt_parts.clone();
                     }
-                    Some(_) => semantic_conversation = None,
+                    Some(_) => {
+                        semantic_conversation = None;
+                        system_prompt_parts.clear();
+                    }
                     // A facade-only checkpoint does not supersede a durable
                     // semantic checkpoint recorded earlier in the same log.
                     None => {}
@@ -1922,6 +2011,7 @@ impl SessionReader {
                     if let FromAgentMessage::ConversationSnapshot {
                         protocol_version,
                         messages,
+                        system_prompt_parts: parts,
                         ..
                     } = message
                     {
@@ -1929,8 +2019,10 @@ impl SessionReader {
                             == crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                         {
                             semantic_conversation = Some(messages.clone());
+                            system_prompt_parts = parts.clone();
                         } else {
                             semantic_conversation = None;
+                            system_prompt_parts.clear();
                         }
                     }
                     if accepted_capability_receipt {
@@ -1944,6 +2036,7 @@ impl SessionReader {
             state,
             last_init,
             semantic_conversation,
+            system_prompt_parts,
             last_workspace_capability_set,
             last_process_budget,
         }

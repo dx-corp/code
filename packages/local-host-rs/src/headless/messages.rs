@@ -944,6 +944,9 @@ pub enum FromAgentMessage {
     ConversationSnapshot {
         protocol_version: String,
         messages: Vec<maestro_ai::Message>,
+        /// Descriptive source attribution from the request; never restored as policy.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        system_prompt_parts: Vec<maestro_ai::ContentBlock>,
         /// Correlation metadata for prompts represented by this checkpoint;
         /// never authority to admit or retry an effect.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1017,6 +1020,12 @@ pub enum FromAgentMessage {
         response_id: String,
         content: String,
         is_thinking: bool,
+    },
+    /// Independently billed background inference; never ends a foreground response.
+    BackgroundUsage {
+        request_id: String,
+        model: String,
+        usage: TokenUsage,
     },
     /// Response streaming ended
     ResponseEnd {

@@ -81,6 +81,7 @@ impl KimiK3Client {
         messages: &[Message],
         config: &RequestConfig,
     ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
+        config.validate_system_parts()?;
         let request_model = provider_model_name(&config.model);
         let endpoint = format!("{}/chat/completions", self.base_url);
         let mut request = self
@@ -336,7 +337,9 @@ fn convert_messages(messages: &[Message]) -> Vec<Value> {
                 let text = blocks
                     .iter()
                     .filter_map(|block| match block {
-                        ContentBlock::Text { text } => Some(text.as_str()),
+                        ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                            Some(text.as_str())
+                        }
                         _ => None,
                     })
                     .collect::<String>();
@@ -368,7 +371,9 @@ fn assistant_message(blocks: &[ContentBlock]) -> Option<Value> {
     let text = blocks
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text { text } => Some(text.as_str()),
+            ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                Some(text.as_str())
+            }
             _ => None,
         })
         .collect::<String>();
@@ -423,7 +428,9 @@ fn user_content_parts(blocks: &[ContentBlock]) -> Vec<Value> {
     blocks
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text { text } => Some(json!({"type": "text", "text": text})),
+            ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                Some(json!({"type": "text", "text": text}))
+            }
             ContentBlock::Image { source } => {
                 let url = match source {
                     ImageSource::Url { url } => url.clone(),

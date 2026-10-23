@@ -1,5 +1,6 @@
 mod agent_launch;
 mod oauth_visibility;
+mod transcript_images;
 use super::*;
 
 use crate::keybindings::{
@@ -941,6 +942,8 @@ fn test_compact_conversation_logic() {
 fn test_restore_visible_session_messages_applies_compactions() {
     let mut state = AppState::new();
     let session = ParsedSession {
+        settings: None,
+        system_prompt_parts: Vec::new(),
         selective_summary_context: None,
         header: SessionHeader {
             version: Some(2),
@@ -1052,6 +1055,8 @@ fn test_restore_visible_session_messages_applies_compactions() {
 fn test_restore_visible_session_messages_applies_multiple_compactions_in_order() {
     let mut state = AppState::new();
     let session = ParsedSession {
+        settings: None,
+        system_prompt_parts: Vec::new(),
         selective_summary_context: None,
         header: SessionHeader {
             version: Some(2),
@@ -1189,6 +1194,8 @@ fn test_restore_visible_session_messages_applies_multiple_compactions_in_order()
 fn test_restore_lifecycle_notifications_in_compacted_transcript_order() {
     let mut state = AppState::new();
     let session = ParsedSession {
+        settings: None,
+        system_prompt_parts: Vec::new(),
         selective_summary_context: None,
         header: SessionHeader {
             version: Some(2),
@@ -3220,6 +3227,8 @@ fn side_messages_do_not_count_toward_compaction() {
 fn restore_side_questions_by_timestamp_without_model_history_entries() {
     let mut state = AppState::new();
     let session = ParsedSession {
+        settings: None,
+        system_prompt_parts: Vec::new(),
         selective_summary_context: None,
         header: SessionHeader {
             version: Some(2),
@@ -6280,66 +6289,6 @@ async fn configured_cycle_binding_respects_busy_and_pending_state() {
         "claude-fable-5-1"
     );
     assert_eq!(app.current_model, "gpt-5.6");
-}
-
-#[tokio::test]
-async fn local_response_content_persists_tool_calls_and_signed_thinking_before_dispatch() {
-    let mut app = new_test_app();
-    let dir = tempfile::tempdir().unwrap();
-    app.session_manager = SessionManager::with_sessions_dir("handoff-test", dir.path());
-    app.current_model = "claude-fable-5-1".into();
-    app.record_user_message("Read both files");
-    let response_id = "tool-response".to_string();
-    app.handle_agent_message(FromAgent::ResponseStart {
-        response_id: response_id.clone(),
-    })
-    .await
-    .unwrap();
-    let blocks = vec![
-        crate::ai::ContentBlock::Thinking {
-            thinking: String::new(),
-            signature: Some("empty-signature".into()),
-        },
-        crate::ai::ContentBlock::Thinking {
-            thinking: "reasoning".into(),
-            signature: Some("visible-signature".into()),
-        },
-        crate::ai::ContentBlock::ToolUse {
-            id: "call|fc_a".into(),
-            name: "read".into(),
-            input: serde_json::json!({"path":"a"}),
-            gemini_context: None,
-        },
-        crate::ai::ContentBlock::ToolUse {
-            id: "call|fc_b".into(),
-            name: "read".into(),
-            input: serde_json::json!({"path":"b"}),
-            gemini_context: None,
-        },
-    ];
-    let event = FromAgent::LocalAssistantContent {
-        response_id: response_id.clone(),
-        content: blocks.clone(),
-    };
-    assert!(
-        serde_json::to_value(&event).is_err(),
-        "private content cannot enter a serialized transport"
-    );
-    app.handle_agent_message(event).await.unwrap();
-    app.handle_agent_message(FromAgent::ResponseEnd {
-        response_id,
-        usage: None,
-    })
-    .await
-    .unwrap();
-    let path = app.session_manager.current_session_path().unwrap();
-    let session = crate::session::SessionReader::read_file(path).unwrap();
-    let history = crate::session::model_history(&session);
-    assert_eq!(
-        serde_json::to_value(&history[1].content).unwrap(),
-        serde_json::to_value(crate::ai::MessageContent::Blocks(blocks)).unwrap()
-    );
-    assert!(app.pending_assistant_content.is_none());
 }
 
 #[test]

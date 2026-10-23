@@ -64,6 +64,7 @@ impl PreparedPrompt {
         namespace: String,
         previous: Option<&CacheTopology>,
     ) -> Result<Self> {
+        config.validate_system_parts()?;
         let affinity = std::env::var("MAESTRO_OPENROUTER_PROMPT_CACHE_KEY")
             .ok()
             .filter(|key| !key.is_empty() && key.len() <= 256);
@@ -93,6 +94,7 @@ impl PreparedPrompt {
         config: &RequestConfig,
         namespace: String,
     ) -> Result<Self> {
+        config.validate_system_parts()?;
         ensure!(
             !config.cache_system_prompt,
             "auxiliary request must disable explicit cache markers"
@@ -228,6 +230,7 @@ impl PreparedPrompt {
         &self.topology
     }
     pub fn validate(&self, messages: &[Message], config: &RequestConfig) -> Result<()> {
+        config.validate_system_parts()?;
         self.topology
             .validate(&shape(
                 messages,
@@ -255,7 +258,11 @@ fn shape(
     PromptShape {
         namespace,
         model: digest(&config.model),
-        instructions: digest(&config.system),
+        instructions: if config.system_parts.is_empty() {
+            digest(&config.system)
+        } else {
+            digest(&(&config.system, &config.system_parts))
+        },
         tools: digest(config.tools.as_ref()),
         thinking: digest(&config.thinking),
         cache_policy: digest(&(config.cache_system_prompt, affinity)),
@@ -277,7 +284,11 @@ pub(crate) fn messages_with_volatile_tail<'a>(
     let mut request = messages.to_vec();
     request.push(Message {
         role: crate::Role::User,
-        content: crate::MessageContent::text(tail),
+        content: crate::MessageContent::attributed_text(
+            tail,
+            crate::ContentSource::Harness,
+            Some("volatile_request_context".into()),
+        ),
     });
     std::borrow::Cow::Owned(request)
 }
@@ -516,6 +527,7 @@ fn plan_boundaries(input: BoundaryInputs<'_>) -> BoundaryPlan {
 }
 
 pub(crate) fn validate_prepared(messages: &[Message], config: &RequestConfig) -> Result<()> {
+    config.validate_system_parts()?;
     if let Some(prepared) = &config.cache_topology {
         prepared.validate(messages, config)?;
     }
@@ -525,6 +537,28 @@ pub(crate) fn validate_prepared(messages: &[Message], config: &RequestConfig) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn system_provenance_is_sealed_even_when_the_rendered_text_is_unchanged() {
+        let mut config = RequestConfig {
+            system: Some("context".into()),
+            system_parts: vec![crate::ContentBlock::attributed_text(
+                "context",
+                crate::ContentSource::Repository,
+                Some("AGENTS.md".into()),
+            )],
+            ..RequestConfig::default()
+        };
+        let sealed = PreparedPrompt::prepare(&[], &config, "session".into(), None).unwrap();
+        sealed.validate(&[], &config).unwrap();
+        config.system_parts = vec![crate::ContentBlock::attributed_text(
+            "context",
+            crate::ContentSource::User,
+            None,
+        )];
+        config.validate_system_parts().unwrap();
+        assert!(sealed.validate(&[], &config).is_err());
+    }
+
     #[test]
     fn compacted_checkpoint_is_marked_before_the_volatile_tail() {
         let config = RequestConfig::default();

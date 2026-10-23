@@ -10,6 +10,9 @@ use super::super::{
     ThinkingLevel, WorkflowStateSnapshot,
 };
 use super::*;
+
+#[path = "tests/request_cancellation.rs"]
+mod request_cancellation;
 use std::fmt::Write as _;
 use std::sync::{
     Arc,
@@ -32,6 +35,12 @@ mod managed_gateway_retry_tests;
 
 #[path = "tests/turn_budget_transport.rs"]
 mod turn_budget_transport;
+
+#[path = "tests/instant_steering.rs"]
+mod instant_steering;
+
+#[path = "tests/content_provenance.rs"]
+mod content_provenance;
 
 fn empty_runtime_audit() -> Arc<RwLock<RuntimeAuditSnapshot>> {
     Arc::new(RwLock::new(RuntimeAuditSnapshot {
@@ -4353,109 +4362,6 @@ fn codex_authoritative_segments_preserve_tool_boundaries_without_duplication() {
     );
 }
 
-#[tokio::test]
-async fn retry_backoff_is_interrupted_by_request_cancellation() {
-    let cancel_token = CancellationToken::new();
-    let waiter_token = cancel_token.clone();
-    let shutdown_token = CancellationToken::new();
-    let waiter = tokio::spawn(async move {
-        wait_for_retry_delay(
-            std::time::Duration::from_mins(1),
-            &waiter_token,
-            &shutdown_token,
-        )
-        .await
-    });
-
-    tokio::task::yield_now().await;
-    cancel_token.cancel();
-    let completed_delay = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
-        .await
-        .expect("cancellation must interrupt the retry backoff")
-        .expect("retry waiter task must not panic");
-    assert!(!completed_delay, "cancelled backoff must not begin a retry");
-}
-
-#[tokio::test]
-async fn shutdown_awaits_terminal_outcome_beyond_the_old_drain_cutoff() {
-    let request_cancel = CancellationToken::new();
-    let shutdown_token = CancellationToken::new();
-    let shutdown = shutdown_token.clone();
-
-    let request = tokio::spawn(async move {
-        let active_cancellation = Arc::new(Mutex::new(ActiveCancellation {
-            terminal_drain_required: true,
-            ..ActiveCancellation::default()
-        }));
-        run_request_with_cancellation(
-            async {
-                tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
-                Ok(())
-            },
-            &request_cancel,
-            &shutdown_token,
-            &active_cancellation,
-        )
-        .await
-    });
-    tokio::task::yield_now().await;
-    shutdown.cancel();
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(5), request)
-        .await
-        .expect("shutdown should await the active terminal outcome")
-        .expect("request task should not panic");
-    assert!(
-        result.is_ok(),
-        "shutdown must not replace a late successful terminal with cancellation"
-    );
-}
-
-#[tokio::test]
-async fn shutdown_preempts_and_drops_attachment_loading() {
-    struct DropFlag(Arc<AtomicBool>);
-
-    impl Drop for DropFlag {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    let request_cancel = CancellationToken::new();
-    let shutdown_token = CancellationToken::new();
-    let shutdown = shutdown_token.clone();
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let entered_by_load = Arc::clone(&entered);
-    let dropped = Arc::new(AtomicBool::new(false));
-    let dropped_by_load = Arc::clone(&dropped);
-
-    let loading = tokio::spawn(async move {
-        load_until_cancelled(
-            async move {
-                let _drop_flag = DropFlag(dropped_by_load);
-                entered_by_load.notify_one();
-                std::future::pending::<Vec<ContentBlock>>().await
-            },
-            &request_cancel,
-            &shutdown_token,
-        )
-        .await
-    });
-
-    entered.notified().await;
-    shutdown.cancel();
-
-    let result = tokio::time::timeout(std::time::Duration::from_millis(100), loading)
-        .await
-        .expect("shutdown should preempt attachment loading")
-        .expect("attachment loading task should not panic");
-    assert!(matches!(result, CancellableLoad::Shutdown));
-    assert!(
-        dropped.load(Ordering::SeqCst),
-        "shutdown must drop the in-flight attachment future"
-    );
-}
-
 #[test]
 fn test_config_default() {
     let config = NativeAgentConfig::default();
@@ -4979,8 +4885,8 @@ fn each_queued_prompt_consumes_only_its_own_staged_skills() {
 #[test]
 fn applying_one_staged_prompt_does_not_invalidate_its_queued_sibling() {
     let mut staged = HashMap::from([
-        (1, (4, "base + skill-a".to_string())),
-        (2, (4, "base + skill-a + skill-b".to_string())),
+        (1, (4, ("base + skill-a".to_string(), Vec::new()))),
+        (2, (4, ("base + skill-a + skill-b".to_string(), Vec::new()))),
     ]);
     let authority_revision = 4;
     let mut runtime_revision = 9;
@@ -4991,6 +4897,7 @@ fn applying_one_staged_prompt_does_not_invalidate_its_queued_sibling() {
         1,
         authority_revision,
         &mut system_prompt,
+        &mut Vec::new(),
         &mut runtime_revision,
     ));
     assert_eq!(system_prompt.as_deref(), Some("base + skill-a"));
@@ -5000,6 +4907,7 @@ fn applying_one_staged_prompt_does_not_invalidate_its_queued_sibling() {
         2,
         authority_revision,
         &mut system_prompt,
+        &mut Vec::new(),
         &mut runtime_revision,
     ));
     assert_eq!(system_prompt.as_deref(), Some("base + skill-a + skill-b"));
@@ -5048,7 +4956,7 @@ fn a_staged_queued_prompt_applies_only_while_it_is_current() {
         None,
         "an authoritative update after the staging supersedes it"
     );
-    assert_eq!(staged_system_prompt_to_apply(None, 0), None);
+    assert_eq!(staged_system_prompt_to_apply::<String>(None, 0), None);
 }
 
 #[test]
@@ -8370,6 +8278,15 @@ async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
     let tool = messages.iter().find(|m| m["role"] == "tool").unwrap()["content"]
         .as_str()
         .unwrap();
+    let hook = messages
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .filter_map(|message| message["content"].as_str())
+        .find(|content| content.contains("large tool context"))
+        .expect("hook context is a separate text part");
+    assert!(hook.len() < 40_000);
+    assert!(hook.contains("Truncated"));
+    assert!(!hook.contains(secret));
     assert!(tool.len() < 40_000);
     assert!(tool.contains("Truncated"));
     assert!(!tool.contains(secret));
@@ -8377,6 +8294,7 @@ async fn final_tool_projection_bounds_hook_output_and_retains_full_capture() {
         .path()
         .join(".maestro/output-fixture/full-output.txt");
     assert!(tool.contains(path.to_str().unwrap()));
+    assert!(hook.contains(path.to_str().unwrap()));
     let full = std::fs::read_to_string(path).unwrap();
     assert!(full.len() > 40_000);
     assert!(full.contains("unique-end-marker"));

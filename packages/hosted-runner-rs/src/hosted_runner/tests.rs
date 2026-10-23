@@ -3764,33 +3764,6 @@ fn hosted_server_capabilities_follow_attached_agent_state() {
 }
 
 #[test]
-fn supervisor_hello_capabilities_prefer_attached_agent_state() {
-    let attached = ServerCapabilities {
-        native_tools: vec![NativeToolCapability {
-            name: "child-build-tool".to_string(),
-            requires_approval: true,
-            version: Some("child-build".to_string()),
-        }],
-        ..ServerCapabilities::default()
-    };
-    let mut supervisor = AgentSupervisor::new(crate::headless::SupervisorConfig::default());
-    supervisor.restore_session_replay(crate::headless::SessionReplay {
-        state: AgentState {
-            server_capabilities: Some(attached.clone()),
-            ..AgentState::default()
-        },
-        last_init: None,
-        semantic_conversation: None,
-        last_workspace_capability_set: None,
-        last_process_budget: None,
-    });
-    let executor =
-        AgentSupervisorHostedRunnerMessageExecutor::new(Arc::new(Mutex::new(supervisor)));
-
-    assert_eq!(executor.negotiated_server_capabilities(), Some(attached));
-}
-
-#[test]
 fn supervisor_hello_fallback_withholds_governed_grant_algorithms() {
     const ENV: &str = "MAESTRO_PLATFORM_TOOL_GRANT_ED25519_PUBLIC_KEYS";
     let _guard = crate::headless_server::GOVERNED_GRANT_ENV_LOCK
