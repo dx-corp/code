@@ -949,6 +949,10 @@ impl SandboxPolicy {
     ///   3. $TMPDIR (unless `exclude_tmpdir_env_var` is true or equals /tmp)
     ///   4. Current working directory with .git as read-only subpath
     ///
+    /// The .git exclusion also applies to broader overlapping roots; an
+    /// explicit grant at or below .git still permits that subtree. On macOS
+    /// the exclusion applies before .git exists as well.
+    ///
     /// # .git Protection
     ///
     /// The .git directory is automatically marked read-only to prevent:
@@ -1015,18 +1019,28 @@ impl SandboxPolicy {
                     }
                 }
 
-                // Add cwd with .git as read-only subpath if present
-                let git_dir = cwd.join(".git");
-                let read_only_subpaths = if git_dir.exists() {
-                    vec![git_dir]
-                } else {
-                    Vec::new()
-                };
-
                 roots.push(WritableRoot {
                     root: cwd.to_path_buf(),
-                    read_only_subpaths,
+                    read_only_subpaths: Vec::new(),
                 });
+
+                let git_dir = cwd.join(".git");
+                // Seatbelt can exclude a path before it exists. Landlock's
+                // additive grants require existing entries (see linux.rs).
+                if cfg!(target_os = "macos") || git_dir.exists() {
+                    let git_dir = canonicalize_best_effort(&git_dir);
+                    for writable in &mut roots {
+                        let root = canonicalize_best_effort(&writable.root);
+                        // A broader grant, including /tmp, must not bypass
+                        // metadata protection. A grant explicitly at or below
+                        // .git still authorizes that subtree.
+                        if native_path_starts_with(&git_dir, &root).unwrap_or(true)
+                            && !native_path_starts_with(&root, &git_dir).unwrap_or(false)
+                        {
+                            writable.read_only_subpaths.push(git_dir.clone());
+                        }
+                    }
+                }
             }
         }
 
@@ -1073,16 +1087,30 @@ impl SandboxPolicy {
                 let candidate = canonicalize_best_effort(path);
                 self.get_writable_roots_with_cwd(cwd).iter().any(|wr| {
                     let root = canonicalize_best_effort(&wr.root);
-                    if !candidate.starts_with(&root) {
+                    if !native_path_starts_with(&candidate, &root).unwrap_or(false) {
                         return false;
                     }
                     !wr.read_only_subpaths.iter().any(|ro| {
                         let ro = canonicalize_best_effort(ro);
-                        candidate.starts_with(&ro)
+                        native_path_starts_with(&candidate, &ro).unwrap_or(true)
                     })
                 })
             }
         }
+    }
+}
+
+// Paths are canonicalized before matching. On macOS realpath still preserves
+// ASCII case aliases, so bytewise prefix matching is insufficient even for
+// existing paths. An unknown filesystem result must never grant access.
+fn native_path_starts_with(path: &Path, root: &Path) -> std::io::Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::path_starts_with(path, root)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(path.starts_with(root))
     }
 }
 
