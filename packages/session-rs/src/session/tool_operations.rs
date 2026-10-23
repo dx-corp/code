@@ -193,6 +193,50 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_transcript_and_tool_appends_preserve_jsonl_records() {
+        use super::super::SessionWriter;
+        use std::sync::{Arc, Barrier};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.jsonl");
+        let mut writer = SessionWriter::new(&path).unwrap().batch_size(1);
+        let barrier = Arc::new(Barrier::new(2));
+        let journal_path = path.clone();
+        let journal_barrier = barrier.clone();
+        const RECORDS: usize = 512;
+        let journal = std::thread::spawn(move || {
+            for index in 0..RECORDS {
+                let record = planned(&format!("call-{index}"));
+                journal_barrier.wait();
+                append_tool_operation(&journal_path, &record).unwrap();
+            }
+        });
+        for index in 0..RECORDS {
+            // Larger than BufWriter's default capacity: the JSON body used to
+            // reach the file before its separately buffered newline.
+            let entry = SessionEntry::Custom(CustomEntry {
+                id: Some(format!("snapshot-{index}")),
+                parent_id: None,
+                timestamp: index.to_string(),
+                custom_type: "request_cache_snapshot_v1".into(),
+                data: Some(serde_json::json!({"snapshot": "x".repeat(8461)})),
+            });
+            barrier.wait();
+            writer.write_entry(entry).unwrap();
+        }
+        journal.join().unwrap();
+        writer.flush().unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.lines().count(), RECORDS * 2);
+        for (index, line) in contents.lines().enumerate() {
+            serde_json::from_str::<SessionEntry>(line)
+                .unwrap_or_else(|error| panic!("invalid transcript line {}: {error}", index + 1));
+        }
+        let ledger = load_tool_operation_ledger(&path).unwrap();
+        assert_eq!(ledger.latest_records().count(), RECORDS);
+    }
+
+    #[test]
     fn append_and_reload_reduce_to_latest_valid_state() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("session.jsonl");

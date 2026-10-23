@@ -196,9 +196,12 @@ impl SessionWriter {
         let mut writer = BufWriter::new(file);
 
         for entry in self.buffer.drain(..) {
-            let json = serde_json::to_string(&entry)
+            let mut json = serde_json::to_string(&entry)
                 .map_err(|e| SessionWriteError::SerializeError(e.to_string()))?;
-            writeln!(writer, "{json}")?;
+            // A large JSON body bypasses BufWriter. Include the delimiter in
+            // the same write instead of leaving it in the buffer until later.
+            json.push('\n');
+            writer.write_all(json.as_bytes())?;
         }
 
         writer.flush()?;
