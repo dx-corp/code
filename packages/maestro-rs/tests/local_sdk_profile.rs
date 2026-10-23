@@ -258,8 +258,13 @@ fn canonical_process_exercises_local_profile_with_native_tool_and_cancel() {
         event["type"] == "tool_call" && event["requires_approval"] == true
     });
     assert_eq!(tool_call["tool"], "bash");
-    assert_eq!(tool_call["args"]["command"], "printf local-sdk-native-tool");
+    assert_eq!(
+        tool_call["args"]["command"],
+        "printf local-sdk-native-tool > local-sdk-native-tool.txt && cat local-sdk-native-tool.txt"
+    );
     assert!(tool_call.get("tool_execution_id").is_none());
+    let output = workspace.join("local-sdk-native-tool.txt");
+    assert!(!output.exists(), "native write must wait for approval");
 
     fixture.send(json!({
         "type": "tool_response",
@@ -269,6 +274,10 @@ fn canonical_process_exercises_local_profile_with_native_tool_and_cancel() {
     fixture.wait_for("native tool start", |event| event["type"] == "tool_start");
     let tool_end = fixture.wait_for("native tool end", |event| event["type"] == "tool_end");
     assert_eq!(tool_end["success"], true);
+    assert_eq!(
+        fs::read_to_string(&output).expect("read approved native write"),
+        "local-sdk-native-tool"
+    );
     fixture.wait_for("completed native turn", |event| {
         event["type"] == "turn_completed"
     });
@@ -283,6 +292,51 @@ fn canonical_process_exercises_local_profile_with_native_tool_and_cancel() {
     });
     assert_eq!(cancelled["fatal"], false);
 
+    fixture.send(json!({"type": "shutdown"}));
+    fixture.wait_for("shutdown status", |event| {
+        event["type"] == "status" && event["message"] == "shutting down"
+    });
+    fixture.finish();
+    fs::remove_dir_all(workspace).expect("remove fixture workspace");
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn canonical_process_denies_native_write_without_executing_it() {
+    let workspace = fixture_workspace();
+    let mut fixture = FixtureProcess::start(&workspace);
+    fixture.wait_for("ready", |event| event["type"] == "ready");
+    fixture.send(json!({
+        "type": "hello",
+        "protocol_version": maestro_tui::headless::HEADLESS_PROTOCOL_VERSION,
+        "client_info": {"name": "local-sdk-profile-test", "version": "1.0.0"}
+    }));
+    fixture.wait_for("hello_ok", |event| event["type"] == "hello_ok");
+    fixture.send(json!({"type": "init", "approval_mode": "prompt"}));
+    fixture.wait_for("init applied", |event| {
+        event["type"] == "status" && event["message"] == "init applied"
+    });
+    fixture.send(json!({"type": "prompt", "content": "deny native write"}));
+    let tool_call = fixture.wait_for("approval-gated native write", |event| {
+        event["type"] == "tool_call" && event["requires_approval"] == true
+    });
+    let output = workspace.join("local-sdk-native-tool.txt");
+    assert!(!output.exists(), "native write must wait for approval");
+    fixture.send(json!({
+        "type": "tool_response",
+        "call_id": tool_call["call_id"],
+        "approved": false
+    }));
+    fixture.wait_for("completed denied turn", |event| {
+        event["type"] == "turn_completed"
+    });
+    assert!(!output.exists(), "denied native write must not execute");
+    assert!(
+        !fixture.observed.iter().any(|event| {
+            event["type"] == "tool_start" && event["call_id"] == tool_call["call_id"]
+        }),
+        "denied tool must not start"
+    );
     fixture.send(json!({"type": "shutdown"}));
     fixture.wait_for("shutdown status", |event| {
         event["type"] == "status" && event["message"] == "shutting down"
