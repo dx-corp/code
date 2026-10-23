@@ -114,6 +114,8 @@
 //! - Timestamps
 //! - Collapsible thinking blocks
 
+pub mod transcript_images;
+
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -2595,6 +2597,23 @@ impl ChatView<'_> {
         key ^ (self.state.expanded_focus_turns.len() as u64).rotate_left(40)
     }
 
+    fn image_height(&self, message: &Message, width: u16) -> u16 {
+        if focus_turn_is_collapsed(
+            message,
+            self.state.focus_view,
+            &self.state.expanded_focus_turns,
+        ) {
+            return 0;
+        }
+        let images = self.state.transcript_images.borrow();
+        message
+            .tool_calls
+            .iter()
+            .filter(|tool| visible_script_child(tool, Some(&self.state.expanded_tool_calls)))
+            .map(|tool| images.height(&tool.call_id, width))
+            .fold(0, u16::saturating_add)
+    }
+
     fn render_messages(&self, area: Rect, buf: &mut Buffer, canvas: Style) {
         // Filter to only renderable messages
         let renderable_messages: Vec<&Message> = self
@@ -2687,7 +2706,13 @@ impl ChatView<'_> {
         };
         let layout = self.state.prepare_message_layout(
             content_area.width,
-            self.message_layout_settings_key(),
+            self.message_layout_settings_key()
+                ^ self
+                    .state
+                    .transcript_images
+                    .borrow()
+                    .revision()
+                    .rotate_left(13),
             &renderable_messages,
             |index| {
                 usize::from(calculate_message_height(
@@ -2697,6 +2722,9 @@ impl ChatView<'_> {
                     self.state.compact_tool_outputs,
                     self.state.focus_view,
                     &self.state.expanded_focus_turns,
+                ))
+                .saturating_add(usize::from(
+                    self.image_height(renderable_messages[index], content_area.width),
                 ))
                 .saturating_sub(usize::from(continues_turn(
                     index
@@ -2758,6 +2786,30 @@ impl ChatView<'_> {
                     ) {
                         *target = source.clone();
                     }
+                }
+            }
+            let mut image_top = usize::from(
+                full_height.saturating_sub(self.image_height(message, content_area.width)),
+            );
+            if !focus_turn_is_collapsed(
+                message,
+                self.state.focus_view,
+                &self.state.expanded_focus_turns,
+            ) {
+                let mut images = self.state.transcript_images.borrow_mut();
+                for tool in &message.tool_calls {
+                    if !visible_script_child(tool, Some(&self.state.expanded_tool_calls)) {
+                        continue;
+                    }
+                    images.render(
+                        &tool.call_id,
+                        content_area.width,
+                        image_top,
+                        skip,
+                        Rect::new(area.x, y, content_area.width, msg_height),
+                        buf,
+                    );
+                    image_top += usize::from(images.height(&tool.call_id, content_area.width));
                 }
             }
             y += msg_height;
@@ -3784,65 +3836,6 @@ mod tests {
         assert!(!rendered.contains("session restored-42"));
     }
 
-    fn transcript_layout_message(id: &str, content: &str) -> Message {
-        Message {
-            id: id.to_string(),
-            role: MessageRole::Assistant,
-            kind: MessageKind::Regular,
-            content: content.to_string(),
-            thinking: String::new(),
-            streaming: false,
-            tool_calls: vec![],
-            usage: None,
-            timestamp: SystemTime::UNIX_EPOCH,
-            thinking_expanded: false,
-        }
-    }
-
-    #[test]
-    fn transcript_layout_reuses_stable_heights_and_remeasures_streaming_tail() {
-        let mut state = crate::state::AppState::default();
-        state.messages = vec![
-            transcript_layout_message("one", "# First\n\nA stable message."),
-            transcript_layout_message("two", "# Second\n\nA streaming message."),
-        ];
-        let area = Rect::new(0, 0, 80, 24);
-
-        ChatView::new(&state).render(area, &mut Buffer::empty(area));
-        let cold_measurements = state.transcript_layout_measurements();
-        assert_eq!(cold_measurements, 2);
-
-        ChatView::new(&state).render(area, &mut Buffer::empty(area));
-        assert_eq!(state.transcript_layout_measurements(), cold_measurements);
-
-        state.messages[1].content.push_str(" More streamed text.");
-        ChatView::new(&state).render(area, &mut Buffer::empty(area));
-        assert_eq!(
-            state.transcript_layout_measurements(),
-            cold_measurements + 1
-        );
-    }
-
-    #[test]
-    fn transcript_layout_width_change_remeasures_every_message() {
-        let mut state = crate::state::AppState::default();
-        state.messages = vec![
-            transcript_layout_message("one", "A stable message."),
-            transcript_layout_message("two", "Another stable message."),
-        ];
-
-        let wide = Rect::new(0, 0, 80, 24);
-        ChatView::new(&state).render(wide, &mut Buffer::empty(wide));
-        let cold_measurements = state.transcript_layout_measurements();
-
-        let narrow = Rect::new(0, 0, 60, 24);
-        ChatView::new(&state).render(narrow, &mut Buffer::empty(narrow));
-        assert_eq!(
-            state.transcript_layout_measurements(),
-            cold_measurements + 2
-        );
-    }
-
     #[test]
     fn transcript_layout_remeasures_when_focus_projection_changes() {
         let mut state = crate::state::AppState::default();
@@ -3905,3 +3898,7 @@ mod footer_tests;
 #[cfg(test)]
 #[path = "message/codemode_tests.rs"]
 mod codemode_tests;
+
+#[cfg(test)]
+#[path = "message/layout_cache_tests.rs"]
+mod layout_cache_tests;

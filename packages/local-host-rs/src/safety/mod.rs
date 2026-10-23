@@ -70,8 +70,6 @@ pub use bash_analyzer::{
     UNPARSEABLE_UNATTENDED_REASON, analyze_bash_command, analyze_bash_command_with_attendance,
     canonicalize_for_matching, is_dangerous, is_likely_safe,
 };
-pub(crate) use bash_analyzer::{find_has_dangerous_predicate, git_args_are_mutating, tokenize};
-pub(crate) use command_catalog::classify_known_command;
 pub use dangerous_patterns::{
     DangerousPattern, PatternMatch, Severity, check_dangerous_patterns, has_high_severity_pattern,
     most_severe_match,

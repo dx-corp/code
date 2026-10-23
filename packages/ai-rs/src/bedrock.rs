@@ -143,6 +143,7 @@ impl BedrockClient {
         messages: &[Message],
         config: &RequestConfig,
     ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
+        config.validate_system_parts()?;
         let cache_enabled = config.cache_system_prompt
             && crate::supports_explicit_prompt_caching(AiProvider::Bedrock, &config.model);
         let request_messages = build_request_messages(messages, config)?;
@@ -410,7 +411,9 @@ fn build_message(
 
 fn build_content_block(block: &ContentBlock) -> Option<Result<bedrock::types::ContentBlock>> {
     Some(match block {
-        ContentBlock::Text { text } => Ok(bedrock::types::ContentBlock::Text(text.clone())),
+        ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+            Ok(bedrock::types::ContentBlock::Text(text.clone()))
+        }
         ContentBlock::Image { source } => build_image_block(source),
         ContentBlock::ToolUse {
             id, name, input, ..

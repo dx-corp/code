@@ -484,6 +484,7 @@ async fn hosted_hard_kill_at_terminal_restores_prior_user_and_assistant_turn() {
                 }) => recorder
                     .record_received(
                         &crate::headless::messages::FromAgentMessage::ConversationSnapshot {
+                            system_prompt_parts: Vec::new(),
                             protocol_version,
                             messages,
                             processed_queue_ids: vec![],
@@ -734,6 +735,7 @@ async fn native_provider_checkpoint_survives_process_death_and_restores_tool_con
     recorder
         .record_received(
             &crate::headless::messages::FromAgentMessage::ConversationSnapshot {
+                system_prompt_parts: Vec::new(),
                 protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                     .to_owned(),
                 messages: snapshot,

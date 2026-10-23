@@ -1029,6 +1029,16 @@ impl AgentState {
                 })
             }
 
+            FromAgentMessage::BackgroundUsage {
+                request_id,
+                model,
+                usage,
+            } => Some(AgentEvent::BackgroundUsage {
+                request_id,
+                model,
+                usage,
+            }),
+
             FromAgentMessage::ResponseEnd {
                 response_id,
                 usage,
@@ -1618,6 +1628,12 @@ pub enum AgentEvent {
         content: String,
         is_thinking: bool,
     },
+    /// Auxiliary usage does not mutate the active foreground response.
+    BackgroundUsage {
+        request_id: String,
+        model: String,
+        usage: TokenUsage,
+    },
     ResponseEnd {
         response_id: String,
         usage: Option<TokenUsage>,
@@ -1702,4 +1718,44 @@ pub enum AgentEvent {
         continuation: Option<crate::agent::compaction::ContinuationRecord>,
         timestamp: String,
     },
+}
+
+#[cfg(test)]
+mod background_usage_tests {
+    use super::*;
+
+    #[test]
+    fn background_usage_preserves_the_active_response() {
+        let mut state = AgentState::default();
+        state.handle_message(FromAgentMessage::ResponseStart {
+            response_id: "primary".into(),
+        });
+        state.handle_message(FromAgentMessage::ResponseChunk {
+            response_id: "primary".into(),
+            content: "In progress".into(),
+            is_thinking: false,
+        });
+        let usage = TokenUsage {
+            output_tokens: 17,
+            cost: Some(0.12),
+            ..Default::default()
+        };
+        let event = state.handle_message(FromAgentMessage::BackgroundUsage {
+            request_id: "summary".into(),
+            model: "summary-model".into(),
+            usage: usage.clone(),
+        });
+        assert!(
+            matches!(event, Some(AgentEvent::BackgroundUsage { request_id, model, usage: received })
+            if request_id == "summary" && model == "summary-model" && received == usage)
+        );
+        let primary = state
+            .current_response
+            .as_ref()
+            .expect("primary remains active");
+        assert_eq!(primary.response_id, "primary");
+        assert_eq!(primary.text, "In progress");
+        assert!(primary.usage.is_none());
+        assert!(state.is_responding);
+    }
 }

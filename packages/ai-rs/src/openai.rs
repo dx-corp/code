@@ -234,8 +234,12 @@ async fn send_with_response_open_timeout(
     .context("Failed to send request to OpenAI API")
 }
 
+#[cfg(test)]
+#[path = "openai/disconnected_endpoint_tests.rs"]
+mod disconnected_endpoint_tests;
 #[path = "openai/managed_gateway.rs"]
 mod managed_gateway;
+
 #[cfg(test)]
 #[path = "openai/response_open_timeout_tests.rs"]
 mod response_open_timeout_tests;
@@ -1522,6 +1526,21 @@ impl OpenAiClient {
                                 .flatten(),
                         });
                     }
+                    let remaining = Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(
+                            blocks
+                                .iter()
+                                .filter(|block| !matches!(block, ContentBlock::ToolResult { .. }))
+                                .cloned()
+                                .collect(),
+                        ),
+                    };
+                    if let Some(message) =
+                        self.convert_message(&remaining, is_mistral, tool_id_to_name)
+                    {
+                        converted.push(message);
+                    }
                     continue;
                 }
             }
@@ -1660,10 +1679,7 @@ impl OpenAiClient {
                     if !tool_calls.is_empty() {
                         let text = blocks
                             .iter()
-                            .filter_map(|block| match block {
-                                ContentBlock::Text { text } => Some(text.as_str()),
-                                _ => None,
-                            })
+                            .filter_map(ContentBlock::text_content)
                             .collect::<String>();
                         return Some(OpenAiMessage {
                             role: "assistant".to_string(),
@@ -1679,7 +1695,7 @@ impl OpenAiClient {
                 let parts: Vec<OpenAiContentPart> = blocks
                     .iter()
                     .filter_map(|block| match block {
-                        ContentBlock::Text { text } => {
+                        ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
                             Some(OpenAiContentPart::Text { text: text.clone() })
                         }
                         ContentBlock::Image { source } => match source {
@@ -1893,7 +1909,6 @@ impl OpenAiClient {
                         }
                         MessageContent::Blocks(blocks) => {
                             // Check if this is tool results (they go as separate items, not in a message)
-                            let mut has_tool_results = false;
                             for block in blocks {
                                 if let ContentBlock::ToolResult {
                                     tool_use_id,
@@ -1901,7 +1916,6 @@ impl OpenAiClient {
                                     is_error: _,
                                 } = block
                                 {
-                                    has_tool_results = true;
                                     // The Responses API expects output as a plain string for success
                                     // Format: { type: "function_call_output", call_id: "...", output: "..." }
                                     input.push(serde_json::json!({
@@ -1912,15 +1926,17 @@ impl OpenAiClient {
                                 }
                             }
 
-                            // If not tool results, treat as regular user message
-                            if !has_tool_results {
+                            {
                                 let content: Vec<serde_json::Value> = blocks
                                     .iter()
                                     .filter_map(|block| match block {
-                                        ContentBlock::Text { text } => Some(serde_json::json!({
-                                            "type": "input_text",
-                                            "text": text
-                                        })),
+                                        ContentBlock::Text { text }
+                                        | ContentBlock::AttributedText { text, .. } => {
+                                            Some(serde_json::json!({
+                                                "type": "input_text",
+                                                "text": text
+                                            }))
+                                        }
                                         _ => None,
                                     })
                                     .collect();
@@ -1955,10 +1971,13 @@ impl OpenAiClient {
                             let text_content: Vec<serde_json::Value> = blocks
                                 .iter()
                                 .filter_map(|block| match block {
-                                    ContentBlock::Text { text } => Some(serde_json::json!({
-                                        "type": "output_text",
-                                        "text": text
-                                    })),
+                                    ContentBlock::Text { text }
+                                    | ContentBlock::AttributedText { text, .. } => {
+                                        Some(serde_json::json!({
+                                            "type": "output_text",
+                                            "text": text
+                                        }))
+                                    }
                                     _ => None,
                                 })
                                 .collect();
@@ -2126,6 +2145,7 @@ impl OpenAiClient {
         config: &RequestConfig,
         responses: bool,
     ) -> Result<serde_json::Value> {
+        config.validate_system_parts()?;
         let mut body = if responses {
             self.build_responses_request_body(messages, config)?
         } else {
@@ -3553,45 +3573,6 @@ struct ToolCallAccumulator {
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn disconnected_endpoint_refuses_redirects() {
-        use std::io::{Read, Write};
-        let destination = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        destination.set_nonblocking(true).unwrap();
-        let origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let origin_url = format!("http://{}", origin.local_addr().unwrap());
-        let location = format!("http://{}", destination.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = origin.accept().unwrap();
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0; 4096];
-            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
-                let count = stream.read(&mut buffer).unwrap();
-                assert!(count > 0, "request ended before HTTP headers");
-                request.extend_from_slice(&buffer[..count]);
-                assert!(request.len() <= 16 * 1024, "request headers too large");
-            }
-            write!(stream, "HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-        });
-        let client =
-            super::OpenAiClient::with_disconnected_endpoint("fixture", &origin_url, "ollama")
-                .unwrap();
-        let response = client.client.get(&origin_url).send().await.unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
-        assert_eq!(
-            destination.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
-        assert_eq!(
-            client.request_model_name("ollama/customer-model"),
-            "customer-model"
-        );
-        server.join().unwrap();
-    }
-
     #[test]
     fn cached_prompt_buckets_do_not_inflate_native_context() {
         // Counts observed during the governed Fireworks tmux trial.

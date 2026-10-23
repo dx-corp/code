@@ -129,6 +129,7 @@ mod input;
 mod layout;
 mod mcp_manager;
 mod message;
+pub use message::transcript_images::TranscriptImages;
 pub mod startup;
 pub(crate) use message::should_render_message;
 pub(crate) mod message_layout;

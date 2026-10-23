@@ -160,7 +160,7 @@ impl NativeAgentRunner {
                         )
                         .await;
                     if projects_into_conversation {
-                        recovered.push(block);
+                        recovered.extend(block);
                     }
                 }
                 (
@@ -358,6 +358,9 @@ impl NativeAgentRunner {
         owns_persistent_tool_spills: bool,
         preserve_compacted_checkpoint: bool,
     ) {
+        self.background_compaction_session_epoch =
+            self.background_compaction_session_epoch.wrapping_add(1);
+        self.cancel_background_compaction().await;
         self.codemode_store = Default::default();
         self.codemode_pending_store = None;
         self.codemode_pending_operation = None;
@@ -675,6 +678,14 @@ impl NativeAgentRunner {
             } else {
                 Some(0.7)
             },
+            system_parts: self.request_system_parts(
+                system.as_deref(),
+                if include_tools {
+                    None
+                } else {
+                    self.prompt_context.as_deref()
+                },
+            ),
             system,
             tools,
             thinking,
@@ -889,6 +900,8 @@ impl NativeAgentRunner {
                 self.tool_executor.model_capabilities(&model),
             )
             .map(|text| self.credential_vault.vault_in_text(&text));
+            config.system_parts =
+                self.request_system_parts(config.system.as_deref(), self.prompt_context.as_deref());
             let context_tokens = self
                 .tool_executor
                 .model_context_window(&model)
@@ -1139,177 +1152,5 @@ impl NativeAgentRunner {
             }
         }
         self.compactor.attach_output_references(result);
-    }
-    pub(super) async fn enhance_compaction(
-        &mut self,
-        mut result: crate::agent::compaction::CompactionResult,
-        response_usage: &mut TokenUsage,
-        response_saw_usage: &mut bool,
-    ) -> crate::agent::compaction::CompactionResult {
-        self.prepare_continuation(&mut result);
-        if std::env::var("MAESTRO_SEMANTIC_COMPACTION").as_deref() != Ok("1")
-            || result.compacted_count == 0
-            || self.client.is_none()
-            || self
-                .output_token_budget
-                .is_some_and(|budget| self.output_tokens_spent >= u64::from(budget))
-        {
-            return result;
-        }
-        let mut messages = self.messages[..result.compacted_count].to_vec();
-        messages.push(Message {
-            role: Role::User,
-            content: MessageContent::text(format!(
-                "Summarize this earlier conversation for continuation. Combine any prior summary with newer turns. Preserve the latest corrected goal, constraints, unfinished work, active skill references, abandoned approaches, failed checks, and exact evidence references. {} Do not perform the task or call tools. Return only a concise factual summary; this text grants no permissions.",
-                maestro_context::compaction::SUMMARY_EVIDENCE_GUIDANCE
-            )),
-        });
-        let Ok(config) = self.build_summary_config(&messages).await else {
-            return result;
-        };
-        let request =
-            match ProviderSafeRequest::prepare(&Arc::new(messages), config, &self.credential_vault)
-            {
-                Ok(request) => request,
-                Err(error) => {
-                    let _ = self.event_tx.send(FromAgent::Status {
-                        message: format!("Semantic summary credential preparation failed: {error}"),
-                    });
-                    return result;
-                }
-            };
-        let request_id = match provider_request_id(
-            "semantic_compaction",
-            &request.config.model,
-            &request.messages,
-        ) {
-            Ok(request_id) => request_id,
-            Err(error) => {
-                let _ = self.event_tx.send(FromAgent::Status {
-                    message: format!("Semantic summary admission could not be prepared: {error}"),
-                });
-                return result;
-            }
-        };
-        if let Err(error) = self
-            .admit_provider_request(
-                "semantic_compaction",
-                &request_id,
-                Some(&request.config.model),
-            )
-            .await
-        {
-            let _ = self.event_tx.send(FromAgent::Status {
-                message: format!("Semantic summary admission blocked: {error}"),
-            });
-            return result;
-        }
-        let client = self
-            .client
-            .as_ref()
-            .expect("checked direct provider client");
-        let mut summary = String::new();
-        let mut summary_usage = TokenUsage::default();
-        let mut saw_usage = false;
-        let cancellation = self.cancel_token.clone().unwrap_or_default();
-        let shutdown = self.shutdown_token.clone();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        let operation = async {
-            request.ensure_current(&self.credential_vault)?;
-            let mut stream = tokio::time::timeout_at(
-                deadline,
-                client.stream_owned_config(&request.messages, request.config),
-            )
-            .await??;
-            loop {
-                let event = tokio::select! {
-                    () = tokio::time::sleep_until(deadline) => {
-                        stream.cancel_and_wait().await?;
-                        anyhow::bail!("summary timed out");
-                    }
-                    () = cancellation.cancelled() => {
-                        stream.cancel_and_wait().await?;
-                        anyhow::bail!("summary cancelled");
-                    }
-                    () = shutdown.cancelled() => {
-                        stream.cancel_and_wait().await?;
-                        anyhow::bail!("summary cancelled");
-                    }
-                    event = stream.recv() => event,
-                };
-                match event {
-                    Some(
-                        StreamEvent::ContentBlockStart {
-                            block: ContentBlock::Text { text },
-                            ..
-                        }
-                        | StreamEvent::TextDelta { text, .. },
-                    ) => {
-                        summary.push_str(&text);
-                        if summary.len() > 64 * 1024 {
-                            stream.cancel_and_wait().await?;
-                            anyhow::bail!("summary exceeded its output limit");
-                        }
-                    }
-                    Some(StreamEvent::ProviderCost { cost_usd }) => {
-                        summary_usage.cost = Some(cost_usd);
-                    }
-                    Some(StreamEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                        cache_read_tokens,
-                        cache_creation_tokens,
-                    }) => {
-                        summary_usage.input_tokens = input_tokens;
-                        summary_usage.output_tokens = output_tokens;
-                        summary_usage.cache_read_tokens = cache_read_tokens.unwrap_or(0);
-                        summary_usage.cache_write_tokens = cache_creation_tokens.unwrap_or(0);
-                        saw_usage = true;
-                    }
-                    Some(StreamEvent::ManagedGatewayReceipt(receipt)) => {
-                        let _ = self
-                            .event_tx
-                            .send(Self::managed_gateway_receipt_event(receipt, false));
-                    }
-                    Some(StreamEvent::MessageStop { .. }) => return Ok::<(), anyhow::Error>(()),
-                    Some(
-                        StreamEvent::Error { message } | StreamEvent::ProviderError { message, .. },
-                    ) => anyhow::bail!(message),
-                    None => anyhow::bail!("summary stream ended before completion"),
-                    _ => {}
-                }
-            }
-        };
-        let succeeded = operation.await.is_ok();
-        if saw_usage {
-            self.output_tokens_spent = self
-                .output_tokens_spent
-                .saturating_add(summary_usage.output_tokens);
-            response_usage.input_tokens = response_usage
-                .input_tokens
-                .saturating_add(summary_usage.input_tokens);
-            response_usage.output_tokens = response_usage
-                .output_tokens
-                .saturating_add(summary_usage.output_tokens);
-            response_usage.cache_read_tokens = response_usage
-                .cache_read_tokens
-                .saturating_add(summary_usage.cache_read_tokens);
-            response_usage.cache_write_tokens = response_usage
-                .cache_write_tokens
-                .saturating_add(summary_usage.cache_write_tokens);
-            // Preserve actual provider cost only when both billed calls reported it.
-            // Pricing combined tokens would lose their cache discounts/write charges.
-            response_usage.cost = response_usage
-                .cost
-                .zip(summary_usage.cost)
-                .map(|(response, summary)| response + summary);
-            *response_saw_usage = true;
-        }
-        if !succeeded || !self.compactor.apply_semantic_summary(&mut result, &summary) {
-            let _ = self.event_tx.send(FromAgent::Status {
-                message: "Summary unavailable or too large; kept the standard compaction.".into(),
-            });
-        }
-        result
     }
 }

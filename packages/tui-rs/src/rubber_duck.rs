@@ -397,6 +397,7 @@ pub async fn run_review(
 /// stdout printing and exit codes.
 async fn drive_review(model: &str, cwd: &str, prompt: &str) -> Result<String> {
     let config = NativeAgentConfig {
+        system_prompt_parts: Vec::new(),
         background_task_access:
             maestro_local_host::tools::background_tasks::BackgroundTaskAccess::Legacy,
         model_capabilities: None,

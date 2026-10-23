@@ -5,7 +5,7 @@
 //! `command_catalog_data.rs` is embedded in the native binary; a workspace copy
 //! cannot grant itself permission.
 //!
-//! The catalog covers 150 executable names, including GitHub CLI, Python versions,
+//! The catalog covers 278 executable names, including GitHub CLI, Python versions,
 //! other interpreters, build and package tools, containers, cloud CLIs, and file,
 //! JSON, and process inspection tools. A known tool with unreviewed arguments gets
 //! an explanation of its possible effects instead of “Unknown command”.
@@ -14,6 +14,22 @@
 //! workflow, run, and search queries; Python version/help; and argument-checked `rg`, `fd`, `jq`, and system inspection.
 //! The same catalog is used by the Bash tool's approval check and the action
 //! firewall's shell analyzer, including pipelines.
+//!
+//! Read grammars distinguish boolean flags, value arity, short-option bundles,
+//! option terminators, and positional bounds. A utility name alone never grants
+//! read-only status: `sort -rn input` reads, while `sort -o output input` writes.
+//! Stateful shell statements (assignments, loops, and function definitions) also
+//! retain review because they can replace a later executable or its environment.
+//!
+//! Git reads can execute repository-configured helpers. Index reads require
+//! `-c core.fsmonitor=false`; diff/show require `--no-ext-diff --no-textconv`;
+//! history/show reads require `--no-show-signature` and an explicit built-in
+//! format such as `--oneline`. Arbitrary formats can invoke signature helpers.
+//! Branch/tag listings require `--no-sort` to clear configured signature sort
+//! keys. Under the no-egress policy, local Git reads additionally need the
+//! leading `--no-lazy-fetch` option to prevent partial-clone object downloads.
+//! These are static argument checks, not proof about installed executables or
+//! inherited environment. Workspace trust and the execution sandbox still apply.
 //!
 //! Recognition is not a blanket allowlist. GitHub mutations, authentication, API
 //! requests, extensions, browser launches, and downloads remain reviewable.
@@ -33,6 +49,9 @@
 //!
 //! The argument semantics follow the [GitHub CLI manual](https://cli.github.com/manual/)
 //! and [Python command-line documentation](https://docs.python.org/3/using/cmdline.html).
+//! Git helper behavior follows the [Git diff](https://git-scm.com/docs/git-diff),
+//! [log](https://git-scm.com/docs/git-log), and [configuration](https://git-scm.com/docs/git-config)
+//! manuals. Paired JSON variables follow the [jq manual](https://jqlang.org/manual/).
 //! New command knowledge is added to the catalog with safe and concerning examples
 //! in `safety/bash_analyzer.rs` and the Bash tool boundary tests in
 //! `tools/bash/command_catalog_tests.rs`.
@@ -60,6 +79,16 @@ struct KnownCommand {
     #[serde(default)]
     global_value_flags: Vec<String>,
     #[serde(default)]
+    global_flags: Vec<String>,
+    #[serde(default)]
+    global_literal_options: Vec<Vec<String>>,
+    #[serde(default)]
+    interspersed_globals: bool,
+    #[serde(default)]
+    local_reads: bool,
+    #[serde(default)]
+    network_guard_prefix: Vec<String>,
+    #[serde(default)]
     network: bool,
 }
 
@@ -72,6 +101,24 @@ struct ReadCommand {
     flags: Vec<String>,
     #[serde(default)]
     value_flags: Vec<String>,
+    #[serde(default)]
+    pair_value_flags: Vec<String>,
+    #[serde(default)]
+    short_bundles: bool,
+    #[serde(default)]
+    option_terminator: bool,
+    #[serde(default)]
+    min_positionals: usize,
+    #[serde(default)]
+    positional_prefix: Option<String>,
+    #[serde(default)]
+    required_flags: Vec<String>,
+    #[serde(default)]
+    required_any_flags: Vec<String>,
+    #[serde(default)]
+    required_global_options: Vec<Vec<String>>,
+    #[serde(default)]
+    numeric_short_flag: bool,
     #[serde(default)]
     max_positionals: usize,
 }
@@ -116,16 +163,41 @@ pub(crate) fn classify_known_command(cmd: &ParsedCommand) -> Option<(CommandRisk
 }
 
 pub(crate) fn known_command_uses_network(cmd: &ParsedCommand) -> bool {
-    definition(&cmd.program).is_some_and(|entry| entry.network && !entry.probes.contains(&cmd.args))
+    definition(&cmd.program).is_some_and(|entry| {
+        entry.network
+            && !entry.probes.contains(&cmd.args)
+            && !(entry.local_reads
+                && cmd.args.starts_with(&entry.network_guard_prefix)
+                && classify_known_command(cmd).is_some_and(|(risk, _)| risk == CommandRisk::Safe))
+    })
 }
 
 fn matches_read(read: &ReadCommand, entry: &KnownCommand, args: &[String]) -> bool {
     let mut offset = 0;
     while args.get(offset).is_some_and(|arg| arg.starts_with('-')) {
+        if let Some(option) = entry
+            .global_literal_options
+            .iter()
+            .find(|option| args[offset..].starts_with(option))
+        {
+            offset += option.len();
+            continue;
+        }
+        if entry.global_flags.contains(&args[offset]) {
+            offset += 1;
+            continue;
+        }
         let Some(consumed) = consume_value_flag(&args[offset..], &entry.global_value_flags) else {
             break;
         };
         offset += consumed;
+    }
+    if !read.required_global_options.iter().all(|option| {
+        args[..offset]
+            .windows(option.len())
+            .any(|window| window == option)
+    }) {
+        return false;
     }
     read.prefixes.iter().any(|prefix| {
         let args = &args[offset..];
@@ -134,20 +206,50 @@ fn matches_read(read: &ReadCommand, entry: &KnownCommand, args: &[String]) -> bo
         }
         let mut args = &args[prefix.len()..];
         let mut positionals = 0;
+        let mut options = true;
+        let mut seen_flags = Vec::new();
         while let Some(arg) = args.first() {
             if arg.is_empty() {
                 return false;
             }
-            if read.flags.contains(arg) {
+            if options && arg == "--" && read.option_terminator {
+                options = false;
                 args = &args[1..];
-            } else if let Some(consumed) = consume_value_flag(args, &read.value_flags)
-                .or_else(|| consume_value_flag(args, &entry.global_value_flags))
+            } else if options
+                && (read.flags.contains(arg)
+                    || matches_short_bundle(read, arg)
+                    || (read.numeric_short_flag
+                        && arg.starts_with('-')
+                        && arg.len() > 1
+                        && arg[1..].bytes().all(|byte| byte.is_ascii_digit())))
+            {
+                seen_flags.push(arg);
+                args = &args[1..];
+            } else if let Some(consumed) = options
+                .then(|| {
+                    consume_pair_value_flag(args, &read.pair_value_flags)
+                        .or_else(|| consume_value_flag(args, &read.value_flags))
+                        .or_else(|| {
+                            entry
+                                .interspersed_globals
+                                .then(|| consume_value_flag(args, &entry.global_value_flags))
+                                .flatten()
+                        })
+                })
+                .flatten()
             {
                 args = &args[consumed..];
-            } else if arg.starts_with('-') {
-                // Unknown flags, option terminators and bundles need review.
+            } else if options && arg.starts_with('-') {
+                // No abbreviations, unknown flags, or unreviewed bundles.
                 return false;
             } else {
+                if read
+                    .positional_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| !arg.starts_with(prefix))
+                {
+                    return false;
+                }
                 positionals += 1;
                 if positionals > read.max_positionals {
                     return false;
@@ -155,8 +257,37 @@ fn matches_read(read: &ReadCommand, entry: &KnownCommand, args: &[String]) -> bo
                 args = &args[1..];
             }
         }
-        true
+        positionals >= read.min_positionals
+            && read
+                .required_flags
+                .iter()
+                .all(|flag| seen_flags.contains(&flag))
+            && (read.required_any_flags.is_empty()
+                || read
+                    .required_any_flags
+                    .iter()
+                    .any(|flag| seen_flags.contains(&flag)))
     })
+}
+
+fn matches_short_bundle(read: &ReadCommand, arg: &str) -> bool {
+    read.short_bundles
+        && arg.starts_with('-')
+        && !arg.starts_with("--")
+        && arg.len() > 2
+        && arg[1..]
+            .chars()
+            .all(|flag| read.flags.contains(&format!("-{flag}")))
+}
+
+fn consume_pair_value_flag(args: &[String], flags: &[String]) -> Option<usize> {
+    // jq's --arg/--argjson consume a variable name AND a value. Neither token
+    // may be reinterpreted as a flag granting another invocation permission.
+    (args.len() >= 3
+        && flags.contains(&args[0])
+        && !args[1].is_empty()
+        && args[1..3].iter().all(|value| !value.starts_with('-')))
+    .then_some(3)
 }
 
 fn consume_value_flag(args: &[String], flags: &[String]) -> Option<usize> {
@@ -216,9 +347,27 @@ mod tests {
                 assert!(names.insert(name), "duplicate command: {name}");
             }
             assert!(entry.probes.iter().all(|probe| !probe.is_empty()));
+            assert!(
+                entry
+                    .global_literal_options
+                    .iter()
+                    .all(|option| !option.is_empty())
+            );
         }
         for read in &catalog.reads {
             assert!(!read.prefixes.is_empty());
+            assert!(read.min_positionals <= read.max_positionals);
+            assert!(
+                read.required_global_options
+                    .iter()
+                    .all(|option| !option.is_empty())
+            );
+            assert!(
+                read.required_flags
+                    .iter()
+                    .chain(&read.required_any_flags)
+                    .all(|flag| read.flags.contains(flag))
+            );
             for program in &read.programs {
                 assert!(
                     names.contains(program),

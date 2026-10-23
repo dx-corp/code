@@ -648,6 +648,7 @@ fn received_semantic_snapshot_is_checkpoint_only_and_strips_private_content() {
     let id = recorder.id().to_owned();
     recorder
         .record_received(&FromAgentMessage::ConversationSnapshot {
+            system_prompt_parts: Vec::new(),
             processed_queue_ids: vec![7, 9],
             protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL.to_owned(),
             messages: vec![
@@ -699,6 +700,7 @@ fn unsupported_semantic_checkpoint_clears_stale_provider_history() {
     let id = recorder.id().to_owned();
     recorder
         .record_received(&FromAgentMessage::ConversationSnapshot {
+            system_prompt_parts: Vec::new(),
             protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL.to_owned(),
             messages: semantic_tool_pair_fixture(),
             processed_queue_ids: vec![7, 9],
@@ -711,6 +713,7 @@ fn unsupported_semantic_checkpoint_clears_stale_provider_history() {
     recorder.flush_checkpoint().unwrap();
     recorder
         .record_received(&FromAgentMessage::ConversationSnapshot {
+            system_prompt_parts: Vec::new(),
             processed_queue_ids: vec![7, 9],
             protocol_version: "evalops.maestro.semantic-conversation.v999".to_owned(),
             messages: vec![],
@@ -1613,4 +1616,96 @@ fn test_title_truncation() {
 
     assert!(metadata.title.as_ref().unwrap().len() <= 80);
     assert!(metadata.title.as_ref().unwrap().ends_with("..."));
+}
+
+#[test]
+fn request_provenance_survives_private_checkpoint_reopen_without_becoming_policy() {
+    let tmp = TempDir::new().unwrap();
+    let parts = vec![
+        ContentBlock::attributed_text(
+            "repository instruction",
+            maestro_ai::ContentSource::Repository,
+            Some("AGENTS.md".into()),
+        ),
+        ContentBlock::attributed_text(
+            "hook observation",
+            maestro_ai::ContentSource::Hook,
+            Some("before-request".into()),
+        ),
+    ];
+    let expected = serde_json::to_value(&parts).unwrap();
+    let mut recorder = SessionRecorder::new(tmp.path()).unwrap();
+    let id = recorder.id().to_owned();
+    recorder
+        .record_received(&FromAgentMessage::ConversationSnapshot {
+            protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL.to_owned(),
+            messages: vec![Message {
+                role: Role::User,
+                content: MessageContent::attributed_text(
+                    "user request",
+                    maestro_ai::ContentSource::User,
+                    None,
+                ),
+            }],
+            processed_queue_ids: Vec::new(),
+            system_prompt_parts: parts,
+        })
+        .unwrap();
+    recorder.flush_checkpoint().unwrap();
+    assert_eq!(
+        serde_json::to_value(recorder.replay().system_prompt_parts).unwrap(),
+        expected
+    );
+    assert!(recorder.replay().last_init.is_none());
+    drop(recorder);
+    let reopened = SessionRecorder::resume(tmp.path(), &id).unwrap();
+    let replay = reopened.replay();
+    assert_eq!(
+        serde_json::to_value(replay.system_prompt_parts).unwrap(),
+        expected
+    );
+    assert!(replay.last_init.is_none());
+    let messages = replay.semantic_conversation.unwrap();
+    assert!(
+        matches!(&messages[0].content, MessageContent::Blocks(parts) if matches!(&parts[0], ContentBlock::AttributedText { .. }))
+    );
+}
+
+#[test]
+fn background_usage_updates_session_totals_once_without_a_foreground_response() {
+    let tmp = TempDir::new().unwrap();
+    let mut recorder = SessionRecorder::new(tmp.path()).unwrap();
+    let id = recorder.id().to_owned();
+    recorder
+        .record_received(&FromAgentMessage::BackgroundUsage {
+            request_id: "background-1".into(),
+            model: "test-model".into(),
+            usage: TokenUsage {
+                input_tokens: 23,
+                output_tokens: 7,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(recorder.metadata().total_input_tokens, 23);
+    assert_eq!(recorder.metadata().total_output_tokens, 7);
+    recorder.flush().unwrap();
+    drop(recorder);
+    let reader = SessionReader::load(tmp.path(), &id).unwrap();
+    assert_eq!(reader.metadata().total_input_tokens, 23);
+    assert_eq!(reader.metadata().total_output_tokens, 7);
+    assert_eq!(
+        reader
+            .entries()
+            .iter()
+            .filter(|entry| matches!(
+                entry,
+                SessionEntry::Received {
+                    message: FromAgentMessage::BackgroundUsage { .. },
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
 }

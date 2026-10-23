@@ -10,6 +10,7 @@ use maestro_context::extract_context_summary;
 use maestro_runtime_contracts::TokenUsage;
 
 pub(super) const CONTEXT_TYPE: &str = "selective_summary_context_v1";
+pub(super) const RUNTIME_CONTEXT_TYPE: &str = "runtime_context_v1";
 pub(super) const USAGE_TYPE: &str = "selective_summary_usage_v1";
 
 #[derive(Serialize, Deserialize)]
@@ -33,6 +34,29 @@ fn custom_entry(kind: &str, data: serde_json::Value) -> SessionEntry {
         custom_type: kind.into(),
         data: Some(data),
     })
+}
+
+/// Checkpoint exact local runtime context, preserving typed source parts and
+/// tool output. The caller owns credential vaulting; no remote content is fetched.
+pub fn runtime_context_entry(history: &[Message]) -> Result<SessionEntry, SessionWriteError> {
+    if history.is_empty() {
+        return Err(SessionWriteError::SerializeError(
+            "runtime context is empty".into(),
+        ));
+    }
+    let data = serde_json::to_value(ContextCheckpoint {
+        messages: history.to_vec(),
+    })
+    .map_err(|error| SessionWriteError::SerializeError(error.to_string()))?;
+    let entry = custom_entry(RUNTIME_CONTEXT_TYPE, data);
+    let bytes = serde_json::to_vec(&entry)
+        .map_err(|error| SessionWriteError::SerializeError(error.to_string()))?;
+    if bytes.len().saturating_add(1) > super::fork::MAX_SESSION_LINE_BYTES {
+        return Err(SessionWriteError::SerializeError(
+            "runtime context exceeds the session line limit".into(),
+        ));
+    }
+    Ok(entry)
 }
 
 /// Save the complete rewritten provider context on an existing fork, then flush.
@@ -125,20 +149,31 @@ pub(super) fn decode_usage(data: Option<serde_json::Value>) -> Result<SummaryUsa
 }
 
 pub(super) fn context_message_visible(message: &Message) -> bool {
+    if message.role == Role::User
+        && message
+            .content
+            .as_text()
+            .and_then(extract_context_summary)
+            .is_some()
+    {
+        return false;
+    }
     !(message.role == Role::User
         && matches!(&message.content, MessageContent::Blocks(blocks)
-            if !blocks.is_empty()
-                && blocks.iter().all(|block| matches!(block, ContentBlock::ToolResult { .. }))))
+        if blocks.iter().any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+            && blocks.iter().all(|block| matches!(block,
+                ContentBlock::ToolResult { .. }
+                | ContentBlock::AttributedText { provenance: maestro_ai::ContentProvenance { source: maestro_ai::ContentSource::Hook, .. }, .. }
+            ))))
 }
 
 /// A display projection only. Exact provider blocks remain in the checkpoint.
 pub(super) fn display_messages(history: &[Message]) -> Vec<AppMessage> {
     let mut result = Vec::new();
     for message in history {
-        let summary = match (&message.role, &message.content) {
-            (Role::User, MessageContent::Text(text)) => extract_context_summary(text),
-            _ => None,
-        };
+        let summary = (message.role == Role::User)
+            .then(|| message.content.as_text().and_then(extract_context_summary))
+            .flatten();
         if let Some(summary) = summary {
             let mut display = vec![super::ContentBlock::Text {
                 text: format!("Conversation summary\n\n{summary}"),
@@ -154,7 +189,9 @@ pub(super) fn display_messages(history: &[Message]) -> Vec<AppMessage> {
         let mut tool_results = Vec::new();
         for block in blocks {
             let block = match block {
-                ContentBlock::Text { text } => super::ContentBlock::Text { text },
+                ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                    super::ContentBlock::Text { text }
+                }
                 ContentBlock::Thinking {
                     thinking,
                     signature,
@@ -284,8 +321,11 @@ pub(super) fn restore_display_timestamps(
         .iter()
         .rposition(|message| {
             message.role == Role::User
-                && matches!(&message.content,
-            MessageContent::Text(text) if extract_context_summary(text).is_some())
+                && message
+                    .content
+                    .as_text()
+                    .and_then(extract_context_summary)
+                    .is_some()
         })
         .map(|index| display_messages(&history[..index]).len())
         .unwrap_or(projected.len());
@@ -297,11 +337,14 @@ pub(super) fn restore_display_timestamps(
             .iter()
             .position(|candidate| candidate == &wanted)
             .map(|offset| begin + offset);
-        let time = found.map_or(checkpoint_time, |index| {
+        if let Some(index) = found {
             begin = index + 1;
-            original[index].timestamp()
-        });
-        set_display_timestamp(message, time);
+            // Keep owner receipts, tool details, image previews, and timestamps
+            // that the provider-only projection does not carry.
+            *message = original[index].clone();
+        } else {
+            set_display_timestamp(message, checkpoint_time);
+        }
     }
     for (index, message) in projected.iter_mut().enumerate().rev() {
         if index <= summary_row {
@@ -312,11 +355,12 @@ pub(super) fn restore_display_timestamps(
             .iter()
             .rposition(|candidate| candidate == &wanted)
             .map(|offset| begin + offset);
-        let time = found.map_or(checkpoint_time, |index| {
+        if let Some(index) = found {
             end = index;
-            original[index].timestamp()
-        });
-        set_display_timestamp(message, time);
+            *message = original[index].clone();
+        } else {
+            set_display_timestamp(message, checkpoint_time);
+        }
     }
     if let Some(message) = projected.get_mut(summary_row) {
         set_display_timestamp(message, checkpoint_time);

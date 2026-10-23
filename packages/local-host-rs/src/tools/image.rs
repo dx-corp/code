@@ -46,6 +46,47 @@ use super::details::ImageDetails;
 use crate::agent::ToolResult;
 use crate::ai::Tool;
 
+// Persist only a small projection of already admitted bytes. Presentation must
+// not reopen a path, which may be remote or change after the approved tool read.
+fn with_preview(details: ImageDetails, data: &[u8]) -> serde_json::Value {
+    let mut details = details.to_json();
+    if let Some(preview) = bounded_preview(data) {
+        details["image_preview"] = serde_json::json!({
+            "mime_type": "image/png",
+            "data": STANDARD.encode(preview),
+        });
+    }
+    details
+}
+
+fn bounded_preview(data: &[u8]) -> Option<Vec<u8>> {
+    const MAX_PREVIEW_PNG_BYTES: usize = 512 * 1024;
+    if data.len() > MAX_IMAGE_SIZE {
+        return None;
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
+    // The bounded raster also bounds PNG encoder work and temporary allocation.
+    let thumbnail = if decoded.width() <= 512 && decoded.height() <= 192 {
+        decoded.to_rgba8()
+    } else {
+        decoded.thumbnail(512, 192).to_rgba8()
+    };
+    let mut encoded = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(thumbnail)
+        .write_to(&mut encoded, ImageFormat::Png)
+        .ok()?;
+    let encoded = encoded.into_inner();
+    (encoded.len() <= MAX_PREVIEW_PNG_BYTES).then_some(encoded)
+}
+
 /// Maximum file size for images (10MB)
 const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
 
@@ -311,7 +352,7 @@ impl ImageTool {
             dim_info,
             serde_json::to_string_pretty(&output).unwrap_or_default()
         ))
-        .with_details(details.to_json())
+        .with_details(with_preview(details, &data))
     }
 
     /// Capture a screenshot
@@ -363,7 +404,7 @@ impl ImageTool {
                     data.len(),
                     serde_json::to_string_pretty(&output).unwrap_or_default()
                 ))
-                .with_details(details.to_json())
+                .with_details(with_preview(details, &data))
             }
             Err(e) => {
                 let details = ImageDetails::screenshot()
@@ -552,6 +593,110 @@ async fn capture_screenshot_windows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn read_image_returns_admitted_preview_pixels_without_a_second_file_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preview.png");
+        image::DynamicImage::new_rgb8(16, 16).save(&path).unwrap();
+        let result = ImageTool::new()
+            .read_image(ReadImageArgs {
+                file_path: path.display().to_string(),
+                max_dimension: None,
+            })
+            .await;
+        assert!(result.success);
+        std::fs::remove_file(path).unwrap();
+        let preview = result.details.unwrap()["image_preview"].clone();
+        let preview: maestro_runtime_contracts::tool_operation::CodeModeImage =
+            serde_json::from_value(preview).unwrap();
+        assert_eq!(preview.mime_type, "image/png");
+        let pixels = STANDARD.decode(preview.data).unwrap();
+        assert_eq!(
+            image::load_from_memory(&pixels).unwrap().dimensions(),
+            (16, 16)
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_preview_is_bounded_and_survives_source_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.png");
+        let pixels = image::RgbImage::from_fn(1024, 768, |x, y| {
+            image::Rgb([
+                (x * 73 + y * 31) as u8,
+                (x * 29 + y * 97) as u8,
+                (x ^ y) as u8,
+            ])
+        });
+        pixels.save(&path).unwrap();
+        let admitted = std::fs::read(&path).unwrap();
+        let result = ImageTool::new()
+            .read_image(ReadImageArgs {
+                file_path: path.display().to_string(),
+                max_dimension: None,
+            })
+            .await;
+        assert!(result.success);
+        let persisted = serde_json::to_vec(&result).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let restored: ToolResult = serde_json::from_slice(&persisted).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(restored.output.split_once("\n\n").unwrap().1).unwrap();
+        let full_uri = output["data_uri"].as_str().unwrap();
+        assert_eq!(
+            STANDARD
+                .decode(full_uri.split_once(',').unwrap().1)
+                .unwrap(),
+            admitted
+        );
+        let preview = &restored.details.unwrap()["image_preview"];
+        assert_eq!(preview["mime_type"], "image/png");
+        let encoded = preview["data"].as_str().unwrap();
+        let bytes = STANDARD.decode(encoded).unwrap();
+        assert!(bytes.len() <= 512 * 1024);
+        assert!(bytes.len() < admitted.len());
+        let dimensions = image::load_from_memory(&bytes).unwrap().dimensions();
+        assert_eq!(dimensions, (256, 192));
+    }
+
+    #[test]
+    fn screenshot_preview_uses_the_same_bounded_admitted_bytes_projection() {
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(1600, 900)
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        let details = with_preview(
+            ImageDetails::screenshot().with_mime_type("image/png"),
+            bytes.get_ref(),
+        );
+        let preview = STANDARD
+            .decode(details["image_preview"]["data"].as_str().unwrap())
+            .unwrap();
+        let (width, height) = image::load_from_memory(&preview).unwrap().dimensions();
+        assert!(width <= 512 && height <= 192);
+        assert!(preview.len() <= 512 * 1024);
+    }
+
+    #[test]
+    fn preview_omits_unsupported_oversized_and_excessive_dimension_sources() {
+        for bytes in [b"<svg/>".to_vec(), vec![0; 10 * 1024 * 1024 + 1]] {
+            let details = with_preview(
+                ImageDetails::screenshot().with_mime_type("image/png"),
+                &bytes,
+            );
+            assert!(details.get("image_preview").is_none());
+        }
+        let mut oversized = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(8193, 1)
+            .write_to(&mut oversized, ImageFormat::Png)
+            .unwrap();
+        let details = with_preview(
+            ImageDetails::screenshot().with_mime_type("image/png"),
+            oversized.get_ref(),
+        );
+        assert!(details.get("image_preview").is_none());
+    }
 
     #[test]
     fn screenshot_temp_path_is_nonexistent_and_guarded() {

@@ -2,6 +2,11 @@
 
 use super::*;
 
+pub(super) enum NativeStreamInput {
+    Event(Option<StreamEvent>),
+    Steer,
+}
+
 impl NativeAgentRunner {
     pub(super) async fn take_deferred_command(
         &mut self,
@@ -105,9 +110,48 @@ impl NativeAgentRunner {
             });
         }
     }
+    /// Admit commands while the provider is producing a response. A follow-up
+    /// stays queued; only a leading explicit steer interrupts this stream.
+    pub(super) async fn next_provider_input<F>(&mut self, event: F) -> Result<NativeStreamInput>
+    where
+        F: Future<Output = Option<StreamEvent>>,
+    {
+        tokio::pin!(event);
+        loop {
+            // Drain first so a cancellation ordered after a steer takes
+            // precedence over starting a replacement provider request.
+            if self.drain_pending_commands().await {
+                return Err(anyhow::anyhow!("Request cancelled"));
+            }
+            if self
+                .pending_messages
+                .peek()
+                .is_some_and(|pending| pending.kind == PromptKind::Steer)
+            {
+                return Ok(NativeStreamInput::Steer);
+            }
+            tokio::select! {
+                biased;
+                command = self.command_rx.recv() => {
+                    let Some(command) = command else {
+                        return Ok(NativeStreamInput::Event(event.await));
+                    };
+                    if self.drain_pending_commands_with_first(Some(command)).await {
+                        return Err(anyhow::anyhow!("Request cancelled"));
+                    }
+                }
+                event = &mut event => return Ok(NativeStreamInput::Event(event)),
+            }
+        }
+    }
+
     pub(super) async fn drain_pending_commands(&mut self) -> bool {
+        self.drain_pending_commands_with_first(None).await
+    }
+
+    async fn drain_pending_commands_with_first(&mut self, mut first: Option<AgentCommand>) -> bool {
         let mut cancelled = false;
-        while let Ok(cmd) = self.command_rx.try_recv() {
+        while let Some(cmd) = first.take().or_else(|| self.command_rx.try_recv().ok()) {
             match cmd {
                 AgentCommand::ApplySelectiveSummary { reply, .. } => {
                     let _ = reply.send(Err(anyhow::anyhow!(
@@ -171,6 +215,7 @@ impl NativeAgentRunner {
                     }
                 }
                 AgentCommand::Cancel { clear_pending } => {
+                    self.cancel_background_compaction().await;
                     self.clear_pending_on_cancel = clear_pending;
                     if clear_pending {
                         let cleared = self.pending_messages.clear();
@@ -260,6 +305,7 @@ impl NativeAgentRunner {
                     checkpoint,
                     applied,
                 } => {
+                    self.cancel_background_compaction().await;
                     let result = self.apply_process_budget(limits, checkpoint);
                     let _ = applied.send(result);
                 }
@@ -273,6 +319,7 @@ impl NativeAgentRunner {
                 AgentCommand::SetOutputTokenBudget {
                     max_total_output_tokens,
                 } => {
+                    self.cancel_background_compaction().await;
                     self.output_token_budget = Some(max_total_output_tokens);
                 }
                 AgentCommand::SetSubagentParentScope { parent_scope_id } => {
@@ -332,7 +379,11 @@ impl NativeAgentRunner {
                 AgentCommand::SetFollowUpMode { mode } => {
                     self.follow_up_mode = mode;
                 }
-                AgentCommand::SetSystemPrompt { system_prompt } => {
+                AgentCommand::SetSystemPrompt {
+                    system_prompt,
+                    parts,
+                } => {
+                    self.config.system_prompt_parts = parts;
                     self.config.system_prompt = Some(system_prompt);
                     self.system_prompt_revision = self.system_prompt_revision.saturating_add(1);
                     self.runtime_prompt_revision = self.runtime_prompt_revision.saturating_add(1);
@@ -341,9 +392,12 @@ impl NativeAgentRunner {
                 AgentCommand::SetSystemPromptForQueuedPrompt {
                     queue_id,
                     system_prompt,
+                    parts,
                 } => {
-                    self.queued_system_prompts
-                        .insert(queue_id, (self.system_prompt_revision, system_prompt));
+                    self.queued_system_prompts.insert(
+                        queue_id,
+                        (self.system_prompt_revision, (system_prompt, parts)),
+                    );
                 }
                 AgentCommand::InjectUserNote {
                     content,
@@ -653,6 +707,7 @@ impl NativeAgentRunner {
                     self.tool_executor.reset_coding_turn();
 
                     let mut prompt = content;
+                    let mut prompt_source = maestro_ai::ContentSource::User;
                     let mut attachments = attachments;
                     let mut prompt_context: Option<String> = None;
 
@@ -676,6 +731,7 @@ impl NativeAgentRunner {
                             continue;
                         }
                         NativeHookResult::ModifyInput { new_input } => {
+                            prompt_source = maestro_ai::ContentSource::Hook;
                             Self::apply_message_hook_modification(
                                 &mut prompt,
                                 &mut attachments,
@@ -708,6 +764,7 @@ impl NativeAgentRunner {
                             continue;
                         }
                         NativeHookResult::ModifyInput { new_input } => {
+                            prompt_source = maestro_ai::ContentSource::Hook;
                             Self::apply_message_hook_modification(
                                 &mut prompt,
                                 &mut attachments,
@@ -730,7 +787,7 @@ impl NativeAgentRunner {
                     });
 
                     let mut blocks = Vec::new();
-                    blocks.push(ContentBlock::Text { text: prompt });
+                    blocks.push(ContentBlock::attributed_text(prompt, prompt_source, None));
                     match load_until_cancelled(
                         self.load_attachment_blocks(&attachments),
                         &cancel_token,
@@ -753,18 +810,13 @@ impl NativeAgentRunner {
                     }
 
                     for block in &mut blocks {
-                        if let ContentBlock::Text { text } = block {
+                        if let ContentBlock::Text { text }
+                        | ContentBlock::AttributedText { text, .. } = block
+                        {
                             *text = self.credential_vault.vault_in_text(text);
                         }
                     }
-                    let content = if blocks.len() == 1 {
-                        match &blocks[0] {
-                            ContentBlock::Text { text } => MessageContent::text(text.clone()),
-                            _ => MessageContent::Blocks(blocks),
-                        }
-                    } else {
-                        MessageContent::Blocks(blocks)
-                    };
+                    let content = MessageContent::Blocks(blocks);
 
                     let current_prompt_index = self.messages.len();
                     self.messages_mut().push(Message {
@@ -1250,6 +1302,7 @@ impl NativeAgentRunner {
                     }
                 }
                 AgentCommand::Cancel { clear_pending } => {
+                    self.cancel_background_compaction().await;
                     if let Some(token) = &self.cancel_token {
                         token.cancel();
                     }
@@ -1403,6 +1456,7 @@ impl NativeAgentRunner {
                     checkpoint,
                     applied,
                 } => {
+                    self.cancel_background_compaction().await;
                     let result = self.apply_process_budget(limits, checkpoint);
                     let _ = applied.send(result);
                 }
@@ -1416,6 +1470,7 @@ impl NativeAgentRunner {
                 AgentCommand::SetOutputTokenBudget {
                     max_total_output_tokens,
                 } => {
+                    self.cancel_background_compaction().await;
                     self.output_token_budget = Some(max_total_output_tokens);
                 }
                 AgentCommand::SetSubagentParentScope { parent_scope_id } => {
@@ -1475,7 +1530,11 @@ impl NativeAgentRunner {
                 AgentCommand::SetFollowUpMode { mode } => {
                     self.follow_up_mode = mode;
                 }
-                AgentCommand::SetSystemPrompt { system_prompt } => {
+                AgentCommand::SetSystemPrompt {
+                    system_prompt,
+                    parts,
+                } => {
+                    self.config.system_prompt_parts = parts;
                     self.config.system_prompt = Some(system_prompt);
                     self.system_prompt_revision = self.system_prompt_revision.saturating_add(1);
                     self.runtime_prompt_revision = self.runtime_prompt_revision.saturating_add(1);
@@ -1484,9 +1543,12 @@ impl NativeAgentRunner {
                 AgentCommand::SetSystemPromptForQueuedPrompt {
                     queue_id,
                     system_prompt,
+                    parts,
                 } => {
-                    self.queued_system_prompts
-                        .insert(queue_id, (self.system_prompt_revision, system_prompt));
+                    self.queued_system_prompts.insert(
+                        queue_id,
+                        (self.system_prompt_revision, (system_prompt, parts)),
+                    );
                 }
                 AgentCommand::ClearHistory => {
                     self.semantic_continuation = None;
@@ -1673,6 +1735,7 @@ impl NativeAgentRunner {
         // runner -- and a command sent at that point would race the
         // cancellation. This runs on every way out of the loop, so a handled
         // signal, a normal quit, and a closed command channel all emit it.
+        self.cancel_background_compaction().await;
         self.apply_session_context(None, None, "shutdown", false, false)
             .await;
 

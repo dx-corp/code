@@ -143,6 +143,7 @@
 //! ```
 
 mod branching;
+mod checkpoint_updates;
 mod entries;
 mod export;
 mod fork;
@@ -150,7 +151,9 @@ mod index;
 mod manager;
 mod model_history;
 mod reader;
+mod runtime_checkpoint;
 mod selective_summary;
+mod settings;
 pub mod tool_operations;
 mod wire_format_generated;
 mod writer;
@@ -158,6 +161,7 @@ mod writer;
 pub use branching::{
     BranchId, BranchManager, BranchMetadata, BranchPoint, BranchSummary, MessageId,
 };
+pub use checkpoint_updates::system_prompt_parts_entry;
 pub use entries::*;
 pub use export::{ExportFormat, ExportOptions, SessionExporter, export_session_file};
 pub use fork::{
@@ -171,7 +175,13 @@ pub use reader::{
     LifecycleAgentNoteEntry, LifecycleNotificationEntry, ParsedSession, SessionReadError,
     SessionReader,
 };
-pub use selective_summary::{append_selective_summary_checkpoint, selective_summary_usage_entry};
+pub use runtime_checkpoint::runtime_context_entries;
+pub use selective_summary::{
+    append_selective_summary_checkpoint, runtime_context_entry, selective_summary_usage_entry,
+};
+pub use settings::{
+    SESSION_SETTINGS_CUSTOM_TYPE, SessionApprovalMode, SessionQueueMode, SessionSettings,
+};
 pub use writer::SessionLock;
 pub use writer::{
     SessionWriter, generate_session_filename, sanitize_path_for_dirname, sessions_dir,

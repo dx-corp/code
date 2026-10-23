@@ -561,6 +561,7 @@ mod tests {
                 ),
             },
             FromAgentMessage::ConversationSnapshot {
+                system_prompt_parts: Vec::new(),
                 processed_queue_ids: vec![7, 9],
                 protocol_version: "snapshot-v1".into(),
                 messages: vec![],
@@ -574,6 +575,11 @@ mod tests {
                 state: "running".into(),
                 thread_id: "thread-1".into(),
                 turn_id: Some("turn-1".into()),
+            },
+            FromAgentMessage::BackgroundUsage {
+                request_id: "summary-1".into(),
+                model: "openai/gpt-4o".into(),
+                usage: TokenUsage::default(),
             },
             FromAgentMessage::CodexUsageState {
                 source: "provider".into(),
@@ -619,6 +625,7 @@ mod tests {
             | FromAgentMessage::AssistantTextObserved { .. }
             | FromAgentMessage::ResponseChunk { .. }
             | FromAgentMessage::ResponseEnd { .. }
+            | FromAgentMessage::BackgroundUsage { .. }
             | FromAgentMessage::TurnCompleted { .. }
             | FromAgentMessage::TurnInterrupted { .. }
             | FromAgentMessage::CodexSessionState { .. }
@@ -1171,6 +1178,7 @@ mod tests {
             FromPayload::AssistantTextObserved(_) => "assistant_text_observed",
             FromPayload::ResponseChunk(_) => "response_chunk",
             FromPayload::ResponseEnd(_) => "response_end",
+            FromPayload::BackgroundUsage(_) => "background_usage",
             FromPayload::ToolCall(_) => "tool_call",
             FromPayload::ToolStart(_) => "tool_start",
             FromPayload::ToolOutput(_) => "tool_output",
@@ -1258,6 +1266,7 @@ mod tests {
             FromPayload::AssistantTextObserved(Default::default()),
             FromPayload::ResponseChunk(Default::default()),
             FromPayload::ResponseEnd(Default::default()),
+            FromPayload::BackgroundUsage(Default::default()),
             FromPayload::ToolCall(Default::default()),
             FromPayload::ToolStart(Default::default()),
             FromPayload::ToolOutput(Default::default()),

@@ -309,6 +309,7 @@ impl App {
                     ApprovalMode::Yolo => crate::state::InteractionMode::AlwaysApprove,
                     ApprovalMode::Safe | ApprovalMode::Selective => crate::state::InteractionMode::Normal,
                 };
+                self.record_session_settings();
                 self.state.status = Some(self.state.locale.format("Approval mode: {0}", &[(self.state.approval_mode.label()).to_string()]));
             }
             CommandAction::CycleInteractionMode => {
@@ -1220,262 +1221,6 @@ impl App {
         self.state.add_system_message(msg);
     }
 
-    pub(super) fn continue_last_session(&mut self) {
-        if self.state.busy {
-            self.state.status = Some(
-                self.state
-                    .locale
-                    .translate(
-                        "Wait for the active response to finish before continuing another session.",
-                    )
-                    .to_string(),
-            );
-            return;
-        }
-        match self
-            .session_manager
-            .recent_sessions(1)
-            .map(|sessions| sessions.into_iter().next())
-        {
-            Ok(Some(session)) => self.resume_session_path(&session.path, &session.id),
-            Ok(None) => {
-                self.state.status.replace(
-                    self.state
-                        .locale
-                        .translate("No previous session found for this workspace.")
-                        .to_string(),
-                );
-            }
-            Err(err) => {
-                self.state.error = Some(
-                    self.state
-                        .locale
-                        .format("Failed to load last session: {0}", &[(err).to_string()]),
-                );
-            }
-        }
-    }
-
-    /// Prepare and read the selected transcript once, while retaining the
-    /// current writer until in-memory adoption succeeds.
-    pub(crate) fn resume_session_path(&mut self, path: &std::path::Path, target_session_id: &str) {
-        if self.session_cleanup_pending() {
-            self.state.error = Some(self.state.locale.translate(
-                "Could not confirm that the response stopped. The current conversation was kept.",
-            ).to_owned());
-            return;
-        }
-        let same_active_session = self
-            .session_manager
-            .current_session_path()
-            .as_deref()
-            .is_some_and(|active| active == path);
-        // Re-selecting the active path uses our existing lock. Other targets
-        // are read under the prepared writer's lock, never before acquiring it.
-        let prepared = if same_active_session {
-            None
-        } else {
-            match self.session_manager.prepare_session_adoption(path) {
-                Ok(prepared) => Some(prepared),
-                Err(err) => {
-                    self.report_session_resume_failure(target_session_id, err);
-                    return;
-                }
-            }
-        };
-        let active_session;
-        let session = if let Some(prepared) = prepared.as_ref() {
-            prepared.session()
-        } else {
-            let result = self
-                .session_manager
-                .flush()
-                .map_err(|error| error.to_string())
-                .and_then(|()| {
-                    crate::session::SessionReader::read_file(path)
-                        .map_err(|error| error.to_string())
-                });
-            active_session = match result {
-                Ok(session) => session,
-                Err(err) => {
-                    self.report_session_resume_failure(target_session_id, err);
-                    return;
-                }
-            };
-            &active_session
-        };
-        // Use the locked transcript's workspace, not potentially stale listing
-        // metadata, to decide whether this requires a fresh runtime.
-        let saved = std::path::Path::new(&session.header.cwd);
-        let current = std::path::Path::new(self.session_manager.cwd());
-        if saved != current
-            && dunce::canonicalize(saved)
-                .ok()
-                .zip(dunce::canonicalize(current).ok())
-                .is_none_or(|(saved, current)| saved != current)
-        {
-            if !saved.is_absolute() || !saved.is_dir() {
-                self.state.error = Some(self.state.locale.format("Cannot resume: workspace {0} is missing. Restore that directory and try again.", &[(saved.display()).to_string()]));
-                return;
-            }
-            // Tools, trust, hooks, and project configuration are bound at startup.
-            // Keep this transcript untouched until orderly shutdown, then build
-            // a fresh agent in the saved directory.
-            self.resume_target = Some((saved.to_path_buf(), session.header.id.clone()));
-            self.should_quit = true;
-            return;
-        }
-        let session_id = session.header.id.clone();
-        self.dex_terminal = None;
-        self.dex_delight = Default::default();
-        // Resuming a persisted transcript begins a new credential scope.
-        // Historical references intentionally cannot resolve after reload.
-        self.credential_vault.clear();
-        // Drop the old session's error surface and force a full repaint so
-        // its frames cannot linger beneath the restored transcript.
-        self.reset_rendered_viewport();
-        if let Some(agent) = &self.native_agent {
-            // Drop any active-session state before the new transcript and
-            // credential scope become visible.
-            agent.clear_history();
-        }
-        restore_visible_session_messages(&mut self.state, session);
-        crate::tools::tool_call_contract::restore_pending_contracts(
-            unanswered_tool_call_contracts(session),
-        );
-
-        self.state.session_id = Some(session_id.clone());
-        self.state.status = Some(
-            self.state
-                .locale
-                .format("Resumed session: {0}", std::slice::from_ref(&(session_id))),
-        );
-
-        let mut model_applied = true;
-        let mut thinking_applied = true;
-        if let Some(agent) = &self.native_agent {
-            if let Err(e) = agent.set_model(&session.header.model) {
-                self.state.error = Some(
-                    self.state
-                        .locale
-                        .format("Failed to set model: {0}", &[(e).to_string()]),
-                );
-                model_applied = false;
-                thinking_applied = false;
-            } else {
-                let (enabled, budget) = session.header.thinking_level.to_config();
-                if let Err(e) = agent.set_thinking(enabled, budget) {
-                    self.state.error = Some(
-                        self.state
-                            .locale
-                            .format("Failed to set thinking: {0}", &[(e).to_string()]),
-                    );
-                    thinking_applied = false;
-                }
-            }
-        }
-
-        self.session_started_at = chrono::DateTime::parse_from_rfc3339(&session.header.timestamp)
-            .ok()
-            .and_then(|dt| {
-                let secs = dt.timestamp();
-                if secs < 0 {
-                    None
-                } else {
-                    Some(UNIX_EPOCH + Duration::new(secs as u64, dt.timestamp_subsec_nanos()))
-                }
-            })
-            .unwrap_or_else(SystemTime::now);
-        self.hydrate_usage_from_session(session);
-
-        if model_applied {
-            self.current_model = session.header.model.clone();
-            self.state.model = Some(session.header.model.clone());
-            self.usage_tracker.set_model(session.header.model.clone());
-            if thinking_applied {
-                self.current_thinking_level = session.header.thinking_level;
-                self.state.thinking_level = self.current_thinking_level;
-            }
-        } else if !self.current_model.is_empty() {
-            self.usage_tracker.set_model(self.current_model.clone());
-        }
-
-        self.restore_pending_lifecycle_agent_notes(session);
-        let restored_history = self.native_agent.as_ref().map(|_| {
-            (
-                crate::session::model_history(session),
-                session
-                    .compactions
-                    .last()
-                    .and_then(|entry| entry.continuation.clone()),
-            )
-        });
-        if let Some(prepared) = prepared {
-            self.session_manager.adopt_prepared_session(prepared);
-        }
-        // Re-adopt this session's own scope: completions from children it
-        // started earlier are parked, not discarded, and surface from here.
-        self.adopt_session_context(Some(&session_id), "resume");
-        if let (Some(agent), Some((messages, continuation))) =
-            (&self.native_agent, restored_history)
-        {
-            // Session transition clears old tool-output references. Install the
-            // target history and its continuation together after that transition.
-            agent.replace_history_with_continuation(messages, continuation);
-        }
-        self.session_resume_failed = false;
-        self.last_esc_at = None;
-        if let Some(event) = self.new_session_event(
-            maestro_runtime_contracts::SessionEventLane::Runtime,
-            "session.resumed",
-            maestro_runtime_contracts::SessionEventPhase::Completed,
-        ) {
-            self.record_session_event(event);
-        }
-    }
-
-    fn report_session_resume_failure(
-        &mut self,
-        target_session_id: &str,
-        err: impl std::fmt::Display,
-    ) {
-        let had_active_session = self.session_manager.current_session_id().is_some();
-        if !had_active_session {
-            self.session_resume_failed = true;
-        }
-        self.state.error = Some(super::format_session_persistence_error(
-            self.state.locale.translate("resume the session writer"),
-            err,
-        ));
-        self.state.status = Some(self.state.locale.format(
-            if had_active_session {
-                "Session resume failed ({0}); current session unchanged"
-            } else {
-                "Session resume failed ({0}); use /new to continue"
-            },
-            &[target_session_id.to_string()],
-        ));
-    }
-
-    /// Resume a specific session before the event loop starts.
-    ///
-    /// Used by `maestro fork` to continue a freshly forked session. At this
-    /// point the native agent has not spawned yet, so the agent-facing parts
-    /// of [`App::resume_session_path`] are no-ops; the forked session's
-    /// model is adopted through `MAESTRO_MODEL` by the caller instead.
-    pub fn resume_session_at_startup(&mut self, session_id: &str) {
-        match self.session_manager.find_session(session_id) {
-            Ok(session) => self.resume_session_path(&session.path, &session.id),
-            Err(err) => {
-                self.state.error = Some(
-                    self.state
-                        .locale
-                        .format("Failed to load session: {0}", &[(err).to_string()]),
-                );
-            }
-        }
-    }
-
     /// List recently recorded alerts in the transcript and mark them seen.
     fn show_alerts(&mut self) {
         const MAX_LISTED: usize = 10;
@@ -1515,6 +1260,7 @@ impl App {
         self.state.approval_mode = mode.approval_mode();
         self.sync_agent_approval_mode();
         self.update_agent_system_prompt();
+        self.record_session_settings();
         self.state.status = Some(self.state.locale.format(
             "Mode: {0} (approvals: {1})",
             &[
@@ -3809,9 +3555,11 @@ impl App {
                     self.state.steering_mode,
                     self.state.follow_up_mode,
                 );
+                let label = label.to_owned();
+                self.record_session_settings();
                 self.state.status.replace(self.state.locale.format(
                     "{0} mode: {1}",
-                    &[(label).to_string(), (mode.label()).to_string()],
+                    &[label.clone(), (mode.label()).to_string()],
                 ));
             }
         }

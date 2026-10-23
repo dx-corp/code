@@ -434,9 +434,15 @@ fn closed_tool_response_failure(call_id: &str) -> anyhow::Error {
     })
 }
 mod attachments;
+mod background_compaction;
 mod budget_controls;
 mod builtin_read;
 mod cancellation;
+mod request_cancellation;
+use request_cancellation::{
+    CancellableLoad, load_until_cancelled, run_request_with_cancellation,
+    wait_for_codex_auth_refresh, wait_for_retry_delay,
+};
 mod classifier;
 mod classifier_wave;
 mod codemode;
@@ -450,6 +456,7 @@ mod deferred_tool_schemas;
 #[cfg(test)]
 mod deferred_tool_tests;
 mod model_dynamics;
+mod provenance;
 mod provider_history;
 mod read_only_results;
 use provider_history::sanitize_semantic_conversation;
@@ -672,6 +679,8 @@ pub struct NativeAgentConfig {
     /// Optional instructions prepended to every conversation. Used to set the agent's
     /// role, coding standards, and behavioral guidelines.
     pub system_prompt: Option<String>,
+    /// Descriptive source metadata; never an authority grant.
+    pub system_prompt_parts: Vec<ContentBlock>,
 
     /// Whether extended thinking is enabled
     ///
@@ -786,6 +795,7 @@ impl Default for NativeAgentConfig {
             max_tokens: 16_384,
             max_tokens_source: MaxTokensSource::Catalog,
             system_prompt: None,
+            system_prompt_parts: Vec::new(),
             thinking_enabled: false,
             thinking_budget: 10000,
             model_dynamics: super::model_dynamics::ModelDynamicsConfig::default(),
@@ -1046,6 +1056,7 @@ enum AgentCommand {
     /// Replaces the base system prompt used for subsequent requests.
     SetSystemPrompt {
         system_prompt: String,
+        parts: Vec<ContentBlock>,
     },
 
     /// Materialize the provider session that owns the current standing prompt.
@@ -1075,6 +1086,7 @@ enum AgentCommand {
     SetSystemPromptForQueuedPrompt {
         queue_id: u64,
         system_prompt: String,
+        parts: Vec<ContentBlock>,
     },
 
     /// Clear conversation history
@@ -1552,6 +1564,8 @@ impl NativeAgent {
             compactor,
             token_calibrated_models: HashSet::new(),
             semantic_continuation: None,
+            background_compaction: None,
+            background_compaction_session_epoch: 0,
             retry_policy,
             pending_messages,
             steering_mode: QueueMode::All,
@@ -1924,6 +1938,7 @@ impl NativeAgent {
             .send(AgentCommand::SetSystemPromptForQueuedPrompt {
                 queue_id,
                 system_prompt,
+                parts: Vec::new(),
             })
             .map_err(|e| anyhow::anyhow!("Failed to set queued system prompt: {e}"))?;
         Ok(())
@@ -2073,13 +2088,46 @@ impl NativeAgent {
         Ok(())
     }
 
+    /// Bind queued standing text to its descriptive source parts.
+    pub fn set_system_prompt_parts_for_queued_prompt(
+        &self,
+        queue_id: u64,
+        system_prompt: String,
+        parts: Vec<ContentBlock>,
+    ) -> Result<()> {
+        self.command_tx
+            .send(AgentCommand::SetSystemPromptForQueuedPrompt {
+                queue_id,
+                system_prompt,
+                parts,
+            })
+            .map_err(|error| anyhow::anyhow!("Failed to stage system prompt: {error}"))
+    }
+
     /// Replace the base system prompt
     pub fn set_system_prompt(&self, system_prompt: impl Into<String>) -> Result<()> {
         let system_prompt = system_prompt.into();
         self.command_tx
-            .send(AgentCommand::SetSystemPrompt { system_prompt })
+            .send(AgentCommand::SetSystemPrompt {
+                system_prompt,
+                parts: Vec::new(),
+            })
             .map_err(|e| anyhow::anyhow!("Failed to set system prompt: {e}"))?;
         Ok(())
+    }
+
+    /// Replace standing text and its exact source parts together.
+    pub fn set_system_prompt_parts(
+        &self,
+        system_prompt: String,
+        parts: Vec<ContentBlock>,
+    ) -> Result<()> {
+        self.command_tx
+            .send(AgentCommand::SetSystemPrompt {
+                system_prompt,
+                parts,
+            })
+            .map_err(|error| anyhow::anyhow!("Failed to set system prompt: {error}"))
     }
 
     /// Wait until the active provider has accepted the current standing prompt.
@@ -2143,113 +2191,8 @@ impl NativeAgent {
     }
 }
 
-async fn wait_for_retry_delay(
-    delay: std::time::Duration,
-    request_cancel: &CancellationToken,
-    shutdown_token: &CancellationToken,
-) -> bool {
-    tokio::select! {
-        () = tokio::time::sleep(delay) => true,
-        () = request_cancel.cancelled() => false,
-        () = shutdown_token.cancelled() => false,
-    }
-}
-
-async fn wait_for_codex_auth_refresh(
-    host: &NativeExecutionHostHandle,
-    auth_path: &std::path::Path,
-    request_cancel: &CancellationToken,
-    shutdown_token: &CancellationToken,
-    max_wait: Duration,
-) -> bool {
-    let baseline = tokio::fs::read(auth_path).await.ok();
-    let wait = async {
-        loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            let current = tokio::fs::read(auth_path).await.ok();
-            if current != baseline && host.codex_auth_is_usable(auth_path) {
-                return true;
-            }
-        }
-    };
-    tokio::select! {
-        result = tokio::time::timeout(max_wait, wait) => result.unwrap_or(false),
-        () = request_cancel.cancelled() => false,
-        () = shutdown_token.cancelled() => false,
-    }
-}
-
-enum CancellableLoad<T> {
-    Loaded(T),
-    RequestCancelled,
-    Shutdown,
-}
-
-async fn load_until_cancelled<F, T>(
-    load: F,
-    request_cancel: &CancellationToken,
-    shutdown_token: &CancellationToken,
-) -> CancellableLoad<T>
-where
-    F: Future<Output = T>,
-{
-    tokio::pin!(load);
-    tokio::select! {
-        biased;
-        () = shutdown_token.cancelled() => CancellableLoad::Shutdown,
-        () = request_cancel.cancelled() => CancellableLoad::RequestCancelled,
-        loaded = &mut load => CancellableLoad::Loaded(loaded),
-    }
-}
-
-const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const CODEX_SIDE_QUESTION_TIMEOUT: Duration = Duration::from_mins(2);
 const CODEX_SIDE_QUESTION_MAX_CONTEXT_TOKENS: u64 = 20_000;
-
-async fn run_request_with_cancellation<F>(
-    request: F,
-    request_cancel: &CancellationToken,
-    shutdown_token: &CancellationToken,
-    active_cancellation: &Arc<Mutex<ActiveCancellation>>,
-) -> Result<()>
-where
-    F: Future<Output = Result<()>>,
-{
-    tokio::pin!(request);
-    tokio::select! {
-        biased;
-        () = shutdown_token.cancelled() => {
-            let terminal_drain_required = || {
-                active_cancellation
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .terminal_drain_required
-            };
-            if terminal_drain_required() {
-                // A mutating native tool may already have committed its
-                // workspace change before bounded follow-up work (for example
-                // LSP diagnostics) finishes. Keep the request alive through
-                // batch cleanup so its one receipt-bearing terminal remains
-                // truthful and cannot invite a duplicate retry.
-                (&mut request).await
-            } else {
-                // Provider and legacy waits that have not crossed a mutating
-                // native boundary retain bounded shutdown. Recheck after the
-                // bound because polling the request may have crossed into a
-                // mutating tool after shutdown won the outer selector.
-                match tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, &mut request).await {
-                    Ok(result) => result,
-                    Err(_) if terminal_drain_required() => (&mut request).await,
-                    Err(_) => Err(anyhow::anyhow!("Request cancelled")),
-                }
-            }
-        }
-        () = request_cancel.cancelled() => {
-            Err(anyhow::anyhow!("Request cancelled"))
-        }
-        result = &mut request => result,
-    }
-}
 
 fn native_tool_requires_terminal_drain(
     _tool_executor: &NativeExecutionHostHandle,
@@ -2538,6 +2481,8 @@ struct NativeAgentRunner {
     /// Models already probed for exact provider token counting.
     token_calibrated_models: HashSet<String>,
     semantic_continuation: Option<super::compaction::ContinuationRecord>,
+    background_compaction: Option<background_compaction::PendingCompaction>,
+    background_compaction_session_epoch: u64,
 
     /// Retry policy for handling transient API errors
     ///
@@ -2603,7 +2548,7 @@ struct NativeAgentRunner {
     /// `prepare_pending_message`. A mismatched revision means an authoritative
     /// `SetSystemPrompt` landed after the staging, so the staged value is stale
     /// and dropped.
-    queued_system_prompts: HashMap<u64, (u64, String)>,
+    queued_system_prompts: HashMap<u64, (u64, (String, Vec<ContentBlock>))>,
 
     /// Bumped by every authoritative system-prompt update.
     ///
@@ -2716,10 +2661,7 @@ pub fn runtime_system_prompt(
 /// authoritative prompt is newer and, because skill activation is cumulative,
 /// already contains the skills the staged one carried; applying the stale
 /// snapshot would revert the newer update.
-fn staged_system_prompt_to_apply(
-    staged: Option<(u64, String)>,
-    current_revision: u64,
-) -> Option<String> {
+fn staged_system_prompt_to_apply<T>(staged: Option<(u64, T)>, current_revision: u64) -> Option<T> {
     match staged {
         Some((staged_revision, prompt)) if staged_revision == current_revision => Some(prompt),
         _ => None,
@@ -2727,10 +2669,11 @@ fn staged_system_prompt_to_apply(
 }
 
 fn apply_staged_system_prompt(
-    staged_prompts: &mut HashMap<u64, (u64, String)>,
+    staged_prompts: &mut HashMap<u64, (u64, (String, Vec<ContentBlock>))>,
     queue_id: u64,
     authority_revision: u64,
     system_prompt: &mut Option<String>,
+    system_prompt_parts: &mut Vec<ContentBlock>,
     runtime_revision: &mut u64,
 ) -> bool {
     let Some(staged) =
@@ -2738,7 +2681,8 @@ fn apply_staged_system_prompt(
     else {
         return false;
     };
-    *system_prompt = Some(staged);
+    *system_prompt = Some(staged.0);
+    *system_prompt_parts = staged.1;
     *runtime_revision = runtime_revision.saturating_add(1);
     true
 }
@@ -3843,10 +3787,16 @@ impl ProviderSafeRequest {
         vault: &CredentialVault,
     ) -> Result<Self> {
         config.system = config.system.map(|system| vault.vault_in_text(&system));
+        provenance::vault_system_parts(&mut config.system_parts, vault);
         config.tools = vault_provider_tools(config.tools.as_ref(), vault)?;
         // Config preparation may discover a credential present in history.
         let messages = vault_provider_history_shared(&messages, vault)?;
         config.system = config.system.map(|system| vault.vault_in_text(&system));
+        provenance::vault_system_parts(&mut config.system_parts, vault);
+        config.validate_system_parts()?;
+        if let Some(prepared) = &config.cache_topology {
+            prepared.validate(messages.as_ref(), &config)?;
+        }
         let attestation = provider_payload::attest_history(&messages, vault)?;
         if let Some(system) = &config.system {
             let system_attestation = vault
@@ -3948,7 +3898,9 @@ fn user_message_text(message: &Message) -> Option<String> {
             let text = blocks
                 .iter()
                 .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::Text { text } | ContentBlock::AttributedText { text, .. } => {
+                        Some(text.as_str())
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -4172,11 +4124,34 @@ impl NativeAgentRunner {
             .copied()
             .collect::<Vec<_>>();
         processed_queue_ids.sort_unstable();
-        if let Some(snapshot) = conversation_snapshot_event_with_queue_ids(
+        if let Some(mut snapshot) = conversation_snapshot_event_with_queue_ids(
             &self.messages,
             processed_queue_ids,
             self.tool_executor.semantic_conversation_protocol(),
         ) {
+            if let FromAgent::ConversationSnapshot {
+                system_prompt_parts,
+                local_messages,
+                ..
+            } = &mut snapshot
+            {
+                match provider_payload::vault_checkpoint(&self.messages, &self.credential_vault) {
+                    Ok(messages) => *local_messages = messages,
+                    Err(error) => {
+                        let _ = self.event_tx.send(FromAgent::Status {
+                            message: format!("Local context checkpoint unavailable: {error}"),
+                        });
+                    }
+                }
+                let system = self
+                    .runtime_audit
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .system_prompt
+                    .clone();
+                *system_prompt_parts =
+                    self.request_system_parts(system.as_deref(), self.prompt_context.as_deref());
+            }
             let _ = self.event_tx.send(snapshot);
             self.processed_prompt_queue_ids.clear();
         }
@@ -4517,6 +4492,8 @@ fn conversation_snapshot_event_with_queue_ids(
     ))
     .ok()?;
     Some(FromAgent::ConversationSnapshot {
+        local_messages: Vec::new(),
+        system_prompt_parts: Vec::new(),
         protocol_version: protocol_version.to_owned(),
         messages,
         processed_queue_ids,

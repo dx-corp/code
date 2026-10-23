@@ -260,6 +260,7 @@ impl SnapshotManifest {
         let snapshot = &self.snapshot;
         let state = &snapshot.state;
         SessionReplay {
+            system_prompt_parts: Vec::new(),
             state: AgentState {
                 pending_managed_authorizations: Vec::new(),
                 protocol_version: state.protocol_version.clone(),

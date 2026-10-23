@@ -139,6 +139,12 @@ impl NativeAgentRunner {
         call_id: &str,
         images: &[maestro_runtime_contracts::tool_operation::CodeModeImage],
     ) {
+        if !images.is_empty() {
+            let _ = self.event_tx.send(FromAgent::LocalToolImages {
+                call_id: call_id.to_owned(),
+                images: images.to_vec(),
+            });
+        }
         for (index, image) in images.iter().enumerate() {
             let owner = maestro_ai::ToolImageOwner {
                 call_id: call_id.to_owned(),

@@ -68,3 +68,8 @@ impl DerefMut for SessionManager {
         &mut self.0
     }
 }
+
+pub use maestro_session::{
+    SessionApprovalMode, SessionQueueMode, SessionSettings, runtime_context_entries,
+    runtime_context_entry, system_prompt_parts_entry,
+};

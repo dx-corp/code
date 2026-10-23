@@ -114,7 +114,10 @@ impl RequestContextUsage {
                 MessageContent::Blocks(blocks) => {
                     for block in blocks {
                         match block {
-                            ContentBlock::Text { text } => usage.conversation += count(text),
+                            ContentBlock::Text { text }
+                            | ContentBlock::AttributedText { text, .. } => {
+                                usage.conversation += count(text)
+                            }
                             ContentBlock::Thinking { thinking, .. } => {
                                 usage.other += count(thinking);
                             }

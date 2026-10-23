@@ -379,6 +379,7 @@ impl AnthropicClient {
         messages: &[Message],
         config: &RequestConfig,
     ) -> Result<serde_json::Value> {
+        config.validate_system_parts()?;
         let model = provider_model_name(&config.model);
         let capabilities = anthropic_request_capabilities(Some("anthropic"), &model);
         let finalized = config

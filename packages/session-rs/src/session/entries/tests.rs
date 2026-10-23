@@ -986,6 +986,7 @@ fn compaction_continuation_round_trips_in_session_jsonl_shape() {
         auto: true,
         custom_instructions: None,
         continuation: Some(ContinuationRecord {
+            content_origins: Vec::new(),
             projected_tool_images: vec![],
             file_operations: vec![maestro_context::compaction::ContinuationFileOperation {
                 tool_call_id: "write-1".into(),

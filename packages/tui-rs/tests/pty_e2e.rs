@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 #[path = "support/terminal_capture.rs"]
 mod terminal_capture;
+#[path = "support/transcript_images_e2e.rs"]
+mod transcript_images_e2e;
 use terminal_capture::TerminalCapture;
 
 use portable_pty::native_pty_system;
@@ -532,10 +534,9 @@ impl PtySession {
                 // The TUI probes the "terminal" with a cursor-position
                 // report (DSR, ESC[6n) when constructing the inline viewport.
                 // A real terminal answers, so we must too, or init
-                // fails with "cursor position could not be read". Init moves
-                // the cursor to the last row before the first query, so the
-                // truthful answer for this 36-row PTY is the bottom row.
-                const DSR_REPLY: &[u8] = b"\x1b[36;1R";
+                // fails with "cursor position could not be read". Report the
+                // emulator's current cursor, including after viewport resize;
+                // an old fixed row would create an off-screen inline viewport.
                 // Also answer primary device attributes like a real terminal.
                 // Otherwise keyboard detection waits for its two-second timeout.
                 const DA_REPLY: &[u8] = b"\x1b[?1;2c";
@@ -545,17 +546,19 @@ impl PtySession {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            reader_output
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .process(&buf[..n]);
+                            let cursor_report = {
+                                let mut capture =
+                                    reader_output.lock().unwrap_or_else(|e| e.into_inner());
+                                capture.process(&buf[..n]);
+                                capture.cursor_report()
+                            };
                             let (query_count, da_count) =
                                 terminal_query_counts(&mut tail, &buf[..n]);
                             if query_count > 0 || da_count > 0 {
                                 let mut writer =
                                     reader_writer.lock().unwrap_or_else(|e| e.into_inner());
                                 for _ in 0..query_count {
-                                    let _ = writer.write_all(DSR_REPLY);
+                                    let _ = writer.write_all(cursor_report.as_bytes());
                                 }
                                 for _ in 0..da_count {
                                     let _ = writer.write_all(DA_REPLY);
@@ -2167,19 +2170,22 @@ fn pty_tool_call_approval_flow() {
     let mock = MockOpenAiServer::start(vec![
         tool_call_turn(
             "bash",
-            &serde_json::json!({"command": "printf pty-e2e-ran"}),
+            &serde_json::json!({"command": "printf pty-e2e-ran > approval-result.txt"}),
         ),
         text_turn("PTY_E2E_TOOL_DONE_OK"),
     ]);
     let workdir = tempfile::tempdir().expect("temp workdir");
     let mut session = PtySession::spawn(&mock, workdir.path(), "run the printf command");
 
-    // Default approval mode is Selective: `printf` is not on the read-only
-    // safe list, so the modal must appear before anything executes.
+    // Default approval mode is Selective: plain printf is read-only, but this
+    // output redirect writes a file and must wait for explicit approval.
     session.wait_for_text("Action Approval Required", READY_TIMEOUT);
     session.wait_for_text("printf pty-e2e-ran", TURN_TIMEOUT);
+    let result_path = workdir.path().join("approval-result.txt");
+    assert!(!result_path.exists(), "file write must wait for approval");
 
     session.send_bytes_until(b"y", "PTY_E2E_TOOL_DONE_OK", TURN_TIMEOUT);
+    assert_eq!(std::fs::read_to_string(result_path).unwrap(), "pty-e2e-ran");
     assert_eq!(
         mock.request_count(),
         2,

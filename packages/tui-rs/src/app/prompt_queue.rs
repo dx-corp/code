@@ -11,6 +11,9 @@ impl App {
         if question.trim().is_empty() {
             return Ok(false);
         }
+        if !self.state.busy && self.permission_decision_pending() {
+            return Ok(false);
+        }
         if self.ensure_session_started().is_err() {
             return Ok(false);
         }
@@ -117,9 +120,14 @@ impl App {
         // the prompt with no entry, so a steer that jumped the queue and applied
         // its own skills first left them in place for the prompt behind it,
         // which is the leak keying was supposed to prevent.
-        let system_prompt = self.build_system_prompt();
+        let assembly = self.build_system_prompt_assembly();
+        let system_prompt = assembly.render();
         if let Some(agent) = &self.native_agent {
-            if let Err(e) = agent.set_system_prompt_for_queued_prompt(queue_id, system_prompt) {
+            if let Err(e) = agent.set_system_prompt_parts_for_queued_prompt(
+                queue_id,
+                system_prompt,
+                assembly.content_parts(),
+            ) {
                 self.state.error = Some(
                     self.state
                         .locale
@@ -143,6 +151,13 @@ impl App {
         kind: PromptKind,
         front: bool,
     ) -> Result<bool> {
+        if let Err(err) = self.ensure_session_started() {
+            self.state.error = Some(super::format_session_persistence_error(
+                self.state.locale.translate("save the session settings"),
+                err,
+            ));
+            return Ok(false);
+        }
         // A prompt submitted while the agent is busy is handed to the runner
         // here and drained later by `NativeAgentRunner::prepare_pending_message`,
         // which never passes through `submit_prompt_with_kind`. Without this
@@ -178,7 +193,7 @@ impl App {
             PromptKind::Steer => self
                 .state
                 .locale
-                .translate("Steering queued for the next checkpoint; current work continues.")
+                .translate("Steering interrupts the current response; active tools settle first.")
                 .to_owned(),
             PromptKind::FollowUp => self
                 .state
@@ -513,7 +528,14 @@ impl App {
         ));
     }
 
+    pub(super) fn permission_decision_pending(&self) -> bool {
+        !self.approval_controller.pending().is_empty() || !self.pending_guardian_reviews.is_empty()
+    }
+
     pub(super) async fn maybe_handle_post_interrupt_queue(&mut self) -> Result<bool> {
+        if self.permission_decision_pending() {
+            return Ok(false);
+        }
         if self.submit_queued_steering_after_interrupt {
             self.submit_queued_steering_after_interrupt = false;
             self.queued_prompt_inflight = None;
@@ -605,6 +627,17 @@ impl App {
         content: String,
         kind: PromptKind,
     ) -> Result<bool> {
+        if !self.state.busy && self.permission_decision_pending() {
+            self.state.status = Some(
+                self.state
+                    .locale
+                    .translate(
+                        "Resolve the pending permission decision before starting another request.",
+                    )
+                    .to_owned(),
+            );
+            return Ok(false);
+        }
         if self.session_resume_failed {
             self.state.error = Some(
                 self.state
@@ -707,5 +740,48 @@ impl App {
         self.report_agent_unavailable();
         self.state.busy = false;
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn pending_permission_decision_holds_post_interrupt_queue_under_detail_view() {
+        for guardian in [false, true] {
+            let mut app = super::super::tests::new_test_app();
+            app.active_modal = ActiveModal::DetailView;
+            if guardian {
+                app.pending_guardian_reviews
+                    .insert("pending-decision".into());
+            } else {
+                app.approval_controller.enqueue(ApprovalRequest::new(
+                    "pending-decision",
+                    "write",
+                    serde_json::json!({"path":"out"}),
+                ));
+            }
+            app.submit_queued_steering_after_interrupt = true;
+            app.enqueue_pending_prompt(
+                1,
+                "Continue after the decision".into(),
+                PromptKind::Steer,
+                true,
+            );
+            assert!(!app.maybe_handle_post_interrupt_queue().await.unwrap());
+            assert!(
+                app.submit_queued_steering_after_interrupt,
+                "retain the scheduled submission"
+            );
+            assert_eq!(
+                app.queued_prompts.len(),
+                1,
+                "pending choices must not consume input"
+            );
+            app.pending_guardian_reviews.clear();
+            app.approval_controller.clear();
+            assert!(!app.permission_decision_pending());
+        }
     }
 }

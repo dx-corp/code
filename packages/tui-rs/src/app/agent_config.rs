@@ -18,6 +18,7 @@ impl App {
             max_tokens: crate::model_catalog::default_max_output_tokens(model),
             max_tokens_source: MaxTokensSource::Catalog,
             system_prompt: Some(self.build_system_prompt()),
+            system_prompt_parts: self.build_system_prompt_assembly().content_parts(),
             thinking_enabled,
             thinking_budget,
             cwd: cwd.to_owned(),

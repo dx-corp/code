@@ -95,6 +95,15 @@ async fn assert_session_restore_provider_history(interactive: bool) {
     } else {
         app.continue_last_session();
     }
+    assert!(
+        app.session_transition_waiting(),
+        "an idle live actor must settle before resume"
+    );
+    assert_eq!(
+        app.session_manager.current_session_path().as_ref(),
+        Some(&original)
+    );
+    settle_session_transition(&mut app).await;
     assert_eq!(
         app.session_manager.current_session_path().as_ref(),
         Some(&child_path)
@@ -219,6 +228,7 @@ async fn resumed_continuation_survives_the_next_compaction() {
     .unwrap();
     app.native_agent = Some(agent);
     app.resume_session_path(std::path::Path::new(&saved.file_path), &saved.header.id);
+    settle_session_transition(&mut app).await;
     app.native_agent
         .as_ref()
         .unwrap()
@@ -251,4 +261,267 @@ async fn resumed_continuation_survives_the_next_compaction() {
             .iter()
             .any(|request| request == "exact original request absent from summary")
     );
+}
+
+#[test]
+fn session_settings_are_checkpointed_before_first_request() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.current_thinking_level = ThinkingLevel::Low;
+    app.state.approval_mode = ApprovalMode::Safe;
+    app.ensure_session_started().unwrap();
+    let raw = std::fs::read_to_string(app.session_manager.current_session_path().unwrap()).unwrap();
+    let checkpoint = raw
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|entry| entry["customType"] == "session_settings_v1")
+        .expect("settings must be durable before the first user message");
+    assert_eq!(checkpoint["data"]["version"], 1);
+    assert_eq!(checkpoint["data"]["model"], "openai/gpt-5.5");
+    assert_eq!(checkpoint["data"]["thinking_level"], "low");
+    assert_eq!(checkpoint["data"]["approval_mode"], "safe");
+    assert!(
+        raw.lines().all(
+            |line| serde_json::from_str::<serde_json::Value>(line).unwrap()["type"] != "message"
+        )
+    );
+}
+
+#[test]
+fn resumed_session_restores_safer_approval_preference() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.state.approval_mode = ApprovalMode::Safe;
+    app.ensure_session_started().unwrap();
+    let path = app.session_manager.current_session_path().unwrap();
+    let id = app.state.session_id.clone().unwrap();
+    app.state.approval_mode = ApprovalMode::Selective;
+    app.resume_session_path(&path, &id);
+    assert_eq!(app.state.approval_mode, ApprovalMode::Safe);
+}
+
+#[test]
+fn cold_resume_keeps_session_model_and_explicit_launch_override_wins() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.ensure_session_started().unwrap();
+    let path = app.session_manager.current_session_path().unwrap();
+    let id = app.state.session_id.clone().unwrap();
+    drop(app);
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-4o".into();
+    app.current_model_user_set = false;
+    app.resume_session_path(&path, &id);
+    assert_eq!(app.current_model, "openai/gpt-5.5");
+    assert!(
+        app.current_model_user_set,
+        "cold actor startup must not replace the session choice with global defaults"
+    );
+    app.set_startup_session_model_override(Some("openai/gpt-4o".into()));
+    app.resume_session_path(&path, &id);
+    assert_eq!(app.current_model, "openai/gpt-4o");
+    assert!(app.startup_session_model_override.is_none());
+    assert_eq!(
+        crate::session::SessionReader::read_file(&path)
+            .unwrap()
+            .header
+            .model,
+        "openai/gpt-4o"
+    );
+}
+
+#[test]
+fn unused_launch_override_does_not_override_later_interactive_resume() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut saved = new_test_app();
+    saved.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    saved.current_model = "openai/gpt-5.5".into();
+    saved.ensure_session_started().unwrap();
+    let path = saved.session_manager.current_session_path().unwrap();
+    let id = saved.state.session_id.clone().unwrap();
+    drop(saved);
+
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-4o".into();
+    app.set_startup_session_model_override(Some("openai/gpt-4o".into()));
+    app.finish_startup_session_model_override();
+    assert!(app.startup_session_model_override.is_none());
+    app.resume_session_path(&path, &id);
+    assert_eq!(app.current_model, "openai/gpt-5.5");
+}
+
+#[test]
+fn startup_override_survives_only_a_pending_workspace_relaunch() {
+    let mut app = new_test_app();
+    app.set_startup_session_model_override(Some("openai/gpt-4o".into()));
+    app.resume_target = Some((std::path::PathBuf::from("/other/workspace"), "saved".into()));
+    app.finish_startup_session_model_override();
+    assert_eq!(
+        app.take_startup_session_model_override().as_deref(),
+        Some("openai/gpt-4o")
+    );
+    assert!(app.startup_session_model_override.is_none());
+}
+
+#[test]
+fn settings_changes_survive_resume_without_replaying_permission_grants() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.state.approval_mode = ApprovalMode::Yolo;
+    app.state.steering_mode = QueueMode::One;
+    app.state.follow_up_mode = QueueMode::All;
+    app.ensure_session_started().unwrap();
+    app.current_thinking_level = ThinkingLevel::High;
+    app.record_thinking_level_change(ThinkingLevel::High);
+    let path = app.session_manager.current_session_path().unwrap();
+    let id = app.state.session_id.clone().unwrap();
+    app.state.approval_mode = ApprovalMode::Safe;
+    app.state.steering_mode = QueueMode::All;
+    app.state.follow_up_mode = QueueMode::One;
+    app.sandbox_policy = Some(crate::sandbox::SandboxPolicy::ReadOnly);
+    app.resume_session_path(&path, &id);
+    assert_eq!(app.current_thinking_level, ThinkingLevel::High);
+    assert_eq!(app.state.approval_mode, ApprovalMode::Safe);
+    assert_eq!(app.state.steering_mode, QueueMode::One);
+    assert_eq!(app.state.follow_up_mode, QueueMode::All);
+    assert!(matches!(
+        app.sandbox_policy,
+        Some(crate::sandbox::SandboxPolicy::ReadOnly)
+    ));
+    let saved = crate::session::SessionReader::read_file(&path).unwrap();
+    assert_eq!(
+        saved.settings.unwrap().approval_mode,
+        crate::session::SessionApprovalMode::Safe
+    );
+}
+
+#[test]
+fn unchanged_settings_do_not_append_redundant_checkpoints() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.ensure_session_started().unwrap();
+    for _ in 0..3 {
+        app.ensure_session_started().unwrap();
+    }
+    app.flush_session();
+    let path = app.session_manager.current_session_path().unwrap();
+    let raw = std::fs::read_to_string(path).unwrap();
+    assert_eq!(
+        raw.lines()
+            .filter(
+                |line| serde_json::from_str::<serde_json::Value>(line).unwrap()["customType"]
+                    == "session_settings_v1"
+            )
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn settings_write_failure_blocks_request_and_is_retried() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = new_test_app();
+    app.session_manager = SessionManager::with_sessions_dir("/tmp", temp.path());
+    app.current_model = "openai/gpt-5.5".into();
+    app.ensure_session_started().unwrap();
+    let path = app.session_manager.current_session_path().unwrap();
+    let backup = path.with_extension("backup");
+    std::fs::rename(&path, &backup).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    app.state.approval_mode = ApprovalMode::Safe;
+    assert!(app.ensure_session_started().is_err());
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(backup, &path).unwrap();
+    app.ensure_session_started().unwrap();
+    assert_eq!(
+        crate::session::SessionReader::read_file(&path)
+            .unwrap()
+            .settings
+            .unwrap()
+            .approval_mode,
+        crate::session::SessionApprovalMode::Safe,
+    );
+}
+
+async fn settle_session_transition(app: &mut App) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while app.session_transition.is_some() {
+            app.poll_session_transition().await.unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn local_response_content_persists_tool_calls_and_signed_thinking_before_dispatch() {
+    let mut app = new_test_app();
+    let dir = tempfile::tempdir().unwrap();
+    app.session_manager = SessionManager::with_sessions_dir("handoff-test", dir.path());
+    app.current_model = "claude-fable-5-1".into();
+    app.record_user_message("Read both files");
+    let response_id = "tool-response".to_string();
+    app.handle_agent_message(FromAgent::ResponseStart {
+        response_id: response_id.clone(),
+    })
+    .await
+    .unwrap();
+    let blocks = vec![
+        crate::ai::ContentBlock::Thinking {
+            thinking: String::new(),
+            signature: Some("empty-signature".into()),
+        },
+        crate::ai::ContentBlock::Thinking {
+            thinking: "reasoning".into(),
+            signature: Some("visible-signature".into()),
+        },
+        crate::ai::ContentBlock::ToolUse {
+            id: "call|fc_a".into(),
+            name: "read".into(),
+            input: serde_json::json!({"path":"a"}),
+            gemini_context: None,
+        },
+        crate::ai::ContentBlock::ToolUse {
+            id: "call|fc_b".into(),
+            name: "read".into(),
+            input: serde_json::json!({"path":"b"}),
+            gemini_context: None,
+        },
+    ];
+    let event = FromAgent::LocalAssistantContent {
+        response_id: response_id.clone(),
+        content: blocks.clone(),
+    };
+    assert!(
+        serde_json::to_value(&event).is_err(),
+        "private content cannot enter a serialized transport"
+    );
+    app.handle_agent_message(event).await.unwrap();
+    app.handle_agent_message(FromAgent::ResponseEnd {
+        response_id,
+        usage: None,
+    })
+    .await
+    .unwrap();
+    let path = app.session_manager.current_session_path().unwrap();
+    let session = crate::session::SessionReader::read_file(path).unwrap();
+    let history = crate::session::model_history(&session);
+    assert_eq!(
+        serde_json::to_value(&history[1].content).unwrap(),
+        serde_json::to_value(crate::ai::MessageContent::Blocks(blocks)).unwrap()
+    );
+    assert!(app.pending_assistant_content.is_none());
 }

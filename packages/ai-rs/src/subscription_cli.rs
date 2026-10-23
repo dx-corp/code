@@ -81,6 +81,7 @@ impl SubscriptionCliClient {
 }
 
 fn prepare_prompt(messages: &[Message], config: &RequestConfig) -> Result<String> {
+    config.validate_system_parts()?;
     ensure!(
         messages.len() <= 500,
         "subscription transcript exceeds 500 messages"
@@ -96,7 +97,25 @@ fn prepare_prompt(messages: &[Message], config: &RequestConfig) -> Result<String
             })
         })
         .collect::<Vec<_>>();
-    let transcript = serde_json::to_string(messages)?;
+    let mut wire_messages = messages.to_vec();
+    for message in &mut wire_messages {
+        if let crate::MessageContent::Blocks(parts) = &mut message.content {
+            for part in parts {
+                match part {
+                    ContentBlock::AttributedText { text, .. } => {
+                        *part = ContentBlock::Text {
+                            text: std::mem::take(text),
+                        };
+                    }
+                    ContentBlock::Image {
+                        source: crate::ImageSource::Base64 { owner, .. },
+                    } => *owner = None,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let transcript = serde_json::to_string(&wire_messages)?;
     let tools = serde_json::to_string(&tools)?;
     let system = config.system.as_deref().unwrap_or("");
     let prompt = format!(
@@ -559,6 +578,23 @@ fn emit_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provenance_is_projected_out_of_subscription_transcript_json() {
+        let messages = vec![Message {
+            role: crate::Role::User,
+            content: crate::MessageContent::attributed_text(
+                "repository text",
+                crate::ContentSource::Repository,
+                Some("private-origin".into()),
+            ),
+        }];
+        let before = serde_json::to_value(&messages).unwrap();
+        let prompt = prepare_prompt(&messages, &RequestConfig::default()).unwrap();
+        assert!(prompt.contains("repository text"));
+        assert!(!prompt.contains("attributed_text"));
+        assert!(!prompt.contains("private-origin"));
+        assert_eq!(serde_json::to_value(messages).unwrap(), before);
+    }
 
     #[test]
     fn rejects_unoffered_tool() {

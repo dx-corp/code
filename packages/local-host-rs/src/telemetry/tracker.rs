@@ -443,6 +443,10 @@ impl TurnTracker {
                 }
                 None
             }
+            // The auxiliary request is exported under its own request ID. It
+            // can finish during any later turn; adding it here would bill that
+            // unrelated foreground response and invent completion/timing data.
+            FromAgent::BackgroundUsage { .. } => None,
             FromAgent::ResponseEnd { response_id, usage } => {
                 // Count only the end paired with the active provider response.
                 // Native also emits a UI cleanup ResponseEnd after its final
@@ -1580,5 +1584,34 @@ mod droid_telemetry_tests {
         assert_eq!(json["tool_outcomes"]["execution_duration_ms"], 111);
         assert!(!json.to_string().contains("private-mcp-name"));
         assert!(!json.to_string().contains("never-export"));
+    }
+}
+
+#[cfg(test)]
+mod background_usage_tests {
+    use super::*;
+
+    #[test]
+    fn background_usage_cannot_finish_or_charge_an_unrelated_turn() {
+        let mut tracker = TurnTracker::new(TurnTrackerConfig {
+            session_id: "session".into(),
+            sampling_config: TailSamplingConfig::default(),
+        });
+        tracker.handle_event(&FromAgent::ResponseStart {
+            response_id: "primary".into(),
+        });
+        let event = tracker.handle_event(&FromAgent::BackgroundUsage {
+            request_id: "summary".into(),
+            model: "summary-model".into(),
+            usage: TokenUsage {
+                output_tokens: 17,
+                cost: Some(0.12),
+                ..Default::default()
+            },
+        });
+        assert!(event.is_none());
+        assert_eq!(tracker.current_response_id.as_deref(), Some("primary"));
+        assert!(tracker.accumulated_usage.is_none());
+        assert!(tracker.current_turn.is_some());
     }
 }

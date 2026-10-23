@@ -8,11 +8,13 @@ const SNAPSHOT_LIMIT: usize = 256;
 
 pub(super) struct TerminalCapture {
     parser: vt100::Parser<ScreenHistory>,
+    raw: Option<Vec<u8>>,
 }
 
 impl TerminalCapture {
     pub(super) fn new(rows: u16, cols: u16) -> Self {
         Self {
+            raw: None,
             parser: vt100::Parser::new_with_callbacks(
                 rows,
                 cols,
@@ -23,11 +25,41 @@ impl TerminalCapture {
     }
 
     pub(super) fn process(&mut self, bytes: &[u8]) {
+        if let Some(raw) = &mut self.raw {
+            const LIMIT: usize = 4 * 1024 * 1024;
+            if bytes.len() >= LIMIT {
+                raw.clear();
+                raw.extend_from_slice(&bytes[bytes.len() - LIMIT..]);
+            } else {
+                let excess = raw.len().saturating_add(bytes.len()).saturating_sub(LIMIT);
+                raw.drain(..excess);
+                raw.extend_from_slice(bytes);
+            }
+        }
         // Keep the parser across reads: PTYs may split escape sequences and
         // UTF-8 characters at any byte, and later paints reuse existing cells.
         self.parser.process(bytes);
         let snapshot = screen_rows(self.parser.screen()).join("\n");
         self.parser.callbacks_mut().record(snapshot);
+    }
+
+    /// Keep the terminal emulator in sync with its PTY before handling resize queries.
+    pub(super) fn resize(&mut self, rows: u16, columns: u16) {
+        self.parser.screen_mut().set_size(rows, columns);
+    }
+
+    pub(super) fn cursor_report(&self) -> String {
+        let (row, column) = self.parser.screen().cursor_position();
+        format!("\x1b[{};{}R", row + 1, column + 1)
+    }
+
+    /// Opt-in graphics evidence: the VT text emulator intentionally discards APC image bytes.
+    pub(super) fn capture_raw(&mut self) {
+        self.raw = Some(Vec::new());
+    }
+
+    pub(super) fn raw_bytes(&self) -> &[u8] {
+        self.raw.as_deref().unwrap_or_default()
     }
 
     /// Current visible screen only, for controls that revisit an earlier value.
@@ -131,6 +163,17 @@ fn screen_rows(screen: &vt100::Screen) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_report_tracks_resize_and_later_cursor_moves() {
+        let mut capture = TerminalCapture::new(36, 120);
+        capture.process(b"\x1b[36;120H");
+        assert_eq!(capture.cursor_report(), "\x1b[36;120R");
+        capture.resize(20, 40);
+        assert_eq!(capture.cursor_report(), "\x1b[20;40R");
+        capture.process(b"\x1b[7;5H\x1b[6n");
+        assert_eq!(capture.cursor_report(), "\x1b[7;5R");
+    }
 
     #[test]
     fn reconstructs_cursor_only_spaces_and_reused_cells() {

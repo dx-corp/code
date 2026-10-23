@@ -214,6 +214,7 @@ pub enum FromRuntimeMessageType {
     AssistantTextObserved,
     ResponseChunk,
     ResponseEnd,
+    BackgroundUsage,
     ToolCall,
     ToolStart,
     ToolOutput,
@@ -361,6 +362,7 @@ pub const HEADLESS_FROM_RUNTIME_MESSAGE_NAMES: &[&str] = &[
     "assistant_text_observed",
     "response_chunk",
     "response_end",
+    "background_usage",
     "tool_call",
     "tool_start",
     "tool_output",
@@ -529,6 +531,7 @@ const FROM_RUNTIME_MESSAGES: &[FromRuntimeMessageType] = &[
     FromRuntimeMessageType::AssistantTextObserved,
     FromRuntimeMessageType::ResponseChunk,
     FromRuntimeMessageType::ResponseEnd,
+    FromRuntimeMessageType::BackgroundUsage,
     FromRuntimeMessageType::ToolCall,
     FromRuntimeMessageType::ToolStart,
     FromRuntimeMessageType::ToolOutput,
@@ -1270,7 +1273,7 @@ mod tests {
         assert_eq!(headless_protocol_capability_digest(), expected);
         assert_eq!(
             headless_protocol_capability_digest(),
-            "sha256:8353f3612f7e7f4f7f5c55020b2c255f7ad52b57417a027ae66ceb657c402ba8"
+            "sha256:0a8aa9a0f6085c7bc6510810cc239b6852271b8fe714fa1cb5622f06c11ef563"
         );
     }
 }

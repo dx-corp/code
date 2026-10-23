@@ -1334,6 +1334,8 @@ mod tests {
         }))
         .unwrap();
         ParsedSession {
+            settings: None,
+            system_prompt_parts: Vec::new(),
             selective_summary_context: None,
             header,
             messages,

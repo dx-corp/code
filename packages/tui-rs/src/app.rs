@@ -900,6 +900,9 @@ pub struct App {
 
     /// Current model in use (for session headers and usage tracking).
     current_model: String,
+    startup_session_model_override: Option<String>,
+    persisted_system_prompt_parts: Option<(std::path::PathBuf, serde_json::Value)>,
+    persisted_session_settings: Option<(std::path::PathBuf, crate::session::SessionSettings)>,
 
     /// Current thinking level (for session headers/changes).
     current_thinking_level: ThinkingLevel,
@@ -1193,6 +1196,13 @@ impl App {
 
     /// Create an app, optionally submitting `initial_prompt` after the agent is ready.
     pub fn new_with_initial_prompt(initial_prompt: Option<String>) -> Result<Self> {
+        Self::new_with_initial_prompt_and_model_override(initial_prompt, None)
+    }
+
+    pub(crate) fn new_with_initial_prompt_and_model_override(
+        initial_prompt: Option<String>,
+        model_override: Option<String>,
+    ) -> Result<Self> {
         let (mut terminal, mut capabilities) =
             terminal::init().context("Failed to initialize terminal")?;
         let mut terminal_events =
@@ -1217,6 +1227,7 @@ impl App {
             Some((startup.local_discovery_handle, startup.local_discovery_rx));
         let mut app =
             Self::new_with_prepared_startup(terminal, capabilities, initial_prompt, true, prepared);
+        app.set_startup_session_model_override(model_override);
         app.state.model = Some(startup.model.clone());
         app.model_selector
             .set_current_model(Some(startup.model.clone()));
@@ -1243,6 +1254,7 @@ impl App {
             app.initial_prompt = None;
             app.resume_session_path(&session.path, &session.id);
         }
+        app.finish_startup_session_model_override();
         app.state.textarea = startup.textarea;
         // Keep the reader and its buffered input across the startup handoff.
         app.terminal_events = terminal_events;
@@ -1836,6 +1848,9 @@ impl App {
             session_started_at: SystemTime::now(),
             session_resume_failed: false,
             current_model: String::new(),
+            startup_session_model_override: None,
+            persisted_session_settings: None,
+            persisted_system_prompt_parts: None,
             current_thinking_level: initial_thinking,
             pending_assistant_content: None,
             last_mcp_status_refresh: None,
@@ -1964,11 +1979,14 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     fn build_system_prompt_assembly_with_context(
         ctx: SystemPromptAssemblyContext<'_>,
     ) -> PromptAssembly {
-        let mut fragments = vec![PromptFragment::new(
-            "base",
-            "maestro.base_system_prompt",
-            Self::build_base_system_prompt(ctx.cwd),
-        )];
+        let mut fragments = vec![
+            PromptFragment::new(
+                "base",
+                "maestro.base_system_prompt",
+                Self::build_base_system_prompt(ctx.cwd),
+            )
+            .with_provenance(maestro_ai::ContentSource::Harness),
+        ];
 
         if ctx.skills.audit_only {
             fragments.push(PromptFragment::audit_only(
@@ -1980,28 +1998,46 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             .content
             .filter(|content| !content.trim().is_empty())
         {
-            fragments.push(PromptFragment::new(
-                "loaded_skills",
-                ctx.skills.source,
-                content,
-            ));
+            fragments.push(
+                PromptFragment::new("loaded_skills", ctx.skills.source, content)
+                    .with_provenance(maestro_ai::ContentSource::Skill),
+            );
         }
 
-        let mut push_section = |name: &'static str, source: &str, section: Option<String>| {
-            if let Some(content) = section.filter(|content| !content.trim().is_empty()) {
-                fragments.push(PromptFragment::new(name, source, content));
-            }
-        };
+        let mut push_section =
+            |name: &'static str, source: &str, section: Option<String>, provenance| {
+                if let Some(content) = section.filter(|content| !content.trim().is_empty()) {
+                    fragments.push(
+                        PromptFragment::new(name, source, content).with_provenance(provenance),
+                    );
+                }
+            };
 
-        push_section("harness", "harness.store", ctx.harness_section);
-        push_section("rlm", "rlm.store", ctx.rlm_section);
-        push_section("mailbox", "mailbox.store", ctx.mailbox_section);
+        push_section(
+            "harness",
+            "harness.store",
+            ctx.harness_section,
+            maestro_ai::ContentSource::Harness,
+        );
+        push_section(
+            "rlm",
+            "rlm.store",
+            ctx.rlm_section,
+            maestro_ai::ContentSource::Harness,
+        );
+        push_section(
+            "mailbox",
+            "mailbox.store",
+            ctx.mailbox_section,
+            maestro_ai::ContentSource::Harness,
+        );
         // The organization's rules are a named fragment like any other, so the
         // prompt audit reports them and nothing has to match on prompt text.
         push_section(
             "managed_setup_rules",
             "managed_setup.rules",
             ctx.managed_rules_section,
+            maestro_ai::ContentSource::Developer,
         );
 
         fragments.push(PromptFragment::new(
@@ -2011,14 +2047,17 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 "When using websearch/codesearch for up-to-date information, include the current year ({}) in the query unless the user specifies a different year or a historical range.",
                 ctx.current_year
             ),
-        ));
+        ).with_provenance(maestro_ai::ContentSource::Harness));
         let active_prompt = ctx.active_prompt.trim();
         if !active_prompt.is_empty() {
-            fragments.push(PromptFragment::new(
-                "active_skill_additions",
-                "skills.registry.active_prompt_additions",
-                active_prompt,
-            ));
+            fragments.push(
+                PromptFragment::new(
+                    "active_skill_additions",
+                    "skills.registry.active_prompt_additions",
+                    active_prompt,
+                )
+                .with_provenance(maestro_ai::ContentSource::Skill),
+            );
         }
 
         PromptAssembly::new(fragments)
@@ -2676,6 +2715,9 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             }
             if !self.state.busy {
                 self.flush_pending_agent_tool_notes();
+                if !self.session_cleanup_pending() {
+                    needs_redraw |= self.maybe_handle_post_interrupt_queue().await?;
+                }
             }
 
             // Fire a due /loop prompt. Loops never interrupt a running turn:
@@ -3252,9 +3294,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     }
 
     fn update_agent_system_prompt(&mut self) {
-        let prompt = self.build_system_prompt();
+        let assembly = self.build_system_prompt_assembly();
+        let prompt = assembly.render();
         if let Some(agent) = &self.native_agent {
-            if let Err(e) = agent.set_system_prompt(prompt) {
+            if let Err(e) = agent.set_system_prompt_parts(prompt, assembly.content_parts()) {
                 self.state.error = Some(format!("Failed to update system prompt: {e}"));
             }
         }
@@ -3930,7 +3973,20 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             return Vec::new();
         }
         self.terminal_session_started = false;
-        self.terminal_notifier.session_ended()
+        let mut sequences = self.terminal_notifier.session_ended();
+        let mut graphics = Vec::new();
+        if self
+            .state
+            .transcript_images
+            .borrow_mut()
+            .clear_graphics(&mut graphics)
+            .is_ok()
+        {
+            if let Ok(graphics) = String::from_utf8(graphics) {
+                sequences.push(graphics);
+            }
+        }
+        sequences
     }
 
     /// Write terminal-notification escape sequences (OSC progress/title) to
@@ -4051,6 +4107,7 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         {
             self.pending_assistant_content = Some((response_id.clone(), content.clone()));
         }
+        self.record_runtime_context_event(&msg);
         self.record_agent_session_events(&msg);
         let response_end_info = match &msg {
             FromAgent::ResponseEnd { response_id, usage } => {
@@ -5002,12 +5059,23 @@ Always use tools when they would be helpful. Be concise and direct in your respo
         let attach_count = self.pending_attachments.len();
         let history_search = &self.history_search;
 
+        let image_overlay_visible = active_modal != ActiveModal::None
+            || state.error.is_some()
+            || history_search.is_some()
+            || slash_state.has_completions()
+            || !approval_controller.pending().is_empty()
+            || feedback_ui.card_visible();
+
         // DEC mode 2026 lets capable terminals present a whole Ratatui diff
         // atomically, eliminating visible partial-frame tearing. Unknown DEC
         // modes are ignored, so this is safe on older terminals.
         {
             let writer = self.terminal.backend_mut();
             crossterm::queue!(writer, BeginSynchronizedUpdate)?;
+            state
+                .transcript_images
+                .borrow_mut()
+                .prepare_frame(writer, image_overlay_visible)?;
             Write::flush(writer)?;
         }
         let draw_result = self
@@ -5208,6 +5276,10 @@ Always use tools when they would be helpful. Be concise and direct in your respo
             .map(|_| ());
         let sync_end_result = {
             let writer = self.terminal.backend_mut();
+            state
+                .transcript_images
+                .borrow_mut()
+                .paint(writer, image_overlay_visible)?;
             crossterm::queue!(writer, EndSynchronizedUpdate).and_then(|()| Write::flush(writer))
         };
         draw_result?;
@@ -5226,6 +5298,11 @@ Always use tools when they would be helpful. Be concise and direct in your respo
     /// blanks the terminal from the viewport top down and resets the back
     /// buffer so the next frame redraws everything.
     fn reset_rendered_viewport(&mut self) {
+        let _ = self
+            .state
+            .transcript_images
+            .borrow_mut()
+            .clear_graphics(self.terminal.backend_mut());
         self.state.error = None;
         if self.terminal_clear_supported {
             let _ = self.terminal.clear();
@@ -5398,130 +5475,6 @@ fn parse_rfc3339_system_time(timestamp: &str) -> Result<SystemTime> {
         anyhow::bail!("negative timestamp");
     }
     Ok(UNIX_EPOCH + Duration::from_millis(millis as u64))
-}
-
-fn restore_visible_session_messages(state: &mut AppState, session: &ParsedSession) {
-    state.clear_conversation_messages();
-    state.clear_focus_turn_state();
-
-    for app_msg in &session.messages {
-        let role = match app_msg {
-            AppMessage::User { .. } => MessageRole::User,
-            AppMessage::Assistant { .. } => MessageRole::Assistant,
-            AppMessage::ToolResult { .. } => continue,
-        };
-
-        state.messages.push(Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            role,
-            kind: MessageKind::Regular,
-            content: app_msg.text_content(),
-            thinking: String::new(),
-            streaming: false,
-            tool_calls: Vec::new(),
-            usage: None,
-            timestamp: UNIX_EPOCH + Duration::from_millis(app_msg.timestamp()),
-            thinking_expanded: false,
-        });
-    }
-
-    for compaction in &session.compactions {
-        if let Some(first_kept_entry_index) = compaction.first_kept_entry_index {
-            state.apply_compaction(
-                compaction.summary.clone(),
-                first_kept_entry_index,
-                parse_rfc3339_system_time(&compaction.timestamp)
-                    .unwrap_or_else(|_| SystemTime::now()),
-            );
-        }
-    }
-
-    for notification in &session.lifecycle_notifications {
-        let insert_at =
-            lifecycle_notification_insert_position(&state.messages, notification.visible_index);
-        state.messages.insert(
-            insert_at,
-            Message {
-                id: notification.id.clone(),
-                role: MessageRole::Assistant,
-                kind: MessageKind::System,
-                content: notification.content.clone(),
-                thinking: String::new(),
-                streaming: false,
-                tool_calls: Vec::new(),
-                usage: None,
-                timestamp: parse_rfc3339_system_time(&notification.timestamp)
-                    .unwrap_or_else(|_| SystemTime::now()),
-                thinking_expanded: false,
-            },
-        );
-    }
-
-    let mut side_questions = session.side_questions.iter().collect::<Vec<_>>();
-    side_questions
-        .sort_by_key(|side| parse_rfc3339_system_time(&side.timestamp).unwrap_or(UNIX_EPOCH));
-    for side in side_questions {
-        let timestamp =
-            parse_rfc3339_system_time(&side.timestamp).unwrap_or_else(|_| SystemTime::now());
-        let question = Message {
-            id: side.id.clone(),
-            role: MessageRole::User,
-            kind: MessageKind::SideQuestion,
-            content: side.question.clone(),
-            thinking: String::new(),
-            streaming: false,
-            tool_calls: Vec::new(),
-            usage: None,
-            timestamp,
-            thinking_expanded: false,
-        };
-        let answer = match &side.error {
-            Some(error) if side.answer.is_empty() => maestro_ui::localization::format(
-                "Side question failed: {0}",
-                std::slice::from_ref(error),
-            ),
-            Some(error) => maestro_ui::localization::format(
-                "{0}\n\nSide question failed: {1}",
-                &[(side.answer).clone(), (error).clone()],
-            ),
-            None => side.answer.clone(),
-        };
-        let response = Message {
-            id: format!("{}-answer", side.id),
-            role: MessageRole::Assistant,
-            kind: MessageKind::SideAnswer,
-            content: answer,
-            thinking: String::new(),
-            streaming: false,
-            tool_calls: Vec::new(),
-            usage: None,
-            timestamp,
-            thinking_expanded: false,
-        };
-        let insert_at = state
-            .messages
-            .iter()
-            .position(|message| {
-                message.kind != MessageKind::CompactionBoundary && message.timestamp > timestamp
-            })
-            .unwrap_or(state.messages.len());
-        state.messages.insert(insert_at, question);
-        state.messages.insert(insert_at + 1, response);
-    }
-}
-
-fn lifecycle_notification_insert_position(messages: &[Message], visible_index: usize) -> usize {
-    let mut visible_count = 0usize;
-    for (index, message) in messages.iter().enumerate() {
-        if message.kind != MessageKind::Regular {
-            continue;
-        }
-        if visible_count == visible_index {
-            return index;
-        }
-        visible_count += 1;
-    }
-    messages.len()
 }
 
 fn default_model_credentials_ready() -> bool {
@@ -5757,6 +5710,9 @@ mod prompt_audit;
 mod prompt_queue;
 mod session_commands;
 mod session_recording;
+mod session_resume;
+use session_resume::restore_visible_session_messages;
+mod session_settings;
 mod session_transition;
 mod startup;
 mod startup_update;

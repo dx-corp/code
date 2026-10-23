@@ -184,18 +184,12 @@ impl NativeAgentRunner {
         .await;
         let reported_error = is_error || hook_outcome.rejected.is_some();
 
-        let mut final_content = append_hook_context(
-            &self.hooks,
-            content,
-            NativeHookEvent::PreToolUse,
+        let hook_parts = self.tool_hook_context_parts(
+            &call.call_id,
             call.extra_context.as_deref(),
-        );
-        final_content = append_hook_context(
-            &self.hooks,
-            final_content,
-            NativeHookEvent::PostToolUse,
             hook_outcome.context.as_deref(),
         );
+        let mut final_content = content;
         if let Some(reason) = &hook_outcome.rejected {
             final_content =
                 format!("{final_content}\n\n[Eval gate rejected this result: {reason}]");
@@ -237,6 +231,7 @@ impl NativeAgentRunner {
             content: final_content,
             is_error: Some(reported_error),
         });
+        tool_results.extend(hook_parts);
         self.complete_tool_operation(&call.call_id).await;
     }
 }

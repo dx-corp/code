@@ -161,6 +161,7 @@ impl SubagentManager {
             model,
             max_tokens: record.max_tokens,
             max_tokens_source: crate::agent::MaxTokensSource::Explicit,
+            system_prompt_parts: Vec::new(),
             system_prompt: Some(system_prompt),
             thinking_enabled: record.thinking.unwrap_or(ThinkingLevel::Off).to_config().0,
             thinking_budget: record.thinking.unwrap_or(ThinkingLevel::Off).to_config().1,

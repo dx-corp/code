@@ -1685,7 +1685,7 @@ impl ToolRegistry {
     /// assert!(registry.requires_approval("write", &args));
     ///
     /// // Bash tool - dynamic approval based on command
-    /// let safe_cmd = json!({"command": "git status"});
+    /// let safe_cmd = json!({"command": "git -c core.fsmonitor=false status"});
     /// assert!(!registry.requires_approval("bash", &safe_cmd));
     ///
     /// let unsafe_cmd = json!({"command": "rm -rf /"});

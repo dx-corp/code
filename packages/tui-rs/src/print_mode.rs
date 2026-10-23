@@ -547,6 +547,7 @@ pub async fn run_print_mode(options: PrintModeOptions) -> Result<i32> {
         .map(|level| level.to_config())
         .unwrap_or((false, 0));
     let config = NativeAgentConfig {
+        system_prompt_parts: Vec::new(),
         background_task_access:
             maestro_local_host::tools::background_tasks::BackgroundTaskAccess::Legacy,
         model_capabilities: None,

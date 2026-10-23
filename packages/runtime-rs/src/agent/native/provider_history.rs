@@ -191,9 +191,9 @@ pub(super) fn sanitize_semantic_conversation(messages: &[Message]) -> Vec<Messag
                 let blocks: Vec<ContentBlock> = blocks
                     .iter()
                     .filter_map(|block| match block {
-                        ContentBlock::Text { .. } | ContentBlock::ToolUse { .. } => {
-                            Some(block.clone())
-                        }
+                        ContentBlock::Text { .. }
+                        | ContentBlock::AttributedText { .. }
+                        | ContentBlock::ToolUse { .. } => Some(block.clone()),
                         ContentBlock::ToolResult {
                             tool_use_id,
                             is_error,

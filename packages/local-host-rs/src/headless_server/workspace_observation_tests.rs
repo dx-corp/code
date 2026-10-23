@@ -67,6 +67,8 @@ async fn native_semantic_snapshot_keeps_processed_queue_ids_on_headless_wire() {
         let (tool_tx, _tool_rx) = mpsc::unbounded_channel();
         handle_agent_event(
             FromAgent::ConversationSnapshot {
+                local_messages: Vec::new(),
+                system_prompt_parts: Vec::new(),
                 protocol_version: crate::headless::messages::SEMANTIC_CONVERSATION_PROTOCOL
                     .to_owned(),
                 messages: vec![],
