@@ -1,7 +1,7 @@
 [
   {
     "added_files_sha256": {
-      "BUILD.bazel": "6b4b1dc5978e45f5a54b9bd210f24a271f5a0d4e8331ea88967fe88dd5cda8f7"
+      "BUILD.bazel": "acef32ee5c638b47d3496acf559b5cb53e40c21b27184c02292ed2b39c4feb06"
     },
     "archive_files_sha256": {
       ".cargo_vcs_info.json": "d47653a9c872e6148a2a9eca040a76494d79b374500b97b4e9364dceb02c173c",
@@ -111,13 +111,13 @@
     "crate": "sqlx-core",
     "omitted_archive_files": [],
     "patch": "sqlx-core-0.8.6.patch",
-    "patch_sha256": "04cfc12822a80c5297bdbb59b4db0c9ab886ef89d4cdf40bb5f56cd0f6e25c95",
+    "patch_sha256": "d0e1a6974b704d5a3d8d1664dc73a9dd57ffaeb57973ce7c3bf84519bc668590",
     "path": "sqlx-core-0.8.6",
     "version": "0.8.6"
   },
   {
     "added_files_sha256": {
-      "BUILD.bazel": "ba80f774498670b50cd487fa0fb0b58b071f9f4ffce036ce8d3ffea3656628b7"
+      "BUILD.bazel": "73c1525b5da195df5bb46658ddbe8d4cf8f67e3af4ff552b89b67faeb5246957"
     },
     "archive_files_sha256": {
       ".cargo/config.toml": "e5496f8d62f914e080b5e8e246870cce26c889df6d9b3d709e3019c7351d29a4",
@@ -199,7 +199,7 @@
       "Cargo.lock"
     ],
     "patch": "tokio-websockets-0.10.1.patch",
-    "patch_sha256": "407349211df02dca4622c15c5227085193902a8c176a5131bbf0fbc73c0268ca",
+    "patch_sha256": "4bbc9b009d984161f382879197b72b04ec0288382f3ff25bfd300b265959f8e8",
     "path": "tokio-websockets-0.10.1",
     "version": "0.10.1"
   },
