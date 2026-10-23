@@ -97,7 +97,7 @@ pub async fn run_scripted_local_sdk_conformance_server() -> Result<i32> {
                     id: "local-sdk-tool-call".to_string(),
                     name: "bash".to_string(),
                     input: serde_json::json!({
-                        "command": "printf local-sdk-native-tool"
+                        "command": "printf local-sdk-native-tool > local-sdk-native-tool.txt && cat local-sdk-native-tool.txt"
                     }),
                 }],
                 stop_reason: crate::ai::StopReason::ToolUse,
