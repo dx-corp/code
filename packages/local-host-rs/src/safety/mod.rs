@@ -52,6 +52,8 @@
 //! ```
 
 mod bash_analyzer;
+mod command_catalog;
+mod command_catalog_data;
 mod dangerous_patterns;
 mod disconnected_deployment;
 mod firewall;
@@ -69,6 +71,7 @@ pub use bash_analyzer::{
     canonicalize_for_matching, is_dangerous, is_likely_safe,
 };
 pub(crate) use bash_analyzer::{find_has_dangerous_predicate, git_args_are_mutating, tokenize};
+pub(crate) use command_catalog::classify_known_command;
 pub use dangerous_patterns::{
     DangerousPattern, PatternMatch, Severity, check_dangerous_patterns, has_high_severity_pattern,
     most_severe_match,

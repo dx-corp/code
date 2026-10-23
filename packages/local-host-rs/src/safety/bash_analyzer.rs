@@ -2,6 +2,7 @@
 //!
 //! Analyzes shell commands with a bounded tree-sitter Bash parse and determines risk.
 
+use super::command_catalog::classify_known_command;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
@@ -537,17 +538,29 @@ pub(crate) fn tokenize(input: &str) -> Vec<String> {
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut escape_next = false;
+    let mut token_started = false;
 
-    for ch in input.chars() {
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
         if escape_next {
             current.push(ch);
             escape_next = false;
             continue;
         }
 
+        if !matches!(ch, ' ' | '\t') || in_single_quote || in_double_quote {
+            token_started = true;
+        }
         match ch {
             '\\' if !in_single_quote => {
-                escape_next = true;
+                // Bash retains backslashes in double quotes unless they escape
+                // $, `, double quote, backslash, or newline. Dropping one before
+                // '-' could mistake a script filename for a version flag.
+                if in_double_quote && !matches!(chars.peek(), Some('$' | '`' | '"' | '\\' | '\n')) {
+                    current.push(ch);
+                } else {
+                    escape_next = true;
+                }
             }
             '\'' if !in_double_quote => {
                 in_single_quote = !in_single_quote;
@@ -556,9 +569,10 @@ pub(crate) fn tokenize(input: &str) -> Vec<String> {
                 in_double_quote = !in_double_quote;
             }
             ' ' | '\t' if !in_single_quote && !in_double_quote => {
-                if !current.is_empty() {
+                if token_started {
                     tokens.push(current.clone());
                     current.clear();
+                    token_started = false;
                 }
             }
             _ => {
@@ -567,7 +581,7 @@ pub(crate) fn tokenize(input: &str) -> Vec<String> {
         }
     }
 
-    if !current.is_empty() {
+    if token_started {
         tokens.push(current);
     }
 
@@ -855,6 +869,14 @@ fn determine_risk(
             continue;
         }
 
+        if let Some((risk, explanation)) = classify_known_command(cmd) {
+            if risk > highest_risk {
+                highest_risk = risk;
+                reason = format!("{}: {explanation}", cmd.program);
+            }
+            continue;
+        }
+
         // Check git subcommands
         if program == "git" && !cmd.args.is_empty() {
             let subcommand = cmd.args[0].to_lowercase();
@@ -909,6 +931,9 @@ fn determine_risk(
             let program = cmd.program.to_lowercase();
             if program == "find" && find_has_dangerous_predicate(&cmd.args) {
                 return false;
+            }
+            if let Some((risk, _)) = classify_known_command(cmd) {
+                return risk == CommandRisk::Safe;
             }
             SAFE_COMMANDS.contains(program.as_str())
                 || (program == "git"
@@ -1046,6 +1071,132 @@ mod tests {
     fn test_command_risk_orders_least_to_most_severe() {
         assert!(CommandRisk::Safe < CommandRisk::RequiresApproval);
         assert!(CommandRisk::RequiresApproval < CommandRisk::Dangerous);
+    }
+
+    #[test]
+    fn common_command_catalog_allows_read_only_invocations() {
+        for command in [
+            "gh --version",
+            "gh pr list",
+            "gh pr view 123 --json title,state",
+            "gh -R dx-corp/mono pr checks 123",
+            "gh run view 123 --log-failed",
+            "gh issue list --state open --limit=10",
+            "gh repo view dx-corp/mono",
+            "gh release list",
+            "gh workflow list",
+            "gh search code 'fn main' --limit 10",
+            "gh pr list | head -n 5",
+            "rg -n --glob '*.rs' TODO src",
+            "fd --type f Cargo",
+            "jq -r '.name' package.json",
+            "ps aux",
+            "uptime",
+            "sha256sum Cargo.lock",
+            "gh pr view 123 && python3 --version",
+            "python3 --version",
+            "python3.13 -V",
+            "python --help",
+            "pypy3 --version",
+        ] {
+            let analysis = analyze_bash_command(command);
+            assert_eq!(
+                analysis.risk,
+                CommandRisk::Safe,
+                "{command}: {}",
+                analysis.reason
+            );
+        }
+    }
+
+    #[test]
+    fn common_command_catalog_explains_operations_that_need_review() {
+        for command in [
+            "cargo --version",
+            "rustc --version",
+            "node --version",
+            "npm --version",
+            "pnpm --version",
+            "yarn --version",
+            "bun --version",
+            "go version",
+            "docker --version",
+            "kubectl version --client",
+            "terraform version",
+            r#"python3 -c 'import shutil; shutil.rmtree("data")'"#,
+            "python3 script.py",
+            "python3 -m pip install example",
+            "python3 -",
+            "gh pr merge 123",
+            "gh repo delete example",
+            "gh auth token",
+            "gh api repos/dx-corp/mono -X DELETE",
+            "gh extension exec arbitrary",
+            "npm install",
+            "cargo test",
+            "docker run image",
+            "kubectl delete pod example",
+            "terraform apply",
+            "aws s3 rm s3://example/key",
+            "gcloud projects delete example",
+        ] {
+            let analysis = analyze_bash_command(command);
+            assert_eq!(
+                analysis.risk,
+                CommandRisk::RequiresApproval,
+                "{command}: {}",
+                analysis.reason
+            );
+            assert!(
+                !analysis.reason.contains("Unknown"),
+                "{command}: {}",
+                analysis.reason
+            );
+        }
+    }
+
+    #[test]
+    fn common_command_catalog_does_not_turn_recognition_into_permission() {
+        for command in [
+            r#"python3 "\--version""#,
+            r#"node "\--version""#,
+            "ps auxe",
+            "python3 --version script.py",
+            "python3 '' --version",
+            "node '' --version",
+            "gh pr view 123 --web",
+            "rg --pre sh pattern .",
+            "fd --exec rm {}",
+            "gh pr diff 123 --output out.patch",
+            "gh pr view --unknown",
+            "gh pr view --repo",
+            "gh pr list --limit=",
+            "gh pr view 123 --repo $TARGET",
+            "gh pr view *",
+            "gh pr view 123 > out.txt",
+            "gh pr list | python3 -",
+            "gh pr list && gh pr merge 123",
+            "env GH_PAGER=evil gh pr view 123",
+            "nohup gh pr list",
+            "gh pr view $(touch file)",
+            "/tmp/gh pr list",
+            "gh-custom pr list",
+            "python3-custom --version",
+            "GH pr list",
+            "gh api graphql -f query=mutation",
+        ] {
+            let analysis = analyze_bash_command(command);
+            assert_ne!(
+                analysis.risk,
+                CommandRisk::Safe,
+                "{command}: {}",
+                analysis.reason
+            );
+        }
+        assert_eq!(
+            analyze_bash_command("gh pr list && rm -rf /").risk,
+            CommandRisk::Dangerous
+        );
     }
 
     #[test]
