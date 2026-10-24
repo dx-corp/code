@@ -56,9 +56,6 @@ glob.workspace = true
 dirs.workspace = true
 dunce.workspace = true
 
-# GitHub
-octocrab = "0.54.2"
-
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile.workspace = true
