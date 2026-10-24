@@ -2,6 +2,36 @@
 
 use super::*;
 
+#[tokio::test]
+async fn new_answer_continuations_are_disabled_by_default() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![
+            text("First part, "),
+            Err(ModelError {
+                class: dex_loop::ErrorClass::Transport,
+                message: "provider stream broke".into(),
+            }),
+        ],
+        vec![text("must not be requested before reader rollout")],
+    ]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "explain");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(
+        model.calls(),
+        1,
+        "new continuation writing needs explicit opt-in"
+    );
+    assert!(matches!(log.events().last(), Some(Event::Final { text })
+        if text == &format!("First part, {CUT_OFF_NOTICE}")));
+    assert_eq!(ctx, log.rehydrate());
+}
+
 // 8d3. A stream that fails after the customer saw text keeps that text as
 // the answer, marked as cut off: a long answer that loses its stream near
 // the end must not vanish.
@@ -56,7 +86,7 @@ async fn a_transient_stream_failure_continues_the_visible_answer_once_without_to
             vec![text("confirmed by the owner record.")],
         ]);
         let tools = FakeTools::new(vec![write_tool("update")]);
-        let engine = engine(&log, &model, &tools, budget());
+        let engine = engine(&log, &model, &tools, budget()).with_answer_continuation_writes(true);
         let mut ctx = log.start_turn("t1", "Explain the findings");
         assert_eq!(
             engine.run(&mut ctx, &CancellationToken::new()).await,
@@ -107,7 +137,7 @@ async fn an_interrupted_answer_gets_only_one_continuation() {
         vec![text("must never be requested")],
     ]);
     let tools = FakeTools::new(vec![]);
-    let engine = engine(&log, &model, &tools, budget());
+    let engine = engine(&log, &model, &tools, budget()).with_answer_continuation_writes(true);
     let mut ctx = log.start_turn("t1", "explain");
     assert_eq!(
         engine.run(&mut ctx, &CancellationToken::new()).await,
@@ -135,7 +165,7 @@ async fn answer_continuation_never_executes_a_proposed_mutation() {
         vec![call("update", json!({"key":"on-continuation"}))],
     ]);
     let tools = FakeTools::new(vec![write_tool("update")]);
-    let engine = engine(&log, &model, &tools, budget());
+    let engine = engine(&log, &model, &tools, budget()).with_answer_continuation_writes(true);
     let mut ctx = log.start_turn("t1", "explain");
     let _ = engine.run(&mut ctx, &CancellationToken::new()).await;
     assert_eq!(model.calls(), 2);
@@ -167,7 +197,7 @@ fn log_interrupted_answer(log: &FakeLog) {
 }
 
 #[tokio::test]
-async fn interrupted_answer_replay_continues_with_the_prefix_and_no_tools() {
+async fn interrupted_answer_replay_continues_with_writing_disabled() {
     let log = FakeLog::default();
     log_interrupted_answer(&log);
     let model = FakeModel::new(vec![vec![text("the rest.")]]);
@@ -183,6 +213,31 @@ async fn interrupted_answer_replay_continues_with_the_prefix_and_no_tools() {
     assert!(
         matches!(log.events().last(), Some(Event::Final { text }) if text == "First part, the rest.")
     );
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn disabled_writers_still_reject_tools_from_a_pending_continuation() {
+    let log = FakeLog::default();
+    log_interrupted_answer(&log);
+    let model = FakeModel::new(vec![vec![call("update", json!({"key":"replayed"}))]]);
+    let tools = FakeTools::new(vec![write_tool("update")]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.rehydrate();
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(model.calls(), 1);
+    assert!(model.offered()[0].is_empty());
+    assert!(tools.runs().is_empty());
+    assert!(
+        !log.events()
+            .iter()
+            .any(|event| matches!(event, Event::ToolStarted { .. }))
+    );
+    assert!(matches!(log.events().last(), Some(Event::Final { text })
+        if text == &format!("First part, {CUT_OFF_NOTICE}")));
     assert_eq!(ctx, log.rehydrate());
 }
 

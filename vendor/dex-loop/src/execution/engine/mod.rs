@@ -323,6 +323,7 @@ pub struct Engine<L, M, T, E, S, C = NoCompaction> {
     sanitizer: S,
     compactor: C,
     budget: Budget,
+    answer_continuation_writes: bool,
     search: ToolSpec,
     client_timeout: Duration,
     tool_call_deadline: Duration,
@@ -345,6 +346,7 @@ where
             sanitizer,
             compactor: NoCompaction,
             budget,
+            answer_continuation_writes: false,
             search: search_spec(),
             client_timeout: DEFAULT_CLIENT_TIMEOUT,
             tool_call_deadline: DEFAULT_TOOL_CALL_DEADLINE,
@@ -370,6 +372,7 @@ where
             sanitizer: self.sanitizer,
             compactor,
             budget: self.budget,
+            answer_continuation_writes: self.answer_continuation_writes,
             search: self.search,
             client_timeout: self.client_timeout,
             tool_call_deadline: self.tool_call_deadline,
@@ -388,6 +391,16 @@ where
     /// call as timed out (see [`DEFAULT_TOOL_CALL_DEADLINE`]).
     pub fn with_tool_call_deadline(mut self, tool_call_deadline: Duration) -> Self {
         self.tool_call_deadline = tool_call_deadline;
+        self
+    }
+
+    /// Enables writing new interrupted-answer continuations after every
+    /// possible journal owner has upgraded its reader. Disabled by default:
+    /// older readers deserialize the additive marker but cannot enforce its
+    /// answer-only contract. Already-marked continuations always recover,
+    /// even with writing disabled, so they can drain before a downgrade.
+    pub fn with_answer_continuation_writes(mut self, enabled: bool) -> Self {
+        self.answer_continuation_writes = enabled;
         self
     }
 
@@ -1053,10 +1066,12 @@ where
                     usage += *reported;
                 }
             }
-            let continue_answer = matches!(
-                error.class(),
-                crate::ErrorClass::Transport | crate::ErrorClass::Truncated
-            ) && !ctx.answer_continuation_used()
+            let continue_answer = self.answer_continuation_writes
+                && matches!(
+                    error.class(),
+                    crate::ErrorClass::Transport | crate::ErrorClass::Truncated
+                )
+                && !ctx.answer_continuation_used()
                 && !ctx.has_queued_steers()
                 && !interrupted
                 && self

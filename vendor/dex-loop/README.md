@@ -37,14 +37,37 @@ call order. Mutations use the effect ledger before dispatch and after execution.
 See the [engine](src/execution/engine/mod.rs) and [context reconstruction
 logic](src/context/rehydrate.rs).
 
-When a transport failure or truncated stream interrupts visible answer text, the
-engine retains the prefix and permits one continuation within the turn's existing
+New answer continuations are disabled by default. Hosts opt in with
+`Engine::with_answer_continuation_writes(true)` only after the reader-first rollout
+below. When enabled, a transport failure or truncated stream interrupting visible
+answer text retains the prefix and permits one continuation within the turn's existing
 budget. It offers no tools and rejects any tool calls proposed by that continuation.
 The completed `Final` contains the prefix and suffix together. User steering or
 cancellation takes precedence; another failure retains the cut-off notice. The
 optional `ModelStepCompleted.interruption` field records the interruption, and the
 next durable `StepStarted` consumes the allowance before inference, including across
 crash recovery. Other failure classes keep the existing cut-off behavior.
+
+#### Reader-first rollout and rollback
+
+`dex-runtime` reads `DEX_RUNTIME_ANSWER_CONTINUATION_ENABLED` at construction:
+`true` or `1` (case-insensitive, whitespace trimmed) enables new writes; missing,
+false, or invalid values leave them disabled. Both production wiring paths default
+to disabled. Already-marked continuations always recover with the answer-only and
+single-continuation limits, even when new writing is disabled.
+
+First deploy the new reader with writing disabled to **every runtime owner that
+can acquire these threads**, including standby replicas and older deployment pools.
+Verify no older owner remains eligible before enabling the flag. The optional
+journal field provides decoding compatibility only: an older engine ignores it and
+can resume a pending continuation as an ordinary tool-capable step. Lease generation
+fencing alone does not enforce reader versions.
+
+Before rolling back to a reader without this contract, disable new continuation
+writes on all owners and let all pending marked turns finish, fail, be cancelled,
+or be superseded under the upgraded reader. Verify none remain pending before any
+legacy owner can acquire a thread. Disabling the flag alone does not make a legacy
+rollback safe. Completed journal histories remain readable by older versions.
 
 ### Policy and confirmation
 

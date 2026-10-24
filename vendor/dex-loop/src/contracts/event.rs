@@ -675,6 +675,8 @@ pub enum Event {
         /// A failed stream whose visible text was retained without its proposed
         /// calls. This typed owner fact permits one answer-only continuation;
         /// old rows and older readers retain the ordinary completion shape.
+        /// Decoding compatibility does not preserve the continuation contract:
+        /// new writes require the engine's reader-first rollout opt-in.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         interruption: Option<ErrorClass>,
         /// The step's provider continuation state (`ModelChunk::Reasoning`),
