@@ -63,6 +63,7 @@ async fn script_completion_during_effect_claim_never_dispatches_the_queued_effec
                     control_through: Cursor(1),
                 },
                 Event::ModelStepCompleted {
+                    interruption: None,
                     step: 1,
                     text: String::new(),
                     calls: vec![parent.clone()],

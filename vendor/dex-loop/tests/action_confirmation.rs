@@ -210,6 +210,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
             page: None,
         },
         Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls: vec![p.clone()],
@@ -264,6 +265,7 @@ fn action_record_capacity_expires_old_references_without_summary_authority() {
         observe(
             &mut ctx,
             Event::ModelStepCompleted {
+                interruption: None,
                 step: index + 1,
                 text: String::new(),
                 calls: vec![call.clone()],
@@ -375,6 +377,7 @@ fn starting_a_dispatch_consumes_consent_even_when_the_effect_fails_or_is_unknown
         log.push((
             Cursor(6),
             Event::ModelStepCompleted {
+                interruption: None,
                 step: 2,
                 text: String::new(),
                 calls: vec![call.clone()],

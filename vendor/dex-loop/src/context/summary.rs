@@ -818,6 +818,7 @@ mod tests {
             events.push((
                 Cursor(i64::from(step) * 2),
                 Event::ModelStepCompleted {
+                    interruption: None,
                     step,
                     text: format!("Read result {step}; outcome remains recorded separately."),
                     calls: vec![ProposedCall::new(
@@ -1788,6 +1789,7 @@ mod tests {
             (
                 Cursor(2),
                 Event::ModelStepCompleted {
+                    interruption: None,
                     step: 1,
                     text: String::new(),
                     calls: vec![

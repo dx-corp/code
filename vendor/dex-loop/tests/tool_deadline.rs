@@ -340,6 +340,7 @@ async fn exhausted_wall_still_adopts_an_already_started_mutations_ledger_result(
         control_through: Cursor::START,
     });
     log.host_append(Event::ModelStepCompleted {
+        interruption: None,
         served: None,
         step: 1,
         text: String::new(),

@@ -265,6 +265,11 @@ pub struct Context {
     // Turn-local safe feedback and cap survive history compaction/recovery.
     content_policy_repairs: u32,
     content_policy_feedback: Option<String>,
+    // Derived from the retained interrupted step and the following StepStarted.
+    // The allowance survives replay and is spent before another model request.
+    interrupted_answer: Option<String>,
+    answer_continuation_started: bool,
+    answer_continuation_used: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -332,6 +337,9 @@ impl Context {
             specialist_usage_recorded: false,
             content_policy_repairs: 0,
             content_policy_feedback: None,
+            interrupted_answer: None,
+            answer_continuation_started: false,
+            answer_continuation_used: false,
         }
     }
 
@@ -439,14 +447,42 @@ impl Context {
         self.remaining_budget
     }
 
-    pub(crate) fn for_model(&self, remaining: crate::RemainingBudget) -> Self {
+    pub(crate) fn for_model(&self, mut remaining: crate::RemainingBudget) -> Self {
         let mut ctx = self.clone();
+        if self.answer_continuation_started {
+            remaining.answer_only = true;
+            remaining.tool_steps = 0;
+        }
         ctx.remaining_budget = Some(remaining);
         ctx
     }
 
+    pub(crate) fn interrupted_answer(&self) -> Option<&str> {
+        self.interrupted_answer.as_deref()
+    }
+
+    pub(crate) fn answer_continuation_started(&self) -> bool {
+        self.answer_continuation_started
+    }
+
+    pub(crate) fn answer_continuation_used(&self) -> bool {
+        self.answer_continuation_used
+    }
+
+    /// Final replaces the visible answer on web and channel replay; a resumed
+    /// suffix must therefore include the already committed prefix.
+    pub(crate) fn final_answer(&self, suffix: &str) -> String {
+        match &self.interrupted_answer {
+            Some(prefix) => format!("{prefix}{suffix}"),
+            None => suffix.to_owned(),
+        }
+    }
+
     /// A fresh identical failed call needs new information or a new approach.
     pub fn recovery_guidance(&self) -> Option<String> {
+        if self.answer_continuation_started {
+            return Some("The preceding assistant answer was interrupted by a transient stream failure. Its visible text is already committed. Continue exactly after its last visible words, without repeating the prefix or restarting the answer. This is the single answer-only continuation: use only established results and do not call tools. Proposed calls from the interrupted step were not accepted; do not claim they ran, and do not repeat any earlier completed or uncertain operation.".into());
+        }
         self.failed_call.as_ref().filter(|failure| failure.count >= 3).map(|failure| {
             format!("The same call to {} failed {} consecutive times without progress. Do not repeat the identical call. Inspect the failure, change the inputs or approach, use another available capability, or report the concrete blocker. A successful intervening call or new user input resets this guard. Never retry a mutation with an unknown outcome.", failure.tool, failure.count)
         })
@@ -823,6 +859,10 @@ impl Context {
                 self.step = *step;
                 self.attempt = Some(*step);
                 self.flush_steers(cursor, *control_through);
+                if self.interrupted_answer.is_some() && !self.answer_continuation_used {
+                    self.answer_continuation_started = true;
+                    self.answer_continuation_used = true;
+                }
             }
             // Text reaches history through `ModelStepCompleted`.
             Event::TextDelta { .. }
@@ -833,12 +873,28 @@ impl Context {
             Event::ModelStepCompleted {
                 text,
                 calls,
+                interruption,
                 reasoning,
                 served,
                 ..
             } => {
                 self.attempt = None;
                 self.last_served = served.clone();
+                if interruption.is_some() && calls.is_empty() && !text.is_empty() {
+                    if self.answer_continuation_started {
+                        if let Some(prefix) = self.interrupted_answer.as_mut() {
+                            prefix.push_str(text);
+                        }
+                    } else if matches!(
+                        interruption,
+                        Some(crate::ErrorClass::Transport | crate::ErrorClass::Truncated)
+                    ) {
+                        self.interrupted_answer = Some(text.clone());
+                    }
+                } else {
+                    self.interrupted_answer = None;
+                }
+                self.answer_continuation_started = false;
                 self.push(
                     cursor,
                     Message::Assistant {
@@ -1204,15 +1260,21 @@ impl Context {
                 );
             }
             Event::Final { .. } => {
+                self.interrupted_answer = None;
+                self.answer_continuation_started = false;
                 self.status = Status::Done;
                 self.begin_next_pending_turn(cursor);
             }
             Event::Error { .. } => {
+                self.interrupted_answer = None;
+                self.answer_continuation_started = false;
                 self.attempt = None;
                 self.status = Status::Failed;
                 self.begin_next_pending_turn(cursor);
             }
             Event::Interrupted => {
+                self.interrupted_answer = None;
+                self.answer_continuation_started = false;
                 self.attempt = None;
                 self.status = Status::Interrupted;
                 self.interrupt_requested = false;
@@ -1256,6 +1318,9 @@ impl Context {
         self.specialist_usage_recorded = false;
         self.content_policy_repairs = 0;
         self.content_policy_feedback = None;
+        self.interrupted_answer = None;
+        self.answer_continuation_started = false;
+        self.answer_continuation_used = false;
         self.attempt = None;
         self.interrupt_requested = false;
         self.exposed.clear();
@@ -1354,6 +1419,8 @@ impl Context {
         if ready.is_empty() {
             return;
         }
+        self.interrupted_answer = None;
+        self.answer_continuation_started = false;
         // A `Steer` is only ever queued into `self.steers` while a turn is
         // already `self.turn` (see `Event::Steer` in `observe`), so this is
         // always `Some` by the time anything reaches `ready`; the fallback

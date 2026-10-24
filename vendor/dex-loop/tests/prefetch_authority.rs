@@ -120,6 +120,7 @@ async fn a_restarted_started_read_rechecks_authority_before_execution() {
         control_through: dex_loop::Cursor::START,
     });
     log.host_append(Event::ModelStepCompleted {
+        interruption: None,
         served: None,
         step: 1,
         text: String::new(),

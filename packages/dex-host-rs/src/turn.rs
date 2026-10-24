@@ -294,6 +294,7 @@ mod tests {
                 control_through: dex_loop::Cursor::START,
             },
             Event::ModelStepCompleted {
+                interruption: None,
                 step: 1,
                 text: String::new(),
                 calls: vec![question],

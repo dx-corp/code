@@ -65,6 +65,7 @@ fn log_up_to_model_step(log: &FakeLog, call: &ProposedCall) {
         control_through: Cursor::START,
     });
     log.host_append(Event::ModelStepCompleted {
+        interruption: None,
         step: 1,
         text: String::new(),
         calls: vec![call.clone()],

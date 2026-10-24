@@ -43,6 +43,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
         push(
             &mut events,
             Event::ModelStepCompleted {
+                interruption: None,
                 step: index as u32,
                 text: String::new(),
                 calls: vec![call.clone()],

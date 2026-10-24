@@ -2,6 +2,9 @@
 //! the engine appends, and most check that `rehydrate` rebuilds the same
 //! context the warm engine holds.
 
+#[path = "scenarios/answer_continuation.rs"]
+mod answer_continuation;
+
 use crate::support;
 
 use std::time::{Duration, Instant};
@@ -375,6 +378,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
             control_through: Cursor::START,
         },
         Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls: vec![send.clone(), search],
@@ -1030,42 +1034,6 @@ async fn usage_reported_before_a_failed_attempt_still_lands_with_the_abandon() {
     assert_eq!(model.calls(), 1);
 }
 
-// 8d3. A stream that fails after the customer saw text keeps that text as
-// the answer, marked as cut off: a long answer that loses its stream near
-// the end must not vanish.
-#[tokio::test]
-async fn a_stream_that_fails_after_text_keeps_the_answer_marked_cut_off() {
-    let (log, model, exit) = run_to_budget(
-        budget(),
-        FakeModel::new(vec![vec![
-            text("A long answer, "),
-            text("nearly done"),
-            usage(10, 5, 100),
-            Err(ModelError {
-                class: dex_loop::ErrorClass::Unknown,
-                message: "provider_stream_timeout: provider stream timed out".into(),
-            }),
-        ]]),
-    )
-    .await;
-    assert_eq!(exit, Exit::Done);
-    let kept = format!("A long answer, nearly done{CUT_OFF_NOTICE}");
-    assert_eq!(
-        log.shapes_after(2),
-        strings(&[
-            &format!("delta:{kept}"),
-            "usage:15",
-            &format!("completed:{kept}:[]"),
-            &format!("final:{kept}"),
-        ])
-    );
-    assert_eq!(
-        model.calls(),
-        1,
-        "text was shown, so the step is not retried"
-    );
-}
-
 // 8d4. Thinking summaries stream as progress before the answer: sanitized,
 // never part of the answer text, the committed step, or the history.
 #[tokio::test]
@@ -1617,6 +1585,7 @@ fn legacy_synthetic_approval_log(log: &FakeLog) -> ProposedCall {
             control_through: dex_loop::Cursor(1),
         },
         Event::ModelStepCompleted {
+            interruption: None,
             timing: None,
             step: 1,
             text: String::new(),
@@ -2186,6 +2155,7 @@ async fn a_mutating_client_tool_rejects_a_mismatched_durable_approval_receipt() 
         control_through: Cursor(1),
     });
     log.host_append(Event::ModelStepCompleted {
+        interruption: None,
         timing: None,
         step: 1,
         text: String::new(),
@@ -2554,6 +2524,7 @@ async fn capacity_recovery_does_not_retry_nonreducing_or_uncompactable_history()
         if history {
             log.start_turn("old", "exact constraint");
             log.host_append(Event::ModelStepCompleted {
+                interruption: None,
                 step: 1,
                 text: "done".into(),
                 calls: vec![],
@@ -2618,6 +2589,7 @@ async fn capacity_recovery_respects_failure_class_visible_output_and_budget() {
         let log = FakeLog::default();
         log.start_turn("old", "preserve approval constraint");
         log.host_append(Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: "old analysis".repeat(100),
             calls: vec![],
