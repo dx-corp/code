@@ -147,6 +147,7 @@ fn completed_route_survives_compaction_and_replay_but_resets_for_a_queued_turn()
         (
             Cursor(2),
             Event::ModelStepCompleted {
+                interruption: None,
                 step: 1,
                 text: "continue".into(),
                 calls: vec![],

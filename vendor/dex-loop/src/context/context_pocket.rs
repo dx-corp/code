@@ -286,6 +286,7 @@ mod tests {
             ctx.observe(
                 crate::Cursor((n * 2 + 1) as i64),
                 &crate::Event::ModelStepCompleted {
+                    interruption: None,
                     step: n as u32,
                     text: String::new(),
                     calls: vec![c.clone()],

@@ -318,6 +318,7 @@ async fn scratch_preparation_cannot_publish_under_a_foreign_principal() {
             control_through: dex_loop::Cursor::START,
         },
         Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls: vec![parent.clone()],

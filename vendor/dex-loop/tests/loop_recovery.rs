@@ -188,6 +188,7 @@ fn failure_recovery_survives_restart_and_compaction_but_new_input_resets_it() {
                 control_through: ctx.control_cursor(),
             },
             Event::ModelStepCompleted {
+                interruption: None,
                 step,
                 text: String::new(),
                 calls: vec![call.clone()],

@@ -21,6 +21,7 @@ loop {
     read control events (steer, interrupt, approval decisions, answers)
     StepStarted -> stream the model -> text to the log as it arrives
     ModelStepCompleted { text, calls }        // persisted model response
+    interrupted stream? one bounded answer-only continuation, when eligible
     no calls?  Final, return Done
     per call, in the model's order:
         policy (under the call's principal) -> deny? record refusal, continue
@@ -35,6 +36,15 @@ Allowed reads can run concurrently; their results enter history in the model's
 call order. Mutations use the effect ledger before dispatch and after execution.
 See the [engine](src/execution/engine/mod.rs) and [context reconstruction
 logic](src/context/rehydrate.rs).
+
+When a transport failure or truncated stream interrupts visible answer text, the
+engine retains the prefix and permits one continuation within the turn's existing
+budget. It offers no tools and rejects any tool calls proposed by that continuation.
+The completed `Final` contains the prefix and suffix together. User steering or
+cancellation takes precedence; another failure retains the cut-off notice. The
+optional `ModelStepCompleted.interruption` field records the interruption, and the
+next durable `StepStarted` consumes the allowance before inference, including across
+crash recovery. Other failure classes keep the existing cut-off behavior.
 
 ### Policy and confirmation
 

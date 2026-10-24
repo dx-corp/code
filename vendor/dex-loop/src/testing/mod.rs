@@ -303,6 +303,7 @@ fn pending_events(call: &ProposedCall) -> Vec<Event> {
             control_through: Cursor::START,
         },
         Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls: vec![call.clone()],

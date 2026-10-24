@@ -32,6 +32,7 @@ fn auto_approval_receipts_decode_losslessly_and_never_become_control_events() {
 #[test]
 fn stored_event_decoder_refuses_corrupt_envelopes_and_call_digests() {
     let event = Event::ModelStepCompleted {
+        interruption: None,
         step: 1,
         text: String::new(),
         calls: vec![ProposedCall::new(

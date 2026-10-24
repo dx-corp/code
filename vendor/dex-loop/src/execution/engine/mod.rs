@@ -475,6 +475,28 @@ where
                 .await?;
                 return Ok(Exit::Failed);
             }
+            if ctx.interrupted_answer().is_some() && !ctx.has_queued_steers() {
+                if ctx.answer_continuation_used() {
+                    // A restart after the continuation's StepStarted must not
+                    // spend another model call. The abandoned suffix is gone;
+                    // keep the durable prefix with the usual fallback notice.
+                    let text = ctx.final_answer(CUT_OFF_NOTICE);
+                    self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
+                    self.emit(ctx, vec![Event::Final { text }]).await?;
+                    return Ok(Exit::Done);
+                }
+                // Preserve the exact interrupted prefix and avoid a separate
+                // summarization call. Normal model admission and all the turn
+                // budgets still apply to this one answer-only continuation.
+                prefetch = Prefetch::new();
+                if let Some(exit) = self
+                    .model_step(ctx, cancel, started, &mut prefetch, &mut capacity_recovery)
+                    .await?
+                {
+                    return Ok(exit);
+                }
+                continue;
+            }
             // Preparation only reads bounded context; it performs no inference.
             // Give compaction a freshly computed interval after that read.
             let pressure = if !self.compactor.uses_model_budget()
@@ -777,9 +799,11 @@ where
         // `ModelStepCompleted` below, including a cut-off or cancelled one.
         let mut served = None;
         let mut timing = None;
+        let answer_continuation = ctx.answer_continuation_started();
         {
             // The answer-only call offers nothing, not even `tools.search`.
-            let answer_only = self.budget.answer_only(step.saturating_sub(1));
+            let answer_only =
+                answer_continuation || self.budget.answer_only(step.saturating_sub(1));
             let owned = if answer_only {
                 Vec::new()
             } else {
@@ -944,6 +968,15 @@ where
             self.log.append(&events).await?;
         }
 
+        if answer_continuation && !calls.is_empty() && failure.is_none() {
+            // Offering no tools is not sufficient enforcement: even a model
+            // which emits a call anyway cannot repeat an earlier operation.
+            failure = Some(ModelError {
+                class: crate::ErrorClass::Rejected,
+                message: "answer_continuation_tool_call: interrupted-answer continuation cannot execute tools".into(),
+            });
+        }
+
         if failure.is_none()
             && !wall_exceeded
             && !cancel.is_cancelled()
@@ -999,26 +1032,46 @@ where
             return Ok(Some(Exit::Failed));
         }
         if content_policy.is_none()
-            && failure.is_some()
-            && !text.is_empty()
+            && let Some(error) = failure.as_ref()
+            && (!text.is_empty() || ctx.interrupted_answer().is_some())
             && !cancel.is_cancelled()
         {
-            // The customer already read this text. Keep it as the
-            // answer, visibly marked as cut off, instead of withdrawing
-            // it: a long answer that loses its stream near the end (a
-            // provider or gateway limit) must not vanish.
+            // Keep the text already shown. A transient failure may continue
+            // once from this exact prefix, without replaying proposed tools.
+            // Other failures retain the explicit cut-off fallback.
             let mut text = text;
             let tail = filter.finish();
             if !tail.is_empty() {
                 text.push_str(&tail);
                 self.log.append_text(tail).await?;
             }
-            self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
-            text.push_str(CUT_OFF_NOTICE);
             self.read_control(ctx).await?;
-            let continues = ctx.has_queued_steers() && !ctx.interrupt_requested();
+            let interrupted = ctx.interrupt_requested() || cancel.is_cancelled();
+            let mut usage = ctx.usage();
+            for event in &pending_usage {
+                if let Event::Usage(reported) = event {
+                    usage += *reported;
+                }
+            }
+            let continue_answer = matches!(
+                error.class(),
+                crate::ErrorClass::Transport | crate::ErrorClass::Truncated
+            ) && !ctx.answer_continuation_used()
+                && !ctx.has_queued_steers()
+                && !interrupted
+                && self
+                    .budget
+                    .exhausted(step, usage, started.elapsed())
+                    .is_none();
+            if !continue_answer && !interrupted {
+                self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
+                text.push_str(CUT_OFF_NOTICE);
+            }
+            let final_text = ctx.final_answer(&text);
+            let continues = continue_answer || ctx.has_queued_steers() || interrupted;
             let mut events = pending_usage;
             events.push(Event::ModelStepCompleted {
+                interruption: Some(error.class()),
                 step,
                 text: text.clone(),
                 calls: Vec::new(),
@@ -1027,7 +1080,7 @@ where
                 timing: timing.take(),
             });
             if !continues {
-                events.push(Event::Final { text });
+                events.push(Event::Final { text: final_text });
             }
             self.emit(ctx, events).await?;
             return Ok((!continues).then_some(Exit::Done));
@@ -1075,6 +1128,7 @@ where
             // so their continuation state is not kept either.
             let mut events = pending_usage;
             events.push(Event::ModelStepCompleted {
+                interruption: None,
                 step,
                 text,
                 calls: Vec::new(),
@@ -1119,8 +1173,10 @@ where
             // A steer that arrived during the answer continues the turn.
             self.read_control(ctx).await?;
             let continues = ctx.has_queued_steers() && !ctx.interrupt_requested();
+            let final_text = ctx.final_answer(&text);
             let mut events = pending_usage;
             events.push(Event::ModelStepCompleted {
+                interruption: None,
                 step,
                 text: text.clone(),
                 calls: Vec::new(),
@@ -1129,7 +1185,7 @@ where
                 timing,
             });
             if !continues {
-                events.push(Event::Final { text });
+                events.push(Event::Final { text: final_text });
             }
             self.emit(ctx, events).await?;
             *capacity_recovery = CapacityRecovery::Available;
@@ -1137,6 +1193,7 @@ where
         }
         let mut events = pending_usage;
         events.push(Event::ModelStepCompleted {
+            interruption: None,
             step,
             text,
             calls,

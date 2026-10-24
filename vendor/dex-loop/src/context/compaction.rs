@@ -402,6 +402,7 @@ mod tests {
         append(
             events,
             Event::ModelStepCompleted {
+                interruption: None,
                 timing: None,
                 served: None,
                 step,
@@ -478,6 +479,7 @@ mod tests {
                 (
                     Cursor(2),
                     Event::ModelStepCompleted {
+                        interruption: None,
                         step: 1,
                         text: String::new(),
                         calls: vec![],
@@ -528,6 +530,7 @@ mod tests {
             (
                 Cursor(2),
                 Event::ModelStepCompleted {
+                    interruption: None,
                     step: 1,
                     text: String::new(),
                     calls: vec![],
@@ -633,6 +636,7 @@ mod tests {
                 warm.observe(events.last().expect("event").0, &event);
             };
             push(Event::ModelStepCompleted {
+                interruption: None,
                 timing: None,
                 served: None,
                 step: 1,
@@ -703,6 +707,7 @@ mod tests {
         append(
             &mut events,
             Event::ModelStepCompleted {
+                interruption: None,
                 timing: None,
                 served: None,
                 step: 3,
@@ -979,6 +984,7 @@ mod cut_tests {
                 control_through: Cursor::START,
             },
             Event::ModelStepCompleted {
+                interruption: None,
                 step: n,
                 text: "y".repeat(BIG),
                 calls,

@@ -937,6 +937,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             control_through: Cursor::START,
         },
         Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls: vec![call.clone()],

@@ -51,6 +51,7 @@ fn context(output: Output) -> Context {
             (
                 Cursor(2),
                 Event::ModelStepCompleted {
+                    interruption: None,
                     step: 1,
                     text: String::new(),
                     calls,

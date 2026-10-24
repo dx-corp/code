@@ -13,6 +13,7 @@ use std::sync::{
 fn historical_turn(log: &FakeLog) -> Context {
     log.start_turn("old", "Never publish without approval.");
     log.host_append(Event::ModelStepCompleted {
+        interruption: None,
         step: 1,
         text: "historical analysis ".repeat(100),
         calls: vec![],
@@ -353,6 +354,7 @@ async fn capacity_recovery_reduces_history_once_before_retrying_the_same_turn() 
         let log = FakeLog::default();
         log.start_turn("old", "Never publish without approval. Budget is $10.");
         log.host_append(Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: "historical analysis ".repeat(100),
             calls: vec![],

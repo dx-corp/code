@@ -672,6 +672,11 @@ pub enum Event {
         step: u32,
         text: String,
         calls: Vec<ProposedCall>,
+        /// A failed stream whose visible text was retained without its proposed
+        /// calls. This typed owner fact permits one answer-only continuation;
+        /// old rows and older readers retain the ordinary completion shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interruption: Option<ErrorClass>,
         /// The step's provider continuation state (`ModelChunk::Reasoning`),
         /// returned in history on `Message::Assistant`. Internal: never
         /// rendered or sent to a surface. `#[serde(default)]` so log rows
@@ -1128,6 +1133,7 @@ mod tests {
                 ..Usage::default()
             }),
             Event::ModelStepCompleted {
+                interruption: None,
                 step: 1,
                 text: "ok".into(),
                 calls: vec![ProposedCall::new(
@@ -1141,6 +1147,7 @@ mod tests {
                 timing: None,
             },
             Event::ModelStepCompleted {
+                interruption: None,
                 step: 2,
                 text: String::new(),
                 calls: Vec::new(),
@@ -1346,8 +1353,42 @@ mod tests {
     }
 
     #[test]
+    fn step_interruption_is_optional_and_round_trips() {
+        let legacy = serde_json::json!({
+            "type": "model_step_completed", "step": 1, "text": "The owner is ", "calls": []
+        });
+        let mut step = serde_json::from_value::<Event>(legacy).expect("legacy row");
+        let Event::ModelStepCompleted { interruption, .. } = &step else {
+            panic!("expected ModelStepCompleted");
+        };
+        assert_eq!(*interruption, None);
+        assert!(
+            serde_json::to_value(&step)
+                .expect("encode")
+                .get("interruption")
+                .is_none()
+        );
+        for class in [ErrorClass::Transport, ErrorClass::Truncated] {
+            let Event::ModelStepCompleted { interruption, .. } = &mut step else {
+                unreachable!();
+            };
+            *interruption = Some(class);
+            let encoded = serde_json::to_value(&step).expect("encode interruption");
+            assert_eq!(
+                encoded["interruption"],
+                serde_json::to_value(class).expect("class")
+            );
+            assert_eq!(
+                serde_json::from_value::<Event>(encoded).expect("new row"),
+                step
+            );
+        }
+    }
+
+    #[test]
     fn step_timing_and_cache_counts_round_trip_and_none_is_omitted() {
         let step = Event::ModelStepCompleted {
+            interruption: None,
             step: 2,
             text: String::new(),
             calls: Vec::new(),
@@ -1368,6 +1409,7 @@ mod tests {
             step
         );
         let untimed = Event::ModelStepCompleted {
+            interruption: None,
             step: 2,
             text: String::new(),
             calls: Vec::new(),

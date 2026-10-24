@@ -126,6 +126,7 @@ async fn run_contended_wave(prefetched: bool) {
             })
             .collect();
         log.host_append(Event::ModelStepCompleted {
+            interruption: None,
             step: 1,
             text: String::new(),
             calls,
