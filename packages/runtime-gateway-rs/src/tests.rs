@@ -129,13 +129,13 @@ const A2A_PUSH_AUTH_ENV_NAMES: &[&str] = &[
 ];
 
 #[derive(Debug)]
-struct CapturedHttpRequest {
+pub(crate) struct CapturedHttpRequest {
     request_line: String,
     headers: HashMap<String, String>,
     body: Value,
 }
 
-struct TestDir {
+pub(crate) struct TestDir {
     path: PathBuf,
 }
 
@@ -226,7 +226,7 @@ pub(crate) use self::auth_tokens::{
 };
 mod a2a_cards;
 mod capsules;
-mod codex_bridge;
+mod codex_bridge_cases;
 #[allow(unused_imports)]
 pub(crate) use self::capsules::{
     valid_browser_qa_capsule, valid_code_review_capsule, valid_code_writer_capsule,
