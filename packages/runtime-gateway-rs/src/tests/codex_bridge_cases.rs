@@ -337,7 +337,7 @@ pub(crate) fn codex_headless_tool_events_normalize_subagent_aliases() {
 #[test]
 pub(crate) fn codex_headless_subagent_lifecycle_matches_workgraph_fixture() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../../docs/protocols/codex-subagent-workgraph-v1.json"
+        "../../../../docs/protocols/codex-subagent-workgraph-v1.json"
     ))
     .expect("work graph fixture should parse");
     assert_eq!(
