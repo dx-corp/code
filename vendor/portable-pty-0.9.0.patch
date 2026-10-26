@@ -1,0 +1,97 @@
+diff --git a/src/unix.rs b/src/unix.rs
+--- a/src/unix.rs
++++ b/src/unix.rs
+@@ -8,11 +8,15 @@
+ use std::ffi::OsStr;
+ use std::io::{Read, Write};
+ use std::os::fd::AsFd;
++#[cfg(target_os = "linux")]
++use std::os::fd::{IntoRawFd, OwnedFd};
+ use std::os::unix::ffi::OsStrExt;
+ use std::os::unix::io::{AsRawFd, FromRawFd};
+ use std::os::unix::process::CommandExt;
+ use std::path::PathBuf;
+-use std::{io, mem, ptr};
++#[cfg(not(target_os = "linux"))]
++use std::ptr;
++use std::{io, mem};
+ 
+ pub use std::os::unix::io::RawFd;
+ 
+@@ -20,16 +24,25 @@
+ pub struct UnixPtySystem {}
+ 
+ fn openpty(size: PtySize) -> anyhow::Result<(UnixMasterPty, UnixSlavePty)> {
++    #[cfg(not(target_os = "linux"))]
+     let mut master: RawFd = -1;
++    #[cfg(not(target_os = "linux"))]
+     let mut slave: RawFd = -1;
+ 
+-    let mut size = winsize {
++    let size = winsize {
+         ws_row: size.rows,
+         ws_col: size.cols,
+         ws_xpixel: size.pixel_width,
+         ws_ypixel: size.pixel_height,
+     };
+ 
++    #[cfg(target_os = "linux")]
++    let (master, slave) = openpty_cloexec(&size)?;
++
++    #[cfg(not(target_os = "linux"))]
++    let mut size = size;
++
++    #[cfg(not(target_os = "linux"))]
+     let result = unsafe {
+         // BSDish systems may require mut pointers to some args
+         #[allow(clippy::unnecessary_mut_passed)]
+@@ -42,6 +55,7 @@
+         )
+     };
+ 
++    #[cfg(not(target_os = "linux"))]
+     if result != 0 {
+         bail!("failed to openpty: {:?}", io::Error::last_os_error());
+     }
+@@ -65,6 +79,41 @@
+     cloexec(slave.fd.as_raw_fd())?;
+ 
+     Ok((master, slave))
++}
++
++#[cfg(target_os = "linux")]
++fn openpty_cloexec(size: &winsize) -> io::Result<(RawFd, RawFd)> {
++    // Setting FD_CLOEXEC after openpty leaves a window in which a concurrent
++    // fork/exec can retain the slave and prevent the terminal reader seeing EOF.
++    // Both descriptors must carry the flag from the instant they are created.
++    let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
++    // SAFETY: posix_openpt takes only an open-flags value.
++    let master = unsafe { libc::posix_openpt(flags) };
++    if master == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    // SAFETY: posix_openpt returned a new descriptor owned by this function.
++    let master = unsafe { OwnedFd::from_raw_fd(master) };
++    // SAFETY: master is a valid, owned PTY master.
++    if unsafe { libc::grantpt(master.as_raw_fd()) } != 0 {
++        return Err(io::Error::last_os_error());
++    }
++    // SAFETY: the granted PTY master remains valid and owned here.
++    if unsafe { libc::unlockpt(master.as_raw_fd()) } != 0 {
++        return Err(io::Error::last_os_error());
++    }
++    // SAFETY: TIOCGPTPEER opens this master's slave with the supplied flags.
++    let slave = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGPTPEER, flags) };
++    if slave == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    // SAFETY: the successful TIOCGPTPEER call returned a new owned descriptor.
++    let slave = unsafe { OwnedFd::from_raw_fd(slave) };
++    // SAFETY: slave is valid and size points to an initialized winsize.
++    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, size) } != 0 {
++        return Err(io::Error::last_os_error());
++    }
++    Ok((master.into_raw_fd(), slave.into_raw_fd()))
+ }
+ 
+ impl PtySystem for UnixPtySystem {

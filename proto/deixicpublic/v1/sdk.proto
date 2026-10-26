@@ -454,17 +454,25 @@ message ListBusinessObjectsResponse {
   repeated BusinessObject objects = 1;
   string next_object_id = 2;
 }
+
 // Names the built-in blueprint member a tenant type was cloned from.
 message BusinessBlueprintOrigin {
   string blueprint_id = 1;
   int64 version = 2;
   string source_type_id = 3;
 }
+message BusinessObjectTypeField {
+  string field_id = 1;
+  string group_id = 2;
+  bool source_mappable = 3;
+}
 message BusinessObjectType {
   string type_id = 1;
   string name = 2;
   int64 revision = 3;
   BusinessBlueprintOrigin blueprint_origin = 4;
+  string display_field_id = 5;
+  repeated BusinessObjectTypeField fields = 6;
 }
 message ListBusinessObjectTypesRequest {
   string organization_id = 1;
@@ -490,8 +498,18 @@ message ListBusinessBlueprintsRequest {
 message ListBusinessBlueprintsResponse {
   repeated BusinessBlueprint blueprints = 1;
 }
+
 // Binds a record to a caller-named connection resource. The response is the
 // projected record; the binding itself stays with the implementation.
+enum BusinessSourceFieldProperty {
+  BUSINESS_SOURCE_FIELD_PROPERTY_UNSPECIFIED = 0;
+  BUSINESS_SOURCE_FIELD_PROPERTY_DISPLAY_NAME = 1;
+  BUSINESS_SOURCE_FIELD_PROPERTY_EXTERNAL_ID = 2;
+}
+message BusinessSourceFieldMapping {
+  string field_id = 1;
+  BusinessSourceFieldProperty property = 2;
+}
 message BindBusinessObjectSourceRequest {
   string organization_id = 1;
   string workspace_id = 2;
@@ -501,6 +519,8 @@ message BindBusinessObjectSourceRequest {
   string connection_id = 6;
   string family_stable_id = 7;
   string record_id = 8;
+  repeated string group_ids = 9;
+  repeated BusinessSourceFieldMapping fields = 10;
 }
 message BindBusinessObjectSourceResponse {
   BusinessObject object = 1;
@@ -517,6 +537,7 @@ message ListBusinessObjectRelationshipsRequest {
   string relationship_id = 4;
   int32 limit = 5;
   string after_key = 6;
+  string peer_object_id = 7;
 }
 message ListBusinessObjectRelationshipsResponse {
   repeated BusinessObjectRelationship relationships = 1;
@@ -611,6 +632,7 @@ message ComplianceLibraryChange {
   ComplianceLibraryChangeKind kind = 1;
   string object_id = 2;
 }
+
 // Preview returns the plan digest; apply must name that digest and is polled
 // with the same idempotency key until applied is true.
 message ReconcileComplianceLibraryRequest {
