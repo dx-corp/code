@@ -30,6 +30,17 @@ service DeixicPublicService {
   rpc GetBusinessObject(GetBusinessObjectRequest) returns (GetBusinessObjectResponse);
   rpc UpdateBusinessObject(UpdateBusinessObjectRequest) returns (UpdateBusinessObjectResponse);
   rpc DeleteBusinessObject(DeleteBusinessObjectRequest) returns (DeleteBusinessObjectResponse);
+  rpc ListBusinessObjects(ListBusinessObjectsRequest) returns (ListBusinessObjectsResponse);
+  rpc ListBusinessObjectTypes(ListBusinessObjectTypesRequest) returns (ListBusinessObjectTypesResponse);
+  rpc ListBusinessBlueprints(ListBusinessBlueprintsRequest) returns (ListBusinessBlueprintsResponse);
+  rpc BindBusinessObjectSource(BindBusinessObjectSourceRequest) returns (BindBusinessObjectSourceResponse);
+  rpc ListBusinessObjectRelationships(ListBusinessObjectRelationshipsRequest) returns (ListBusinessObjectRelationshipsResponse);
+  rpc CreateBusinessObjectRelationship(CreateBusinessObjectRelationshipRequest) returns (CreateBusinessObjectRelationshipResponse);
+  rpc DeleteBusinessObjectRelationship(DeleteBusinessObjectRelationshipRequest) returns (DeleteBusinessObjectRelationshipResponse);
+  rpc GetProgram(GetProgramRequest) returns (GetProgramResponse);
+  rpc CreateProgram(CreateProgramRequest) returns (CreateProgramResponse);
+  rpc UpdateProgram(UpdateProgramRequest) returns (UpdateProgramResponse);
+  rpc ReconcileComplianceLibrary(ReconcileComplianceLibraryRequest) returns (ReconcileComplianceLibraryResponse);
 }
 
 message Scope {
@@ -431,6 +442,191 @@ message DeleteBusinessObjectRequest {
 }
 message DeleteBusinessObjectResponse {
   BusinessObject object = 1;
+}
+message ListBusinessObjectsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string type_id = 3;
+  int32 limit = 4;
+  string after_object_id = 5;
+}
+message ListBusinessObjectsResponse {
+  repeated BusinessObject objects = 1;
+  string next_object_id = 2;
+}
+// Names the built-in blueprint member a tenant type was cloned from.
+message BusinessBlueprintOrigin {
+  string blueprint_id = 1;
+  int64 version = 2;
+  string source_type_id = 3;
+}
+message BusinessObjectType {
+  string type_id = 1;
+  string name = 2;
+  int64 revision = 3;
+  BusinessBlueprintOrigin blueprint_origin = 4;
+}
+message ListBusinessObjectTypesRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  int32 limit = 3;
+  string after_type_id = 4;
+}
+message ListBusinessObjectTypesResponse {
+  repeated BusinessObjectType object_types = 1;
+  string next_type_id = 2;
+}
+message BusinessBlueprint {
+  string blueprint_id = 1;
+  int64 version = 2;
+  string content_digest = 3;
+  string name = 4;
+  string description = 5;
+}
+message ListBusinessBlueprintsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+}
+message ListBusinessBlueprintsResponse {
+  repeated BusinessBlueprint blueprints = 1;
+}
+// Binds a record to a caller-named connection resource. The response is the
+// projected record; the binding itself stays with the implementation.
+message BindBusinessObjectSourceRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string object_id = 4;
+  int64 expected_revision = 5;
+  string connection_id = 6;
+  string family_stable_id = 7;
+  string record_id = 8;
+}
+message BindBusinessObjectSourceResponse {
+  BusinessObject object = 1;
+}
+message BusinessObjectRelationship {
+  string source_object_id = 1;
+  string relationship_id = 2;
+  string target_object_id = 3;
+}
+message ListBusinessObjectRelationshipsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string object_id = 3;
+  string relationship_id = 4;
+  int32 limit = 5;
+  string after_key = 6;
+}
+message ListBusinessObjectRelationshipsResponse {
+  repeated BusinessObjectRelationship relationships = 1;
+  string next_key = 2;
+}
+message CreateBusinessObjectRelationshipRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  BusinessObjectRelationship relationship = 4;
+  int64 expected_revision = 5;
+}
+message CreateBusinessObjectRelationshipResponse {
+  BusinessObject object = 1;
+}
+message DeleteBusinessObjectRelationshipRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  BusinessObjectRelationship relationship = 4;
+  int64 expected_revision = 5;
+}
+message DeleteBusinessObjectRelationshipResponse {
+  BusinessObject object = 1;
+}
+message Program {
+  string program_id = 1;
+  int64 revision = 2;
+  string name = 3;
+  string goal = 4;
+  string owner_label = 5;
+  string due_date = 6;
+  // One of planned, active, paused or archived.
+  string planning_status = 7;
+}
+message GetProgramRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string program_id = 3;
+}
+message GetProgramResponse {
+  Program program = 1;
+}
+message CreateProgramRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string name = 4;
+  string goal = 5;
+  string owner_label = 6;
+  string due_date = 7;
+}
+message CreateProgramResponse {
+  Program program = 1;
+}
+message UpdateProgramRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string program_id = 4;
+  int64 expected_revision = 5;
+  string name = 6;
+  string goal = 7;
+  string owner_label = 8;
+  string due_date = 9;
+  // Required by the owner; send the current value to leave it unchanged.
+  string planning_status = 10;
+}
+message UpdateProgramResponse {
+  Program program = 1;
+}
+message BlueprintSelection {
+  string blueprint_id = 1;
+  int64 version = 2;
+  string content_digest = 3;
+}
+enum ComplianceLibraryReconcileMode {
+  COMPLIANCE_LIBRARY_RECONCILE_MODE_UNSPECIFIED = 0;
+  COMPLIANCE_LIBRARY_RECONCILE_MODE_PREVIEW = 1;
+  COMPLIANCE_LIBRARY_RECONCILE_MODE_APPLY = 2;
+}
+enum ComplianceLibraryChangeKind {
+  COMPLIANCE_LIBRARY_CHANGE_KIND_UNSPECIFIED = 0;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_ADD = 1;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_UPDATE = 2;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_WITHDRAW = 3;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_MAPPING = 4;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_CONFLICT = 5;
+  COMPLIANCE_LIBRARY_CHANGE_KIND_PRESERVE_LOCAL = 6;
+}
+message ComplianceLibraryChange {
+  ComplianceLibraryChangeKind kind = 1;
+  string object_id = 2;
+}
+// Preview returns the plan digest; apply must name that digest and is polled
+// with the same idempotency key until applied is true.
+message ReconcileComplianceLibraryRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string library_type_id = 4;
+  repeated BlueprintSelection selections = 5;
+  string expected_plan_digest = 6;
+  ComplianceLibraryReconcileMode mode = 7;
+}
+message ReconcileComplianceLibraryResponse {
+  string library_clone_id = 1;
+  string plan_digest = 2;
+  repeated ComplianceLibraryChange changes = 3;
+  bool applied = 4;
 }
 
 message GetThreadRequest {
