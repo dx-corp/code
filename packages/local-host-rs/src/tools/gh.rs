@@ -3217,17 +3217,6 @@ mod tests {
     // ========================================================================
 
     #[cfg(unix)]
-    fn write_executable_script(path: &std::path::Path, contents: &str) {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::write(path, contents).expect("write fake gh script");
-        let mut permissions = std::fs::metadata(path)
-            .expect("fake gh metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(path, permissions).expect("make fake gh executable");
-    }
-
-    #[cfg(unix)]
     #[tokio::test]
     async fn checks_watch_completes_once_status_transitions_and_fetches_failed_log() {
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
@@ -3282,19 +3271,12 @@ mod tests {
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
         let workspace = tempfile::tempdir().expect("workspace");
         let fake_gh = workspace.path().join("gh");
-        write_executable_script(
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh-checks-watch-pending.sh"),
             &fake_gh,
-            "#!/bin/sh\n\
-             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
-             case \"$2\" in\n\
-             *check-runs*)\n\
-               echo '{\"total_count\":1,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null,\"details_url\":null}]}'\n\
-               ;;\n\
-             *)\n\
-               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
-               ;;\n\
-             esac\n",
-        );
+        )
+        .expect("link immutable fake gh script");
         let _override = TestGhOverride::install(fake_gh);
 
         let result = tokio::time::timeout(
@@ -3324,19 +3306,12 @@ mod tests {
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
         let workspace = tempfile::tempdir().expect("workspace");
         let fake_gh = workspace.path().join("gh");
-        write_executable_script(
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh-checks-watch-success.sh"),
             &fake_gh,
-            "#!/bin/sh\n\
-             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
-             case \"$2\" in\n\
-             *check-runs*)\n\
-               echo '{\"total_count\":2,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"neutral\"}]}'\n\
-               ;;\n\
-             *)\n\
-               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
-               ;;\n\
-             esac\n",
-        );
+        )
+        .expect("link immutable fake gh script");
         let _override = TestGhOverride::install(fake_gh);
 
         let result = tokio::time::timeout(
@@ -3359,19 +3334,12 @@ mod tests {
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
         let workspace = tempfile::tempdir().expect("workspace");
         let fake_gh = workspace.path().join("gh");
-        write_executable_script(
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh-checks-watch-cancel.sh"),
             &fake_gh,
-            "#!/bin/sh\n\
-             if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
-             case \"$2\" in\n\
-             *check-runs*)\n\
-               echo '{\"total_count\":1,\"check_runs\":[{\"id\":1,\"name\":\"build\",\"status\":\"in_progress\",\"conclusion\":null}]}'\n\
-               ;;\n\
-             *)\n\
-               echo '{\"head\":{\"sha\":\"deadbeefsha\"}}'\n\
-               ;;\n\
-             esac\n",
-        );
+        )
+        .expect("link immutable fake gh script");
         let _override = TestGhOverride::install(fake_gh);
 
         let cancel = CancellationToken::new();
