@@ -209,6 +209,7 @@ mod session_persistence_tests;
 #[path = "tests/codex_bridge_shutdown.rs"]
 mod codex_bridge_shutdown;
 
+mod a2a_local_endpoints;
 mod a2a_tasks;
 mod session_messaging;
 #[allow(unused_imports)]

@@ -130,3 +130,19 @@ and package versions remain unchanged. SQLx-core and tokio-websockets retain
 their generated, hash-pinned local BUILD targets. Computer-only source is
 excluded from Rust and Bazel metadata. SQLx does not package a Cargo.lock;
 the two websocket archives package locks, omitted exactly as provenance records.
+
+## Computer PTY descriptor creation
+
+Computer alone uses the `portable-pty-0.9.0` repair recorded in
+`pty-provenance.json`. Linux opens the master with `O_CLOEXEC` and opens its
+slave through `TIOCGPTPEER` with the same flag. Setting the flag after
+`openpty` allowed a concurrent fork/exec to retain the slave and keep the
+terminal reader waiting after its shell exited. Owned descriptors close on
+initialization errors; initial window size and the existing output-before-exit
+event order are retained. Other operating systems keep the published path.
+
+The Linux runtime regression execs a sibling immediately after each actual
+master/slave creation call, checks its descriptors through `/proc`, and runs
+the existing output-and-exit test with its original deadline. Archive files,
+licenses, Cargo identity, patch hash, and the Computer-only consumer are pinned
+by the source profile. This repair grants no dependency audit approval.
