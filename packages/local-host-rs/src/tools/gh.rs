@@ -2064,36 +2064,22 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn hung_mutating_gh_issue_returns_bounded_indeterminate_outcome() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let _override_lock = TEST_GH_OVERRIDE_LOCK.lock().await;
         let workspace = tempfile::tempdir().expect("workspace");
         let fake_gh = workspace.path().join("gh");
         let pid_path = workspace.path().join("api.pid");
         let completion_path = workspace.path().join("completed");
-        std::fs::write(
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh-issue-hung.sh"),
             &fake_gh,
-            format!(
-                "#!/bin/sh\n\
-                 if [ \"$1\" = \"--version\" ]; then echo 'gh version test'; exit 0; fi\n\
-                 printf '%s' \"$$\" > '{}'\n\
-                 sleep 60\n\
-                 printf completed > '{}'\n",
-                pid_path.display(),
-                completion_path.display()
-            ),
         )
-        .expect("write fake gh");
-        let mut permissions = std::fs::metadata(&fake_gh)
-            .expect("fake gh metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&fake_gh, permissions).expect("make fake gh executable");
+        .expect("link immutable fake gh script");
         let _override = TestGhOverride::install(fake_gh);
 
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
-        let execution = tokio::spawn(async move {
+        let mut execution = tokio::spawn(async move {
             gh_issue(
                 serde_json::json!({
                     "action": "create",
@@ -2105,8 +2091,15 @@ mod tests {
             .await
         });
         tokio::time::timeout(GH_TEST_PROCESS_START_TIMEOUT, async {
-            while !pid_path.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::select! {
+                result = &mut execution => {
+                    panic!("fake mutating gh command exited before publishing its pid: {result:?}");
+                }
+                () = async {
+                    while !pid_path.exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                } => {}
             }
         })
         .await

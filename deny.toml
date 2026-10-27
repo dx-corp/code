@@ -24,7 +24,6 @@ targets = []
 
 [advisories]
 ignore = [
-    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml 0.2.11 unmaintained (repository archived), pulled in by serde_yaml_ng 0.10.0 (production). No known vulnerability; no maintained serde_yaml_ng release drops it yet. expires: 2026-10-26" },
     # --- Unmaintained crates (no known vulnerability) ---
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5.13.1 is unmaintained after its merge into zbus 6; retained by the Linux native credential-store chain keyring 4.2.0 -> zbus-secret-service-keyring-store 1.0.0 -> secret-service 5.1.0 -> zbus 5.18.0. Current published store 1.0.1 and secret-service 5.2.0 still require zbus ^5; no supported same-backend upgrade removes it. Preserve secure credential storage; remove this acceptance when the supported chain migrates to zbus 6, or re-review at expiry. expires: 2026-10-31" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.4 is unmaintained after its merge into zbus 6; retained by the Linux native credential-store chain keyring 4.2.0 -> zbus-secret-service-keyring-store 1.0.0 -> secret-service 5.1.0 -> zbus 5.18.0. Current published store 1.0.1 and secret-service 5.2.0 still require zbus ^5; no supported same-backend upgrade removes it. Preserve secure credential storage; remove this acceptance when the supported chain migrates to zbus 6, or re-review at expiry. expires: 2026-10-31" },
