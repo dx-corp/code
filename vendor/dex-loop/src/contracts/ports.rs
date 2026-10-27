@@ -335,6 +335,13 @@ pub trait Tools: Send + Sync {
         cancel: &CancellationToken,
     ) -> impl Future<Output = ToolResult> + Send;
 
+    /// The host's bounded hydration allowance for an admitted tool result.
+    /// Ordinary tools retain the default; owned paged reads may need room for
+    /// their stored JSON wrapper before a script selects a smaller projection.
+    fn codemode_result_byte_limit(&self, _name: &ToolName) -> usize {
+        256 * 1024
+    }
+
     /// Resolve one already-journaled owner result for bounded script data
     /// processing. This never dispatches the tool again. Hosts with owned
     /// output storage must verify exact thread/principal/call evidence and

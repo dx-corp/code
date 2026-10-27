@@ -506,11 +506,12 @@ where
         if result.outcome != Outcome::Succeeded {
             return response(result);
         }
+        let max_bytes = self.tools.codemode_result_byte_limit(&call.tool);
         let resolved = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(READ_INTERRUPTED.into()),
             () = tokio::time::sleep_until(deadline) => return Err(DEADLINE_READ.into()),
-            result = self.tools.resolve_codemode_result(ctx, call, &result, 256 * 1024) => result?,
+            result = self.tools.resolve_codemode_result(ctx, call, &result, max_bytes) => result?,
         };
         response(resolved)
     }
