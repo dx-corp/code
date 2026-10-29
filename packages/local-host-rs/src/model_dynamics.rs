@@ -283,9 +283,9 @@ mod selection_tests {
             ThinkingLevel::Off
         );
 
-        // o1 supports low/medium/high; normalized Minimal and Max must not
+        // o3 supports low/medium/high; normalized Minimal and Max must not
         // trap the cycle at Low or High.
-        let model = "openrouter/openai/o1";
+        let model = "openrouter/openai/o3";
         assert_eq!(
             next_thinking_level(model, ThinkingLevel::Off),
             ThinkingLevel::Low
@@ -339,7 +339,7 @@ mod selection_tests {
     fn boosts_do_not_advertise_equivalent_wire_settings() {
         let config = ModelDynamicsConfig::default();
         let current = ModelChoice {
-            model: "openrouter/openai/o1".into(),
+            model: "openrouter/openai/o3".into(),
             thinking: ThinkingLevel::High,
         };
         assert!(boost_choice(&current, &config).is_none());
@@ -352,7 +352,7 @@ mod selection_tests {
             ThinkingLevel::High
         );
         assert_eq!(
-            normalize_thinking("openrouter/openai/o1", ThinkingLevel::Low),
+            normalize_thinking("openrouter/openai/o3", ThinkingLevel::Low),
             ThinkingLevel::Low
         );
     }
