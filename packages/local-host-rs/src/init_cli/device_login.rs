@@ -452,9 +452,9 @@ mod tests {
         DeviceAuthorization {
             device_code: "device-secret".into(),
             user_code: "WDJB-MJHT".into(),
-            verification_uri: "https://identity.evalops.dev/device".into(),
+            verification_uri: "https://identity.deixic.com/device".into(),
             verification_uri_complete: Some(
-                "https://identity.evalops.dev/device?user_code=WDJB-MJHT".into(),
+                "https://identity.deixic.com/device?user_code=WDJB-MJHT".into(),
             ),
             expires_in: 600,
             interval: Some(5),
@@ -476,8 +476,8 @@ mod tests {
         assert_eq!(
             local,
             "Authenticate your account at (press ENTER to open in browser):\n\n  \
-             https://identity.evalops.dev/device?user_code=WDJB-MJHT\n\n\
-             If the link does not open, visit https://identity.evalops.dev/device \
+             https://identity.deixic.com/device?user_code=WDJB-MJHT\n\n\
+             If the link does not open, visit https://identity.deixic.com/device \
              and enter code WDJB-MJHT to complete authentication."
         );
         assert!(
@@ -505,7 +505,7 @@ mod tests {
         );
         assert!(styled.contains("\x1b[1mENTER\x1b[0m"));
         assert!(
-            styled.contains("\x1b[4;36mhttps://identity.evalops.dev/device?user_code=WDJB-MJHT")
+            styled.contains("\x1b[4;36mhttps://identity.deixic.com/device?user_code=WDJB-MJHT")
         );
         assert!(styled.contains("\x1b[1mWDJB-MJHT\x1b[0m"));
     }
@@ -514,7 +514,7 @@ mod tests {
     fn the_link_falls_back_to_the_plain_verification_uri() {
         let mut authorization = device_authorization();
         authorization.verification_uri_complete = None;
-        assert_eq!(authorization.link(), "https://identity.evalops.dev/device");
+        assert_eq!(authorization.link(), "https://identity.deixic.com/device");
     }
 
     #[test]
