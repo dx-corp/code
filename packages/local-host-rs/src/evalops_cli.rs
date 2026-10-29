@@ -634,7 +634,7 @@ mod tests {
             organization_id: Some("org_123".to_owned()),
             workspace_id: Some("workspace_123".to_owned()),
             user_id: Some("user_1".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: Some(json!({"provider": "openai", "environment": "prod"})),
             agent_mcp: None,
         };
@@ -661,7 +661,7 @@ mod tests {
             organization_id: Some("org_123".to_owned()),
             workspace_id: Some("workspace_session".to_owned()),
             user_id: Some("user_1".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: None,
             agent_mcp: Some(EvalOpsAgentMcpSnapshot {
                 workspace_id: Some("workspace_agent".to_owned()),
@@ -682,7 +682,7 @@ mod tests {
             organization_id: Some("org_123".to_owned()),
             workspace_id: None,
             user_id: Some("user_1".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: Some(json!({"provider": "openai", "environment": "prod"})),
             agent_mcp: None,
         };
@@ -713,7 +713,7 @@ mod tests {
             organization_id: Some("org_fixture".to_owned()),
             workspace_id: None,
             user_id: Some("user_fixture".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: None,
             agent_mcp: Some(EvalOpsAgentMcpSnapshot {
                 workspace_id: Some("workspace_fixture".to_owned()),

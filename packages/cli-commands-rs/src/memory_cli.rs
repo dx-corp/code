@@ -1101,7 +1101,7 @@ mod tests {
             organization_id: organization_id.map(str::to_owned),
             workspace_id: None,
             user_id: Some("user-1".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: None,
             agent_mcp: Some(EvalOpsAgentMcpSnapshot {
                 agent_id: Some("agent-1".to_owned()),

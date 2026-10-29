@@ -1370,14 +1370,14 @@ mod tests {
             env.insert("MAESTRO_HOSTED_RUNNER_MODE".into(), mode.into());
             assert_eq!(
                 identity_verification_endpoint(None, &env).unwrap(),
-                ("https://identity.evalops.dev".into(), None)
+                ("https://identity.deixic.com".into(), None)
             );
         }
         let mut env = hosted_identity_env();
         env.remove("MAESTRO_IDENTITY_EXCHANGE_URL");
         assert_eq!(
             identity_verification_endpoint(None, &env).unwrap(),
-            ("https://identity.evalops.dev".into(), None)
+            ("https://identity.deixic.com".into(), None)
         );
         env.insert(
             "MAESTRO_IDENTITY_URL".into(),
@@ -1558,7 +1558,7 @@ mod tests {
             organization_id: Some(org.to_owned()),
             workspace_id: None,
             user_id: Some("user_1".to_owned()),
-            identity_base_url: Some("https://identity.evalops.dev".to_owned()),
+            identity_base_url: Some("https://identity.deixic.com".to_owned()),
             provider_ref: Some(serde_json::json!({
                 "provider": "anthropic",
                 "environment": "production",

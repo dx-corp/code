@@ -21,7 +21,7 @@ const CALLBACK_PATH: &str = "/auth/callback/evalops-platform-tools";
 const REQUIRED_SCOPES: &[&str] = &["tool-execution:read", "tool-execution:write"];
 const CREDENTIAL_SCHEMA: &str = "evalops.maestro.platform-tools-credential.v1";
 const CREDENTIAL_FILE: &str = "platform-tools.json";
-const DEFAULT_IDENTITY_URL: &str = "https://identity.evalops.dev";
+const DEFAULT_IDENTITY_URL: &str = "https://identity.deixic.com";
 const MAX_CALLBACK_HEADER_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn authorization_url_requests_only_tool_execution_scopes() {
         let url = authorization_url(
-            "https://identity.evalops.dev",
+            "https://identity.deixic.com",
             "client-1",
             "http://127.0.0.1:1461/auth/callback/evalops-platform-tools",
             "challenge",

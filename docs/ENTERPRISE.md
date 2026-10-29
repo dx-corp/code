@@ -64,7 +64,9 @@ check passes.
 
 ## Platform mode
 
-`identity` at `https://identity.evalops.dev` is the only issuer.
+`identity` at `https://identity.deixic.com` is the only issuer. Sessions stored
+before the rename name `https://identity.evalops.dev`, the same Identity under its
+retiring name; the CLI still accepts it until that name is retired.
 
 - CLI login is the existing PKCE loopback flow in `packages/local-host-rs/src/init_cli.rs`.
 - The stored session carries access token, refresh token, `organization_id`,
