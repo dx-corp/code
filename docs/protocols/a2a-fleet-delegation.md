@@ -286,7 +286,7 @@ The current suite split is deliberate:
   projection, workspace auth, and CloudEvents/trace joins.
 - Deploy owns release-smoke and observability gates for the hosted A2A path:
   dashboards, alerts, smoke agents, and promotion checks.
-- Cerebro should consume the same low-cardinality Platform events for analytics
+- Knowledge should consume the same low-cardinality Platform events for analytics
   rather than reading Maestro's local ledger directly.
 - Conductor remains a browser-control capability behind Maestro/Platform
   receipts; it should surface as task artifacts and tool evidence, not as a

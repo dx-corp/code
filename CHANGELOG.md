@@ -560,7 +560,7 @@ independent model-quality benchmark or air-gap certification.
 - Twenty-style record table (virtualized, resize, reorder, multi-select) (#9252). <!-- maestro-release-note:7ee6c3adfa2d -->
 - Kanban board view (lifecycle) with html5 dnd (#9253). <!-- maestro-release-note:ca92e65b66e9 -->
 - Add bounded Hootsuite media transfer (#9260). <!-- maestro-release-note:2133464a1f63 -->
-- Expose Deixic-authenticated Cerebro MCP (#9250). <!-- maestro-release-note:513429e94e72 -->
+- Expose Deixic-authenticated Knowledge MCP (#9250). <!-- maestro-release-note:513429e94e72 -->
 
 ### Changed
 

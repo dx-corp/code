@@ -120,9 +120,9 @@ Deixic Code auto-detects the transport type:
 - **sse**: When URL contains `/sse` or `sse` subdomain
 - **http**: For other URLs
 
-### EvalOps Cerebro MCP
+### EvalOps Knowledge MCP
 
-Managed EvalOps launches can attach the Cerebro world-model MCP server without
+Managed EvalOps launches can attach the Knowledge world-model MCP server without
 adding a project config file. Configure one of:
 
 - `MAESTRO_PLATFORM_MCP_URL`
@@ -138,15 +138,15 @@ It also forwards `X-EvalOps-Workspace-Id`, `X-EvalOps-Session-Id`,
 `X-EvalOps-Agent-Id`, `X-EvalOps-Agent-Run-Id`, trace/request IDs, and
 `X-EvalOps-Scopes`.
 
-For Cerebro, set scopes deliberately:
+For Knowledge, set scopes deliberately:
 
-- `cerebro:read` exposes `cerebro_search`, `cerebro_gather_facts`,
-  `cerebro_debug_beliefs`, and the other read tools.
-- `cerebro:assert` additionally exposes `cerebro_assert_fact` for explicit,
+- `cerebro:read` exposes `knowledge_search`, `knowledge_gather_facts`,
+  `knowledge_debug_beliefs`, and the other read tools.
+- `cerebro:assert` additionally exposes `knowledge_assert_fact` for explicit,
   evidence-backed session learnings.
 
 Agents should search or gather facts before asserting. Use
-`cerebro_assert_fact` only when the session learned durable context that future
+`knowledge_assert_fact` only when the session learned durable context that future
 agents should recall, and always include a stable dimension, confidence reason,
 and evidence.
 

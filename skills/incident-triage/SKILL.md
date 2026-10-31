@@ -24,7 +24,7 @@ Use this skill to turn scattered incident evidence into a concise operator plan.
 
 ## Workflow
 
-1. Check Cerebro memory first (see below): query the world model for what the
+1. Check Knowledge memory first (see below): query the world model for what the
    company already knows about the entities in the alert before touching raw
    logs or metrics.
 2. Confirm the symptom, start time, affected surface, and urgency.
@@ -35,11 +35,11 @@ Use this skill to turn scattered incident evidence into a concise operator plan.
 7. End with current state, blast radius, next action, and what evidence was withheld or unavailable.
 8. Record what you learned (see below) so the next incident starts from it.
 
-## Cerebro Memory First
+## Knowledge Memory First
 
-Cerebro is the company world model; treat it as the first responder's memory.
+Knowledge is the company world model; treat it as the first responder's memory.
 Managed EvalOps launches attach its MCP read tools (`cerebro_*`) when the
-session carries the `cerebro:read` scope — see "EvalOps Cerebro MCP" in
+session carries the `cerebro:read` scope — see "EvalOps Knowledge MCP" in
 `docs/MCP_GUIDE.md`. If no `cerebro_*` tools are available in the run, say so,
 fall back to raw evidence, and record the miss under withheld or unavailable
 evidence.
@@ -51,25 +51,25 @@ query:
    image digest, domain, actor. Prefer stable identities (deployment, service,
    repo) over ephemeral pod UIDs, and never put tenant IDs, pod UIDs, or
    secrets into queries.
-2. **Find prior coverage**: `cerebro_search` (or `cerebro_gather_facts` to get
+2. **Find prior coverage**: `knowledge_search` (or `knowledge_gather_facts` to get
    matching Things plus their Facts in one pass) for each entity, with
    `include_map=true` to see linked Things.
-3. **Load incident history**: `cerebro_get_thing` on each matched Thing for its
+3. **Load incident history**: `knowledge_get_thing` on each matched Thing for its
    recent Facts, Events, and Evidence — prior incidents, deploys, and alerts
    involving the same entity.
-4. **Check open risk**: `cerebro_attention_lifecycle` for attention items
+4. **Check open risk**: `knowledge_attention_lifecycle` for attention items
    already tracking the entity.
-5. **Recover the last-known resolution**: `cerebro_action_experiences`
+5. **Recover the last-known resolution**: `knowledge_action_experiences`
    (optionally filtered by `target_system` / `kind`) for lessons and replay
    hints from terminal remediation actions on similar past incidents.
-6. **Scope blast radius**: `cerebro_map_thing` with `depth=2` on the affected
+6. **Scope blast radius**: `knowledge_map_thing` with `depth=2` on the affected
    service for dependency and ownership links.
-7. **Resolve conflicts**: when Cerebro's Facts disagree with the live alert,
-   `cerebro_debug_beliefs` on the Thing shows why Cerebro believes what it
+7. **Resolve conflicts**: when Knowledge's Facts disagree with the live alert,
+   `knowledge_debug_beliefs` on the Thing shows why Knowledge believes what it
    does.
 
-If Cerebro has no coverage for the entities — no matching Things, or
-`cerebro_source_health` reports the relevant sources stale or missing — state
+If Knowledge has no coverage for the entities — no matching Things, or
+`knowledge_source_health` reports the relevant sources stale or missing — state
 that plainly and fall back to raw logs and metrics as the primary evidence.
 Raw evidence is the fallback, not the starting point.
 
@@ -93,10 +93,10 @@ path: treat a missing file as an empty guideline set, normalize surrounding
 whitespace when loading, and append through an atomic temporary-file rename.
 No language-specific Maestro runtime helper is required.
 
-The guidelines file is the local, always-available memory; Cerebro is the
+The guidelines file is the local, always-available memory; Knowledge is the
 shared one. When the run also carries the `cerebro:assert` scope, durable
 learnings (root cause, working mitigation, owner) may additionally be recorded
-with `cerebro_assert_fact` using a stable dimension, explicit confidence, and
+with `knowledge_assert_fact` using a stable dimension, explicit confidence, and
 evidence — never tenant IDs, pod UIDs, or secrets.
 
 ## Toolbox
@@ -105,4 +105,4 @@ Run `toolbox/incident-timeline` to emit the required incident report skeleton.
 
 ## MCP Scope
 
-The bundled GitHub MCP config exposes issue, code, workflow, and file lookups for incident context. Live observability systems must be granted by the runtime separately. Cerebro read tools are attached by managed EvalOps launches with the `cerebro:read` scope rather than by this config; the manifest at `/.well-known/evalops/cerebro-mcp.json` lists the available tools and required headers.
+The bundled GitHub MCP config exposes issue, code, workflow, and file lookups for incident context. Live observability systems must be granted by the runtime separately. Knowledge read tools are attached by managed EvalOps launches with the `cerebro:read` scope rather than by this config; the manifest at `/.well-known/evalops/cerebro-mcp.json` lists the available tools and required headers.
