@@ -177,6 +177,47 @@ async fn parallel_reads_then_serial_effects_project_only_selected_output() {
     assert!(log.events().iter().any(|event| matches!(event, Event::CodeModeCallsProposed { parent, calls } if parent.as_str() == "t1-1-0" && calls.len() == 2)));
 }
 
+// Production 2026-10-31 (#18998): found tools stopped being declared to the
+// model, and codemode built its script catalog from the declared tools only,
+// so a script's `tools.crm_lookup` for a tool a search had exposed was
+// `undefined` ("not a function"). A script may call every tool the model may:
+// the declared ones and the ones a search exposed to this thread. The model's
+// own `tools.call` wrapper is not a script function.
+#[tokio::test]
+async fn scripts_call_tools_a_search_exposed() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("tools.search", json!({"query": "crm"}))],
+        vec![script(
+            r#"
+        const found = await tools.crm_lookup({key:"acme"});
+        text(JSON.stringify(found));
+        text(typeof tools.call);
+    "#,
+        )],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![read_tool("lookup"), hidden_read_tool("crm.lookup")])
+        .search_result("crm", &["crm.lookup"]);
+    let engine = engine(&log, &model, &tools, Budget::default());
+    let mut ctx = log.start_turn("t1", "look acme up in the crm");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    let runs = tools.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].args, json!({"key": "acme"}));
+    assert!(
+        runs[0].call.as_str().starts_with("t1-2-0:codemode:"),
+        "{:?}",
+        runs[0].call
+    );
+    let (outcome, output) = outer_result(&log, "t1-2-0");
+    assert_eq!(outcome, Outcome::Succeeded);
+    assert!(output.ends_with("\nundefined"), "{output}");
+}
+
 #[tokio::test]
 async fn denied_invalid_unexposed_and_conversational_calls_do_not_execute() {
     let log = FakeLog::default();

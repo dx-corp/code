@@ -53,15 +53,33 @@ where
         let Some(code) = parent.args.get("code").and_then(Value::as_str) else {
             return Ok(ToolResult::error("invalid call: code must be a string"));
         };
-        // Discovery follows normal tools.search exposure. Client and User
-        // executors need an ordinary conversational call, not a VM continuation.
-        let catalog = self
-            .offered(ctx)
+        // Discovery follows normal tools.search exposure: a script may call
+        // every tool the model may, the declared ones and the ones a search
+        // exposed to this thread (declared tools no longer include found
+        // tools; see `TOOLS_CALL`), so `tools.<name>` exists for each. Client
+        // and User executors need an ordinary conversational call, not a VM
+        // continuation; `tools.call` is the model's wrapper, not a script's.
+        let mut callable = self.offered(ctx);
+        for name in ctx.exposed_tools() {
+            if callable.iter().any(|entry| &entry.name == name) {
+                continue;
+            }
+            if let Some(entry) = self
+                .tools
+                .catalog()
+                .iter()
+                .find(|entry| &entry.name == name)
+            {
+                callable.push(entry.clone());
+            }
+        }
+        let catalog = callable
             .into_iter()
             .filter(|entry| {
                 !matches!(entry.executor, ExecutorKind::Client | ExecutorKind::User)
                     && entry.name.as_str() != agent_codemode::TOOL_NAME
                     && entry.name.as_str() != TOOLS_SEARCH
+                    && entry.name.as_str() != TOOLS_CALL
                     && entry.name.as_str() != crate::GRC_GRAPH_TOOL_NAME
                     && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
             })
