@@ -637,13 +637,13 @@ Use `recordMaestroLearnedContext` when a Maestro coding session learns a
 durable, evidence-backed fact that future agents should be able to recall. The
 event must include a stable `learning_id`, `statement`, claim-family
 `dimension`, confidence score/reason, supporting evidence, and the normal
-org/user/workspace/session/run correlation. Cerebro projects this event into a
+org/user/workspace/session/run correlation. Knowledge projects this event into a
 learned-context document Thing plus an agent-authored Fact, so agents can query
 it later without treating it as connector source truth.
 
 Use `maestroCorrelationToChronicleMetadata(correlation)` when handing the same
 run/session identity to Chronicle or agentd capture. It emits the stable
-metadata keys consumed by Platform Chronicle evidence and Cerebro's Chronicle
+metadata keys consumed by Platform Chronicle evidence and Knowledge's Chronicle
 consumer, including `organization_id`, `user_id`, `workspace_id`,
 `maestro_session_id`, `agent_run_id`, `agent_run_step_id`,
 `tool_execution_id`, `trace_id`, `task_id`, and `source_issue`.
@@ -660,7 +660,7 @@ user identity environment variables before starting Maestro:
 Maestro copies those values into CloudEvent extensions and OpenTelemetry span
 attributes (`evalops.organization_id`, `enduser.id`, `evalops.workspace_id`,
 `maestro.session_id`, and `maestro.agent_run_id`). Platform `traces` normalizes
-those attributes into first-class trace fields, and Cerebro imports the same
+those attributes into first-class trace fields, and Knowledge imports the same
 event correlation into org/user/session/run/tool graph nodes.
 
 When a session uses an EvalOps managed model provider, Maestro also forwards the
@@ -673,7 +673,7 @@ lets Platform's AgentRuntime operating ledger attach model usage to the same run
 as tool execution, approval, trace, and timeline evidence without copying raw
 prompts or responses into operator surfaces.
 
-For direct Cerebro MCP access through the EvalOps plugin, set
+For direct Knowledge MCP access through the EvalOps plugin, set
 `MAESTRO_PLATFORM_MCP_URL`, `MAESTRO_EVALOPS_AGENT_MCP_URL`, or the manifest
 form `MAESTRO_PLATFORM_MCP_MANIFEST_URL`, then grant scopes with
 `MAESTRO_CEREBRO_MCP_SCOPES` or `MAESTRO_PLATFORM_MCP_SCOPES`. The URL can be
@@ -683,7 +683,7 @@ HTTP MCP endpoint. Use `cerebro:read` for recall-only agents and add
 `cerebro:assert` only for agents allowed to write explicit learned facts.
 Maestro forwards `X-EvalOps-Workspace-Id`, `X-EvalOps-Session-Id`,
 `X-EvalOps-Agent-Id`, `X-EvalOps-Agent-Run-Id`, trace/request IDs, and scopes so
-Cerebro can attribute every query and assertion to the user/org session.
+Knowledge can attribute every query and assertion to the user/org session.
 
 The publisher conformance fixture used by Platform can be regenerated from the
 same shared publisher with

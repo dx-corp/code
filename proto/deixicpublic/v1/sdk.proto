@@ -41,6 +41,14 @@ service DeixicPublicService {
   rpc CreateProgram(CreateProgramRequest) returns (CreateProgramResponse);
   rpc UpdateProgram(UpdateProgramRequest) returns (UpdateProgramResponse);
   rpc ReconcileComplianceLibrary(ReconcileComplianceLibraryRequest) returns (ReconcileComplianceLibraryResponse);
+  // Read-only compliance controls (public API v1): one page of the workspace's
+  // controls with their current verification state, and one control's detail.
+  rpc ListControls(ListControlsRequest) returns (ListControlsResponse);
+  rpc GetControl(GetControlRequest) returns (GetControlResponse);
+  // Read-only compliance tests (public API v1): one page of the workspace's
+  // tests with their current result, and one test's per-resource results.
+  rpc ListTests(ListTestsRequest) returns (ListTestsResponse);
+  rpc GetTest(GetTestRequest) returns (GetTestResponse);
 }
 
 message Scope {
@@ -868,4 +876,133 @@ message GetVoiceCatalogResponse {
   bool enabled = 2;
   string default_voice_id = 3;
   repeated BrandVoice voices = 4;
+}
+
+// A control's current verification state, from the same owner read the
+// Controls page uses.
+enum ControlState {
+  CONTROL_STATE_UNSPECIFIED = 0;
+  CONTROL_STATE_VERIFIED = 1;
+  CONTROL_STATE_FAILING = 2;
+  // Not yet known; reason_code says why (no_receipt, indeterminate, stale,
+  // partial_population).
+  CONTROL_STATE_UNKNOWN = 3;
+  CONTROL_STATE_ATTESTED = 4;
+  CONTROL_STATE_NOT_APPLICABLE = 5;
+  CONTROL_STATE_EXCEPTED = 6;
+}
+message Control {
+  string control_id = 1;
+  string key = 2;
+  string name = 3;
+  ControlState state = 4;
+  string reason_code = 5;
+  // Unset when the control has no assessment receipt.
+  google.protobuf.Timestamp assessed_at = 6;
+  repeated string owner_ids = 7;
+  int64 revision = 8;
+}
+message ListControlsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  // At most 25 per page; zero means 25.
+  int32 limit = 3;
+  // Opaque; pass next_page_token from the previous page.
+  string page_token = 4;
+}
+message ListControlsResponse {
+  repeated Control controls = 1;
+  string next_page_token = 2;
+}
+message GetControlRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string control_id = 3;
+}
+// One framework requirement a control maps to.
+message ControlRequirement {
+  string framework_id = 1;
+  string requirement_id = 2;
+  // automatic, reviewed or proposed; proposed mappings do not count.
+  string review_state = 3;
+}
+// One test that verifies a control, with its own state.
+message ControlTestState {
+  string test_id = 1;
+  ControlState state = 2;
+  string reason_code = 3;
+  google.protobuf.Timestamp assessed_at = 4;
+}
+message GetControlResponse {
+  Control control = 1;
+  repeated ControlRequirement requirements = 2;
+  repeated ControlTestState tests = 3;
+  repeated string evidence_ids = 4;
+  // False when an owner source was unavailable or the read was truncated.
+  bool complete = 5;
+}
+
+message Test {
+  string test_id = 1;
+  string name = 2;
+  // The test's qualified state, from the same owner read as the Tests page.
+  ControlState state = 3;
+  string reason_code = 4;
+  google.protobuf.Timestamp assessed_at = 5;
+  repeated string control_ids = 6;
+  int64 revision = 7;
+  // Deactivated tests are listed only when requested and never count.
+  bool deactivated = 8;
+}
+message ListTestsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  // At most 100 per page; zero means 25.
+  int32 limit = 3;
+  // Opaque; pass next_page_token from the previous page.
+  string page_token = 4;
+  // Only tests that verify one of these controls.
+  repeated string control_ids = 5;
+  // List deactivated tests instead of active ones.
+  bool deactivated = 6;
+}
+message ListTestsResponse {
+  repeated Test tests = 1;
+  // Matching tests across all pages.
+  uint32 total = 2;
+  string next_page_token = 3;
+  // False when an owner source was unavailable or the read was truncated.
+  bool complete = 4;
+}
+// A resource's latest result for one test.
+enum TestResultState {
+  TEST_RESULT_STATE_UNSPECIFIED = 0;
+  TEST_RESULT_STATE_VERIFIED = 1;
+  TEST_RESULT_STATE_FAILING = 2;
+  TEST_RESULT_STATE_INDETERMINATE = 3;
+  TEST_RESULT_STATE_NOT_RUN = 4;
+  TEST_RESULT_STATE_NOT_APPLICABLE = 5;
+  TEST_RESULT_STATE_EXCEPTED = 6;
+  // Defined but no automated check is connected; never a passing result.
+  TEST_RESULT_STATE_NOT_RUNNING = 7;
+}
+message TestResourceResult {
+  string resource_id = 1;
+  string resource_kind = 2;
+  TestResultState state = 3;
+  string reason = 4;
+  google.protobuf.Timestamp evaluated_at = 5;
+  google.protobuf.Timestamp state_since = 6;
+}
+message GetTestRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string test_id = 3;
+}
+message GetTestResponse {
+  Test test = 1;
+  repeated TestResourceResult resources = 2;
+  google.protobuf.Timestamp last_evaluated_at = 3;
+  // False when an owner source was unavailable or the read was truncated.
+  bool complete = 4;
 }
