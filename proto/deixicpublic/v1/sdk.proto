@@ -49,6 +49,11 @@ service DeixicPublicService {
   // tests with their current result, and one test's per-resource results.
   rpc ListTests(ListTestsRequest) returns (ListTestsResponse);
   rpc GetTest(GetTestRequest) returns (GetTestResponse);
+  // Read-only evidence (public API v1): one page of the workspace's evidence,
+  // one evidence record's retained versions, and one version's file.
+  rpc ListEvidence(ListEvidenceRequest) returns (ListEvidenceResponse);
+  rpc ListEvidenceVersions(ListEvidenceVersionsRequest) returns (ListEvidenceVersionsResponse);
+  rpc GetEvidenceContent(GetEvidenceContentRequest) returns (GetEvidenceContentResponse);
 }
 
 message Scope {
@@ -1005,4 +1010,76 @@ message GetTestResponse {
   google.protobuf.Timestamp last_evaluated_at = 3;
   // False when an owner source was unavailable or the read was truncated.
   bool complete = 4;
+}
+
+message Evidence {
+  string evidence_id = 1;
+  string name = 2;
+  // Whether the evidence currently satisfies its controls.
+  ControlState state = 3;
+  string reason_code = 4;
+  repeated string control_ids = 5;
+  repeated string framework_ids = 6;
+  // When fresh evidence is next due; unset when it does not expire.
+  google.protobuf.Timestamp due_at = 7;
+  // The current version; empty when nothing has been collected.
+  string current_version_id = 8;
+  // Management status and approval state as the Evidence page shows them.
+  string status = 9;
+  string approval_state = 10;
+  int64 revision = 11;
+}
+message ListEvidenceRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  // At most 200 per page; zero means 50.
+  int32 limit = 3;
+  // Opaque; pass next_page_token from the previous page.
+  string page_token = 4;
+  // Only evidence for one of these controls.
+  repeated string control_ids = 5;
+}
+message ListEvidenceResponse {
+  repeated Evidence evidence = 1;
+  // Matching evidence across all pages.
+  uint32 total = 2;
+  string next_page_token = 3;
+  // False when an owner source was unavailable or the read was truncated.
+  bool complete = 4;
+}
+message EvidenceVersion {
+  string version_id = 1;
+  google.protobuf.Timestamp collected_at = 2;
+  string sha256 = 3;
+  // The period the version covers, when the evidence declares one.
+  google.protobuf.Timestamp covers_start = 4;
+  google.protobuf.Timestamp covers_end = 5;
+  bool current = 6;
+}
+message ListEvidenceVersionsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string evidence_id = 3;
+  // At most 50 per page; zero means 3.
+  int32 limit = 4;
+  string page_token = 5;
+}
+message ListEvidenceVersionsResponse {
+  repeated EvidenceVersion versions = 1;
+  string next_page_token = 2;
+  bool complete = 3;
+}
+message GetEvidenceContentRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string evidence_id = 3;
+  string version_id = 4;
+}
+message GetEvidenceContentResponse {
+  string version_id = 1;
+  string filename = 2;
+  string content_type = 3;
+  bytes content = 4;
+  // Hex SHA-256 of content, as recorded when the version was collected.
+  string sha256 = 5;
 }
