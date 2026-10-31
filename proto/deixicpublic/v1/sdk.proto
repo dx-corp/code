@@ -58,6 +58,11 @@ service DeixicPublicService {
   // assets and one asset.
   rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
   rpc GetAsset(GetAssetRequest) returns (GetAssetResponse);
+  // Read-only audits and their request lists (public API v1).
+  rpc ListAudits(ListAuditsRequest) returns (ListAuditsResponse);
+  rpc GetAudit(GetAuditRequest) returns (GetAuditResponse);
+  rpc ListAuditRequests(ListAuditRequestsRequest) returns (ListAuditRequestsResponse);
+  rpc GetAuditRequestItem(GetAuditRequestItemRequest) returns (GetAuditRequestItemResponse);
 }
 
 message Scope {
@@ -1130,4 +1135,88 @@ message GetAssetRequest {
 }
 message GetAssetResponse {
   Asset asset = 1;
+}
+
+message Audit {
+  string audit_id = 1;
+  string program_id = 2;
+  string name = 3;
+  string status = 4;
+  // Report type, such as soc2_type2.
+  string report_type = 5;
+  repeated string frameworks = 6;
+  // ISO dates; empty when not set.
+  string period_start_date = 7;
+  string period_end_date = 8;
+  string as_of_date = 9;
+  string audit_firm_id = 10;
+  string audit_firm = 11;
+  string lead_owner_id = 12;
+  // RFC 3339.
+  string created_at = 13;
+  int64 revision = 14;
+}
+message ListAuditsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  // Only audits of this program.
+  string program_id = 3;
+  int32 limit = 4;
+  string after_audit_id = 5;
+}
+message ListAuditsResponse {
+  repeated Audit audits = 1;
+  string next_audit_id = 2;
+}
+message GetAuditRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string audit_id = 3;
+}
+message GetAuditResponse {
+  Audit audit = 1;
+}
+// One item on an audit's request list (the auditor's information request list).
+message AuditRequestItem {
+  string item_id = 1;
+  string request_id = 2;
+  string title = 3;
+  string description = 4;
+  string request_type = 5;
+  repeated string control_ids = 6;
+  string owner_id = 7;
+  string status = 8;
+  // ISO date; empty when not set.
+  string due_date = 9;
+  string due_state = 10;
+  uint32 evidence_count = 11;
+  // RFC 3339; empty when nothing was captured.
+  string last_captured_at = 12;
+  string readiness = 13;
+  int64 revision = 14;
+}
+message AuditRequestCounts {
+  uint32 total = 1;
+  uint32 open = 2;
+  uint32 evidence_submitted = 3;
+  uint32 changes_requested = 4;
+  uint32 accepted = 5;
+}
+message ListAuditRequestsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string audit_id = 3;
+}
+message ListAuditRequestsResponse {
+  repeated AuditRequestItem requests = 1;
+  AuditRequestCounts counts = 2;
+}
+message GetAuditRequestItemRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string audit_id = 3;
+  string item_id = 4;
+}
+message GetAuditRequestItemResponse {
+  AuditRequestItem request = 1;
 }
