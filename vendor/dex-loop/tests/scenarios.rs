@@ -10,9 +10,9 @@ use crate::support;
 use std::time::{Duration, Instant};
 
 use dex_loop::{
-    ApprovalId, ApprovalMode, Budget, CUT_OFF_NOTICE, CancellationToken, Cursor, Engine, Event,
-    Exit, Fenced, Lexicon, ModelError, Output, OutputRef, PrincipalId, ProposedCall, Threshold,
-    ToolName, ToolResult, TurnId, Verdict,
+    ApprovalId, ApprovalMode, Budget, CUT_OFF_NOTICE, CallId, CancellationToken, Cursor, Engine,
+    Event, Exit, Fenced, Lexicon, ModelError, Output, OutputRef, PrincipalId, ProposedCall,
+    Threshold, ToolName, ToolResult, TurnId, Verdict,
 };
 use serde_json::json;
 use support::*;
@@ -544,8 +544,7 @@ async fn steer_from_another_principal_is_checked_under_that_principal() {
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// 5b. A steer that lands while the model is answering continues the turn
-// instead of being dropped.
+// 5b. A steer that lands while the model is answering continues the turn instead of being dropped.
 #[tokio::test]
 async fn steer_during_a_final_answer_continues_the_turn() {
     let log = FakeLog::default();
@@ -1913,8 +1912,7 @@ async fn sanitizer_replaces_internal_tool_identifiers() {
     assert!(!serialized.to_lowercase().contains("maestro"));
 }
 
-// 13. tools.search exposes a non-core tool; its schema is offered from the
-// next step, and the exposure is an event.
+// 13. tools.search exposes a non-core tool; its schema is offered from the next step, as an event.
 #[tokio::test]
 async fn tools_search_exposes_schemas_for_the_next_step() {
     let log = FakeLog::default();
@@ -1952,25 +1950,28 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
         ])
     );
     assert_eq!(ctx.exposed_tools(), &[ToolName::new("crm.lookup")]);
+    // The declared tools are the same on both steps: a found tool is called
+    // through tools.call with the schema the search result carried.
     let offered = model.offered();
-    assert_eq!(offered[0], strings(&["tools.search", "codemode", "search"]));
-    assert_eq!(
-        offered[1],
-        strings(&["tools.search", "codemode", "search", "crm.lookup"])
-    );
+    assert_eq!(offered[0], FIXED_TOOLS.map(String::from));
+    assert_eq!(offered[1], offered[0]);
     assert_eq!(tools.run_ids(), strings(&["t1-2-0"]));
-    assert_eq!(
-        view(&model.seen()[1])[2..],
-        strings(&["tool:t1-1-0:ok:crm_lookup: Label for crm.lookup"])
+    let result = &view(&model.seen()[1])[2];
+    assert!(
+        result.starts_with("tool:t1-1-0:ok:Call each with tools_call {\"name\": <name>, \"arguments\": <input matching its input_schema>}.\ncrm_lookup: Label for crm.lookup\n  description: \n  input_schema: {\"type\":\"object\"}"),
+        "{result}"
     );
     assert_eq!(log.rehydrate(), ctx);
 }
 
-// An exposure only appends: search and core tools keep their place and the
-// exposed tools follow in the order the search returned them, so the prefix
-// the provider cached on the previous step is unchanged.
+/// The tools every model call declares, in order, whatever the thread has
+/// found: the provider's cached tool block never changes.
+const FIXED_TOOLS: [&str; 4] = ["tools.search", "codemode", "tools.call", "search"];
+
+// An exposure records the order the search returned, for the thread's later
+// turns; the declared tools do not change.
 #[tokio::test]
-async fn exposed_tools_are_appended_in_exposure_order() {
+async fn exposed_tools_are_recorded_in_exposure_order_without_being_declared() {
     let log = FakeLog::default();
     let model = FakeModel::new(vec![
         vec![call("tools.search", json!({"query": "crm"}))],
@@ -1996,11 +1997,8 @@ async fn exposed_tools_are_appended_in_exposure_order() {
     );
     assert_eq!(log.rehydrate().exposed_tools(), ctx.exposed_tools());
     let offered = model.offered();
-    assert_eq!(offered[0], strings(&["tools.search", "codemode", "search"]));
-    assert_eq!(
-        offered[1],
-        strings(&["tools.search", "codemode", "search", "crm.zed", "crm.alpha"])
-    );
+    assert_eq!(offered[0], FIXED_TOOLS.map(String::from));
+    assert_eq!(offered[1], offered[0]);
 }
 
 // A question parks the turn; the answer is the call's result.
@@ -3016,3 +3014,5 @@ async fn failed_attempt_rows_precede_the_commit_and_never_change_history() {
 
 #[path = "scenarios/capacity_controls.rs"]
 mod capacity_controls;
+#[path = "scenarios/tool_exposure.rs"]
+mod tool_exposure;

@@ -412,6 +412,7 @@ impl Model for SimModel {
         let mutation = tools.iter().find(|spec| {
             !spec.read_only
                 && spec.name.as_str() != dex_loop::CODEMODE
+                && spec.name.as_str() != dex_loop::TOOLS_CALL
                 && spec.executor != dex_loop::ExecutorKind::Client
         });
         let client = tools
