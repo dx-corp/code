@@ -54,6 +54,10 @@ service DeixicPublicService {
   rpc ListEvidence(ListEvidenceRequest) returns (ListEvidenceResponse);
   rpc ListEvidenceVersions(ListEvidenceVersionsRequest) returns (ListEvidenceVersionsResponse);
   rpc GetEvidenceContent(GetEvidenceContentRequest) returns (GetEvidenceContentResponse);
+  // Read-only asset inventory (public API v1): one page of the workspace's
+  // assets and one asset.
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
+  rpc GetAsset(GetAssetRequest) returns (GetAssetResponse);
 }
 
 message Scope {
@@ -1082,4 +1086,48 @@ message GetEvidenceContentResponse {
   bytes content = 4;
   // Hex SHA-256 of content, as recorded when the version was collected.
   string sha256 = 5;
+}
+
+message Asset {
+  string asset_id = 1;
+  string name = 2;
+  // The asset's record type, as the Assets page groups it.
+  string asset_type = 3;
+  // The owning person or team record, when one is assigned.
+  string owner_id = 4;
+  string owner_display_name = 5;
+  string environment = 6;
+  // The connected system that reported the asset.
+  string source = 7;
+  string managed_by_provider_id = 8;
+  string status = 9;
+  google.protobuf.Timestamp last_seen_at = 10;
+  // RFC 3339 time the source last observed the asset; empty when unknown.
+  string source_observed_at = 11;
+  repeated string tags = 12;
+  // A link to the asset in its source system, when the source provides one.
+  string source_url = 13;
+}
+message ListAssetsRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  // Opaque; pass next_page_token from the previous page.
+  string page_token = 3;
+  // Only assets of this record type.
+  string type_id = 4;
+}
+message ListAssetsResponse {
+  repeated Asset assets = 1;
+  // Matching assets; exact when total_is_exact.
+  int32 total = 2;
+  bool total_is_exact = 3;
+  string next_page_token = 4;
+}
+message GetAssetRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string asset_id = 3;
+}
+message GetAssetResponse {
+  Asset asset = 1;
 }
