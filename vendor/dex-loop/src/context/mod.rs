@@ -381,7 +381,13 @@ impl Context {
         self.acting.as_ref()
     }
 
-    /// Tools `tools.search` exposed in this turn.
+    /// Tools `tools.search` exposed in this thread for the acting principal,
+    /// in exposure order. They stay offered on the principal's later turns:
+    /// tools render first in the prompt, so dropping them at a turn boundary
+    /// and finding them again at step two rewrote the whole conversation to
+    /// the prompt cache twice per turn (production 2026-10-27: 730 of 790
+    /// multi-step turns). A turn by another principal starts from the core
+    /// tools again; what one person found is not offered to another.
     pub fn exposed_tools(&self) -> &[ToolName] {
         &self.exposed
     }
@@ -1309,6 +1315,9 @@ impl Context {
             interaction_mode,
             page,
         } = next;
+        if self.acting.as_ref() != Some(&principal) {
+            self.exposed.clear();
+        }
         self.turn = Some(turn.clone());
         self.acting = Some(principal.clone());
         self.status = Status::Running;
@@ -1323,7 +1332,6 @@ impl Context {
         self.answer_continuation_used = false;
         self.attempt = None;
         self.interrupt_requested = false;
-        self.exposed.clear();
         self.uncertain_calls.clear();
         self.nested_calls.retain(|proposal| {
             self.tool_evidence

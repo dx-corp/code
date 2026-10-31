@@ -54,6 +54,14 @@ enum CapacityRecovery {
 
 /// The engine-owned discovery tool. Always offered to the model.
 pub const TOOLS_SEARCH: &str = "tools.search";
+/// The one tool through which the model calls tools `tools.search` found.
+/// The tools the provider sees never change within a thread: core tools,
+/// `tools.search`, `codemode` and this; found tools' schemas arrive in the
+/// search result, which is appended history, so the prompt prefix the
+/// provider cached stays byte-identical instead of being rewritten each
+/// time the tool list grew (production 2026-10-27: 730 of 790 multi-step
+/// turns went from 29 to 41 tools at step two and back the next turn).
+pub const TOOLS_CALL: &str = "tools.call";
 /// The engine-owned bounded script tool.
 pub const CODEMODE: &str = agent_codemode::TOOL_NAME;
 
@@ -901,6 +909,7 @@ where
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
                         let index = calls.len();
                         let id = call_id(&turn, step, index);
+                        let (name, args) = self.unwrap_tool_call(name, args);
                         let call = ProposedCall::new(id, name, args, principal.clone());
                         // The answer-only call offers no tools, so nothing may
                         // start on it.
@@ -1432,6 +1441,10 @@ where
                         self.search_tools(ctx, call).await?;
                         continue;
                     }
+                    if call.tool.as_str() == TOOLS_CALL {
+                        self.reject_tool_call(ctx, call).await?;
+                        continue;
+                    }
                     match self.offered_spec(ctx, &call.tool) {
                         Some(spec) if self.replayable_read(&spec) => None,
                         Some(_) => {
@@ -1480,6 +1493,14 @@ where
                 self.search_tools(ctx, call).await?;
                 continue;
             }
+            // A `tools.call` still named so is one that named no catalog
+            // tool or carried the wrong shape; the named ones were unwrapped
+            // when proposed.
+            if call.tool.as_str() == TOOLS_CALL {
+                prefetch.reads.discard(index);
+                self.reject_tool_call(ctx, call).await?;
+                continue;
+            }
             let Some(spec) = self.offered_spec(ctx, &call.tool) else {
                 self.finish(ctx, call, unknown_tool(&call.tool)).await?;
                 continue;
@@ -1488,6 +1509,14 @@ where
             // executor: the model sees why and can call again. (A call the
             // stream already started passed this check before it ran.)
             if let Err(reason) = validate_args(&spec, &call.args) {
+                // Counted per tool: one the model keeps getting wrong through
+                // `tools.call` is a candidate for the core set.
+                tracing::info!(
+                    event = "dex_tool_arguments_rejected",
+                    tool = %call.tool,
+                    exposed = !spec.core,
+                    "tool call arguments rejected by the tool's schema"
+                );
                 prefetch.reads.discard(index);
                 self.finish(ctx, call, ToolResult::error(reason)).await?;
                 continue;
@@ -2107,11 +2136,23 @@ where
         let listing = if matches.is_empty() {
             format!("no tools match {query:?}")
         } else {
-            matches
+            let found = matches
                 .iter()
-                .map(|spec| format!("{}: {}", model_tool_name(spec.name.as_str()), spec.label))
+                .map(|spec| {
+                    format!(
+                        "{}: {}\n  description: {}\n  input_schema: {}",
+                        model_tool_name(spec.name.as_str()),
+                        spec.label,
+                        spec.description,
+                        spec.schema
+                    )
+                })
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join("\n");
+            format!(
+                "Call each with {} {{\"name\": <name>, \"arguments\": <input matching its input_schema>}}.\n{found}",
+                model_tool_name(TOOLS_CALL)
+            )
         };
         let mut events = Vec::with_capacity(2);
         if !matches.is_empty() {
@@ -2153,8 +2194,9 @@ where
         Ok(Exit::Interrupted)
     }
 
-    /// The specs the model sees this step: `tools.search`, core tools, and
-    /// tools exposed earlier in the turn. A turn's client-declared tools
+    /// The specs the model sees this step: `tools.search`, `codemode`,
+    /// `tools.call` and the core tools. Tools exposed by a search are
+    /// callable (`offered_spec`) but never declared. A turn's client-declared tools
     /// reach the model only if the host's `Tools::catalog()` already
     /// includes them (see `Context::client_tools`, and
     /// `dex_tools::client::declare` for dex-runtime's host); the engine
@@ -2163,11 +2205,14 @@ where
         if !ctx.interaction_mode().tools_allowed() {
             return Vec::new();
         }
-        // Search and core tools come first; exposed tools follow admission
-        // order. The wrapper stays stable; on-demand discovery describes the
-        // exact callable catalog without repeating direct declarations.
-        let mut offered: Vec<ToolSpec> = std::iter::once(self.search.clone())
+        // Search, the wrapper, `tools.call` and the core tools, in that
+        // order on every step of every turn: the provider's tool block is
+        // the same bytes for the whole thread. Found tools are not declared
+        // here; the model calls them through `tools.call` with the schema
+        // the search result carried.
+        std::iter::once(self.search.clone())
             .chain(std::iter::once(codemode::spec()))
+            .chain(std::iter::once(call_spec()))
             .chain(
                 self.tools
                     .catalog()
@@ -2176,19 +2221,11 @@ where
                         spec.core
                             && spec.name.as_str() != CODEMODE
                             && spec.name.as_str() != TOOLS_SEARCH
+                            && spec.name.as_str() != TOOLS_CALL
                     })
                     .cloned(),
             )
-            .collect();
-        for name in ctx.exposed_tools() {
-            if offered.iter().any(|spec| &spec.name == name) {
-                continue;
-            }
-            if let Some(spec) = self.tools.catalog().iter().find(|spec| &spec.name == name) {
-                offered.push(spec.clone());
-            }
-        }
-        offered
+            .collect()
     }
 
     /// A tool the model was offered. Calls to anything else are unknown.
@@ -2202,10 +2239,53 @@ where
         if name == &self.search.name {
             return Some(self.search.clone());
         }
+        if name.as_str() == TOOLS_CALL {
+            return Some(call_spec());
+        }
         self.tools
             .spec(name)
             .filter(|spec| spec.core || ctx.exposed_tools().contains(name))
             .cloned()
+    }
+
+    /// A `tools.call` as the model made it, as the call it names when the
+    /// name is a catalog tool and the arguments are an object; otherwise
+    /// unchanged, so dispatch reports exactly what was wrong. The named
+    /// call is what the log, policy, receipts and the UI see; whether the
+    /// tool was exposed to this thread is checked where every call is.
+    fn unwrap_tool_call(
+        &self,
+        name: ToolName,
+        args: serde_json::Value,
+    ) -> (ToolName, serde_json::Value) {
+        if name.as_str() != TOOLS_CALL {
+            return (name, args);
+        }
+        let Some(inner) = args.get("name").and_then(serde_json::Value::as_str) else {
+            return (name, args);
+        };
+        let Some(arguments) = args.get("arguments").filter(|value| value.is_object()) else {
+            return (name, args);
+        };
+        match self.tools.catalog().iter().find(|spec| {
+            spec.name.as_str() == inner || model_tool_name(spec.name.as_str()) == inner
+        }) {
+            Some(spec) => (spec.name.clone(), arguments.clone()),
+            None => (name, args),
+        }
+    }
+
+    /// Why a `tools.call` could not be made into the call it names: the
+    /// argument that is missing or of the wrong type, or a name no catalog
+    /// tool has. The model corrects the call in one step.
+    async fn reject_tool_call(&self, ctx: &mut Context, call: &ProposedCall) -> Result<(), Fenced> {
+        let result = match validate_args(&call_spec(), &call.args) {
+            Err(reason) => ToolResult::error(reason),
+            Ok(()) => unknown_tool(&ToolName::new(
+                call.args["name"].as_str().unwrap_or_default(),
+            )),
+        };
+        self.finish(ctx, call, result).await
     }
 
     fn replayable_read(&self, spec: &ToolSpec) -> bool {
@@ -2449,6 +2529,35 @@ fn search_spec() -> ToolSpec {
             "additionalProperties": false,
         }),
         read_only: true,
+        core: true,
+        governance: GovernanceClass::Plain,
+        executor: ExecutorKind::InProcess,
+    }
+}
+
+/// `tools.call`: see [`TOOLS_CALL`]. Not read-only: the call it names may
+/// be a mutation, and that call's own spec decides how it runs.
+fn call_spec() -> ToolSpec {
+    ToolSpec {
+        description: "Call a tool that tools_search found. name: the tool's name exactly as the \
+                      search result lists it; arguments: an object matching that tool's \
+                      input_schema from the search result. The call runs as that tool, with \
+                      its own authorization and receipt. An argument that does not fit the \
+                      schema is returned with the field and the reason; correct it and call \
+                      again."
+            .into(),
+        name: ToolName::new(TOOLS_CALL),
+        label: "Using a found tool".into(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "description": "The tool's name from the search result"},
+                "arguments": {"type": "object", "description": "The tool's input, matching its input_schema"}
+            },
+            "required": ["name", "arguments"],
+            "additionalProperties": false,
+        }),
+        read_only: false,
         core: true,
         governance: GovernanceClass::Plain,
         executor: ExecutorKind::InProcess,

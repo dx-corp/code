@@ -128,6 +128,16 @@ impl FakeLog {
         self.start_turn_with_client_tools(turn, text, Vec::new())
     }
 
+    /// Appends `principal`'s `UserMessage` and returns the rehydrated context.
+    pub fn start_turn_as(&self, principal: PrincipalId, turn: &str, text: &str) -> Context {
+        let mut message = user_message(turn, text);
+        if let Event::UserMessage { principal: who, .. } = &mut message {
+            *who = principal;
+        }
+        self.host_append(message);
+        self.rehydrate()
+    }
+
     /// Appends Alice's `UserMessage`, declaring `client_tools`, and returns
     /// the rehydrated context.
     pub fn start_turn_with_client_tools(
