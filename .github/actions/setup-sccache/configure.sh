@@ -73,6 +73,27 @@ probe_metadata() {
 gce_identity="$(probe_metadata "${SCCACHE_METADATA_EMAIL_URL}")"
 gce_identity="${gce_identity//$'\n'/}"
 
+# Runners without a GCE identity (borg burst and on-prem drones) can reach the
+# shared bucket through GitHub OIDC workload identity federation: the action
+# exchanges the job token for the reader (or, on a main push, the writer)
+# service account and passes the credentials file and a probe token here.
+SCCACHE_WIF_CREDENTIALS_FILE="${SCCACHE_WIF_CREDENTIALS_FILE:-}"
+SCCACHE_WIF_ACCESS_TOKEN="${SCCACHE_WIF_ACCESS_TOKEN:-}"
+wif_ready=false
+if [[ -z "${gce_identity}" && -n "${SCCACHE_WIF_CREDENTIALS_FILE}" && -f "${SCCACHE_WIF_CREDENTIALS_FILE}" \
+  && -n "${SCCACHE_WIF_ACCESS_TOKEN}" ]]; then
+  wif_ready=true
+fi
+
+# Only a push to main writes the shared cache. Pull request and merge-queue
+# jobs run unreviewed code, so they read main's objects but cannot add or
+# replace any.
+if [[ "${GITHUB_EVENT_NAME:-}" == "push" && "${GITHUB_REF:-}" == "refs/heads/main" ]]; then
+  gcs_rw_mode="READ_WRITE"
+else
+  gcs_rw_mode="READ_ONLY"
+fi
+
 # Persistent self-hosted hosts (the WSL box) export SCCACHE_LOCAL_DIR in the
 # runner service environment. Ephemeral ARC pods do not; they keep GCS/GHA.
 # Default size cap 40G; override with SCCACHE_CACHE_SIZE on the host.
@@ -124,7 +145,7 @@ select_local_or_gha() {
 
 case "${SCCACHE_BACKEND}" in
   auto)
-    if [[ -n "${gce_identity}" ]]; then
+    if [[ -n "${gce_identity}" || "${wif_ready}" == true ]]; then
       SCCACHE_BACKEND="gcs"
     else
       select_local_or_gha
@@ -142,7 +163,7 @@ if [[ "${SCCACHE_BACKEND}" == "gha" && "${SCCACHE_ALLOW_GHA_FALLBACK}" != "true"
   exit 1
 fi
 
-echo "sccache backend=${SCCACHE_BACKEND} gce_identity=${gce_identity:-none} local_dir=${SCCACHE_LOCAL_DIR:-none}"
+echo "sccache backend=${SCCACHE_BACKEND} gce_identity=${gce_identity:-none} wif=${wif_ready} gcs_rw_mode=${gcs_rw_mode} local_dir=${SCCACHE_LOCAL_DIR:-none}"
 
 cache_source_root="${GITHUB_WORKSPACE}"
 if [[ -n "${GITHUB_ACTION_PATH:-}" ]]; then
@@ -182,15 +203,19 @@ encoded_prefix="$(urlencode "${gcs_key_prefix}")"
 
 if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
   bucket_reason=""
-  if [[ -z "${gce_identity}" ]]; then
-    bucket_reason="GCE metadata identity is unavailable"
+  if [[ -z "${gce_identity}" && "${wif_ready}" != true ]]; then
+    bucket_reason="no GCE metadata identity or federated credentials"
   else
-    token_json="$(probe_metadata "${SCCACHE_METADATA_TOKEN_URL}")"
     access_token=""
-    if access_token="$(parse_access_token "${token_json}")"; then
-      :
+    if [[ -n "${gce_identity}" ]]; then
+      token_json="$(probe_metadata "${SCCACHE_METADATA_TOKEN_URL}")"
+      if access_token="$(parse_access_token "${token_json}")"; then
+        :
+      else
+        access_token=""
+      fi
     else
-      access_token=""
+      access_token="${SCCACHE_WIF_ACCESS_TOKEN}"
     fi
     if [[ -z "${access_token}" ]]; then
       bucket_reason="metadata-server token is unavailable"
@@ -282,12 +307,19 @@ export SCCACHE_SERVER_UDS
 if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
   {
     echo "SCCACHE_GCS_BUCKET=${SCCACHE_GCS_BUCKET_NAME}"
-    echo "SCCACHE_GCS_RW_MODE=READ_WRITE"
+    echo "SCCACHE_GCS_RW_MODE=${gcs_rw_mode}"
     echo "SCCACHE_GCS_KEY_PREFIX=${gcs_key_prefix}"
+    if [[ "${wif_ready}" == true ]]; then
+      # Federated (external_account) credentials from google-github-actions/auth.
+      echo "SCCACHE_GCS_KEY_PATH=${SCCACHE_WIF_CREDENTIALS_FILE}"
+    fi
   } >>"${GITHUB_ENV}"
   export SCCACHE_GCS_BUCKET="${SCCACHE_GCS_BUCKET_NAME}"
-  export SCCACHE_GCS_RW_MODE=READ_WRITE
+  export SCCACHE_GCS_RW_MODE="${gcs_rw_mode}"
   export SCCACHE_GCS_KEY_PREFIX="${gcs_key_prefix}"
+  if [[ "${wif_ready}" == true ]]; then
+    export SCCACHE_GCS_KEY_PATH="${SCCACHE_WIF_CREDENTIALS_FILE}"
+  fi
   # Do not set SCCACHE_GHA_ENABLED: that would select the GitHub Actions
   # cache backend. mozilla-actions/sccache-action only installs the binary.
   # Do not set SCCACHE_GCS_CREDENTIALS_URL: that is TaskCluster token fetch
@@ -310,12 +342,13 @@ else
     echo "SCCACHE_GCS_BUCKET="
     echo "SCCACHE_GCS_RW_MODE="
     echo "SCCACHE_GCS_KEY_PREFIX="
+    echo "SCCACHE_GCS_KEY_PATH="
   } >>"${GITHUB_ENV}"
   export SCCACHE_GHA_ENABLED=true
   # A prior step or runner image may have left GCS vars set. sccache 0.15
   # prefers GCS whenever SCCACHE_GCS_BUCKET is present, even if GHA is
   # enabled, and --show-stats then prints Cache location gcs.
-  unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX
+  unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX SCCACHE_GCS_KEY_PATH
 fi
 
 if startup_output="$("${SCCACHE_BIN}" --start-server 2>&1)"; then
