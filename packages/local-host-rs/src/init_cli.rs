@@ -2464,6 +2464,19 @@ fn validate_identity_authority(candidate: &str, allow_test_loopback: bool) -> Re
     bail!("{}", crate::localization::cli_locale().format("untrusted EvalOps Identity authority; model admission requires a first-party HTTPS Identity endpoint", &[]))
 }
 
+/// True only for a first-party production Identity authority (HTTPS on 443
+/// at a trusted host, including the old issuer name until it is retired),
+/// never a loopback test authority or any other host.
+pub(crate) fn is_production_identity_authority(identity_base_url: &str) -> bool {
+    Url::parse(&normalize_identity(identity_base_url)).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.port_or_known_default() == Some(443)
+            && url
+                .host_str()
+                .is_some_and(|host| TRUSTED_IDENTITY_AUTHORITIES.contains(&host))
+    })
+}
+
 pub(crate) fn test_identity_authority_enabled(env: &HashMap<String, String>) -> bool {
     if cfg!(test) {
         return env

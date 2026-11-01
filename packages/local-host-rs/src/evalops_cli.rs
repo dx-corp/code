@@ -145,12 +145,22 @@ fn evalops_help() -> &'static str {
     crate::localization::cli_locale().translate("deixic-code evalops device-enroll       Enroll this device for tool authority\n  deixic-code evalops device-revoke       Revoke this device authority\n  maestro login                         Authenticate with EvalOps Identity\n  maestro evalops logout                  Remove stored EvalOps credentials\n  maestro evalops status                  Show managed EvalOps session status\n  maestro evalops init ...                Alias for `maestro init` (agent bootstrap)\n  maestro evalops platform-tools ...      Install and operate Platform-governed tools\n\n`maestro evalops login` remains a compatibility alias for `maestro login`.")
 }
 
-pub(crate) fn authenticated_session_history_endpoint() -> String {
-    session_history_endpoint_from(&env_map())
+/// Where to upload Session History for a session Identity verified at
+/// `identity_base_url`. Production is the default only for the production
+/// Identity authority. A session verified anywhere else (a loopback test
+/// authority, a staging Identity) uploads only to an explicitly configured
+/// endpoint; otherwise capture stays spooled on this machine. A token minted
+/// by another authority can never pass production's Identity, so defaulting
+/// there only sent its transcripts to a 401.
+pub(crate) fn authenticated_session_history_endpoint(identity_base_url: &str) -> Option<String> {
+    session_history_endpoint_from(&env_map(), identity_base_url)
 }
 
-fn session_history_endpoint_from(env: &HashMap<String, String>) -> String {
-    [
+fn session_history_endpoint_from(
+    env: &HashMap<String, String>,
+    identity_base_url: &str,
+) -> Option<String> {
+    let configured = [
         "MAESTRO_SESSION_HISTORY_URL",
         "MAESTRO_PLATFORM_BASE_URL",
         "MAESTRO_EVALOPS_BASE_URL",
@@ -160,10 +170,12 @@ fn session_history_endpoint_from(env: &HashMap<String, String>) -> String {
     .find_map(|name| env.get(*name))
     .map(String::as_str)
     .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .unwrap_or(DEFAULT_SESSION_HISTORY_URL)
-    .trim_end_matches('/')
-    .to_owned()
+    .filter(|value| !value.is_empty());
+    if let Some(endpoint) = configured {
+        return Some(endpoint.trim_end_matches('/').to_owned());
+    }
+    crate::init_cli::is_production_identity_authority(identity_base_url)
+        .then(|| DEFAULT_SESSION_HISTORY_URL.to_owned())
 }
 
 fn hosted_orb_smoke_credential_command(args: &[String]) -> Result<i32> {
@@ -592,8 +604,40 @@ mod tests {
     #[test]
     fn session_history_endpoint_requires_no_configuration() {
         assert_eq!(
-            session_history_endpoint_from(&HashMap::new()),
-            DEFAULT_SESSION_HISTORY_URL
+            session_history_endpoint_from(&HashMap::new(), "https://identity.deixic.com/")
+                .as_deref(),
+            Some(DEFAULT_SESSION_HISTORY_URL)
+        );
+        // The old issuer name stays production until it is retired.
+        assert_eq!(
+            session_history_endpoint_from(&HashMap::new(), "https://identity.evalops.dev")
+                .as_deref(),
+            Some(DEFAULT_SESSION_HISTORY_URL)
+        );
+    }
+
+    #[test]
+    fn a_non_production_identity_never_defaults_session_history_to_production() {
+        for identity in [
+            "https://127.0.0.1:8443",
+            "http://localhost:9000",
+            "https://identity.staging.example",
+            "https://identity.deixic.com:8443",
+        ] {
+            assert_eq!(
+                session_history_endpoint_from(&HashMap::new(), identity),
+                None,
+                "{identity}"
+            );
+        }
+        // An explicitly configured endpoint is still honoured.
+        let env = HashMap::from([(
+            "MAESTRO_SESSION_HISTORY_URL".to_owned(),
+            "https://127.0.0.1:9443/".to_owned(),
+        )]);
+        assert_eq!(
+            session_history_endpoint_from(&env, "https://127.0.0.1:8443").as_deref(),
+            Some("https://127.0.0.1:9443")
         );
     }
 
