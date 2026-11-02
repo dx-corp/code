@@ -701,11 +701,23 @@ fn build_local_host(
             if let (Some(workspace_id), Some(maestro_home)) =
                 (session.workspace_id, crate::path_utils::maestro_home_dir())
             {
+                // The endpoint follows the Identity authority that verified
+                // this session, so a test or staging session never uploads to
+                // production.
+                let env = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+                let snapshot = crate::init_cli::load_current_evalops_snapshot()
+                    .ok()
+                    .flatten();
+                let endpoint = crate::init_cli::evalops_identity_base_url(snapshot.as_ref(), &env)
+                    .ok()
+                    .and_then(|identity| {
+                        crate::evalops_cli::authenticated_session_history_endpoint(&identity)
+                    });
                 hooks.enable_authenticated_session_history(
                     session.organization_id,
                     workspace_id,
                     session.access_token,
-                    Some(crate::evalops_cli::authenticated_session_history_endpoint()),
+                    endpoint,
                     maestro_home.join("session-history"),
                 );
             }
