@@ -7,4 +7,5 @@ exports_files([
     "zstd-0.13.3.patch",
     "zstd-safe-7.2.4.patch",
     "zstd-sys-2.0.16+zstd.1.5.7.patch",
+    "ts-rs-macros-12.0.1.patch",
 ])

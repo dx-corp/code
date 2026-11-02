@@ -146,3 +146,24 @@ master/slave creation call, checks its descriptors through `/proc`, and runs
 the existing output-and-exit test with its original deadline. Archive files,
 licenses, Cargo identity, patch hash, and the Computer-only consumer are pinned
 by the source profile. This repair grants no dependency audit approval.
+
+## Deterministic ts-rs derive expansion
+
+`ts-rs-macros-12.0.1` is the published `ts-rs-macros` 12.0.1 (upstream
+[aleph-alpha/ts-rs](https://github.com/Aleph-Alpha/ts-rs), tag `v12.0.1`) with one
+ordering repair. Upstream emits `#[derive(TS)]` dependency visits and generated
+`where` bounds by iterating `HashSet`s, whose order is seeded per process, so two
+compilations of the same source expand differently. Under Bazel pipelining the
+metadata and rlib actions of a crate are separate rustc processes; the expansions
+gave `ts_rs`, `platform_core_types` and their dependents different crate hashes
+and the platform-api binary failed with E0463/E0460. The patch sorts the
+rendered dependency lines and bounds by their token text. It changes no
+generated TypeScript: `cargo test -p platform-core-types --lib export_bindings`
+with `TS_RS_EXPORT_DIR` produced 81 byte-identical `.ts` files before and after.
+
+`ts-rs-provenance.json` records the archive checksum, original file hashes and
+the patch digest. Cargo consumes the directory through `[patch.crates-io]` in
+`rust/Cargo.toml`; Bazel applies the same patch to the checksum-pinned archive
+through the `ts-rs-macros` annotation in `MODULE.bazel`. Upstream fix: pending
+(prepared in `docs/solutions/bazel/pipelining-needs-deterministic-proc-macros.md`).
+Drop this repair when an upstream release contains the fix.
