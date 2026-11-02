@@ -32,7 +32,7 @@
       "Cargo.lock"
     ],
     "patch": "ts-rs-macros-12.0.1.patch",
-    "patch_sha256": "2a6f058c76d5886556516890659928c69ab786eed495b9e98e2b852d5920548f",
+    "patch_sha256": "05562344927164363c99b490b92462a7144c573efd40dcbdea1056c65f4919f7",
     "path": "ts-rs-macros-12.0.1",
     "version": "12.0.1",
     "workspaces": [
