@@ -6,6 +6,9 @@ license = "UNLICENSED"
 publish = false
 rust-version = "1.95"
 
+[lib]
+doctest = false
+
 [dependencies]
 aws-lc-rs = "1.17.1"
 base64 = "0.22"
