@@ -71,7 +71,7 @@ pub struct PageRead {
 
 /// What the authenticated host admits from a page locator: which reads are
 /// served and which filters a page's reads declare. The host builds it from
-/// `contracts/dex/page-reads.v1.json` and the reads' request schemas.
+/// `contracts/dex/page-reads/` and the reads' request schemas.
 pub trait PageAdmission {
     /// Whether `read` is a served page read and `params` are its own
     /// parameters with values of the right shape.
