@@ -22,7 +22,10 @@ diff --git a/src/deps.rs b/src/deps.rs
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -4,7 +4,7 @@
+@@ -1,10 +1,9 @@
+-#![macro_use]
+ #![deny(unused)]
+ 
  use std::collections::{HashMap, HashSet};
  
  use proc_macro2::{Ident, TokenStream};
@@ -31,7 +34,7 @@ diff --git a/src/lib.rs b/src/lib.rs
  use syn::{
      parse_quote, spanned::Spanned, ConstParam, Expr, GenericParam, Generics, Item, LifetimeParam,
      Path, QSelf, Result, Type, TypeArray, TypeParam, TypeParen, TypePath, TypeReference, TypeSlice,
-@@ -446,6 +446,9 @@ fn generate_where_clause(
+@@ -446,6 +445,9 @@ fn generate_where_clause(
          for ty in dependencies.used_types() {
              used_type_params(&mut used_types, ty, is_type_param);
          }
