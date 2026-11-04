@@ -279,6 +279,18 @@ fi
 
 echo "sccache selected backend=${SCCACHE_BACKEND}"
 
+# A persistent host that also reads the shared bucket keeps its own disk cache
+# as level 0 in front of GCS (sccache 0.15 multi-level). GCS is read-only for
+# every event but a push to main, so without L0 a pull request or merge-queue
+# job on a persistent drone would trade its warm writable cache for one it can
+# never add to. Only an explicit SCCACHE_LOCAL_DIR or Borg's owned cache
+# qualifies here; ephemeral fallback dirs are chosen only after GCS fails.
+gcs_disk_l0=false
+if [[ "${SCCACHE_BACKEND}" == "gcs" ]] && local_disk_ready; then
+  gcs_disk_l0=true
+  echo "sccache multi-level: L0 disk ${SCCACHE_LOCAL_DIR}, L1 gcs ${SCCACHE_GCS_BUCKET_NAME} (${gcs_rw_mode})"
+fi
+
 # Self-hosted machines run several Actions runners against one network
 # namespace. Give each job its own Unix socket so concurrent sccache servers
 # cannot contend for the default 127.0.0.1:4226 endpoint.
@@ -319,6 +331,18 @@ if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
   export SCCACHE_GCS_KEY_PREFIX="${gcs_key_prefix}"
   if [[ "${wif_ready}" == true ]]; then
     export SCCACHE_GCS_KEY_PATH="${SCCACHE_WIF_CREDENTIALS_FILE}"
+  fi
+  if [[ "${gcs_disk_l0}" == true ]]; then
+    {
+      echo "SCCACHE_DIR=${SCCACHE_LOCAL_DIR}"
+      echo "SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE}"
+      echo "SCCACHE_MULTILEVEL_CHAIN=disk,gcs"
+    } >>"${GITHUB_ENV}"
+    export SCCACHE_DIR="${SCCACHE_LOCAL_DIR}"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE}"
+    export SCCACHE_MULTILEVEL_CHAIN="disk,gcs"
+  else
+    unset SCCACHE_MULTILEVEL_CHAIN
   fi
   # Do not set SCCACHE_GHA_ENABLED: that would select the GitHub Actions
   # cache backend. mozilla-actions/sccache-action only installs the binary.
@@ -376,6 +400,13 @@ if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
   # "gcs, name: <bucket>, prefix: <root>"
   if ! grep -qF "gcs, name: ${SCCACHE_GCS_BUCKET_NAME}" <<<"${stats}"; then
     echo "::error::sccache Cache location is not GCS bucket ${SCCACHE_GCS_BUCKET_NAME} on ARC after a successful bucket probe" >&2
+    exit 1
+  fi
+  # sccache 0.15 multi-level prints "Multi-level (2 levels)" followed by one
+  # line per level: L0 (disk) Local disk: "<dir>", L1 (gcs) gcs, name: ...
+  if [[ "${gcs_disk_l0}" == true ]] \
+    && ! { grep -qF "Multi-level (2 levels)" <<<"${stats}" && grep -qF "Local disk: \"${SCCACHE_DIR}\"" <<<"${stats}"; }; then
+    echo "::error::sccache Cache location is not multi-level disk ${SCCACHE_DIR} then GCS after both were accepted" >&2
     exit 1
   fi
 elif [[ "${SCCACHE_BACKEND}" == "local" ]]; then
