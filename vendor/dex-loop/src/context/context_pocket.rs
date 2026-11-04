@@ -255,21 +255,25 @@ mod tests {
             workspace: "ws".into(),
             thread: "t".into(),
         });
-        let mut packet: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../../platform/cerebro/evals/context_pockets/native_brief.json"
-        ))
-        .unwrap();
-        packet["items"][0]["title"] = serde_json::json!("\"".repeat(590));
+        // A quote is escaped once in the JSON result and again in its provider
+        // frame. Keep the raw result within budget while its frame exceeds it.
+        let packet = serde_json::json!({
+            "items": [{"title": "\"".repeat(CONTEXT_POCKET_RESULT_BYTES / 4)}]
+        })
+        .to_string();
         let call = ProposedCall::new(
             CallId::new("call0"),
             ToolName::new(CONTEXT_POCKET_TOOL_NAME),
             serde_json::json!({"root_id":"case"}),
             PrincipalId::new("alice"),
         );
-        assert_eq!(
-            finish(&ctx, &call, ToolResult::text(packet.to_string())).outcome,
-            Outcome::Failed
-        );
+        let result = ToolResult::text(packet);
+        let Output::Text(text) = &result.output else {
+            panic!("fixture must be inline text");
+        };
+        assert!(text.len() <= CONTEXT_POCKET_RESULT_BYTES);
+        assert!(encoded_size(&call, result.outcome, &result.output) > CONTEXT_POCKET_RESULT_BYTES);
+        assert_eq!(finish(&ctx, &call, result).outcome, Outcome::Failed);
     }
     #[test]
     fn lost_case_authority_cannot_be_hidden_by_evidence_eviction_or_summary() {

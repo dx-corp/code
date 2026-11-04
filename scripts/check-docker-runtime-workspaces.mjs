@@ -233,7 +233,7 @@ try {
 				// Chef dummies only its own workspace. External actual Rust source
 				// must retain the APIs of this shared library during the cook.
 				const filter = `sed -i '/^    "${member.replaceAll("/", "\\/")}",$/d' Cargo.toml`;
-				const exclude = `sed -i 's|"vendor/\\*"|"vendor/*", "${member}"|' Cargo.toml`;
+				const exclude = `sed -i 's|"vendor"|"vendor", "${member}"|' Cargo.toml`;
 				if (!beforePrepare(filter) || !beforePrepare(exclude)) {
 					uncopied.push(`actual shared library ${member} before cargo chef prepare`);
 				}

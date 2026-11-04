@@ -257,7 +257,7 @@ test("Docker runtime guard remaps a Rust dependency back into the Maestro image 
 
 test("Docker runtime guard preserves an actual library consumed by external Rust during cook", () => {
 	const filter = `sed -i '/^    "packages\\/codemode-rs",$/d' Cargo.toml`;
-	const exclude = `sed -i 's|"vendor/\\*"|"vendor/*", "packages/codemode-rs"|' Cargo.toml`;
+	const exclude = `sed -i 's|"vendor"|"vendor", "packages/codemode-rs"|' Cargo.toml`;
 	assert.ok(sourceDockerfile.includes(filter));
 	assert.ok(sourceDockerfile.includes(exclude));
 	assert.match(runChecker(sourceDockerfile, sourceCargoManifest, { crossWorkspace: true }),
