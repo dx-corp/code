@@ -375,6 +375,39 @@ else
   unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX SCCACHE_GCS_KEY_PATH
 fi
 
+# A live sccache 0.15 server with a multi-level chain reports only
+# "Cache location  Multi-level (N levels)"; its stats do not name the level
+# backends. So read the chain back from sccache itself before starting the
+# server: --show-stats with no server on its socket renders the configured
+# levels from this environment (the one the server starts with) without
+# starting a server, e.g.
+#   Cache location                  Multi-level (2 levels)
+#     L0 (disk)                     Local disk: "<dir>"
+#     L1 (gcs)                      gcs, name: <bucket>, prefix: /<prefix>
+# The bucket itself was probed above, and the server below starts only after
+# sccache's own storage check reads every level (an unreadable GCS level fails
+# startup).
+if [[ "${gcs_disk_l0}" == true ]]; then
+  readback_socket="${RUNNER_TEMP}/sccache-${server_key}-readback.sock"
+  rm -f "${readback_socket}"
+  if ! readback="$(SCCACHE_SERVER_UDS="${readback_socket}" "${SCCACHE_BIN}" --show-stats 2>&1)"; then
+    printf '%s\n' "${readback}" >&2
+    echo "::error::sccache could not read back its multi-level cache configuration" >&2
+    exit 1
+  fi
+  level_location() {
+    awk -v level="  $1 " -v want="$2" \
+      'index($0, level) == 1 && index($0, want) { found = 1 } END { exit !found }' <<<"${readback}"
+  }
+  grep -E '^Cache location|^  L[0-9]+ \([a-z0-9]+\) +[^ 0-9]' <<<"${readback}" | grep -vE ' (hits|misses|hit rate|writes|write failures|backfills (from|to)|avg cache (write|read hit)) ' || true
+  if ! grep -qF "Multi-level (2 levels)" <<<"${readback}" \
+    || ! level_location "L0 (disk)" "Local disk: \"${SCCACHE_DIR}\"" \
+    || ! level_location "L1 (gcs)" "gcs, name: ${SCCACHE_GCS_BUCKET_NAME}, prefix: /${gcs_key_prefix}"; then
+    echo "::error::sccache configuration readback is not disk ${SCCACHE_DIR} then GCS bucket ${SCCACHE_GCS_BUCKET_NAME} prefix ${gcs_key_prefix}" >&2
+    exit 1
+  fi
+fi
+
 if startup_output="$("${SCCACHE_BIN}" --start-server 2>&1)"; then
   printf '%s\n' "${startup_output}"
 else
@@ -396,17 +429,17 @@ stats="$("${SCCACHE_BIN}" --show-stats)"
 printf '%s\n' "${stats}"
 
 if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
+  if [[ "${gcs_disk_l0}" == true ]]; then
+    # The live server's levels were read back above; it must be serving the
+    # two-level chain (sccache 0.15 prints only the level count here).
+    if ! grep -qF "Multi-level (2 levels)" <<<"${stats}"; then
+      echo "::error::sccache server is not serving the multi-level disk ${SCCACHE_DIR} then GCS chain that was read back" >&2
+      exit 1
+    fi
   # sccache 0.15 RemoteStorage::location prints OpenDAL scheme/name/root:
   # "gcs, name: <bucket>, prefix: <root>"
-  if ! grep -qF "gcs, name: ${SCCACHE_GCS_BUCKET_NAME}" <<<"${stats}"; then
+  elif ! grep -qF "gcs, name: ${SCCACHE_GCS_BUCKET_NAME}" <<<"${stats}"; then
     echo "::error::sccache Cache location is not GCS bucket ${SCCACHE_GCS_BUCKET_NAME} on ARC after a successful bucket probe" >&2
-    exit 1
-  fi
-  # sccache 0.15 multi-level prints "Multi-level (2 levels)" followed by one
-  # line per level: L0 (disk) Local disk: "<dir>", L1 (gcs) gcs, name: ...
-  if [[ "${gcs_disk_l0}" == true ]] \
-    && ! { grep -qF "Multi-level (2 levels)" <<<"${stats}" && grep -qF "Local disk: \"${SCCACHE_DIR}\"" <<<"${stats}"; }; then
-    echo "::error::sccache Cache location is not multi-level disk ${SCCACHE_DIR} then GCS after both were accepted" >&2
     exit 1
   fi
 elif [[ "${SCCACHE_BACKEND}" == "local" ]]; then
