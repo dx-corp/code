@@ -35,6 +35,9 @@ else if (args[0] === '--headless') {
 	};
 	tool("uname", "echo Darwin");
 	tool("make", capacityFails ? "exit 1" : ":");
+	// Public checkouts use the inline du-based capacity probe instead of
+	// Mono's make target. Exceed its 120 GiB limit to fail that preflight too.
+	if (capacityFails) tool("du", "printf '125829121\\tfixture-target\\n'");
 	tool("cargo", `printf '%s' "$CARGO_BUILD_JOBS" > "$FIXTURE_ROOT/jobs"\nprintf '%s\\n' '${JSON.stringify({ reason: "compiler-artifact", target: { name: "maestro", kind: ["bin"] }, executable })}'`);
 	tool("codesign", `printf '%s\\n' "$*" >> "$FIXTURE_ROOT/codesign.log"\ncase "$1" in\n -dv) printf '%s\\n' 'Identifier=maestro' 'TeamIdentifier=TEAMID1234' 'Authority=Developer ID Application: Fixture (TEAMID1234)' >&2;;\n --force) ${signingFails ? "exit 1" : ":"};;\nesac`);
 	tool("security", noIdentity ? "echo '0 valid identities found'" : "echo '  1) ABC \"Developer ID Application: Fixture (TEAMID1234)\"'");
@@ -70,7 +73,9 @@ test("failed signing leaves the previous installation intact", (t) => {
 test("failed preflight or staged smoke leaves existing commands untouched", (t) => {
 	for (const options of [{ capacityFails: true }, { smokeFails: true }]) {
 		const f = fixture(t, options);
-		assert.notEqual(f.run().status, 0);
+		const result = f.run();
+		assert.notEqual(result.status, 0, JSON.stringify(options));
+		if (options.smokeFails) assert.match(result.stderr, /--help failed/);
 		assert.equal(readFileSync(join(f.prefix, "maestro"), "utf8"), "previous trusted binary");
 		assert.ok(!existsSync(join(f.prefix, "deixic-code")));
 		assert.ok(!existsSync(join(f.prefix, ".maestro-local", "current")));

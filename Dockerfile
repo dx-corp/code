@@ -48,7 +48,7 @@ COPY packages/session-rs ./packages/session-rs
 # code-mode library actual too, rather than replacing that API with a dummy.
 # The native build restores the original full workspace manifest after cook.
 RUN sed -i '/^    "packages\/codemode-rs",$/d' Cargo.toml \
-    && sed -i 's|"vendor/\*"|"vendor/*", "packages/codemode-rs"|' Cargo.toml
+    && sed -i 's|"vendor"|"vendor", "packages/codemode-rs"|' Cargo.toml
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
