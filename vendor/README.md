@@ -1,5 +1,21 @@
 # Reviewed source repairs
 
+## Testcontainers tar maintenance
+
+`testcontainers-0.27.3` replaces the unmaintained `astral-tokio-tar`
+dependency with `tar 0.4.46`. The repair follows upstream PR #1006 and
+retains rejection of truncated file payloads for memory and disk destinations.
+Tar header parsing and filesystem reads run on Tokio's blocking pool; payload
+copies remain asynchronous. The public unsupported-entry error now contains
+`tar::EntryType`.
+
+`testcontainers-provenance.json` records the published archive, original file
+inventory, patch and generated Bazel BUILD hashes. Cargo and Bazel resolve
+the same maintained source and dependency graph. The protected source profiles
+continue to reject missing, partial or foreign source inventories. The review
+and qualification limits are in
+`rust/supply-chain/reviews/audit-storage-maintenance-2026-11-05.md`.
+
 ## SMTP and MIME header repairs
 
 `lettre-0.11.23` and `email-encoding-0.4.2` are maintained source repairs for
