@@ -46,9 +46,12 @@ pub struct RemainingBudget {
 }
 
 impl RemainingBudget {
+    /// Internal execution guidance for the model. It steers how much work the
+    /// attempt does; it is never conversation, so the text itself says so
+    /// (dx-corp/mono#20342: a reply to "What?" narrated these limits).
     pub fn guidance(&self) -> String {
         format!(
-            "Turn capacity for this attempt: tool steps remaining (including this attempt)={}, tokens remaining={:?}, cost micros remaining={:?}, time remaining={} ms, answer_only={}. None means no policy cap. Reserve capacity for a truthful final answer. Prioritize the user's remaining work; distinguish verified completion, partial progress, and blockers. When answer_only=true, use no tools and report only established results.",
+            "Turn capacity for this attempt: tool steps remaining (including this attempt)={}, tokens remaining={:?}, cost micros remaining={:?}, time remaining={} ms, answer_only={}. None means no policy cap. Reserve capacity for a truthful final answer. Prioritize the user's remaining work; distinguish verified completion, partial progress, and blockers. When answer_only=true, use no tools and report only established results. Apply this silently: never mention these limits, remaining steps, tokens, cost or time to the user, and never acknowledge receiving them.",
             self.tool_steps, self.tokens, self.cost_micros, self.wall_ms, self.answer_only,
         )
     }
