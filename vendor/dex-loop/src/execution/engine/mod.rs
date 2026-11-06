@@ -335,6 +335,20 @@ pub struct Engine<L, M, T, E, S, C = NoCompaction> {
     search: ToolSpec,
     client_timeout: Duration,
     tool_call_deadline: Duration,
+    final_check: Option<Arc<dyn FinalCheck>>,
+}
+
+/// A last deterministic stage over the reply, given what the turn's tools
+/// returned. It returns the reply to record; it runs no model and cannot fail
+/// the turn.
+pub trait FinalCheck: Send + Sync {
+    fn check<'a>(
+        &'a self,
+        thread: &'a crate::ThreadId,
+        reply: String,
+        outputs: &'a [crate::Output],
+        held: &'a [crate::ToolName],
+    ) -> futures_util::future::BoxFuture<'a, String>;
 }
 
 impl<L, M, T, E, S> Engine<L, M, T, E, S, NoCompaction>
@@ -358,6 +372,7 @@ where
             search: search_spec(),
             client_timeout: DEFAULT_CLIENT_TIMEOUT,
             tool_call_deadline: DEFAULT_TOOL_CALL_DEADLINE,
+            final_check: None,
         }
     }
 }
@@ -384,6 +399,29 @@ where
             search: self.search,
             client_timeout: self.client_timeout,
             tool_call_deadline: self.tool_call_deadline,
+            final_check: self.final_check,
+        }
+    }
+
+    /// Run `check` over each reply before it becomes the turn's `Final`.
+    pub fn with_final_check(mut self, check: Arc<dyn FinalCheck>) -> Self {
+        self.final_check = Some(check);
+        self
+    }
+
+    async fn checked_final(&self, ctx: &Context, reply: String) -> String {
+        match &self.final_check {
+            Some(check) => {
+                check
+                    .check(
+                        ctx.thread(),
+                        reply,
+                        ctx.turn_outputs(),
+                        ctx.authorized_tools(),
+                    )
+                    .await
+            }
+            None => reply,
         }
     }
 
@@ -1104,7 +1142,9 @@ where
                 timing: timing.take(),
             });
             if !continues {
-                events.push(Event::Final { text: final_text });
+                events.push(Event::Final {
+                    text: self.checked_final(ctx, final_text).await,
+                });
             }
             self.emit(ctx, events).await?;
             return Ok((!continues).then_some(Exit::Done));
@@ -1209,7 +1249,9 @@ where
                 timing,
             });
             if !continues {
-                events.push(Event::Final { text: final_text });
+                events.push(Event::Final {
+                    text: self.checked_final(ctx, final_text).await,
+                });
             }
             self.emit(ctx, events).await?;
             *capacity_recovery = CapacityRecovery::Available;

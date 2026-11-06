@@ -68,7 +68,8 @@ pub use context::{
     ToolEvidence,
 };
 pub use engine::{
-    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, TOOLS_CALL, TOOLS_SEARCH,
+    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck, TOOLS_CALL,
+    TOOLS_SEARCH,
 };
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,
