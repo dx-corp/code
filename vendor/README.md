@@ -16,6 +16,10 @@ continue to reject missing, partial or foreign source inventories. The review
 and qualification limits are in
 `rust/supply-chain/reviews/audit-storage-maintenance-2026-11-05.md`.
 
+The Rust, business-object integration and Sentinel workspaces declare this
+patch independently. A path dependency on the shared PostgreSQL test helper
+does not inherit the Rust workspace's patch table.
+
 ## SMTP and MIME header repairs
 
 `lettre-0.11.23` and `email-encoding-0.4.2` are maintained source repairs for

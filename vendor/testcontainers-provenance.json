@@ -85,7 +85,8 @@
     "version": "0.27.3",
     "workspaces": [
       "rust",
-      "tests/business-objects-integration"
+      "tests/business-objects-integration",
+      "products/sentinel"
     ]
   }
 ]
