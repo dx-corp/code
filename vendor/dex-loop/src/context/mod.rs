@@ -272,6 +272,9 @@ pub struct Context {
     // The allowance survives replay and is spent before another model request.
     interrupted_answer: Option<String>,
     answer_continuation_started: bool,
+    /// The last turn to end failed or was interrupted, so its request sits
+    /// unanswered in history above the current one.
+    previous_turn_unanswered: bool,
     answer_continuation_used: bool,
 }
 
@@ -343,6 +346,7 @@ impl Context {
             content_policy_feedback: None,
             interrupted_answer: None,
             answer_continuation_started: false,
+            previous_turn_unanswered: false,
             answer_continuation_used: false,
         }
     }
@@ -480,7 +484,7 @@ impl Context {
     }
 
     /// What this turn's tools returned, oldest first; failed calls are left out.
-    pub fn turn_outputs(&self) -> &[Output] {
+    pub(crate) fn turn_outputs(&self) -> &[Output] {
         &self.turn_outputs
     }
 
@@ -513,6 +517,18 @@ impl Context {
     }
 
     /// The model's view of the thread.
+    /// Per-attempt guidance when an earlier turn ended without an answer.
+    /// Without it, the next turn sees an unanswered request above a new message
+    /// and answers both (production 2026-11-06, thread mcp-9bbf1a9e). History
+    /// stays as it was, so the cached prefix is unchanged.
+    pub fn unanswered_turn_guidance(&self) -> Option<String> {
+        self.previous_turn_unanswered.then(|| {
+            "An earlier request in this conversation ended before it was answered. Answer only \
+             the person's latest message. Do not answer the earlier request unless they ask again."
+                .to_owned()
+        })
+    }
+
     pub fn history(&self) -> &[Entry] {
         self.history.as_slice()
     }
@@ -1278,6 +1294,7 @@ impl Context {
                 );
             }
             Event::Final { .. } => {
+                self.previous_turn_unanswered = false;
                 self.interrupted_answer = None;
                 self.answer_continuation_started = false;
                 self.status = Status::Done;
@@ -1287,6 +1304,7 @@ impl Context {
                 self.interrupted_answer = None;
                 self.answer_continuation_started = false;
                 self.attempt = None;
+                self.previous_turn_unanswered = true;
                 self.status = Status::Failed;
                 self.begin_next_pending_turn(cursor);
             }
@@ -1294,6 +1312,7 @@ impl Context {
                 self.interrupted_answer = None;
                 self.answer_continuation_started = false;
                 self.attempt = None;
+                self.previous_turn_unanswered = true;
                 self.status = Status::Interrupted;
                 self.interrupt_requested = false;
                 self.begin_next_pending_turn(cursor);

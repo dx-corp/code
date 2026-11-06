@@ -392,8 +392,9 @@ impl ErrorCode {
 }
 
 /// Execution mode retained in durable ingress for compatibility and attribution.
-/// Both modes now grant `NeedsApproval` through an exact `AutoApproved`
-/// receipt. Neither mode overrides a hard policy `Deny`.
+/// `Interactive` and `Headless` grant `NeedsApproval` through an exact
+/// `AutoApproved` receipt; `AskFirst` previews those calls for a person first.
+/// No mode overrides a hard policy `Deny`.
 /// A content-free failure class supplied by the typed model adapter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -508,6 +509,10 @@ pub enum ApprovalMode {
     Interactive,
     /// Unattended caller; approval-class calls receive the same durable receipt.
     Headless,
+    /// A person is present and their workspace says "Ask before changes": a
+    /// call whose declared risk needs a person returns a preview for them to
+    /// confirm, instead of running.
+    AskFirst,
 }
 
 impl ApprovalMode {
@@ -515,6 +520,7 @@ impl ApprovalMode {
         match self {
             ApprovalMode::Interactive => "interactive",
             ApprovalMode::Headless => "headless",
+            ApprovalMode::AskFirst => "ask_first",
         }
     }
 }

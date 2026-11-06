@@ -347,6 +347,7 @@ pub trait FinalCheck: Send + Sync {
         thread: &'a crate::ThreadId,
         reply: String,
         outputs: &'a [crate::Output],
+        held: &'a [crate::ToolName],
     ) -> futures_util::future::BoxFuture<'a, String>;
 }
 
@@ -410,7 +411,16 @@ where
 
     async fn checked_final(&self, ctx: &Context, reply: String) -> String {
         match &self.final_check {
-            Some(check) => check.check(ctx.thread(), reply, ctx.turn_outputs()).await,
+            Some(check) => {
+                check
+                    .check(
+                        ctx.thread(),
+                        reply,
+                        ctx.turn_outputs(),
+                        ctx.authorized_tools(),
+                    )
+                    .await
+            }
             None => reply,
         }
     }
