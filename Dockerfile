@@ -15,6 +15,8 @@ COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
 COPY vendor/tokio-websockets-0.10.1 ./vendor/tokio-websockets-0.10.1
+COPY vendor/aws-smithy-schema-0.2.0 ./vendor/aws-smithy-schema-0.2.0
+COPY vendor/aws-smithy-xml-0.62.0 ./vendor/aws-smithy-xml-0.62.0
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
 COPY packages/codemode-rs ./packages/codemode-rs
 COPY packages/context-rs ./packages/context-rs
@@ -63,6 +65,8 @@ COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
 COPY vendor/zstd-safe-7.2.4 ./vendor/zstd-safe-7.2.4
 COPY vendor/zstd-sys-2.0.16+zstd.1.5.7 ./vendor/zstd-sys-2.0.16+zstd.1.5.7
 COPY vendor/tokio-websockets-0.10.1 ./vendor/tokio-websockets-0.10.1
+COPY vendor/aws-smithy-schema-0.2.0 ./vendor/aws-smithy-schema-0.2.0
+COPY vendor/aws-smithy-xml-0.62.0 ./vendor/aws-smithy-xml-0.62.0
 RUN cargo chef cook --release --locked -p maestro --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY packages/execpolicy-rs ./packages/execpolicy-rs
