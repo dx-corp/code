@@ -1,0 +1,170 @@
+[
+  {
+    "added_files_sha256": {},
+    "archive_files_sha256": {
+      "Cargo.lock": "1caedd071083eb6e83e9c9a6a91c6dedf2123e4a232c6031324c1eda204223dc",
+      "Cargo.toml": "e8622e5d10f5e372eca53fb36cb33d8e97405469d07d7660781c4338f54909c1",
+      "Cargo.toml.orig": "23689d92fd81fb782743cafa2aef0decc6de1a17fbd17d6c2456a0ea930a25a3",
+      "LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "README.md": "eb88bcfa0921b5ae0f5db811d8cedca9846cd2a7e0ec9ff6b89dbadb326f70d1",
+      "external-types.toml": "bbd8df47d0c6bbc0730f58d078747db8246871ae9fbbf706f8c9bbacb4ff1741",
+      "src/lib.rs": "07a197ebd4e6fee053bffefb7eb9b5678487894ff9e924c5f7da167116ce7866",
+      "src/schema/codec.rs": "576dfc098062c3676e685bffadd5b089240ba7caf7d12fef91ed3a978661ebd5",
+      "src/schema/codec/http_string.rs": "2a92b66861ef3c8a6555ac02cbe1a9a7fb9e78593185c06f351c95cec07580fd",
+      "src/schema/header_omit_settings.rs": "90ad9f50d4fbad93864d791981928cdb3aee7bfb81604b2507e9c5cde4ae2de9",
+      "src/schema/http_protocol.rs": "ecf39e382ce714f60c1550ffee60f80d2799ae7c13bd749199b9a562b1a9d324",
+      "src/schema/http_protocol/binding.rs": "98d46c7f7ecb4bb9135ee45f7a8d910750c72f3c3fe61f83b88091b726f2e6ee",
+      "src/schema/http_protocol/rpc.rs": "00a47fa5d41dbf269a5b6474f96cd51d0257a2811df3c6ba513f5b5e623b7401",
+      "src/schema/prelude.rs": "e08a11d8181e21a2d49b72611702fca3b750d2e13733a4e8900d933a861d00cd",
+      "src/schema/protocol.rs": "5704224f7d9c72a8aed34f34a1e24e0f8267bd18d2329205f782c42f840d597f",
+      "src/schema/serde.rs": "67c04356c0ef806f0f1fbf8396b36a11468acd904effcdd71434086938589259",
+      "src/schema/serde/deserializer.rs": "3081827a00466ef869db0db60b72fa8f4b13fcc51c51adec1bf02a584eeed158",
+      "src/schema/serde/error.rs": "116488cb6c34e3b129d58c5664f2ddde878f181e311b40858aad6e7a1e4892a6",
+      "src/schema/serde/serializer.rs": "385738a4df0abdaef0193f8e0316ed1b582cbe0cb2df9ebe7393a747af66a0e0",
+      "src/schema/shape_id.rs": "de9f56506dbbd71443d255f3e28029a15ecd9593485ce41ca0c82f255996b23e",
+      "src/schema/shape_type.rs": "120fa879ff5691945ad279eb48822ef3b831541832ebacfaaba25037042874c0",
+      "src/schema/trait_map.rs": "f798241e9287920db002d1fd090445bd4a9a39d1a710bce9f78c900c45b123ab",
+      "src/schema/trait_type.rs": "a2cd38fa4b0100b50ac7ca8d4faf0cfcee085d05564d118060345331389c95a4",
+      "src/schema/traits.rs": "5ecaca63f71fbe6970d76814b89591b3102547ad760cbcfe3f661ac990d636bc"
+    },
+    "archive_sha256": "e8f395d93304280b64b7632fea798d177e74897fe7f063416ce627cd6fa24829",
+    "archive_url": "https://static.crates.io/crates/aws-smithy-schema/aws-smithy-schema-0.2.1.crate",
+    "bazel_source": "archive_patch",
+    "crate": "aws-smithy-schema",
+    "omitted_archive_files": [
+      "Cargo.lock"
+    ],
+    "patch": "aws-smithy-schema-0.2.1.patch",
+    "patch_sha256": "a6ebb0952b865568da8b33cd1675ed7157f89db722a30cc2539b91963ffb6520",
+    "path": "aws-smithy-schema-0.2.1",
+    "version": "0.2.1",
+    "workspaces": [
+      "rust",
+      "tests/business-objects-integration",
+      "evals/dex-document-understanding/hillclimb-rs",
+      "rust/fuzz"
+    ]
+  },
+  {
+    "added_files_sha256": {},
+    "archive_files_sha256": {
+      "Cargo.lock": "42bb63529b71f051273fb99a59700fa42be521fba2442df48093910428c37199",
+      "Cargo.toml": "c0ce5a27cf87ed1f8cdcd703db12f8c3c25fc7ed36506ba6d6500f74eb9e64eb",
+      "Cargo.toml.orig": "a1a89a46d777cfe4e6965c0305dbb9836d2df1285e4bfed5cca3f9b4f225de3d",
+      "LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "README.md": "77d2cba47a91d5700623193ef527bbfec8f94398478b72e5f6d659ece178ab92",
+      "external-types.toml": "65d9be4943a2aca6e9d45cf9290f55894187c0c74ffe1a3c00b81af804fca538",
+      "src/codec.rs": "f6a211803d116fe12f5d398a1f15d52b3c8d670b5f26232a9100b95b32c22478",
+      "src/codec/deserializer.rs": "932809196a31ef2470801147a184ab169ea4b906535c363a05659ab9daffe51d",
+      "src/codec/serializer.rs": "abac7461a466850718fcaa94fc2a75d9834523449227291e9df9a723f6bad3ab",
+      "src/decode.rs": "a699d2f19a19ca872bc107523865cab8af01c207a628cd8eb4715230f5f96ad5",
+      "src/encode.rs": "a2431a8a055b3647ef22265d3491a41709189d338ae0dfd818ff010bbcca619c",
+      "src/escape.rs": "3a43f607beed9edd74237463fc7291297e5face0e7dc75b89b7baf86d3c3cede",
+      "src/lib.rs": "a014209d03825970b7f4c5edc8174ae76caef9dd9bef638da6c4ce32119a8c96",
+      "src/protocol/aws_rest_xml.rs": "ecea0066131862355f7f24662c2be594b45ce555266ee00a8330b63e4e000643",
+      "src/protocol/mod.rs": "7c13e90e26917cfe0ed86b5cb1a1568728766681b67c8bbcfb6cd52d1d8d1320",
+      "src/unescape.rs": "adb7c999ac65ef7d3723df0f7e468612a61a10d201df6a903400d21b5fdb0b72",
+      "tests/handwritten_parsers.rs": "894d8e27d826bd395e4e535362a262ed710d17c0bdf9a29da30f91075fd76f93",
+      "tests/handwritten_serializers.rs": "8d86b9ad11c974ed51b0e9f368696a323a83591821f5c10e7b4d315471539b10"
+    },
+    "archive_sha256": "ea3f68eec3607f02acd24067969ce2abc6ba16aa7d5ce59ca450ed2fb5f78957",
+    "archive_url": "https://static.crates.io/crates/aws-smithy-xml/aws-smithy-xml-0.61.1.crate",
+    "bazel_source": "archive_patch",
+    "crate": "aws-smithy-xml",
+    "omitted_archive_files": [
+      "Cargo.lock"
+    ],
+    "patch": "aws-smithy-xml-0.61.1.patch",
+    "patch_sha256": "5db2d0e50f8950dae5dcf64c7b26790a6a8e40d215b608d0020a723ca36fcaa4",
+    "path": "aws-smithy-xml-0.61.1",
+    "version": "0.61.1",
+    "workspaces": [
+      "rust",
+      "tests/business-objects-integration",
+      "evals/dex-document-understanding/hillclimb-rs",
+      "rust/fuzz"
+    ]
+  },
+  {
+    "added_files_sha256": {},
+    "archive_files_sha256": {
+      "Cargo.lock": "ca1a7316f7bfd3b65f5bb5b5bca4e3f4b837958c488ef9050f156f619ad7df4a",
+      "Cargo.toml": "4bb327f994893b25cb67f27423a7bfa3300bc1241946dffc8c37ae0d46fd4dd7",
+      "Cargo.toml.orig": "78fc3cdbaa4c10750b2b6233dd2294af2af14695a676660923de7599a5e0742d",
+      "LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "README.md": "77d2cba47a91d5700623193ef527bbfec8f94398478b72e5f6d659ece178ab92",
+      "external-types.toml": "65d9be4943a2aca6e9d45cf9290f55894187c0c74ffe1a3c00b81af804fca538",
+      "src/codec.rs": "5d05b4caa5c1c0e989f32fca24658f504b480584b84d99145bae0be9a2be5cfb",
+      "src/codec/deserializer.rs": "88680908a161ebe99840be3216042958e1651c96825277a3ad702d1285d68391",
+      "src/codec/serializer.rs": "abac7461a466850718fcaa94fc2a75d9834523449227291e9df9a723f6bad3ab",
+      "src/decode.rs": "a699d2f19a19ca872bc107523865cab8af01c207a628cd8eb4715230f5f96ad5",
+      "src/encode.rs": "a2431a8a055b3647ef22265d3491a41709189d338ae0dfd818ff010bbcca619c",
+      "src/escape.rs": "3a43f607beed9edd74237463fc7291297e5face0e7dc75b89b7baf86d3c3cede",
+      "src/lib.rs": "a014209d03825970b7f4c5edc8174ae76caef9dd9bef638da6c4ce32119a8c96",
+      "src/protocol/aws_rest_xml.rs": "bcdf4f97baf1476941a780ec81b68342145c05f8a1d07eec650d36047182ca60",
+      "src/protocol/mod.rs": "7c13e90e26917cfe0ed86b5cb1a1568728766681b67c8bbcfb6cd52d1d8d1320",
+      "src/unescape.rs": "adb7c999ac65ef7d3723df0f7e468612a61a10d201df6a903400d21b5fdb0b72",
+      "tests/handwritten_parsers.rs": "894d8e27d826bd395e4e535362a262ed710d17c0bdf9a29da30f91075fd76f93",
+      "tests/handwritten_serializers.rs": "8d86b9ad11c974ed51b0e9f368696a323a83591821f5c10e7b4d315471539b10"
+    },
+    "archive_sha256": "ce84f71c72fee2cbbadde6e7d082f5fb466e3a84733855295fa7aafd1b31b7d8",
+    "archive_url": "https://static.crates.io/crates/aws-smithy-xml/aws-smithy-xml-0.62.0.crate",
+    "bazel_source": "archive_patch",
+    "crate": "aws-smithy-xml",
+    "omitted_archive_files": [
+      "Cargo.lock"
+    ],
+    "patch": "aws-smithy-xml-0.62.0.patch",
+    "patch_sha256": "15edebd0955f894ac6875d54c2225e319f1cbeb0b94e929ee6e72f8492027d4d",
+    "path": "aws-smithy-xml-0.62.0",
+    "version": "0.62.0",
+    "workspaces": [
+      "products/maestro",
+      "evals/dex-document-understanding/hillclimb-rs",
+      "rust/fuzz"
+    ]
+  },
+  {
+    "added_files_sha256": {},
+    "archive_files_sha256": {
+      "Cargo.lock": "e52e375517d2df62550e7c9ba3fd7320f1adc091e38a0161409cbca9751fbffc",
+      "Cargo.toml": "5651cf87343e5391bac268ad584fc0db0c099dfc912e5eae763a120cc33f6ef5",
+      "Cargo.toml.orig": "ffd5bcd237c94d938a46f773ebcd1e2096432b39ba06355dec79bea3f15a47ef",
+      "LICENSE": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b",
+      "README.md": "eb88bcfa0921b5ae0f5db811d8cedca9846cd2a7e0ec9ff6b89dbadb326f70d1",
+      "external-types.toml": "bbd8df47d0c6bbc0730f58d078747db8246871ae9fbbf706f8c9bbacb4ff1741",
+      "src/lib.rs": "07a197ebd4e6fee053bffefb7eb9b5678487894ff9e924c5f7da167116ce7866",
+      "src/schema/codec.rs": "576dfc098062c3676e685bffadd5b089240ba7caf7d12fef91ed3a978661ebd5",
+      "src/schema/codec/http_string.rs": "2a92b66861ef3c8a6555ac02cbe1a9a7fb9e78593185c06f351c95cec07580fd",
+      "src/schema/header_omit_settings.rs": "90ad9f50d4fbad93864d791981928cdb3aee7bfb81604b2507e9c5cde4ae2de9",
+      "src/schema/http_protocol.rs": "ecf39e382ce714f60c1550ffee60f80d2799ae7c13bd749199b9a562b1a9d324",
+      "src/schema/http_protocol/binding.rs": "98d46c7f7ecb4bb9135ee45f7a8d910750c72f3c3fe61f83b88091b726f2e6ee",
+      "src/schema/http_protocol/rpc.rs": "00a47fa5d41dbf269a5b6474f96cd51d0257a2811df3c6ba513f5b5e623b7401",
+      "src/schema/prelude.rs": "e08a11d8181e21a2d49b72611702fca3b750d2e13733a4e8900d933a861d00cd",
+      "src/schema/protocol.rs": "5704224f7d9c72a8aed34f34a1e24e0f8267bd18d2329205f782c42f840d597f",
+      "src/schema/serde.rs": "67c04356c0ef806f0f1fbf8396b36a11468acd904effcdd71434086938589259",
+      "src/schema/serde/deserializer.rs": "3081827a00466ef869db0db60b72fa8f4b13fcc51c51adec1bf02a584eeed158",
+      "src/schema/serde/error.rs": "116488cb6c34e3b129d58c5664f2ddde878f181e311b40858aad6e7a1e4892a6",
+      "src/schema/serde/serializer.rs": "385738a4df0abdaef0193f8e0316ed1b582cbe0cb2df9ebe7393a747af66a0e0",
+      "src/schema/shape_id.rs": "de9f56506dbbd71443d255f3e28029a15ecd9593485ce41ca0c82f255996b23e",
+      "src/schema/shape_type.rs": "120fa879ff5691945ad279eb48822ef3b831541832ebacfaaba25037042874c0",
+      "src/schema/trait_map.rs": "f798241e9287920db002d1fd090445bd4a9a39d1a710bce9f78c900c45b123ab",
+      "src/schema/trait_type.rs": "a2cd38fa4b0100b50ac7ca8d4faf0cfcee085d05564d118060345331389c95a4",
+      "src/schema/traits.rs": "5ecaca63f71fbe6970d76814b89591b3102547ad760cbcfe3f661ac990d636bc"
+    },
+    "archive_sha256": "7d56e0a4e53127a632224e43633b0fe045fa9e1e3cfc68b9830f1115e103f910",
+    "archive_url": "https://static.crates.io/crates/aws-smithy-schema/aws-smithy-schema-0.2.0.crate",
+    "bazel_source": "archive_patch",
+    "crate": "aws-smithy-schema",
+    "omitted_archive_files": [
+      "Cargo.lock"
+    ],
+    "patch": "aws-smithy-schema-0.2.0.patch",
+    "patch_sha256": "a6ebb0952b865568da8b33cd1675ed7157f89db722a30cc2539b91963ffb6520",
+    "path": "aws-smithy-schema-0.2.0",
+    "version": "0.2.0",
+    "workspaces": [
+      "products/maestro"
+    ]
+  }
+]

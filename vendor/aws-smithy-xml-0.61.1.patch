@@ -1,0 +1,12 @@
+diff --git a/src/codec/deserializer.rs b/src/codec/deserializer.rs
+--- a/src/codec/deserializer.rs
++++ b/src/codec/deserializer.rs
+@@ -431,6 +431,8 @@
+                 wrapped.extend_from_slice(&bytes);
+                 wrapped.extend_from_slice(b"</__flat>");
+                 let mut child_deser = XmlDeserializer::new(&wrapped, self.settings.clone());
++                // Owned wrapper storage does not reset aggregate nesting.
++                child_deser.depth = self.depth;
+                 consumer(member, &mut child_deser)?;
+             }
+             Ok(())

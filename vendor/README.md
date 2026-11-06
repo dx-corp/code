@@ -1,5 +1,14 @@
 # Reviewed source repairs
 
+## AWS serialization
+
+Schema 0.2.0 and 0.2.1 own callback payload bytes and routes writes through separate
+state and codec borrows. XML 0.61.1 and 0.62.0 preserve aggregate depth across
+owned flattened-member wrappers. The exact archives, consumer footprints and
+patch hashes are pinned in `aws-serialization-provenance.json` and the protected
+source profile. [Repair details](../../../rust/supply-chain/reviews/aws-serialization-backports.md)
+include the public API constraints and verification scope.
+
 ## Testcontainers tar maintenance
 
 `testcontainers-0.27.3` replaces the unmaintained `astral-tokio-tar`
