@@ -2727,12 +2727,72 @@ fn compiled_validator(schema: &serde_json::Value) -> Result<Arc<jsonschema::Vali
 }
 
 /// Validate boolean and object JSON schemas; malformed schemas fail closed.
-fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
+pub fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
     let validator = compiled_validator(&spec.schema)?;
-    match validator.iter_errors(args).next() {
-        None => Ok(()),
-        Some(error) => Err(format!("invalid arguments: {error}")),
+    let corrections: Vec<String> = validator
+        .iter_errors(args)
+        .take(MAX_ARGUMENT_CORRECTIONS)
+        .map(|error| argument_correction(&error))
+        .collect();
+    if corrections.is_empty() {
+        return Ok(());
     }
+    Err(format!("invalid arguments: {}", corrections.join("; ")))
+}
+
+/// Corrections returned for one call; the model fixes these and sees any others next.
+const MAX_ARGUMENT_CORRECTIONS: usize = 5;
+/// How much of a sent value a correction repeats.
+const MAX_SENT_VALUE_CHARS: usize = 200;
+
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// What the model must change: the field by its path, then for a wrong type the
+/// expected type and what it sent. Never coerces: the model sends the value again.
+fn argument_correction(error: &jsonschema::ValidationError<'_>) -> String {
+    let path = error
+        .instance_path()
+        .as_str()
+        .trim_start_matches('/')
+        .replace('/', ".");
+    let field = if path.is_empty() {
+        "arguments"
+    } else {
+        path.as_str()
+    };
+    if let jsonschema::error::ValidationErrorKind::Type { kind } = error.kind() {
+        let sent = error.instance().to_string();
+        let sent = if sent.chars().count() > MAX_SENT_VALUE_CHARS {
+            format!(
+                "{}...",
+                sent.chars().take(MAX_SENT_VALUE_CHARS).collect::<String>()
+            )
+        } else {
+            sent
+        };
+        let expected = match kind {
+            jsonschema::error::TypeKind::Single(kind) => kind.to_string(),
+            jsonschema::error::TypeKind::Multiple(kinds) => kinds
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect::<Vec<_>>()
+                .join(" or "),
+        };
+        return format!(
+            "{field}: expected {expected}, got {} {sent}",
+            json_type_name(error.instance()),
+        );
+    }
+    format!("{field}: {error}")
 }
 
 fn unknown_tool(name: &ToolName) -> ToolResult {

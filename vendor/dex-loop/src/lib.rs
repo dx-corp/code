@@ -69,7 +69,7 @@ pub use context::{
 };
 pub use engine::{
     CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck, TOOLS_CALL,
-    TOOLS_SEARCH,
+    TOOLS_SEARCH, validate_args,
 };
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,

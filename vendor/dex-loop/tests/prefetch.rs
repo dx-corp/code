@@ -307,6 +307,11 @@ async fn arguments_that_fail_the_schema_never_start_and_the_model_sees_why() {
         seen[2].starts_with("tool:t1-1-0:err:invalid arguments: "),
         "{seen:?}"
     );
+    // It says which field, the type it wants and what it got, so the model can fix it.
+    assert!(
+        seen[2].contains("key: expected string, got number 7"),
+        "{seen:?}"
+    );
     assert_eq!(log.rehydrate(), ctx);
 }
 
