@@ -1,5 +1,14 @@
 # Reviewed source repairs
 
+## AWS serialization
+
+Schema 0.2.0 and 0.2.1 own callback payload bytes and routes writes through separate
+state and codec borrows. XML 0.61.1 and 0.62.0 preserve aggregate depth across
+owned flattened-member wrappers. The exact archives, consumer footprints and
+patch hashes are pinned in `aws-serialization-provenance.json` and the protected
+source profile. [Repair details](../../../rust/supply-chain/reviews/aws-serialization-backports.md)
+include the public API constraints and verification scope.
+
 ## Testcontainers tar maintenance
 
 `testcontainers-0.27.3` replaces the unmaintained `astral-tokio-tar`
@@ -15,6 +24,10 @@ the same maintained source and dependency graph. The protected source profiles
 continue to reject missing, partial or foreign source inventories. The review
 and qualification limits are in
 `rust/supply-chain/reviews/audit-storage-maintenance-2026-11-05.md`.
+
+The Rust, business-object integration and Sentinel workspaces declare this
+patch independently. A path dependency on the shared PostgreSQL test helper
+does not inherit the Rust workspace's patch table.
 
 ## SMTP and MIME header repairs
 

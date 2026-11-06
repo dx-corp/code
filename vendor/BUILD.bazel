@@ -1,4 +1,8 @@
 exports_files([
+    "aws-smithy-schema-0.2.0.patch",
+    "aws-smithy-xml-0.62.0.patch",
+    "aws-smithy-xml-0.61.1.patch",
+    "aws-smithy-schema-0.2.1.patch",
     "zip-9.0.3.patch",
     "calamine-0.36.0.patch",
     "rquickjs-core-0.13.0.patch",

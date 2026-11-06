@@ -191,6 +191,8 @@ lto = false
 codegen-units = 16
 
 [patch.crates-io]
+aws-smithy-xml-v062 = { package = "aws-smithy-xml", path = "vendor/aws-smithy-xml-0.62.0" }
+aws-smithy-schema-v020 = { package = "aws-smithy-schema", path = "vendor/aws-smithy-schema-0.2.0" }
 tokio-websockets = { path = "vendor/tokio-websockets-0.10.1" }
 zip = { path = "vendor/zip-9.0.3" }
 rquickjs-core = { path = "vendor/rquickjs-core-0.13.0" }
