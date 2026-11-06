@@ -236,6 +236,9 @@ pub struct Context {
     /// turn's own later events (its `ModelStepCompleted`, `ToolFinished`,
     /// `Final`) are never attributed to the turn that raced in ahead of them.
     pending_turns: Vec<PendingTurn>,
+    /// What this turn's tools returned, derived from the durable log, for a
+    /// final check. Kept outside compactable history.
+    turn_outputs: Vec<Output>,
     authorized_principal: Option<PrincipalId>,
     /// Unknown call outcomes in this turn, derived from the durable log.
     /// Kept outside model history so compaction cannot permit a fresh retry.
@@ -328,6 +331,7 @@ impl Context {
             action_confirmations: Vec::new(),
             action_previews: Vec::new(),
             pending_turns: Vec::new(),
+            turn_outputs: Vec::new(),
             pre_started: Vec::new(),
             last_compaction: None,
             failed_call: None,
@@ -473,6 +477,11 @@ impl Context {
 
     pub(crate) fn answer_continuation_used(&self) -> bool {
         self.answer_continuation_used
+    }
+
+    /// What this turn's tools returned, oldest first; failed calls are left out.
+    pub fn turn_outputs(&self) -> &[Output] {
+        &self.turn_outputs
     }
 
     /// Final replaces the visible answer on web and channel replay; a resumed
@@ -1028,6 +1037,9 @@ impl Context {
                 receipt,
                 ..
             } => {
+                if *outcome == Outcome::Succeeded {
+                    self.turn_outputs.push(output.clone());
+                }
                 self.scratch.finish(call, *outcome);
                 if let Some(proposal) = self.proposed_call(call).cloned()
                     && !self
@@ -1319,6 +1331,7 @@ impl Context {
             self.exposed.clear();
         }
         self.turn = Some(turn.clone());
+        self.turn_outputs.clear();
         self.acting = Some(principal.clone());
         self.status = Status::Running;
         self.step = 0;
