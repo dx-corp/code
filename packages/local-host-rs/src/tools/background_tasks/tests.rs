@@ -1022,6 +1022,24 @@ async fn agent_can_stop_a_monitor_early_through_the_tool() {
         notifications.last().map(|notification| &notification.kind),
         Some(&MonitorNotificationKind::Stopped { events: 1 })
     );
+    // The process lifecycle is marked monitored so hosts do not report its end twice.
+    let mut lifecycle = Vec::new();
+    for _ in 0..250 {
+        lifecycle.extend(
+            poll_task_lifecycle_events()
+                .into_iter()
+                .filter(|event| event.task_id == task_id),
+        );
+        if lifecycle.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!lifecycle.is_empty());
+    assert!(
+        lifecycle.iter().all(|event| event.monitored),
+        "{lifecycle:?}"
+    );
     TASKS.write().unwrap().remove(&task_id);
 }
 

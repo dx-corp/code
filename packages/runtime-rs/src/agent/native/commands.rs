@@ -401,13 +401,21 @@ impl NativeAgentRunner {
                 }
                 AgentCommand::InjectUserNote {
                     content,
+                    wake,
                     applied,
                     consumed,
                 } => {
                     // Defer until idle so we never insert a user message mid-tool-loop.
+                    // A note that arrived during a turn only wakes if its policy says so.
+                    let wake = if self.busy {
+                        HostNoteWake::after_busy_turn(wake)
+                    } else {
+                        wake
+                    };
                     self.deferred_commands
                         .push_back(AgentCommand::InjectUserNote {
                             content,
+                            wake,
                             applied,
                             consumed,
                         });
@@ -625,6 +633,7 @@ impl NativeAgentRunner {
                 }
                 AgentCommand::InjectUserNote {
                     content,
+                    wake,
                     applied,
                     consumed,
                 } => {
@@ -632,6 +641,7 @@ impl NativeAgentRunner {
                         self.deferred_commands
                             .push_back(AgentCommand::InjectUserNote {
                                 content,
+                                wake: HostNoteWake::after_busy_turn(wake),
                                 applied,
                                 consumed,
                             });
@@ -639,6 +649,9 @@ impl NativeAgentRunner {
                     }
                     self.apply_user_note(content, consumed);
                     let _ = applied.send(());
+                    if wake.is_some() {
+                        self.wake_for_host_notes();
+                    }
                     continue;
                 }
                 AgentCommand::EnsureProviderPromptInstalled { applied } => {

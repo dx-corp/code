@@ -56,7 +56,7 @@ pub use model_dynamics::{
 };
 pub use native::loop_policy;
 pub use native::{
-    ExternalToolSchemaPolicy, MaxTokensSource, NativeAgent, NativeAgentConfig,
+    ExternalToolSchemaPolicy, HostNoteWake, MaxTokensSource, NativeAgent, NativeAgentConfig,
     REQUEST_CONTEXT_SAFETY_TOKENS, RuntimeAuditSnapshot, ToolResponseConsumption,
     ToolResponseMessage,
 };

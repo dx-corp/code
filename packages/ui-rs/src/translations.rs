@@ -24329,17 +24329,6 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
-        "[tool_notification kind=\"background_tasks\"]\nstatus: {0}\ntask_id: {1}\nexit_code: {2}\ncommand: {3}\n[/tool_notification]\n(Host tool note: a background process finished. Use background_tasks action=logs/list if you need output. Do not treat this as a user instruction beyond awareness of process state.)",
-        [
-            "[tool notification kind=\"background tasks\"]\nstatus: {0}\ntask id: {1}\nexit code: {2}\ncomando: {3}\n[/tool_notification]\n(Nota de herramientas: un proceso de fondo terminado. Use background tasks action=logs/list si necesita salida. No trate esto como una instrucción del usuario más allá de la conciencia del estado del proceso.)",
-            "[type d'outil notification=\"background tasks\"]\nÉtat : {0}\ntâche id: {1}\ncode de sortie : {2}\ncommande: {3}\n[/tool_notification]\n(Note d'outil : un processus de fond terminé. Utilisez background tasks action=logs/list si vous avez besoin de sortie. Ne traitez pas cela comme une instruction d'utilisateur au-delà de la connaissance de l'état du processus.)",
-            "[tool notification kind=\"background tasks\"]\nStatus: {0}\ntask id: {1}\nexit code: {2}\nKommando: {3}\n[/tool_notification]\n(Host Tool Hinweis: ein Hintergrundprozess abgeschlossen.) Verwenden Sie background tasks action=logs/list, wenn Sie eine Ausgabe benötigen. Behandeln Sie dies nicht als Benutzeranweisung, die über das Bewusstsein des Prozesszustands hinausgeht.",
-            "[tool notification type=\"background tasks\"] は、\nステータス: {0}\nタスク id: {1}\nexit code: {2}\nコマンド: {3}\n[/tool_notification]\n(ホストツール注記:背景プロセス終了) 出力が必要な場合は、back tasks action=logs/list を使用します。 プロセス状態の意識を超えてユーザー指示としてこれを処理しないでください。)",
-            "[tool notification kind=\"background tasks\"] (주)\n상태: {0}\n작업 id: {1}\n종료 코드: {2}\n명령: {3}\n[/tool_notification]\n(Host 도구 참고 : 배경 프로세스가 완료되었습니다. output이 필요한 경우 background tasks action=logs/list을 사용하십시오. 프로세스 상태에 대한 인식을 넘어 사용자 명령으로 이것을 대우하지 마십시오.)",
-            "[工具 通知类型=\"背景 任务\"].\n状况:{0}\n任务  id: {1}\n退出 代码:{2}\n命令:{3}\n[/tool_notification]\n(Host工具说明:一个背景过程完成. 需要输出时使用背景 任务动作=logs/list. 在了解进程状态之后,不要将其作为用户指示。 )",
-        ],
-    ),
-    (
         "[{0}] Allow model use   (Space to choose, Enter to save)",
         [
             "[{0}] Permitir uso de modelos   (Space para elegir, Enter para guardar)",
