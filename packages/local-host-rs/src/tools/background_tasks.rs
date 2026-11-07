@@ -215,6 +215,9 @@ pub struct TaskLifecycleEvent {
     pub status: String,
     pub exit_code: Option<i32>,
     pub timestamp_ms: u64,
+    /// The task ran under an all-lines monitor, whose own terminal
+    /// notification already reports this end to the agent.
+    pub monitored: bool,
 }
 
 /// Snapshot of a task that was running when a previous process exited.
@@ -494,12 +497,19 @@ pub fn load_persisted_running_snapshot() -> Vec<PersistedRunningTask> {
     live
 }
 
-fn emit_task_lifecycle(task_id: &str, command: &str, status: &str, exit_code: Option<i32>) {
+fn emit_task_lifecycle(
+    task_id: &str,
+    command: &str,
+    status: &str,
+    exit_code: Option<i32>,
+    monitored: bool,
+) {
     let event = TaskLifecycleEvent {
         task_id: task_id.to_string(),
         command: command.to_string(),
         status: status.to_string(),
         exit_code,
+        monitored,
         timestamp_ms: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64),
@@ -1901,6 +1911,7 @@ async fn spawn_task(
     // Track completion — never block the agent turn on waitForRotation; push
     // lifecycle events instead (Kimi TaskOutput non-blocking completion notify).
     let lifecycle_command = command.clone();
+    let monitored = monitor.is_some();
     tokio::spawn(async move {
         let status = child.wait().await;
         let (exit_code, failed) = match status {
@@ -1930,7 +1941,13 @@ async fn spawn_task(
         if let Ok(mut tasks) = TASKS.write() {
             prune_completed_tasks(&mut tasks);
         }
-        emit_task_lifecycle(&id, &lifecycle_command, status_label, Some(exit_code));
+        emit_task_lifecycle(
+            &id,
+            &lifecycle_command,
+            status_label,
+            Some(exit_code),
+            monitored,
+        );
         for handle in drain_handles {
             let _ = handle.await;
         }
@@ -2022,8 +2039,15 @@ fn stop_with_end(id: &str, end: Option<WatchEnd>) -> Result<BackgroundTask, Stri
     let watches = take_line_watches(id);
     remove_task_monitors(id);
     drop(tasks);
+    let monitored = !watches.is_empty();
     end_line_watches(watches, end);
-    emit_task_lifecycle(&stopped.id, &stopped.command, "stopped", stopped.exit_code);
+    emit_task_lifecycle(
+        &stopped.id,
+        &stopped.command,
+        "stopped",
+        stopped.exit_code,
+        monitored,
+    );
 
     Ok(stopped)
 }

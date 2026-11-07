@@ -449,12 +449,16 @@ mod codemode;
 mod codemode_dispatch;
 mod codex;
 mod commands;
+pub use host_notes::HostNoteWake;
 mod context;
 #[cfg(test)]
 mod context_overflow_tests;
 mod deferred_tool_schemas;
 #[cfg(test)]
 mod deferred_tool_tests;
+mod host_notes;
+#[cfg(test)]
+mod host_notes_tests;
 mod model_dynamics;
 mod provenance;
 mod provider_history;
@@ -1114,11 +1118,11 @@ enum AgentCommand {
         messages: Vec<Message>,
     },
 
-    /// Append a host-generated user note to conversation history without
-    /// starting a model turn. Used for background-task lifecycle notices so
-    /// the next completion request sees them (does not trigger a response).
+    /// Append a host-generated user note to conversation history. It is
+    /// deferred while a turn runs; `wake` (see `host_notes`) may start one.
     InjectUserNote {
         content: String,
+        wake: Option<HostNoteWake>,
         applied: tokio::sync::oneshot::Sender<()>,
         consumed: tokio::sync::oneshot::Sender<()>,
     },
@@ -1831,33 +1835,6 @@ impl NativeAgent {
         let _ = self
             .command_tx
             .send(AgentCommand::ReplaceHistoryPreservingCredentials { messages });
-    }
-
-    /// Append a host tool/user note to history without starting a turn.
-    ///
-    /// Callers must only flush these when the agent is idle so provider
-    /// message order stays valid (no user turn between tool results).
-    pub fn inject_user_note(
-        &self,
-        content: impl Into<String>,
-    ) -> Result<(
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Receiver<()>,
-    )> {
-        let content = content.into();
-        if content.trim().is_empty() {
-            anyhow::bail!("Cannot inject an empty user note");
-        }
-        let (applied, applied_receiver) = tokio::sync::oneshot::channel();
-        let (consumed, consumed_receiver) = tokio::sync::oneshot::channel();
-        self.command_tx
-            .send(AgentCommand::InjectUserNote {
-                content,
-                applied,
-                consumed,
-            })
-            .map_err(|error| anyhow::anyhow!("Failed to inject user note: {error}"))?;
-        Ok((applied_receiver, consumed_receiver))
     }
 
     /// Set the model

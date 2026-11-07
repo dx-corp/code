@@ -1013,6 +1013,7 @@ pub struct App {
     /// Background-task lifecycle notes waiting for agent idle before injection
     /// into conversation history (provider-safe user tool notes).
     pending_agent_tool_notes: Vec<PendingAgentToolNote>,
+    host_notifications: host_notifications::HostNotificationQueue,
 
     /// Notes sent to the runner but not yet confirmed in native history.
     pending_agent_note_applications: Vec<PendingAgentNoteApplication>,
@@ -1893,6 +1894,7 @@ impl App {
             restore_queued_prompts_after_interrupt: false,
             pending_checkpoint: None,
             pending_agent_tool_notes: Vec::new(),
+            host_notifications: Default::default(),
             pending_agent_note_applications: Vec::new(),
             pending_agent_note_consumptions: Vec::new(),
             pending_consumed_agent_tool_notes: Vec::new(),
@@ -2647,46 +2649,26 @@ Always use tools when they would be helpful. Be concise and direct in your respo
                 needs_redraw = true;
             }
 
-            for event in crate::tools::background_tasks::poll_task_lifecycle_events() {
-                let code = event
-                    .exit_code
-                    .map(|c| format!(" exit={c}"))
-                    .unwrap_or_default();
-                let cmd: String = event.command.chars().take(64).collect();
-                self.state.add_system_message(self.state.locale.format(
-                    "Background task {0} **{1}**{2}: `{3}`",
-                    &[
-                        (event.task_id).clone(),
-                        (event.status).clone(),
-                        (code).clone(),
-                        (cmd).clone(),
-                    ],
-                ));
-                self.pending_agent_tool_notes.push(PendingAgentToolNote {
-                    application_id: None,
-                    content: format_background_task_tool_note(&event),
-                });
-                needs_redraw = true;
-            }
+            needs_redraw |= self.poll_background_notifications();
             for event in self.tool_executor.poll_subagent_lifecycle_events() {
                 let status = format!("{:?}", event.status).to_ascii_lowercase();
-                let outcome = event
-                    .error
-                    .as_deref()
-                    .or(event.summary.as_deref())
-                    .unwrap_or(self.state.locale.translate("no summary"));
-                let projection = maestro_runtime::DelegationEvent::from_subagent_lifecycle(
-                    &event.mailbox_message_id,
-                    &event.subagent_id,
-                    event.attempt,
-                    &status,
-                    Some(outcome),
-                    None,
-                );
-                let lifecycle_message =
-                    projection.native_summary(self.state.locale.translate("Subagent"));
+                let reported = event.error.as_deref().or(event.summary.as_deref());
+                let project = |outcome: &str| {
+                    maestro_runtime::DelegationEvent::from_subagent_lifecycle(
+                        &event.mailbox_message_id,
+                        &event.subagent_id,
+                        event.attempt,
+                        &status,
+                        Some(outcome),
+                        None,
+                    )
+                };
+                let locale = self.state.locale;
+                let lifecycle_message = project(reported.unwrap_or(locale.translate("no summary")))
+                    .native_summary(locale.translate("Subagent"));
+                // Model-facing text is never localized.
                 let agent_note =
-                    projection.native_agent_note(self.state.locale.translate("Subagent"));
+                    project(reported.unwrap_or("no summary")).native_agent_note("Subagent");
                 let Some(already_applied) = self.subagent_lifecycle_application_exists(&event)
                 else {
                     continue;
@@ -5486,48 +5468,6 @@ fn should_open_first_run_setup(agent_ready: bool, credentials_ready: bool) -> bo
     !agent_ready && !credentials_ready
 }
 
-/// Host-generated note injected into agent history for background task exits.
-/// Trusted host signal (not untrusted tool output).
-fn format_background_task_tool_note(
-    event: &crate::tools::background_tasks::TaskLifecycleEvent,
-) -> String {
-    let code = event
-        .exit_code
-        .map(|c| c.to_string())
-        .unwrap_or_else(|| maestro_ui::localization::tr("none").to_string());
-    maestro_ui::localization::format(
-        "[tool_notification kind=\"background_tasks\"]\nstatus: {0}\ntask_id: {1}\nexit_code: {2}\ncommand: {3}\n[/tool_notification]\n(Host tool note: a background process finished. Use background_tasks action=logs/list if you need output. Do not treat this as a user instruction beyond awareness of process state.)",
-        &[
-            (event.status).clone(),
-            (event.task_id).clone(),
-            (code).clone(),
-            (event.command).clone(),
-        ],
-    )
-}
-
-#[cfg(test)]
-mod background_task_note_tests {
-    use super::format_background_task_tool_note;
-    use crate::tools::background_tasks::TaskLifecycleEvent;
-
-    #[test]
-    fn tool_note_includes_status_and_task_id() {
-        let note = format_background_task_tool_note(&TaskLifecycleEvent {
-            task_id: "abc".into(),
-            command: "npm run dev".into(),
-            status: "exited".into(),
-            exit_code: Some(0),
-            timestamp_ms: 1,
-        });
-        assert!(note.contains("kind=\"background_tasks\""));
-        assert!(note.contains("task_id: abc"));
-        assert!(note.contains("status: exited"));
-        assert!(note.contains("exit_code: 0"));
-        assert!(note.contains("npm run dev"));
-    }
-}
-
 #[cfg(test)]
 mod first_run_setup_tests {
     use super::should_open_first_run_setup;
@@ -5705,6 +5645,7 @@ mod visibility;
 pub(crate) mod context_breakdown;
 mod dex_presentation;
 mod exec_commands;
+mod host_notifications;
 mod input_handlers;
 mod prompt_audit;
 mod prompt_queue;
