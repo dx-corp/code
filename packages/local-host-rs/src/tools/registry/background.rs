@@ -28,6 +28,51 @@ impl ToolExecutor {
         self
     }
 
+    /// Resolve a model-supplied cwd against the session workspace and the sandbox.
+    fn background_cwd(&self, args: &Value) -> Result<String, ToolResult> {
+        let requested_cwd = args.get("cwd").and_then(|v| v.as_str());
+        let cwd = match requested_cwd {
+            Some(raw) if !raw.trim().is_empty() => {
+                let raw = raw.trim();
+                // Resolve relative to the session workspace
+                // (not whatever directory the Maestro process
+                // itself happens to be running from), so the
+                // sandbox check below and the spawned
+                // process see the same path.
+                if std::path::Path::new(raw).is_absolute() {
+                    raw.to_string()
+                } else {
+                    std::path::Path::new(&self.cwd)
+                        .join(raw)
+                        .to_string_lossy()
+                        .to_string()
+                }
+            }
+            _ => self.cwd.clone(),
+        };
+        // `background_tasks::start` passes `cwd` straight
+        // through as the sandbox spawn cwd, and the sandbox
+        // policy automatically treats a spawn's cwd as a
+        // writable root (see `get_writable_roots_with_cwd`).
+        // A model-supplied cwd must not be allowed to expand
+        // the writable footprint beyond what the workspace
+        // sandbox already grants -- otherwise `background_tasks
+        // { cwd: "$HOME" }` silently makes the whole home
+        // directory writable under a policy advertised as
+        // workspace-write.
+        if let Some(policy) = &self.sandbox_policy {
+            if !policy.allows_write_to(std::path::Path::new(&self.cwd), std::path::Path::new(&cwd))
+            {
+                return Err(ToolResult::failure(format!(
+                    "background_tasks cwd '{cwd}' is outside the sandbox's \
+                     writable roots; omit cwd to use the workspace or pick a \
+                     directory the sandbox already allows"
+                )));
+            }
+        }
+        Ok(cwd)
+    }
+
     pub(super) async fn execute_background_task(&self, args: &Value) -> ToolResult {
         let scope = match &self.background_task_access {
             background_tasks::BackgroundTaskAccess::Legacy => None,
@@ -57,57 +102,15 @@ impl ToolExecutor {
                         return ToolResult::failure("command required for start".to_string());
                     }
                 };
-                let requested_cwd = args.get("cwd").and_then(|v| v.as_str());
-                let cwd = match requested_cwd {
-                    Some(raw) if !raw.trim().is_empty() => {
-                        let raw = raw.trim();
-                        // Resolve relative to the session workspace
-                        // (not whatever directory the Maestro process
-                        // itself happens to be running from), so the
-                        // sandbox check below and the spawned
-                        // process see the same path.
-                        if std::path::Path::new(raw).is_absolute() {
-                            raw.to_string()
-                        } else {
-                            std::path::Path::new(&self.cwd)
-                                .join(raw)
-                                .to_string_lossy()
-                                .to_string()
-                        }
-                    }
-                    _ => self.cwd.clone(),
+                let cwd = match self.background_cwd(args) {
+                    Ok(cwd) => cwd,
+                    Err(failure) => return failure,
                 };
-                // `background_tasks::start` passes `cwd` straight
-                // through as the sandbox spawn cwd, and the sandbox
-                // policy automatically treats a spawn's cwd as a
-                // writable root (see `get_writable_roots_with_cwd`).
-                // A model-supplied cwd must not be allowed to expand
-                // the writable footprint beyond what the workspace
-                // sandbox already grants -- otherwise `background_tasks
-                // { cwd: "$HOME" }` silently makes the whole home
-                // directory writable under a policy advertised as
-                // workspace-write.
-                if let Some(policy) = &self.sandbox_policy {
-                    if !policy.allows_write_to(
-                        std::path::Path::new(&self.cwd),
-                        std::path::Path::new(&cwd),
-                    ) {
-                        return ToolResult::failure(format!(
-                            "background_tasks cwd '{cwd}' is outside the sandbox's \
-                                     writable roots; omit cwd to use the workspace or pick a \
-                                     directory the sandbox already allows"
-                        ));
-                    }
-                }
                 let shell = args
                     .get("shell")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
-                let env = args.get("env").and_then(|v| v.as_object()).map(|map| {
-                    map.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                        .collect::<std::collections::HashMap<_, _>>()
-                });
+                let env = background_env(args);
                 match background_tasks::start_owned(
                     command,
                     cwd,
@@ -128,6 +131,57 @@ impl ToolExecutor {
                         });
                         ToolResult::success(format!("Started task {}", task.id))
                             .with_details(details)
+                    }
+                    Err(err) => ToolResult::failure(err),
+                }
+            }
+            "monitor" => {
+                let command = match args.get("command").and_then(Value::as_str) {
+                    Some(cmd) if !cmd.trim().is_empty() => cmd.to_string(),
+                    _ => {
+                        return ToolResult::failure("command required for monitor".to_string());
+                    }
+                };
+                let cwd = match self.background_cwd(args) {
+                    Ok(cwd) => cwd,
+                    Err(failure) => return failure,
+                };
+                let timeout_ms = args
+                    .get("timeout_ms")
+                    .or_else(|| args.get("timeoutMs"))
+                    .and_then(Value::as_u64);
+                let request = background_tasks::MonitorRequest {
+                    command,
+                    description: args
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    timeout_ms,
+                    cwd,
+                    workspace_dir: self.cwd.clone(),
+                    env: background_env(args),
+                    sandbox_policy: self.sandbox_policy.clone(),
+                    scope: scope.cloned(),
+                };
+                match background_tasks::start_monitor(request).await {
+                    Ok(started) => {
+                        let details = serde_json::json!({
+                            "id": started.task.id,
+                            "monitorId": started.monitor.id,
+                            "pid": started.task.pid,
+                            "status": "running",
+                            "timeoutMs": started.timeout_ms,
+                            "logPath": started.task.log_path
+                        });
+                        ToolResult::success(format!(
+                            "Monitoring task {} for up to {}s. Each stdout line arrives as a \
+                             notification (batched per 200ms); stderr goes to the task log. \
+                             Stop early with action=stop taskId={}.",
+                            started.task.id,
+                            started.timeout_ms / 1000,
+                            started.task.id
+                        ))
+                        .with_details(details)
                     }
                     Err(err) => ToolResult::failure(err),
                 }
@@ -228,4 +282,12 @@ impl ToolExecutor {
             }
         }
     }
+}
+
+fn background_env(args: &Value) -> Option<std::collections::HashMap<String, String>> {
+    args.get("env").and_then(Value::as_object).map(|map| {
+        map.iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect()
+    })
 }

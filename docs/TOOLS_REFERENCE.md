@@ -50,7 +50,7 @@ error distinctions.
 
 | Tool | Description | Key Options / Notes |
 | ---- | ----------- | ------------------- |
-| `background_tasks` | Runs commands in the background and manages lifecycle. | `action` supports `start`, `list`, `stop`, `logs`, and `waitForRotation`. `/monitor` attaches bounded stdout/stderr regex notifications to existing tasks. Model turns are disabled for monitor matches. |
+| `background_tasks` | Runs commands in the background and manages lifecycle. | `action` supports `start`, `monitor`, `list`, `stop`, `logs`, and `waitForRotation`. `monitor` runs a shell script whose stdout lines (batched per 200ms, rate-limited, flood-stopped) become owner-scoped notifications until it exits or `timeout_ms` (default 5 min, max 30 min) elapses; stderr goes to the task log. `/monitor` attaches bounded stdout/stderr regex notifications to existing tasks; regex matches do not start model turns. |
 | `read` | Reads file contents with syntax-aware chunking. Supports text, images, PDFs, and Jupyter notebooks. | Accepts `path`, optional `startLine`/`endLine`. Images are optimized with Sharp if available. PDFs are extracted to text. Notebooks display formatted cells with outputs. |
 | `list` | Lists files in a directory (non-recursive by default). | Supports glob filters and depth. Used for context discovery. |
 | `search` | Ripgrep-style text search. | Args mirror `rg` (`pattern`, `path`, `glob`). Output includes file:line matches. Default max results now capped to avoid huge responses; oversized outputs are truncated and marked. |

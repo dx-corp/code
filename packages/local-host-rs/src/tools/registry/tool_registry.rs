@@ -630,13 +630,19 @@ impl ToolRegistry {
                     "background_tasks",
                     "Manage long-running background tasks. Prefer logs/list (snapshots). \
                      waitForRotation defaults to non-blocking (timeoutMs=0); do not block the turn. \
-                     Process exit is reported via lifecycle notifications.",
+                     Process exit is reported via lifecycle notifications. \
+                     monitor runs a shell script and delivers each stdout line to you as a \
+                     notification (lines within 200ms are batched; stderr goes to the task log) \
+                     until it exits or timeout_ms elapses; floods are stopped. Use it to wait \
+                     on events (e.g. `tail -f log | grep --line-buffered ERROR`) instead of polling.",
                 )
                     .with_schema(serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "action": {"type": "string", "description": "start | stop | list | logs | waitForRotation"},
-                            "command": {"type": "string"},
+                            "action": {"type": "string", "description": "start | monitor | stop | list | logs | waitForRotation"},
+                            "command": {"type": "string", "description": "start: the command. monitor: a shell script; each stdout line is one event."},
+                            "description": {"type": "string", "description": "monitor only. Short label shown with each notification."},
+                            "timeout_ms": {"type": "number", "description": "monitor only. Default 300000 (5 min), max 1800000 (30 min); the script is stopped when it elapses."},
                             "cwd": {"type": "string"},
                             "env": {"type": "object"},
                             "shell": {"type": "boolean"},
