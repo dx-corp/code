@@ -151,6 +151,8 @@ pub(crate) struct WatchRuntime {
     active: SyncMutex<HashMap<String, usize>>,
     next_generation: std::sync::atomic::AtomicU64,
     readers: SyncMutex<HashMap<String, usize>>,
+    /// Monitor notification owners woken through this runtime's turn tracking.
+    pub(crate) monitors: crate::monitor_wake::MonitorOwners,
 }
 
 struct ReadGuard {
@@ -225,7 +227,15 @@ impl WatchRuntime {
         })
     }
 
-    fn claim_idle(self: &Arc<Self>, session: &str) -> Option<TurnGuard> {
+    /// Whether any turn (user or wake) is running for `session`.
+    pub(crate) fn is_active(&self, session: &str) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains_key(session)
+    }
+
+    pub(crate) fn claim_idle(self: &Arc<Self>, session: &str) -> Option<TurnGuard> {
         let mut active = self
             .active
             .lock()
@@ -240,7 +250,7 @@ impl WatchRuntime {
         })
     }
 
-    fn wake_is_alone(&self, session: &str) -> bool {
+    pub(crate) fn wake_is_alone(&self, session: &str) -> bool {
         self.active
             .lock()
             .unwrap_or_else(|error| error.into_inner())

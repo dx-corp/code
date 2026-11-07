@@ -57,6 +57,7 @@ mod local;
 mod markitdown;
 mod migrations;
 mod model_catalog;
+mod monitor_wake;
 mod native_credentials;
 mod native_turns;
 mod pull_request_watch;
@@ -881,6 +882,7 @@ pub async fn serve_listener(
         state.selected_model.clone(),
     );
     pull_request_watch::spawn_scheduler(state.clone());
+    monitor_wake::spawn_scheduler(state.clone());
     maybe_spawn_a2a_platform_registration_loop(config.clone());
 
     let mut owner_loss = Box::pin(async move {

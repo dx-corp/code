@@ -58,8 +58,9 @@ fn task_values(session: &SessionRecord) -> Result<Vec<Value>, String> {
             "status": status, "completionSequence": task.completion_sequence,
             "exitCode": task.exit_code,
         }));
-        // Monitor ownership is inherited from its accepted command. These are
-        // output watchers; they do not claim to schedule another agent turn.
+        // Monitor ownership is inherited from its accepted command. Regex
+        // monitors are output watchers; an all-lines monitor (action=monitor)
+        // also wakes its session through `monitor_wake`.
         for monitor in monitors.iter().filter(|monitor| monitor.task_id == task.id) {
             if status == "running" {
                 values.push(serde_json::json!({

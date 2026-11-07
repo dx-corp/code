@@ -423,32 +423,51 @@ pub(crate) async fn record_chat_assistant_message(
     let _ = append_session_message(state, session_id, message, None, None, None).await;
 }
 
+/// Next-turn delivery: unread peer messages and pending monitor notifications.
+pub(crate) struct PendingTurnDelivery {
+    peer_message_ids: Vec<String>,
+    monitor: crate::monitor_wake::MonitorDelivery,
+}
+
 async fn prepend_pending_peer_messages(
     state: &AppState,
     session_id: Option<&str>,
     auth: &AuthContext,
     prompt: &mut String,
-) -> Vec<String> {
+) -> PendingTurnDelivery {
+    let (monitor_block, monitor) = crate::monitor_wake::take_for_turn(state, session_id);
+    if let Some(block) = monitor_block {
+        *prompt = format!("{block}\n{prompt}");
+    }
     let Some(session_id) = session_id else {
-        return Vec::new();
+        return PendingTurnDelivery {
+            peer_message_ids: Vec::new(),
+            monitor,
+        };
     };
     let pending = unread_inbox_for_session(state, session_id, auth).await;
     if let Some(block) = render_peer_messages_block(&pending) {
         *prompt = format!("{block}\n{prompt}");
     }
-    pending.into_iter().map(|message| message.id).collect()
+    PendingTurnDelivery {
+        peer_message_ids: pending.into_iter().map(|message| message.id).collect(),
+        monitor,
+    }
 }
 
 async fn acknowledge_peer_messages(
     state: &AppState,
     session_id: Option<&str>,
     auth: &AuthContext,
-    message_ids: &[String],
+    delivery: &PendingTurnDelivery,
 ) {
+    crate::monitor_wake::acknowledge(state, &delivery.monitor);
     let Some(session_id) = session_id else {
         return;
     };
-    if let Err(error) = mark_inbox_messages_read(state, session_id, auth, message_ids).await {
+    if let Err(error) =
+        mark_inbox_messages_read(state, session_id, auth, &delivery.peer_message_ids).await
+    {
         eprintln!("failed to acknowledge delivered peer messages: {error}");
     }
 }
@@ -633,6 +652,8 @@ pub(crate) async fn run_authorized_chat(
 
     let session_id = chat.session_id.clone();
     let _active_turn = state.pull_request_watches.enter(session_id.as_deref());
+    let _monitor_owner =
+        crate::monitor_wake::RegisterOnTurnEnd::new(&state, session_id.as_deref(), &auth);
     let prepared_attachments = match prepare_chat_attachments(&chat, &state.config.cwd).await {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -925,6 +946,8 @@ pub(crate) async fn execute_chat_websocket_turn(
             .unwrap_or_default()
     };
     let _active_turn = state.pull_request_watches.enter(session_id.as_deref());
+    let _monitor_owner =
+        crate::monitor_wake::RegisterOnTurnEnd::new(&state, session_id.as_deref(), &auth);
     let prepared_attachments = match prepare_chat_attachments(&chat, &state.config.cwd).await {
         Ok(attachments) => attachments,
         Err(error) => {
