@@ -109,6 +109,19 @@ pub struct ThreadId {
     pub thread: String,
 }
 
+impl ThreadId {
+    /// Namespace for private turns that only write evidence notice prose.
+    pub const EVIDENCE_NOTICE_COPY_NAMESPACE: &str = "dex_evidence_notice_copy";
+
+    /// Evidence notice wording turns never get tools or prewarmed resources.
+    pub fn is_evidence_notice_copy(&self) -> bool {
+        self.thread
+            .strip_prefix(Self::EVIDENCE_NOTICE_COPY_NAMESPACE)
+            .and_then(|suffix| suffix.strip_prefix('_'))
+            .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    }
+}
+
 /// Position of an event in a thread's log. Strictly increasing per thread.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
