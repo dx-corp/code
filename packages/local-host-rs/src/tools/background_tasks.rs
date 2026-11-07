@@ -914,6 +914,22 @@ pub fn poll_monitor_notifications(scope: Option<&BackgroundTaskScope>) -> Vec<Mo
     owned
 }
 
+/// Whether `scope` still has a running line watch or undelivered monitor
+/// notifications. Hosts keep a wake owner for the scope while this holds.
+pub fn monitor_owner_active(scope: &BackgroundTaskScope) -> bool {
+    let watching = MONITORS.read().is_ok_and(|monitors| {
+        monitors.values().any(|monitor| {
+            matches!(&monitor.matcher, MonitorMatcher::Lines(watch) if watch.scope.as_ref() == Some(scope))
+        })
+    });
+    watching
+        || MONITOR_NOTIFICATIONS.lock().is_ok_and(|queue| {
+            queue
+                .iter()
+                .any(|notification| notification.scope.as_ref() == Some(scope))
+        })
+}
+
 fn line_notification(
     info: &MonitorInfo,
     watch: &LineWatch,
