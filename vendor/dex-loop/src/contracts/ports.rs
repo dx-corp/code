@@ -232,8 +232,8 @@ pub struct ToolSpec {
     pub executor: ExecutorKind,
 }
 
-/// A declared tool that runs another catalog tool. The first route whose
-/// `field` is present in the call's arguments names the tool, and the
+/// A declared tool that runs another catalog tool. The first route that
+/// matches the call's arguments names the tool, and the
 /// arguments pass to it unchanged. The call is unwrapped when proposed, as a
 /// `tools.call` is, so the log, policy, receipts and surfaces see the routed
 /// tool; a routed tool is callable without being core or found.
@@ -243,11 +243,25 @@ pub struct ToolWrapper {
     pub routes: Vec<WrapperRoute>,
 }
 
-/// One way a `ToolWrapper` call is routed: present `field` means `tool`.
+/// One way a `ToolWrapper` call is routed: present `field` means `tool`;
+/// with a `value`, only when `field` is that string. `tool` may be
+/// `tools.search`, which the wrapper then declares in its place.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WrapperRoute {
     pub field: String,
+    pub value: Option<String>,
     pub tool: ToolName,
+}
+
+impl WrapperRoute {
+    /// Whether this route names the tool for `arguments`.
+    pub fn matches(&self, arguments: &serde_json::Map<String, serde_json::Value>) -> bool {
+        arguments.get(&self.field).is_some_and(|present| {
+            self.value
+                .as_deref()
+                .is_none_or(|value| present.as_str() == Some(value))
+        })
+    }
 }
 
 /// The policy decision for one call.

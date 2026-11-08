@@ -12,10 +12,12 @@ fn read_wrapper() -> dex_loop::ToolWrapper {
         routes: vec![
             dex_loop::WrapperRoute {
                 field: "ref".into(),
+                value: None,
                 tool: ToolName::new("x.read_ref"),
             },
             dex_loop::WrapperRoute {
                 field: "page".into(),
+                value: None,
                 tool: ToolName::new("x.read_page"),
             },
         ],
@@ -129,4 +131,76 @@ async fn search_never_lists_a_routed_tool() {
     let results = view(&model.seen()[1]).join("\n");
     assert!(results.contains("x_other"), "{results}");
     assert!(!results.contains("x_read_ref"), "{results}");
+}
+
+fn search_wrapper() -> dex_loop::ToolWrapper {
+    let route = |field: &str, value: Option<&str>, tool: &str| dex_loop::WrapperRoute {
+        field: field.into(),
+        value: value.map(Into::into),
+        tool: ToolName::new(tool),
+    };
+    dex_loop::ToolWrapper {
+        spec: ToolSpec {
+            description: "Find records, capabilities or tools.".into(),
+            ..read_tool("search")
+        },
+        routes: vec![
+            route("scope", Some("records"), "x.find"),
+            route("scope", None, "x.describe"),
+            route("query", None, "tools.search"),
+        ],
+    }
+}
+
+// A route with a value takes only that value; a later route without one takes
+// the rest. A wrapper routing to tools.search is declared in its place, and
+// what Dex is told to find tools with names the wrapper.
+#[tokio::test]
+async fn value_routes_split_one_field_and_a_wrapper_can_replace_tools_search() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![
+            call("search", json!({"scope": "records", "query": "acme"})),
+            call("search", json!({"scope": "capabilities"})),
+            call("search", json!({"query": "assign training"})),
+            call("x.nothing", json!({})),
+        ],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![
+        hidden_read_tool("x.find"),
+        hidden_read_tool("x.describe"),
+        hidden_read_tool("x.assign"),
+    ])
+    .wrappers(vec![search_wrapper()])
+    .search_result("assign training", &["x.assign"]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "look around");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    let proposed = ctx
+        .history()
+        .iter()
+        .find_map(|entry| match &entry.message {
+            dex_loop::Message::Assistant { calls, .. } if calls.len() == 4 => Some(calls.clone()),
+            _ => None,
+        })
+        .expect("step one's calls");
+    assert_eq!(proposed[0].tool, ToolName::new("x.find"));
+    assert_eq!(proposed[1].tool, ToolName::new("x.describe"));
+    assert_eq!(proposed[2].tool, ToolName::new("tools.search"));
+    assert_eq!(
+        tools.run_of(&CallId::new("t1-1-0")).args,
+        json!({"scope": "records", "query": "acme"})
+    );
+    let results = view(&model.seen()[1]).join("\n");
+    assert!(results.contains("x_assign"), "{results}");
+    assert!(results.contains("use search to find tools"), "{results}");
+    assert_eq!(
+        model.offered()[0],
+        ["codemode", "tools.call", "search"].map(String::from)
+    );
+    assert_eq!(log.rehydrate(), ctx);
 }

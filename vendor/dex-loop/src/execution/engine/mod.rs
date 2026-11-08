@@ -16,6 +16,7 @@
 //! of running them again.
 
 mod codemode;
+mod wrappers;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -1565,7 +1566,8 @@ where
                 continue;
             }
             let Some(spec) = self.offered_spec(ctx, &call.tool) else {
-                self.finish(ctx, call, unknown_tool(&call.tool)).await?;
+                self.finish(ctx, call, self.unknown_tool(&call.tool))
+                    .await?;
                 continue;
             };
             // Arguments that do not fit the tool's schema never reach an
@@ -1885,7 +1887,8 @@ where
             decision,
         } = client_call;
         let Some(spec) = self.offered_spec(ctx, &call.tool) else {
-            self.finish(ctx, call, unknown_tool(&call.tool)).await?;
+            self.finish(ctx, call, self.unknown_tool(&call.tool))
+                .await?;
             return Ok(ClientToolOutcome::Continue);
         };
         if let Some(decision) = decision.as_ref() {
@@ -2276,9 +2279,11 @@ where
         // the same bytes for the whole thread. Found tools are not declared
         // here; the model calls them through `tools.call` with the schema
         // the search result carried.
-        std::iter::once(self.search.clone())
+        let search = (!self.search_wrapped()).then(|| self.search.clone());
+        search
+            .into_iter()
             .chain(std::iter::once(codemode::spec()))
-            .chain(std::iter::once(call_spec()))
+            .chain(std::iter::once(self.call_spec()))
             .chain(
                 self.tools
                     .wrappers()
@@ -2312,7 +2317,7 @@ where
             return Some(self.search.clone());
         }
         if name.as_str() == TOOLS_CALL {
-            return Some(call_spec());
+            return Some(self.call_spec());
         }
         if let Some(wrapper) = self.wrapper(name) {
             return Some(wrapper.spec.clone());
@@ -2323,28 +2328,6 @@ where
                 spec.core || ctx.exposed_tools().contains(name) || self.routed_by_wrapper(name)
             })
             .cloned()
-    }
-
-    /// The declared wrapper named `name`.
-    fn wrapper(&self, name: &ToolName) -> Option<&crate::ToolWrapper> {
-        self.tools
-            .wrappers()
-            .iter()
-            .find(|wrapper| &wrapper.spec.name == name)
-    }
-
-    /// Whether a declared wrapper routes to `name`, which makes it callable.
-    fn routed_by_wrapper(&self, name: &ToolName) -> bool {
-        self.tools
-            .wrappers()
-            .iter()
-            .any(|wrapper| wrapper.routes.iter().any(|route| &route.tool == name))
-    }
-
-    /// A call still named as `tools.call` or a wrapper after unwrapping: its
-    /// arguments named no catalog tool, so it is refused with what to fix.
-    fn unrouted(&self, name: &ToolName) -> bool {
-        name.as_str() == TOOLS_CALL || self.wrapper(name).is_some()
     }
 
     /// A `tools.call` as the model made it, as the call it names when the
@@ -2358,13 +2341,12 @@ where
         args: serde_json::Value,
     ) -> (ToolName, serde_json::Value) {
         if let Some(wrapper) = self.wrapper(&name) {
-            let route = args.as_object().and_then(|object| {
-                wrapper
-                    .routes
-                    .iter()
-                    .find(|route| object.contains_key(&route.field))
-            });
-            return match route.filter(|route| self.tools.spec(&route.tool).is_some()) {
+            let route = args
+                .as_object()
+                .and_then(|object| wrapper.routes.iter().find(|route| route.matches(object)));
+            return match route.filter(|route| {
+                route.tool.as_str() == TOOLS_SEARCH || self.tools.spec(&route.tool).is_some()
+            }) {
                 Some(route) => (route.tool.clone(), args),
                 None => (name, args),
             };
@@ -2391,11 +2373,12 @@ where
     /// tool has. The model corrects the call in one step.
     async fn reject_tool_call(&self, ctx: &mut Context, call: &ProposedCall) -> Result<(), Fenced> {
         if let Some(wrapper) = self.wrapper(&call.tool) {
-            let fields: Vec<&str> = wrapper
-                .routes
-                .iter()
-                .map(|route| route.field.as_str())
-                .collect();
+            let mut fields: Vec<&str> = Vec::new();
+            for route in &wrapper.routes {
+                if !fields.contains(&route.field.as_str()) {
+                    fields.push(route.field.as_str());
+                }
+            }
             let result = ToolResult::error(format!(
                 "{} needs one of these arguments: {}",
                 model_tool_name(wrapper.spec.name.as_str()),
@@ -2403,9 +2386,9 @@ where
             ));
             return self.finish(ctx, call, result).await;
         }
-        let result = match validate_args(&call_spec(), &call.args) {
+        let result = match validate_args(&self.call_spec(), &call.args) {
             Err(reason) => ToolResult::error(reason),
-            Ok(()) => unknown_tool(&ToolName::new(
+            Ok(()) => self.unknown_tool(&ToolName::new(
                 call.args["name"].as_str().unwrap_or_default(),
             )),
         };
@@ -2661,15 +2644,16 @@ fn search_spec() -> ToolSpec {
 
 /// `tools.call`: see [`TOOLS_CALL`]. Not read-only: the call it names may
 /// be a mutation, and that call's own spec decides how it runs.
-fn call_spec() -> ToolSpec {
+fn call_spec(searcher: &str) -> ToolSpec {
     ToolSpec {
-        description: "Call a tool that tools_search found. name: the tool's name exactly as the \
-                      search result lists it; arguments: an object matching that tool's \
-                      input_schema from the search result. The call runs as that tool, with \
-                      its own authorization and receipt. An argument that does not fit the \
-                      schema is returned with the field and the reason; correct it and call \
-                      again."
-            .into(),
+        description: format!(
+            "Call a tool that {} found. name: the tool's name exactly as the search result \
+             lists it; arguments: an object matching that tool's input_schema from the search \
+             result. The call runs as that tool, with its own authorization and receipt. An \
+             argument that does not fit the schema is returned with the field and the reason; \
+             correct it and call again.",
+            model_tool_name(searcher)
+        ),
         name: ToolName::new(TOOLS_CALL),
         label: "Using a found tool".into(),
         schema: serde_json::json!({
@@ -2875,13 +2859,6 @@ fn argument_correction(error: &jsonschema::ValidationError<'_>) -> String {
         );
     }
     format!("{field}: {error}")
-}
-
-fn unknown_tool(name: &ToolName) -> ToolResult {
-    ToolResult::error(format!(
-        "unknown tool: {name}; use {} to find tools",
-        model_tool_name(TOOLS_SEARCH),
-    ))
 }
 
 fn started(call: &ProposedCall, spec: &ToolSpec) -> Event {
