@@ -346,9 +346,26 @@ pub trait FinalCheck: Send + Sync {
         &'a self,
         thread: &'a crate::ThreadId,
         reply: String,
-        outputs: &'a [crate::Output],
+        outputs: &'a [crate::TurnOutput],
         held: &'a [crate::ToolName],
-    ) -> futures_util::future::BoxFuture<'a, String>;
+    ) -> futures_util::future::BoxFuture<'a, FinalReply>;
+}
+
+/// What a [`FinalCheck`] makes of a reply: the text the turn's `Final`
+/// records, and the claims of that text the turn's tool results verified.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FinalReply {
+    pub text: String,
+    pub claims: Vec<crate::AnswerClaim>,
+}
+
+impl From<String> for FinalReply {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            claims: Vec::new(),
+        }
+    }
 }
 
 impl<L, M, T, E, S> Engine<L, M, T, E, S, NoCompaction>
@@ -409,8 +426,8 @@ where
         self
     }
 
-    async fn checked_final(&self, ctx: &Context, reply: String) -> String {
-        match &self.final_check {
+    async fn checked_final(&self, ctx: &Context, reply: String) -> Event {
+        let FinalReply { text, claims } = match &self.final_check {
             Some(check) => {
                 check
                     .check(
@@ -421,8 +438,9 @@ where
                     )
                     .await
             }
-            None => reply,
-        }
+            None => reply.into(),
+        };
+        Event::Final { text, claims }
     }
 
     /// How long a `Client`-executor call waits for `Event::ClientToolResult`
@@ -541,7 +559,14 @@ where
                     // keep the durable prefix with the usual fallback notice.
                     let text = ctx.final_answer(CUT_OFF_NOTICE);
                     self.log.append_text(CUT_OFF_NOTICE.to_owned()).await?;
-                    self.emit(ctx, vec![Event::Final { text }]).await?;
+                    self.emit(
+                        ctx,
+                        vec![Event::Final {
+                            text,
+                            claims: Vec::new(),
+                        }],
+                    )
+                    .await?;
                     return Ok(Exit::Done);
                 }
                 // Preserve the exact interrupted prefix and avoid a separate
@@ -1142,9 +1167,7 @@ where
                 timing: timing.take(),
             });
             if !continues {
-                events.push(Event::Final {
-                    text: self.checked_final(ctx, final_text).await,
-                });
+                events.push(self.checked_final(ctx, final_text).await);
             }
             self.emit(ctx, events).await?;
             return Ok((!continues).then_some(Exit::Done));
@@ -1249,9 +1272,7 @@ where
                 timing,
             });
             if !continues {
-                events.push(Event::Final {
-                    text: self.checked_final(ctx, final_text).await,
-                });
+                events.push(self.checked_final(ctx, final_text).await);
             }
             self.emit(ctx, events).await?;
             *capacity_recovery = CapacityRecovery::Available;

@@ -2265,9 +2265,7 @@ async fn a_steer_from_before_the_rehydrate_point_is_not_carried_into_a_later_tur
         principal: bob(),
         text: "focus on the renewal date".into(),
     }); // cursor 2 -- never flushed within t1
-    log.host_append(Event::Final {
-        text: "done".into(),
-    }); // cursor 3
+    log.host_append(Event::final_text("done")); // cursor 3
     log.host_append(user_message("t2", "a completely different question")); // cursor 4
 
     // Excludes t1's own `UserMessage` (cursor 1) but includes its orphaned
@@ -2378,9 +2376,7 @@ async fn compaction_usage_is_durable_and_stops_an_exhausted_turn_before_dispatch
     for commit in [false, true] {
         let log = FakeLog::default();
         log.start_turn("old", "old input is lengthy enough to compact");
-        log.host_append(Event::Final {
-            text: "old done".into(),
-        });
+        log.host_append(Event::final_text("old done"));
         let mut ctx = log.start_turn("current", "continue");
         let model = FakeModel::new(vec![vec![text("should never run")]]);
         let tools = FakeTools::new(vec![]);
@@ -2451,9 +2447,7 @@ async fn declined_compaction_preserves_history_and_a_later_turn_can_recover() {
     }
     let log = FakeLog::default();
     log.start_turn("old", "Never publish without approval. Budget is $10.");
-    log.host_append(Event::Final {
-        text: "analysis unfinished".into(),
-    });
+    log.host_append(Event::final_text("analysis unfinished"));
     let mut ctx = log.start_turn("current", "continue investigating");
     let original = ctx.history().to_vec();
     let model = FakeModel::new(vec![vec![text("recovered answer")]]);
@@ -2530,9 +2524,7 @@ async fn capacity_recovery_does_not_retry_nonreducing_or_uncompactable_history()
                 served: None,
                 timing: None,
             });
-            log.host_append(Event::Final {
-                text: "done".into(),
-            });
+            log.host_append(Event::final_text("done"));
         }
         let mut ctx = log.start_turn("current", "keep this exact");
         let original = ctx.history().to_vec();
@@ -2595,9 +2587,7 @@ async fn capacity_recovery_respects_failure_class_visible_output_and_budget() {
             served: None,
             timing: None,
         });
-        log.host_append(Event::Final {
-            text: "unfinished".into(),
-        });
+        log.host_append(Event::final_text("unfinished"));
         let mut ctx = log.start_turn("current", "continue");
         let mut chunks = vec![usage(3, 1, 5)];
         if partial {
@@ -2646,7 +2636,7 @@ async fn capacity_recovery_respects_failure_class_visible_output_and_budget() {
             )));
         }
         if partial {
-            assert!(log.events().iter().any(|e| matches!(e, Event::Final { text } if text.starts_with("already visible answer") && text.ends_with(CUT_OFF_NOTICE))));
+            assert!(log.events().iter().any(|e| matches!(e, Event::Final { text, .. } if text.starts_with("already visible answer") && text.ends_with(CUT_OFF_NOTICE))));
         }
         assert_eq!(ctx, log.rehydrate());
     }
@@ -2667,9 +2657,7 @@ async fn summary_calls_obey_the_same_wall_budget_as_normal_model_calls() {
     }
     let log = FakeLog::default();
     log.start_turn("old", "old history");
-    log.host_append(Event::Final {
-        text: "old done".into(),
-    });
+    log.host_append(Event::final_text("old done"));
     let mut ctx = log.start_turn("current", "continue");
     let model = FakeModel::default();
     let engine = Engine::new(
@@ -2951,7 +2939,7 @@ async fn a_steer_during_a_cut_answer_continues_the_turn() {
         ])
     );
     assert!(
-        matches!(log.events().last(), Some(Event::Final { text }) if text == "corrected answer")
+        matches!(log.events().last(), Some(Event::Final { text, .. }) if text == "corrected answer")
     );
     assert_eq!(log.rehydrate(), ctx);
 }

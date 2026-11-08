@@ -183,7 +183,7 @@ async fn final_answer_text(log: &LocalLog) -> anyhow::Result<Option<String>> {
         .into_iter()
         .rev()
         .find_map(|(_, event)| match event {
-            Event::Final { text } => Some(text),
+            Event::Final { text, .. } => Some(text),
             _ => None,
         }))
 }
@@ -362,7 +362,7 @@ mod tests {
         let mut attempted_action = action;
         attempted_action.args["confirmation"] = serde_json::json!(attempted_action.id.as_str());
         assert!(!replayed.confirmed_action(&attempted_action));
-        assert!(matches!(events.last(), Some((_, Event::Final { text })) if text == "done"));
+        assert!(matches!(events.last(), Some((_, Event::Final { text, .. })) if text == "done"));
     }
 
     #[tokio::test]

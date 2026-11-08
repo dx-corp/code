@@ -254,6 +254,23 @@ pub struct StepTiming {
     pub first_text_ms: Option<u64>,
     /// Request start to the end of the response.
     pub total_ms: u64,
+    /// Tools the request declared to the model (its `tools` array). Zero on
+    /// rows written before the field existed.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub tools_declared: u32,
+    /// Bytes of the request's serialized `tools` array: what the declared
+    /// schemas cost in every step's prompt. Same default.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tool_schema_bytes: u64,
+    /// Bytes of the request's system prompt (`instructions` on Responses,
+    /// `system` on Messages), the part of the prompt that is not history.
+    /// Same default.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub instructions_bytes: u64,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// The default for `ClientToolRequested::deadline_ms` on a row written
@@ -269,6 +286,42 @@ pub fn args_digest(args: &serde_json::Value) -> String {
     // a string and there is no I/O.
     let bytes = serde_json::to_vec(args).unwrap_or_default();
     hex::encode(Sha256::digest(bytes))
+}
+
+/// One statement of a final reply that a tool result of the same turn
+/// verified: the record the reply named, what it said about it, and which
+/// results say so. Built only by a host final check from tool results; a
+/// statement no result supports never becomes a claim.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerClaim {
+    /// Stable within the turn (`c1`, `c2`, ...), for follow-ups by reference.
+    pub id: String,
+    /// The record the claim is about, as its tool result named it.
+    pub subject: String,
+    /// What is claimed about it: `status`, or a count such as `count.fail`.
+    pub predicate: String,
+    /// The value the tool result holds, normalized (a status class or a number).
+    pub value: String,
+    /// The set the claim was read from (`workspace tests`, `library checks`),
+    /// as the read's contract names it; `None` when the read declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub population: Option<String>,
+    /// When the source last observed the value, as the record states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    /// The tool results that hold the value; never empty.
+    pub sources: Vec<ClaimSource>,
+}
+
+/// A tool result a claim rests on: the call that produced it, and the owner
+/// receipt when the tool issued one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSource {
+    pub call: CallId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<ReceiptId>,
 }
 
 /// A tool call the model proposed. Durable from `ModelStepCompleted` on:
@@ -854,9 +907,14 @@ pub enum Event {
         summary: String,
     },
 
-    /// The turn finished; `text` is the last step's text.
+    /// The turn finished; `text` is the last step's text. `claims` are the
+    /// statements of `text` that this turn's tool results verified, written
+    /// by the host's final check ([`crate::FinalCheck`]) and never by the
+    /// model. Older rows and older readers omit them.
     Final {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        claims: Vec<AnswerClaim>,
     },
     Error {
         code: ErrorCode,
@@ -892,6 +950,14 @@ impl Event {
     /// Intentionally unsupported by ordinary `Event` deserialization: an
     /// older reader must refuse an encoded row instead of executing its
     /// non-authoritative, sanitized projection.
+    /// A `Final` with no claims: a reply no final check has verified.
+    pub fn final_text(text: impl Into<String>) -> Self {
+        Self::Final {
+            text: text.into(),
+            claims: Vec::new(),
+        }
+    }
+
     pub const STORED_JSON_V1_TYPE: &'static str = "_dex_event_json_v1";
 
     /// Explicit turn authority requires a reader that understands this mode.
@@ -1422,6 +1488,9 @@ mod tests {
                 first_event_ms: Some(4),
                 first_text_ms: None,
                 total_ms: 5,
+                tools_declared: 6,
+                tool_schema_bytes: 4096,
+                instructions_bytes: 0,
             }),
         };
         let value = serde_json::to_value(&step).expect("encode");
@@ -1440,6 +1509,26 @@ mod tests {
         };
         let text = serde_json::to_string(&untimed).expect("encode");
         assert!(!text.contains("timing"), "{text}");
+        // A row written before the request-size fields decodes them as zero,
+        // and zero is not written.
+        let old: StepTiming = serde_json::from_value(serde_json::json!({
+            "prepare_ms": 1, "mint_ms": 2, "headers_ms": 3,
+            "first_event_ms": null, "first_text_ms": null, "total_ms": 5
+        }))
+        .expect("decode a row from before the size fields");
+        assert_eq!(
+            (
+                old.tools_declared,
+                old.tool_schema_bytes,
+                old.instructions_bytes
+            ),
+            (0, 0, 0)
+        );
+        let text = serde_json::to_string(&old).expect("encode");
+        assert!(
+            !text.contains("tools_declared") && !text.contains("instructions_bytes"),
+            "{text}"
+        );
 
         let usage = Event::Usage(Usage {
             input_tokens: 10,

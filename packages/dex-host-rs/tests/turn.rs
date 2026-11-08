@@ -164,5 +164,5 @@ async fn read_then_write_then_done_with_no_approval() {
         })
         .count();
     assert_eq!(finished, 2, "the read and the write both ran to completion");
-    assert!(matches!(events.last(), Some(Event::Final { text }) if text == "done"));
+    assert!(matches!(events.last(), Some(Event::Final { text, .. }) if text == "done"));
 }

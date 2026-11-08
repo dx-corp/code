@@ -847,6 +847,7 @@ mod tests {
             Cursor(10),
             Event::Final {
                 text: "Read results recorded.".into(),
+                claims: Vec::new(),
             },
         ));
         let current_event = Event::UserMessage {
@@ -1835,6 +1836,7 @@ mod tests {
                 Cursor(5),
                 Event::Final {
                     text: "Results recorded.".into(),
+                    claims: Vec::new(),
                 },
             ),
             (

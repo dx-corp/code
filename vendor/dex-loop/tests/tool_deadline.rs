@@ -535,6 +535,7 @@ async fn compaction_time_consumes_the_tool_calls_remaining_wall_budget() {
     log.start_turn("old", "old history to summarize");
     log.host_append(dex_loop::Event::Final {
         text: "old done".into(),
+        claims: Vec::new(),
     });
     let mut ctx = log.start_turn("current", "read");
     let model = FakeModel::new(vec![
