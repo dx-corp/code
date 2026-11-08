@@ -1577,7 +1577,7 @@ where
                 tracing::info!(
                     event = "dex_tool_arguments_rejected",
                     tool = %call.tool,
-                    exposed = !spec.core,
+                    exposed = !spec.core && !self.routed_by_wrapper(&spec.name),
                     "tool call arguments rejected by the tool's schema"
                 );
                 prefetch.reads.discard(index);
@@ -2193,6 +2193,9 @@ where
             .search(&call.principal, query)
             .await
             .iter()
+            // A routed tool is declared through its wrapper; listing it again
+            // would offer two names for one call.
+            .filter(|name| !self.routed_by_wrapper(name))
             .filter_map(|name| self.tools.spec(name))
             .cloned()
             .collect();
