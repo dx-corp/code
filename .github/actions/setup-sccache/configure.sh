@@ -131,7 +131,7 @@ local_disk_ready() {
 select_local_or_gha() {
   if local_disk_ready; then
     SCCACHE_BACKEND="local"
-  elif [[ "${SCCACHE_ALLOW_GHA_FALLBACK}" == "true" ]]; then
+  elif [[ "${SCCACHE_ALLOW_GHA_FALLBACK}" == "true" && "${SCCACHE_NO_ACTIONS_CACHE_ENV:-}" != "1" ]]; then
     SCCACHE_BACKEND="gha"
   else
     SCCACHE_LOCAL_DIR="${RUNNER_TEMP:?RUNNER_TEMP is required}/sccache-no-gha-fallback"
@@ -316,6 +316,18 @@ export RUSTC_WRAPPER=sccache
 export SCCACHE_BASEDIRS="${GITHUB_WORKSPACE}"
 export SCCACHE_SERVER_UDS
 
+if [[ "${SCCACHE_BACKEND}" != "gcs" ]]; then
+  # sccache prefers an inherited GCS bucket over either fallback. Clear it
+  # for daemon startup and for later steps that can restart the daemon.
+  {
+    echo "SCCACHE_GCS_BUCKET="
+    echo "SCCACHE_GCS_RW_MODE="
+    echo "SCCACHE_GCS_KEY_PREFIX="
+    echo "SCCACHE_GCS_KEY_PATH="
+  } >>"${GITHUB_ENV}"
+  unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX SCCACHE_GCS_KEY_PATH
+fi
+
 if [[ "${SCCACHE_BACKEND}" == "gcs" ]]; then
   {
     echo "SCCACHE_GCS_BUCKET=${SCCACHE_GCS_BUCKET_NAME}"
@@ -358,21 +370,8 @@ elif [[ "${SCCACHE_BACKEND}" == "local" ]]; then
   export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE}"
   # Do not set SCCACHE_GHA_ENABLED or GCS vars: local disk is SCCACHE_DIR.
 else
-  {
-    echo "SCCACHE_GHA_ENABLED=true"
-    # GITHUB_ENV persists values across steps. Empty assignments prevent
-    # inherited runner or earlier-step GCS settings from overriding the
-    # selected GHA backend after this script exits.
-    echo "SCCACHE_GCS_BUCKET="
-    echo "SCCACHE_GCS_RW_MODE="
-    echo "SCCACHE_GCS_KEY_PREFIX="
-    echo "SCCACHE_GCS_KEY_PATH="
-  } >>"${GITHUB_ENV}"
+  echo "SCCACHE_GHA_ENABLED=true" >>"${GITHUB_ENV}"
   export SCCACHE_GHA_ENABLED=true
-  # A prior step or runner image may have left GCS vars set. sccache 0.15
-  # prefers GCS whenever SCCACHE_GCS_BUCKET is present, even if GHA is
-  # enabled, and --show-stats then prints Cache location gcs.
-  unset SCCACHE_GCS_BUCKET SCCACHE_GCS_RW_MODE SCCACHE_GCS_KEY_PREFIX SCCACHE_GCS_KEY_PATH
 fi
 
 # A live sccache 0.15 server with a multi-level chain reports only

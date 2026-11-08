@@ -75,6 +75,13 @@ where
                 callable.push(entry.clone());
             }
         }
+        // So are `act`'s operations: `act` is the model's preview step,
+        // and a script's nested call keeps the operation's own policy.
+        for entry in self.act_operation_specs() {
+            if callable.iter().all(|offered| offered.name != entry.name) {
+                callable.push(entry.clone());
+            }
+        }
         for name in ctx.exposed_tools() {
             if callable.iter().any(|entry| &entry.name == name) {
                 continue;
@@ -95,6 +102,7 @@ where
                     && entry.name.as_str() != agent_codemode::TOOL_NAME
                     && entry.name.as_str() != TOOLS_SEARCH
                     && entry.name.as_str() != TOOLS_CALL
+                    && entry.name.as_str() != ACT
                     && entry.name.as_str() != crate::GRC_GRAPH_TOOL_NAME
                     && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
             })
@@ -271,6 +279,7 @@ where
                             self.wrapper(&entry.name).is_none()
                                 && entry.name.as_str() != agent_codemode::TOOL_NAME
                                 && entry.name.as_str() != TOOLS_SEARCH
+                                && entry.name.as_str() != ACT
                                 && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
                                 && !matches!(
                                     entry.executor,

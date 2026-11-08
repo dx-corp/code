@@ -1958,7 +1958,7 @@ async fn tools_search_exposes_schemas_for_the_next_step() {
     assert_eq!(tools.run_ids(), strings(&["t1-2-0"]));
     let result = &view(&model.seen()[1])[2];
     assert!(
-        result.starts_with("tool:t1-1-0:ok:Call each with tools_call {\"name\": <name>, \"arguments\": <input matching its input_schema>}.\ncrm_lookup: Label for crm.lookup\n  description: \n  input_schema: {\"type\":\"object\"}"),
+        result.starts_with("tool:t1-1-0:ok:Call each with call {\"name\": <name>, \"arguments\": <input matching its input_schema>}.\ncrm_lookup: Label for crm.lookup\n  description: \n  input_schema: {\"type\":\"object\"}"),
         "{result}"
     );
     assert_eq!(log.rehydrate(), ctx);

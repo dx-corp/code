@@ -828,7 +828,7 @@ mod tests {
                 index: 1,
                 block: AiContentBlock::ToolUse {
                     id: "p1".into(),
-                    name: "user_ask".into(),
+                    name: "ask_human".into(),
                     input: serde_json::json!({}),
                     gemini_context: None,
                 },
@@ -882,7 +882,7 @@ mod tests {
             executor: dex_loop::ExecutorKind::User,
         };
         let declared = to_ai_tools(&[&spec]);
-        assert_eq!(declared[0].name, "user_ask");
+        assert_eq!(declared[0].name, "ask_human");
         assert_eq!(declared[0].description, "Ask the person");
     }
 

@@ -203,11 +203,26 @@ pub enum ExecutorKind {
 
 /// How model-visible text names a tool: registry names use dots
 /// (`dex.read`), and providers reject dots in function names, so the model
-/// sees `dex_read`. `dex-model` declares tools under this same name whenever
-/// it is a valid function name, so prose and declarations agree.
+/// sees `dex_read`. A few engine and core tools carry the general names of
+/// docs/design/dex-minimal-tools.md instead. `dex-model`
+/// declares tools under this same name whenever it is a valid function name,
+/// so prose and declarations agree, and maps a returned name back to the
+/// registry name, which the log, policy, receipts and surfaces keep.
 pub fn model_tool_name(name: &str) -> String {
-    name.replace('.', "_")
+    MODEL_NAMES
+        .iter()
+        .find(|(registry, _)| *registry == name)
+        .map_or_else(|| name.replace('.', "_"), |(_, model)| (*model).to_owned())
 }
+
+/// Registry names the model sees under a general name: the bounded script
+/// tool is `run`, the call of a found tool is `call`, and asking the person
+/// is `ask_human`.
+const MODEL_NAMES: &[(&str, &str)] = &[
+    (agent_codemode::TOOL_NAME, "run"),
+    ("tools.call", "call"),
+    ("user.ask", "ask_human"),
+];
 
 /// One registry entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,8 +247,8 @@ pub struct ToolSpec {
     pub executor: ExecutorKind,
 }
 
-/// A declared tool that runs another catalog tool. The first route whose
-/// `field` is present in the call's arguments names the tool, and the
+/// A declared tool that runs another catalog tool. The first route that
+/// matches the call's arguments names the tool, and the
 /// arguments pass to it unchanged. The call is unwrapped when proposed, as a
 /// `tools.call` is, so the log, policy, receipts and surfaces see the routed
 /// tool; a routed tool is callable without being core or found.
@@ -243,11 +258,35 @@ pub struct ToolWrapper {
     pub routes: Vec<WrapperRoute>,
 }
 
-/// One way a `ToolWrapper` call is routed: present `field` means `tool`.
+/// One way a `ToolWrapper` call is routed: present `field` means `tool`;
+/// with a `value`, only when `field` is that string. `tool` may be
+/// `tools.search`, which the wrapper then declares in its place.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WrapperRoute {
     pub field: String,
+    pub value: Option<String>,
     pub tool: ToolName,
+}
+
+impl WrapperRoute {
+    /// Whether this route names the tool for `arguments`.
+    pub fn matches(&self, arguments: &serde_json::Map<String, serde_json::Value>) -> bool {
+        arguments.get(&self.field).is_some_and(|present| {
+            self.value
+                .as_deref()
+                .is_none_or(|value| present.as_str() == Some(value))
+        })
+    }
+}
+
+/// A change `act` previews without a search first. `act`'s description names
+/// each by its model name and `summary`; the list is the same for every
+/// organization, so the declared bytes are too, and one an organization does
+/// not have is an unknown tool when previewed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActOperation {
+    pub tool: ToolName,
+    pub summary: String,
 }
 
 /// The policy decision for one call.
@@ -288,6 +327,19 @@ pub trait Tools: Send + Sync {
     /// order they are declared. The same list on every step keeps the
     /// provider's tool block byte-stable.
     fn wrappers(&self) -> &[ToolWrapper] {
+        &[]
+    }
+
+    /// Whether the engine declares `act`, the preview-then-submit path for
+    /// changes. With it on, `tools.call` refuses a change and points to it.
+    fn act(&self) -> bool {
+        false
+    }
+
+    /// The changes `act` reaches without a search, in the order its
+    /// description names them. They are not declared on their own; a
+    /// script reaches them as it reaches a wrapper's routed tools.
+    fn act_operations(&self) -> &[ActOperation] {
         &[]
     }
 

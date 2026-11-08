@@ -11,7 +11,10 @@ description: >
 
 inputs:
   version:
-    description: sccache release tag consumed by mozilla-actions/sccache-action.
+    description: >
+      sccache release tag. A runner that retains tools reuses the binary kept
+      by an earlier job; otherwise mozilla-actions/sccache-action downloads it,
+      falling back to install.sh's verified download (v0.15.0 is pinned).
     required: false
     default: v0.15.0
   backend:
@@ -65,11 +68,44 @@ inputs:
 runs:
   using: composite
   steps:
+    # A runner that keeps tools reuses its binary; GitHub release downloads
+    # return intermittent 504s, so download only on a miss.
+    - name: Use retained sccache
+      id: retained
+      shell: bash
+      env:
+        SCCACHE_VERSION: ${{ inputs.version }}
+      # Projections that ship this action without install.sh keep the download path.
+      run: |
+        if [[ -f "${GITHUB_ACTION_PATH}/install.sh" ]]; then
+          bash "${GITHUB_ACTION_PATH}/install.sh" use
+        else
+          echo "found=false" >> "${GITHUB_OUTPUT}"
+        fi
     - name: Install sccache
+      id: download
+      if: ${{ steps.retained.outputs.found != 'true' }}
+      continue-on-error: true
       uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       with:
         version: ${{ inputs.version }}
         disable_annotations: true
+    - name: Download pinned sccache when the action could not
+      if: ${{ steps.retained.outputs.found != 'true' && steps.download.outcome == 'failure' }}
+      shell: bash
+      env:
+        SCCACHE_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: bash "${GITHUB_ACTION_PATH}/install.sh" fetch
+    - name: Retain sccache for later jobs
+      if: ${{ steps.retained.outputs.found != 'true' }}
+      shell: bash
+      env:
+        SCCACHE_VERSION: ${{ inputs.version }}
+      run: |
+        if [[ -f "${GITHUB_ACTION_PATH}/install.sh" ]]; then
+          bash "${GITHUB_ACTION_PATH}/install.sh" retain
+        fi
     - name: Exchange GitHub OIDC for sccache bucket credentials
       id: wif
       if: ${{ inputs.wif-provider != '' && inputs.reader-service-account != '' }}
