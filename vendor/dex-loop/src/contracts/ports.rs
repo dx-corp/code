@@ -232,6 +232,24 @@ pub struct ToolSpec {
     pub executor: ExecutorKind,
 }
 
+/// A declared tool that runs another catalog tool. The first route whose
+/// `field` is present in the call's arguments names the tool, and the
+/// arguments pass to it unchanged. The call is unwrapped when proposed, as a
+/// `tools.call` is, so the log, policy, receipts and surfaces see the routed
+/// tool; a routed tool is callable without being core or found.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolWrapper {
+    pub spec: ToolSpec,
+    pub routes: Vec<WrapperRoute>,
+}
+
+/// One way a `ToolWrapper` call is routed: present `field` means `tool`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WrapperRoute {
+    pub field: String,
+    pub tool: ToolName,
+}
+
 /// The policy decision for one call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -265,6 +283,13 @@ pub enum Verdict {
 pub trait Tools: Send + Sync {
     /// Every tool this turn may use, core or discoverable.
     fn catalog(&self) -> &[ToolSpec];
+
+    /// Declared tools that route to catalog tools by their arguments, in the
+    /// order they are declared. The same list on every step keeps the
+    /// provider's tool block byte-stable.
+    fn wrappers(&self) -> &[ToolWrapper] {
+        &[]
+    }
 
     fn codemode_output_schema(&self, _name: &ToolName) -> Option<serde_json::Value> {
         None

@@ -1504,7 +1504,7 @@ where
                         self.search_tools(ctx, call).await?;
                         continue;
                     }
-                    if call.tool.as_str() == TOOLS_CALL {
+                    if self.unrouted(&call.tool) {
                         self.reject_tool_call(ctx, call).await?;
                         continue;
                     }
@@ -1559,7 +1559,7 @@ where
             // A `tools.call` still named so is one that named no catalog
             // tool or carried the wrong shape; the named ones were unwrapped
             // when proposed.
-            if call.tool.as_str() == TOOLS_CALL {
+            if self.unrouted(&call.tool) {
                 prefetch.reads.discard(index);
                 self.reject_tool_call(ctx, call).await?;
                 continue;
@@ -2278,6 +2278,12 @@ where
             .chain(std::iter::once(call_spec()))
             .chain(
                 self.tools
+                    .wrappers()
+                    .iter()
+                    .map(|wrapper| wrapper.spec.clone()),
+            )
+            .chain(
+                self.tools
                     .catalog()
                     .iter()
                     .filter(|spec| {
@@ -2305,10 +2311,37 @@ where
         if name.as_str() == TOOLS_CALL {
             return Some(call_spec());
         }
+        if let Some(wrapper) = self.wrapper(name) {
+            return Some(wrapper.spec.clone());
+        }
         self.tools
             .spec(name)
-            .filter(|spec| spec.core || ctx.exposed_tools().contains(name))
+            .filter(|spec| {
+                spec.core || ctx.exposed_tools().contains(name) || self.routed_by_wrapper(name)
+            })
             .cloned()
+    }
+
+    /// The declared wrapper named `name`.
+    fn wrapper(&self, name: &ToolName) -> Option<&crate::ToolWrapper> {
+        self.tools
+            .wrappers()
+            .iter()
+            .find(|wrapper| &wrapper.spec.name == name)
+    }
+
+    /// Whether a declared wrapper routes to `name`, which makes it callable.
+    fn routed_by_wrapper(&self, name: &ToolName) -> bool {
+        self.tools
+            .wrappers()
+            .iter()
+            .any(|wrapper| wrapper.routes.iter().any(|route| &route.tool == name))
+    }
+
+    /// A call still named as `tools.call` or a wrapper after unwrapping: its
+    /// arguments named no catalog tool, so it is refused with what to fix.
+    fn unrouted(&self, name: &ToolName) -> bool {
+        name.as_str() == TOOLS_CALL || self.wrapper(name).is_some()
     }
 
     /// A `tools.call` as the model made it, as the call it names when the
@@ -2321,6 +2354,18 @@ where
         name: ToolName,
         args: serde_json::Value,
     ) -> (ToolName, serde_json::Value) {
+        if let Some(wrapper) = self.wrapper(&name) {
+            let route = args.as_object().and_then(|object| {
+                wrapper
+                    .routes
+                    .iter()
+                    .find(|route| object.contains_key(&route.field))
+            });
+            return match route.filter(|route| self.tools.spec(&route.tool).is_some()) {
+                Some(route) => (route.tool.clone(), args),
+                None => (name, args),
+            };
+        }
         if name.as_str() != TOOLS_CALL {
             return (name, args);
         }
@@ -2342,6 +2387,19 @@ where
     /// argument that is missing or of the wrong type, or a name no catalog
     /// tool has. The model corrects the call in one step.
     async fn reject_tool_call(&self, ctx: &mut Context, call: &ProposedCall) -> Result<(), Fenced> {
+        if let Some(wrapper) = self.wrapper(&call.tool) {
+            let fields: Vec<&str> = wrapper
+                .routes
+                .iter()
+                .map(|route| route.field.as_str())
+                .collect();
+            let result = ToolResult::error(format!(
+                "{} needs one of these arguments: {}",
+                model_tool_name(wrapper.spec.name.as_str()),
+                fields.join(", ")
+            ));
+            return self.finish(ctx, call, result).await;
+        }
         let result = match validate_args(&call_spec(), &call.args) {
             Err(reason) => ToolResult::error(reason),
             Ok(()) => unknown_tool(&ToolName::new(
