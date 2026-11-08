@@ -104,3 +104,29 @@ async fn no_wrappers_declare_nothing_extra() {
     );
     assert_eq!(model.offered()[0], FIXED_TOOLS.map(String::from));
 }
+
+// A routed tool is declared through its wrapper, so a search never lists it
+// under its own name; other matches still appear.
+#[tokio::test]
+async fn search_never_lists_a_routed_tool() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![call("tools.search", json!({"query": "read"}))],
+        vec![text("done")],
+    ]);
+    let tools = FakeTools::new(vec![
+        hidden_read_tool("x.read_ref"),
+        hidden_read_tool("x.other"),
+    ])
+    .wrappers(vec![read_wrapper()])
+    .search_result("read", &["x.read_ref", "x.other"]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "find a reader");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    let results = view(&model.seen()[1]).join("\n");
+    assert!(results.contains("x_other"), "{results}");
+    assert!(!results.contains("x_read_ref"), "{results}");
+}
