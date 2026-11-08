@@ -309,6 +309,10 @@ pub struct AnswerClaim {
     /// When the source last observed the value, as the record states it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub as_of: Option<String>,
+    /// True when the value is a tally of one page of a larger read and no
+    /// result states the whole value: the real count is at least `value`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
     /// The tool results that hold the value; never empty.
     pub sources: Vec<ClaimSource>,
 }

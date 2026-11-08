@@ -1,6 +1,6 @@
 //! Declared wrapper tools (`Tools::wrappers`): which wrapper a name is,
-//! what it routes to, and the texts that name the tool the model finds
-//! tools with.
+//! what it routes to, which catalog tools are reachable undeclared, and the
+//! texts that name the tool the model finds tools with.
 
 use super::*;
 
@@ -27,6 +27,16 @@ where
             .wrappers()
             .iter()
             .any(|wrapper| wrapper.routes.iter().any(|route| &route.tool == name))
+    }
+
+    /// Whether the model may call catalog tool `spec` this step: it is core,
+    /// a search exposed it in this thread, a declared wrapper routes to it,
+    /// or `act` reaches it without a search.
+    pub(super) fn reachable(&self, ctx: &Context, spec: &ToolSpec) -> bool {
+        spec.core
+            || ctx.exposed_tools().contains(&spec.name)
+            || self.routed_by_wrapper(&spec.name)
+            || self.act_operation(&spec.name)
     }
 
     /// A call still named as `tools.call` or a wrapper after unwrapping: its

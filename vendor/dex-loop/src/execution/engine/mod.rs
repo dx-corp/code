@@ -15,8 +15,10 @@
 //! those calls as not run; a committed step adopts their results in place
 //! of running them again.
 
+mod act;
 mod codemode;
 mod wrappers;
+pub use act::{ACT, plan_digest};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -973,7 +975,7 @@ where
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
                         let index = calls.len();
                         let id = call_id(&turn, step, index);
-                        let (name, args) = self.unwrap_tool_call(name, args);
+                        let (name, args) = self.unwrap_tool_call(ctx, name, args);
                         let call = ProposedCall::new(id, name, args, principal.clone());
                         // The answer-only call offers no tools, so nothing may
                         // start on it.
@@ -1319,6 +1321,7 @@ where
         }
         if prefetch.started.len() != index
             || call.tool.as_str() == TOOLS_SEARCH
+            || call.tool.as_str() == ACT
             || call.tool.as_str() == crate::GRC_GRAPH_TOOL_NAME
             || call.tool.as_str() == crate::CONTEXT_POCKET_TOOL_NAME
         {
@@ -1505,6 +1508,10 @@ where
                         self.search_tools(ctx, call).await?;
                         continue;
                     }
+                    if call.tool.as_str() == ACT {
+                        self.act_call(ctx, call).await?;
+                        continue;
+                    }
                     if self.unrouted(&call.tool) {
                         self.reject_tool_call(ctx, call).await?;
                         continue;
@@ -1555,6 +1562,11 @@ where
             }
             if call.tool.as_str() == TOOLS_SEARCH {
                 self.search_tools(ctx, call).await?;
+                continue;
+            }
+            if call.tool.as_str() == ACT {
+                prefetch.reads.discard(index);
+                self.act_call(ctx, call).await?;
                 continue;
             }
             // A `tools.call` still named so is one that named no catalog
@@ -2218,10 +2230,7 @@ where
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!(
-                "Call each with {} {{\"name\": <name>, \"arguments\": <input matching its input_schema>}}.\n{found}",
-                model_tool_name(TOOLS_CALL)
-            )
+            format!("{}\n{found}", self.found_call_hint())
         };
         let mut events = Vec::with_capacity(2);
         if !matches.is_empty() {
@@ -2284,6 +2293,7 @@ where
             .into_iter()
             .chain(std::iter::once(codemode::spec()))
             .chain(std::iter::once(self.call_spec()))
+            .chain(self.act_spec())
             .chain(
                 self.tools
                     .wrappers()
@@ -2319,14 +2329,15 @@ where
         if name.as_str() == TOOLS_CALL {
             return Some(self.call_spec());
         }
+        if let Some(act) = self.act_spec().filter(|act| &act.name == name) {
+            return Some(act);
+        }
         if let Some(wrapper) = self.wrapper(name) {
             return Some(wrapper.spec.clone());
         }
         self.tools
             .spec(name)
-            .filter(|spec| {
-                spec.core || ctx.exposed_tools().contains(name) || self.routed_by_wrapper(name)
-            })
+            .filter(|spec| self.reachable(ctx, spec))
             .cloned()
     }
 
@@ -2337,9 +2348,13 @@ where
     /// tool was exposed to this thread is checked where every call is.
     fn unwrap_tool_call(
         &self,
+        ctx: &Context,
         name: ToolName,
         args: serde_json::Value,
     ) -> (ToolName, serde_json::Value) {
+        if let Some(unwrapped) = self.unwrap_act(ctx, &name, &args) {
+            return unwrapped;
+        }
         if let Some(wrapper) = self.wrapper(&name) {
             let route = args
                 .as_object()
@@ -2363,8 +2378,8 @@ where
         match self.tools.catalog().iter().find(|spec| {
             spec.name.as_str() == inner || model_tool_name(spec.name.as_str()) == inner
         }) {
-            Some(spec) => (spec.name.clone(), arguments.clone()),
-            None => (name, args),
+            Some(spec) if !self.redirects_to_act(spec) => (spec.name.clone(), arguments.clone()),
+            _ => (name, args),
         }
     }
 
@@ -2384,6 +2399,9 @@ where
                 model_tool_name(wrapper.spec.name.as_str()),
                 fields.join(", ")
             ));
+            return self.finish(ctx, call, result).await;
+        }
+        if let Some(result) = self.act_redirect(call) {
             return self.finish(ctx, call, result).await;
         }
         let result = match validate_args(&self.call_spec(), &call.args) {

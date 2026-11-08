@@ -68,8 +68,8 @@ pub use context::{
     ToolEvidence, TurnOutput,
 };
 pub use engine::{
-    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck, FinalReply,
-    TOOLS_CALL, TOOLS_SEARCH, validate_args,
+    ACT, CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck,
+    FinalReply, TOOLS_CALL, TOOLS_SEARCH, plan_digest, validate_args,
 };
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, AnswerClaim, ApprovalId, ApprovalMode, ArtifactRef,
@@ -83,8 +83,9 @@ pub use page::{
     PageAdmission, PageCollection, PageContext, PageFilter, PageRead, PageRecord, is_record_id,
 };
 pub use ports::{
-    Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
-    RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute, model_tool_name,
+    ActOperation, Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, MODEL_NAMES, Model,
+    ModelChunk, ModelError, RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute,
+    model_tool_name,
 };
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};

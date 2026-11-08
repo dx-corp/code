@@ -131,7 +131,7 @@ local_disk_ready() {
 select_local_or_gha() {
   if local_disk_ready; then
     SCCACHE_BACKEND="local"
-  elif [[ "${SCCACHE_ALLOW_GHA_FALLBACK}" == "true" ]]; then
+  elif [[ "${SCCACHE_ALLOW_GHA_FALLBACK}" == "true" && "${SCCACHE_NO_ACTIONS_CACHE_ENV:-}" != "1" ]]; then
     SCCACHE_BACKEND="gha"
   else
     SCCACHE_LOCAL_DIR="${RUNNER_TEMP:?RUNNER_TEMP is required}/sccache-no-gha-fallback"

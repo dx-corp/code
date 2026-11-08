@@ -508,6 +508,8 @@ struct ToolState {
 pub struct FakeTools {
     catalog: Arc<[ToolSpec]>,
     wrappers: Arc<[dex_loop::ToolWrapper]>,
+    act: bool,
+    act_operations: Arc<[dex_loop::ActOperation]>,
     state: Arc<Mutex<ToolState>>,
 }
 
@@ -516,6 +518,8 @@ impl FakeTools {
         Self {
             catalog: catalog.into(),
             wrappers: Arc::from([]),
+            act: false,
+            act_operations: Arc::from([]),
             state: Arc::default(),
         }
     }
@@ -524,6 +528,26 @@ impl FakeTools {
     #[allow(dead_code)] // configured by the wrapper scenarios
     pub fn wrappers(mut self, wrappers: Vec<dex_loop::ToolWrapper>) -> Self {
         self.wrappers = wrappers.into();
+        self
+    }
+
+    /// Declare `act`, the preview-then-submit path for changes.
+    #[allow(dead_code)] // configured by the act scenarios
+    pub fn with_act(mut self) -> Self {
+        self.act = true;
+        self
+    }
+
+    /// Changes `act` reaches without a search, each by name and summary.
+    #[allow(dead_code)] // configured by the act scenarios
+    pub fn with_act_operations(mut self, operations: &[(&str, &str)]) -> Self {
+        self.act_operations = operations
+            .iter()
+            .map(|(tool, summary)| dex_loop::ActOperation {
+                tool: ToolName::new(*tool),
+                summary: (*summary).to_owned(),
+            })
+            .collect();
         self
     }
 
@@ -634,6 +658,14 @@ impl Tools for FakeTools {
 
     fn wrappers(&self) -> &[dex_loop::ToolWrapper] {
         &self.wrappers
+    }
+
+    fn act(&self) -> bool {
+        self.act
+    }
+
+    fn act_operations(&self) -> &[dex_loop::ActOperation] {
+        &self.act_operations
     }
 
     async fn search(&self, _principal: &PrincipalId, query: &str) -> Vec<ToolName> {
