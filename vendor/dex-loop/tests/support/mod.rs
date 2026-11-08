@@ -507,6 +507,7 @@ struct ToolState {
 #[derive(Clone)]
 pub struct FakeTools {
     catalog: Arc<[ToolSpec]>,
+    wrappers: Arc<[dex_loop::ToolWrapper]>,
     state: Arc<Mutex<ToolState>>,
 }
 
@@ -514,8 +515,16 @@ impl FakeTools {
     pub fn new(catalog: Vec<ToolSpec>) -> Self {
         Self {
             catalog: catalog.into(),
+            wrappers: Arc::from([]),
             state: Arc::default(),
         }
+    }
+
+    /// Declare wrappers routing to catalog tools.
+    #[allow(dead_code)] // configured by the wrapper scenarios
+    pub fn wrappers(mut self, wrappers: Vec<dex_loop::ToolWrapper>) -> Self {
+        self.wrappers = wrappers.into();
+        self
     }
 
     /// Match tools whose production contract retains bounded inline text.
@@ -621,6 +630,10 @@ pub fn output_for(call: &CallId) -> ToolResult {
 impl Tools for FakeTools {
     fn catalog(&self) -> &[ToolSpec] {
         &self.catalog
+    }
+
+    fn wrappers(&self) -> &[dex_loop::ToolWrapper] {
+        &self.wrappers
     }
 
     async fn search(&self, _principal: &PrincipalId, query: &str) -> Vec<ToolName> {

@@ -120,3 +120,6 @@ async fn tools_call_is_the_call_it_names() {
     );
     assert_eq!(log.rehydrate(), ctx);
 }
+
+#[path = "tool_wrappers.rs"]
+mod tool_wrappers;

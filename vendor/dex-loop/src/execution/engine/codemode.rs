@@ -60,6 +60,21 @@ where
         // and User executors need an ordinary conversational call, not a VM
         // continuation; `tools.call` is the model's wrapper, not a script's.
         let mut callable = self.offered(ctx);
+        // A script calls a wrapper's routed tools by their own names; the
+        // wrapper itself is the model's routing, not a script's.
+        callable.retain(|entry| self.wrapper(&entry.name).is_none());
+        for route in self
+            .tools
+            .wrappers()
+            .iter()
+            .flat_map(|wrapper| &wrapper.routes)
+        {
+            if callable.iter().all(|entry| entry.name != route.tool)
+                && let Some(entry) = self.tools.spec(&route.tool)
+            {
+                callable.push(entry.clone());
+            }
+        }
         for name in ctx.exposed_tools() {
             if callable.iter().any(|entry| &entry.name == name) {
                 continue;
@@ -253,7 +268,8 @@ where
 
                     for (request, call) in calls.iter().zip(&proposals) {
                         let Some(entry) = self.offered_spec(ctx, &call.tool).filter(|entry| {
-                            entry.name.as_str() != agent_codemode::TOOL_NAME
+                            self.wrapper(&entry.name).is_none()
+                                && entry.name.as_str() != agent_codemode::TOOL_NAME
                                 && entry.name.as_str() != TOOLS_SEARCH
                                 && entry.name.as_str() != crate::CONTEXT_POCKET_TOOL_NAME
                                 && !matches!(

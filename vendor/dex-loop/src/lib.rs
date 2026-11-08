@@ -84,7 +84,7 @@ pub use page::{
 };
 pub use ports::{
     Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk, ModelError,
-    RequestSize, ToolSpec, Tools, Verdict, model_tool_name,
+    RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute, model_tool_name,
 };
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};
