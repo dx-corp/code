@@ -871,7 +871,7 @@ pub fn shape(event: &Event) -> String {
             ..
         } => format!("client_tool_result:{call}:{}", outcome(*result)),
         Event::Compaction { summary, .. } => format!("compaction:{summary}"),
-        Event::Final { text } => format!("final:{text}"),
+        Event::Final { text, .. } => format!("final:{text}"),
         Event::Error { code, message, .. } => format!("error:{}:{message}", code.as_str()),
         Event::Interrupted => "interrupted".into(),
     }

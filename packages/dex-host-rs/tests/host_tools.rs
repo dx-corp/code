@@ -330,7 +330,7 @@ async fn a_gated_command_runs_only_after_the_person_confirms_it() {
     assert!(marker.exists(), "the confirmed command ran");
     assert!(matches!(
         turn.events().await.last(),
-        Some(Event::Final { text }) if text == "created the marker"
+        Some(Event::Final { text, .. }) if text == "created the marker"
     ));
 }
 

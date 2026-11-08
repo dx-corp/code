@@ -23,6 +23,7 @@ fn historical_turn(log: &FakeLog) -> Context {
     });
     log.host_append(Event::Final {
         text: "unfinished".into(),
+        claims: Vec::new(),
     });
     log.start_turn("current", "Continue without publishing.")
 }
@@ -364,6 +365,7 @@ async fn capacity_recovery_reduces_history_once_before_retrying_the_same_turn() 
         });
         log.host_append(Event::Final {
             text: "unfinished".into(),
+            claims: Vec::new(),
         });
         let mut ctx = log.start_turn("current", "continue investigating, do not publish");
         let capacity = || {

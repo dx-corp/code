@@ -65,18 +65,18 @@ pub use content_policy::{
 };
 pub use context::{
     AttachmentInput, Context, Entry, MAX_CONTEXT_ATTACHMENTS, Message, TOOL_EVIDENCE_LIMIT,
-    ToolEvidence,
+    ToolEvidence, TurnOutput,
 };
 pub use engine::{
-    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck, TOOLS_CALL,
-    TOOLS_SEARCH, validate_args,
+    CODEMODE, CUT_OFF_NOTICE, DEFAULT_TOOL_CALL_DEADLINE, Engine, Exit, FinalCheck, FinalReply,
+    TOOLS_CALL, TOOLS_SEARCH, validate_args,
 };
 pub use event::{
-    AUTO_APPROVER, ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, AttemptNext, CallId,
-    ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass, ErrorCode, Event,
-    HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output, OutputRef, PrincipalId,
-    ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming, ThreadId, ToolName,
-    ToolResult, TurnId, Usage, args_digest,
+    AUTO_APPROVER, ActionConfirmation, AnswerClaim, ApprovalId, ApprovalMode, ArtifactRef,
+    AttemptNext, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass,
+    ErrorCode, Event, HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output,
+    OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming,
+    ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use page::{

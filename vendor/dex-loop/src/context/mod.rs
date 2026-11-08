@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::event::{
     ActionConfirmation, ApprovalId, ApprovalMode, ArtifactRef, CallId, ClientToolSpec,
     ConfirmationDecision, Cursor, Event, HEADLESS_AUTO_APPROVER, MessageId, Outcome, Output,
-    PrincipalId, ProposedCall, ProviderReasoning, ServedBy, ThreadId, ToolName, ToolResult, TurnId,
-    Usage,
+    PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, ServedBy, ThreadId, ToolName,
+    ToolResult, TurnId, Usage,
 };
 
 const NOT_RUN_NEW_TURN: &str = "not run: a new turn started first";
@@ -150,6 +150,18 @@ struct FailedCall {
     count: u32,
 }
 
+/// One succeeded tool result of the running turn, as a final check reads it:
+/// the call that produced it, its tool and arguments when the call was
+/// proposed in this context, the output and the owner receipt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TurnOutput {
+    pub call: CallId,
+    pub tool: Option<ToolName>,
+    pub args: Option<serde_json::Value>,
+    pub output: Output,
+    pub receipt: Option<ReceiptId>,
+}
+
 /// The latest owner tool completions retained independently of model history.
 /// Proposals and results are paired only by the typed event fold.
 #[derive(Clone, Debug, PartialEq)]
@@ -238,7 +250,7 @@ pub struct Context {
     pending_turns: Vec<PendingTurn>,
     /// What this turn's tools returned, derived from the durable log, for a
     /// final check. Kept outside compactable history.
-    turn_outputs: Vec<Output>,
+    turn_outputs: Vec<TurnOutput>,
     authorized_principal: Option<PrincipalId>,
     /// Unknown call outcomes in this turn, derived from the durable log.
     /// Kept outside model history so compaction cannot permit a fresh retry.
@@ -484,7 +496,7 @@ impl Context {
     }
 
     /// What this turn's tools returned, oldest first; failed calls are left out.
-    pub(crate) fn turn_outputs(&self) -> &[Output] {
+    pub(crate) fn turn_outputs(&self) -> &[TurnOutput] {
         &self.turn_outputs
     }
 
@@ -1054,7 +1066,14 @@ impl Context {
                 ..
             } => {
                 if *outcome == Outcome::Succeeded {
-                    self.turn_outputs.push(output.clone());
+                    let proposed = self.proposed_call(call);
+                    self.turn_outputs.push(TurnOutput {
+                        call: call.clone(),
+                        tool: proposed.map(|proposed| proposed.tool.clone()),
+                        args: proposed.map(|proposed| proposed.args.clone()),
+                        output: output.clone(),
+                        receipt: receipt.clone(),
+                    });
                 }
                 self.scratch.finish(call, *outcome);
                 if let Some(proposal) = self.proposed_call(call).cloned()

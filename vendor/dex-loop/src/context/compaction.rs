@@ -492,6 +492,7 @@ mod tests {
                     Cursor(3),
                     Event::Final {
                         text: String::new(),
+                        claims: Vec::new(),
                     },
                 ),
             ];
@@ -543,6 +544,7 @@ mod tests {
                 Cursor(3),
                 Event::Final {
                     text: String::new(),
+                    claims: Vec::new(),
                 },
             ),
         ];
@@ -571,6 +573,7 @@ mod tests {
             &mut events,
             Event::Final {
                 text: "old done".into(),
+                claims: Vec::new(),
             },
         );
         append(&mut events, user("current", "do not publish"));
@@ -609,6 +612,7 @@ mod tests {
             &mut events,
             Event::Final {
                 text: "current done".into(),
+                claims: Vec::new(),
             },
         );
         let mut next = rehydrate(thread(), &events);
@@ -652,6 +656,7 @@ mod tests {
             push(user("queued-two", "second queued request"));
             push(Event::Final {
                 text: "current done".into(),
+                claims: Vec::new(),
             });
             push(Event::Compaction {
                 covers_to_cursor: Cursor(2),
@@ -666,6 +671,7 @@ mod tests {
         assert_ne!(warm, rehydrate(thread(), &events[1..]));
         let finish = Event::Final {
             text: "first queued done".into(),
+            claims: Vec::new(),
         };
         append(&mut events, finish.clone());
         warm.observe(events.last().expect("event").0, &finish);
@@ -757,6 +763,7 @@ mod tests {
             &mut events,
             Event::Final {
                 text: "done".into(),
+                claims: Vec::new(),
             },
         );
         let mut ctx = rehydrate(thread(), &events);
@@ -1021,6 +1028,7 @@ mod cut_tests {
         events.extend(step(1, None));
         events.push(Event::Final {
             text: "done".into(),
+            claims: Vec::new(),
         });
         events.push(user("t2"));
         for round in 1..=rounds {

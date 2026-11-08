@@ -27,8 +27,10 @@ async fn new_answer_continuations_are_disabled_by_default() {
         1,
         "new continuation writing needs explicit opt-in"
     );
-    assert!(matches!(log.events().last(), Some(Event::Final { text })
-        if text == &format!("First part, {CUT_OFF_NOTICE}")));
+    assert!(
+        matches!(log.events().last(), Some(Event::Final { text, .. })
+        if text == &format!("First part, {CUT_OFF_NOTICE}"))
+    );
     assert_eq!(ctx, log.rehydrate());
 }
 
@@ -115,7 +117,7 @@ async fn a_transient_stream_failure_continues_the_visible_answer_once_without_to
                 .any(|shape| shape.contains(CUT_OFF_NOTICE))
         );
         assert!(
-            matches!(log.events().last(), Some(Event::Final { text }) if text == "The first finding is confirmed by the owner record."),
+            matches!(log.events().last(), Some(Event::Final { text, .. }) if text == "The first finding is confirmed by the owner record."),
             "Final must retain the prefix for browser and channel replay"
         );
         assert_eq!(ctx, log.rehydrate());
@@ -145,7 +147,7 @@ async fn an_interrupted_answer_gets_only_one_continuation() {
     );
     assert_eq!(model.calls(), 2);
     assert!(
-        matches!(log.events().last(), Some(Event::Final { text }) if text == &format!("First part, second part{CUT_OFF_NOTICE}"))
+        matches!(log.events().last(), Some(Event::Final { text, .. }) if text == &format!("First part, second part{CUT_OFF_NOTICE}"))
     );
     assert_eq!(ctx, log.rehydrate());
 }
@@ -211,7 +213,7 @@ async fn interrupted_answer_replay_continues_with_writing_disabled() {
     assert_eq!(model.calls(), 1);
     assert!(model.offered()[0].is_empty());
     assert!(
-        matches!(log.events().last(), Some(Event::Final { text }) if text == "First part, the rest.")
+        matches!(log.events().last(), Some(Event::Final { text, .. }) if text == "First part, the rest.")
     );
     assert_eq!(ctx, log.rehydrate());
 }
@@ -236,8 +238,10 @@ async fn disabled_writers_still_reject_tools_from_a_pending_continuation() {
             .iter()
             .any(|event| matches!(event, Event::ToolStarted { .. }))
     );
-    assert!(matches!(log.events().last(), Some(Event::Final { text })
-        if text == &format!("First part, {CUT_OFF_NOTICE}")));
+    assert!(
+        matches!(log.events().last(), Some(Event::Final { text, .. })
+        if text == &format!("First part, {CUT_OFF_NOTICE}"))
+    );
     assert_eq!(ctx, log.rehydrate());
 }
 
@@ -266,7 +270,7 @@ async fn a_crashed_continuation_does_not_get_another_model_call() {
         "replay must preserve the consumed continuation allowance"
     );
     assert!(
-        matches!(log.events().last(), Some(Event::Final { text }) if text == &format!("First part, {CUT_OFF_NOTICE}"))
+        matches!(log.events().last(), Some(Event::Final { text, .. }) if text == &format!("First part, {CUT_OFF_NOTICE}"))
     );
     assert_eq!(ctx, log.rehydrate());
 }
@@ -293,7 +297,7 @@ async fn a_user_steer_supersedes_pending_answer_continuation() {
         "the user's new request retains ordinary tool admission"
     );
     assert!(
-        matches!(log.events().last(), Some(Event::Final { text }) if text == "The new answer.")
+        matches!(log.events().last(), Some(Event::Final { text, .. }) if text == "The new answer.")
     );
     assert_eq!(ctx, log.rehydrate());
 }
