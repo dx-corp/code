@@ -191,6 +191,10 @@ lto = false
 codegen-units = 16
 
 [patch.crates-io]
+# The rust/ members this workspace path-depends on carry the cargo-hakari
+# workspace-hack (rust/.config/hakari.toml); resolve it to the empty stand-in
+# so this workspace inherits none of the unified dependencies.
+evalops-workspace-hack = { path = "../../rust/workspace-hack-stub" }
 aws-smithy-xml-v062 = { package = "aws-smithy-xml", path = "vendor/aws-smithy-xml-0.62.0" }
 aws-smithy-schema-v020 = { package = "aws-smithy-schema", path = "vendor/aws-smithy-schema-0.2.0" }
 tokio-websockets = { path = "vendor/tokio-websockets-0.10.1" }

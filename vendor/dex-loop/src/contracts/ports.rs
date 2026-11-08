@@ -204,7 +204,7 @@ pub enum ExecutorKind {
 /// How model-visible text names a tool: registry names use dots
 /// (`dex.read`), and providers reject dots in function names, so the model
 /// sees `dex_read`. A few engine and core tools carry the general names of
-/// docs/design/dex-minimal-tools.md instead ([`MODEL_NAMES`]). `dex-model`
+/// docs/design/dex-minimal-tools.md instead. `dex-model`
 /// declares tools under this same name whenever it is a valid function name,
 /// so prose and declarations agree, and maps a returned name back to the
 /// registry name, which the log, policy, receipts and surfaces keep.
@@ -218,7 +218,7 @@ pub fn model_tool_name(name: &str) -> String {
 /// Registry names the model sees under a general name: the bounded script
 /// tool is `run`, the call of a found tool is `call`, and asking the person
 /// is `ask_human`.
-pub const MODEL_NAMES: &[(&str, &str)] = &[
+const MODEL_NAMES: &[(&str, &str)] = &[
     (agent_codemode::TOOL_NAME, "run"),
     ("tools.call", "call"),
     ("user.ask", "ask_human"),

@@ -83,9 +83,8 @@ pub use page::{
     PageAdmission, PageCollection, PageContext, PageFilter, PageRead, PageRecord, is_record_id,
 };
 pub use ports::{
-    ActOperation, Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, MODEL_NAMES, Model,
-    ModelChunk, ModelError, RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute,
-    model_tool_name,
+    ActOperation, Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk,
+    ModelError, RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute, model_tool_name,
 };
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};
