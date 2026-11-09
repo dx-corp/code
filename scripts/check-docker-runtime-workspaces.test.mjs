@@ -199,6 +199,26 @@ test("Docker runtime guard rejects a named-context dependency outside the narrow
 		/managed-inference-contract.*narrowed Rust workspace/);
 });
 
+test("Docker runtime guard rejects a missing workspace-hack stand-in copy", () => {
+	const copy = "COPY --from=dex-loop-workspace /workspace-hack-stub /rust/workspace-hack-stub\n";
+	assert.ok(
+		sourceDockerfile.includes(copy),
+		"the checked-in Dockerfile copies the workspace-hack stand-in",
+	);
+	assert.throws(() => runChecker(sourceDockerfile.replace(copy, "")),
+		/workspace-hack-stub.*before cargo chef prepare/);
+});
+
+test("Docker runtime guard rejects a workspace-hack stand-in copied after preparation", () => {
+	const copy = "COPY --from=dex-loop-workspace /workspace-hack-stub /rust/workspace-hack-stub\n";
+	const without = sourceDockerfile.replace(copy, "");
+	const tooLate = without.replace(
+		"RUN cargo chef prepare --recipe-path recipe.json",
+		`RUN cargo chef prepare --recipe-path recipe.json\n${copy.trimEnd()}`,
+	);
+	assert.throws(() => runChecker(tooLate), /workspace-hack-stub.*before cargo chef prepare/);
+});
+
 test("Docker runtime guard resolves transitive target dependencies from Cargo manifests", () => {
 	assert.throws(() => runChecker(sourceDockerfile, sourceCargoManifest, { transitive: true }),
 		/receipt-contract.*before cargo chef prepare/);
@@ -348,3 +368,4 @@ test("Docker runtime guard needs the platform tree in the native stage before th
 	assert.throws(() => runChecker(noNativeCopy, sourceCargoManifest, { platformCrate: true }),
 		/before cargo chef cook in the native stage/);
 });
+
