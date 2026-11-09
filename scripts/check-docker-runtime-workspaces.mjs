@@ -202,6 +202,25 @@ try {
 			throw new Error(`Dockerfile omits a platform crate build context: ${missingContext.join(", ")}`);
 		}
 	}
+	// [patch.crates-io] targets are not cargo metadata dependencies, so the
+	// walk above never visits them. A path patch outside this workspace (for
+	// example the rust/workspace-hack-stub stand-in) is still an image input
+	// cargo reads while resolving the recipe during cargo chef prepare.
+	const patchSection = cargoManifest.match(/\[patch\.crates-io\]([\s\S]*?)(?=\n\[|$)/);
+	const patchedOutsideWorkspace = [...(patchSection?.[1].matchAll(/\bpath\s*=\s*"([^"\n]+)"/g) ?? [])]
+		.map((match) => resolve(maestroRoot, match[1]))
+		.filter((target) => !within(maestroRoot, target) && within(rustRoot, target));
+	if (patchedOutsideWorkspace.length > 0) {
+		const prepare = plannerStage.search(/^RUN\s+cargo\s+chef\s+prepare\b/m);
+		const plannerLines = prepare < 0 ? [] : plannerStage.slice(0, prepare).split("\n").map((line) => line.trim());
+		for (const target of new Set(patchedOutsideWorkspace)) {
+			const path = relative(rustRoot, target).split(sep).join("/");
+			const copy = `COPY --from=dex-loop-workspace /${path} /rust/${path}`;
+			if (!plannerLines.includes(copy)) {
+				throw new Error(`Dockerfile omits a patched crates-io target: ${copy} before cargo chef prepare in the planner stage`);
+			}
+		}
+	}
 	if (external.length > 0) {
 		const prepare = plannerStage.search(/^RUN\s+cargo\s+chef\s+prepare\b/m);
 		const plannerInputs = plannerStage.slice(0, Math.max(0, prepare));
@@ -290,3 +309,4 @@ if (/ENTRYPOINT\s+\[(?:"node"|"bun")/.test(dockerfile)) {
 }
 
 console.log("Verified native-only Docker runtime contract.");
+

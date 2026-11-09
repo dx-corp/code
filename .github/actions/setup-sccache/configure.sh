@@ -18,6 +18,13 @@ SCCACHE_BACKEND="${SCCACHE_BACKEND:-auto}"
 SCCACHE_ALLOW_GHA_FALLBACK="${SCCACHE_ALLOW_GHA_FALLBACK:-true}"
 SCCACHE_CURL="${SCCACHE_CURL:-curl}"
 SCCACHE_BIN="${SCCACHE_BIN:-sccache}"
+if ! resolved_sccache="$(command -v "${SCCACHE_BIN}")" \
+  || [[ ! -f "${resolved_sccache}" || ! -x "${resolved_sccache}" ]]; then
+  echo "::error::sccache executable is unavailable: ${SCCACHE_BIN}" >&2
+  exit 1
+fi
+# Child tools can reset PATH after setup; retain the executable we verified.
+SCCACHE_BIN="$(cd "$(dirname "${resolved_sccache}")" && pwd)/$(basename "${resolved_sccache}")"
 SCCACHE_METADATA_EMAIL_URL="${SCCACHE_METADATA_EMAIL_URL:-http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/email}"
 SCCACHE_METADATA_TOKEN_URL="${SCCACHE_METADATA_TOKEN_URL:-http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token}"
 
@@ -307,12 +314,12 @@ rm -f "${SCCACHE_SERVER_UDS}"
 
 {
   echo "SCCACHE_IDLE_TIMEOUT=0"
-  echo "RUSTC_WRAPPER=sccache"
+  echo "RUSTC_WRAPPER=${SCCACHE_BIN}"
   echo "SCCACHE_BASEDIRS=${GITHUB_WORKSPACE}"
   echo "SCCACHE_SERVER_UDS=${SCCACHE_SERVER_UDS}"
 } >>"${GITHUB_ENV}"
 export SCCACHE_IDLE_TIMEOUT=0
-export RUSTC_WRAPPER=sccache
+export RUSTC_WRAPPER="${SCCACHE_BIN}"
 export SCCACHE_BASEDIRS="${GITHUB_WORKSPACE}"
 export SCCACHE_SERVER_UDS
 
