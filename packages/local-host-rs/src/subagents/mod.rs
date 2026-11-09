@@ -2160,7 +2160,7 @@ impl SubagentManager {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return ToolResult::success("No subagents").with_details(serde_json::json!({
                     "snapshotId": snapshot_id,
-                    "complete": true,
+                    "complete": true, // nosemgrep: evalops-rust-no-hardcoded-complete -- no subagents directory means there are none.
                     "count": 0,
                     "subagents": [],
                     "errors": []
