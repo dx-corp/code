@@ -31,7 +31,7 @@ def application_source(text: str) -> str:
     text = tokens.sub(lambda m: re.sub(r'[^\n]', ' ', m[0])
                       if m[0].startswith(('/', '/*')) else m[0], text)
     structure = tokens.sub(lambda m: re.sub(r'[^\n]', ' ', m[0]), text)
-    pattern = re.compile(r'#\[cfg\(test\)\]\s*mod\s+\w+\s*\{')
+    pattern = re.compile(r'#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{')
     while match := pattern.search(structure):
         depth, pos = 1, match.end()
         pieces = re.compile(r'[{}]')
