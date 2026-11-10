@@ -368,8 +368,86 @@ impl Drop for ProcessGroupGuard {
 }
 
 #[cfg(all(test, unix))]
+pub(crate) async fn read_fixture_pid(path: &std::path::Path) -> u32 {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Some(pid) = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+            {
+                return pid;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("fixture must publish its child's pid")
+}
+
+#[cfg(all(test, unix))]
+pub(crate) async fn assert_process_reaped(pid: u32) {
+    let raw_pid = i32::try_from(pid).expect("valid fixture pid");
+    assert!(raw_pid > 1);
+    let reaped = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            // SAFETY: signal 0 probes only the fixture's recorded child.
+            if unsafe { libc::kill(raw_pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    if reaped.is_err() {
+        // Bound the failing regression itself without hiding its failure.
+        kill_process_tree(pid);
+    }
+    assert!(
+        reaped.is_ok(),
+        "owned descendant {pid} must be killed and reaped"
+    );
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn group_cleanup_preserves_an_independent_live_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut children = Vec::new();
+        let mut groups = Vec::new();
+        let mut descendants = Vec::new();
+        for name in ["owned", "independent"] {
+            let pid_file = directory.path().join(name);
+            let mut command = tokio::process::Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "sleep 60 & printf '%s\\n' \"$!\" > \"$1\"; wait",
+                    "fixture",
+                ])
+                .arg(&pid_file)
+                .kill_on_drop(true);
+            set_new_process_group(&mut command);
+            let child = command.spawn().unwrap();
+            groups.push(ProcessGroupGuard::new(child.id()));
+            children.push(child);
+            descendants.push(read_fixture_pid(&pid_file).await);
+        }
+        let independent_group = groups.pop().unwrap();
+        drop(groups.pop().unwrap());
+        assert!(!children[0].wait().await.unwrap().success());
+        assert_process_reaped(descendants[0]).await;
+        assert!(children[1].try_wait().unwrap().is_none());
+        // SAFETY: signal 0 probes the independent fixture's recorded child.
+        assert_eq!(unsafe { libc::kill(descendants[1] as i32, 0) }, 0);
+        drop(independent_group);
+        assert!(!children[1].wait().await.unwrap().success());
+        assert_process_reaped(descendants[1]).await;
+    }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]

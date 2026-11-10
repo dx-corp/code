@@ -186,6 +186,8 @@ enum ConnectionBackend {
     /// Stdio subprocess
     Stdio {
         process: Child,
+        #[cfg(unix)]
+        process_group: crate::tools::ProcessGroupGuard,
         stdin: tokio::process::ChildStdin,
         notification_rx: NotificationQueue,
         stdout_reader: Option<AbortOnDropHandle<()>>,
@@ -370,10 +372,14 @@ impl McpConnection {
             cmd.env(key, expand_env_vars_for_scope(value, self.config.scope));
         }
 
-        // Spawn the process
+        // Own descendants before any of the transport's fallible setup runs.
+        #[cfg(unix)]
+        crate::tools::set_new_process_group(&mut cmd);
         let mut child = cmd
             .spawn()
             .map_err(|e| McpError::ConnectionFailed(format!("Failed to spawn {command}: {e}")))?;
+        #[cfg(unix)]
+        let process_group = crate::tools::ProcessGroupGuard::new(child.id());
 
         // Take stdin/stdout
         let stdin = child
@@ -423,6 +429,8 @@ impl McpConnection {
 
         self.backend = Some(ConnectionBackend::Stdio {
             process: child,
+            #[cfg(unix)]
+            process_group,
             stdin,
             notification_rx,
             stdout_reader: Some(stdout_reader),
@@ -1086,6 +1094,8 @@ impl McpConnection {
         match self.backend.take() {
             Some(ConnectionBackend::Stdio {
                 mut process,
+                #[cfg(unix)]
+                mut process_group,
                 stdout_reader,
                 ..
             }) => {
@@ -1095,6 +1105,8 @@ impl McpConnection {
                     reader.abort();
                     let _ = reader.await;
                 }
+                #[cfg(unix)]
+                process_group.terminate();
                 let _ = process.kill().await;
             }
             Some(ConnectionBackend::Http(mut http)) => {
@@ -1132,7 +1144,15 @@ impl McpConnection {
 impl Drop for McpConnection {
     fn drop(&mut self) {
         // Try to kill the process synchronously
-        if let Some(ConnectionBackend::Stdio { mut process, .. }) = self.backend.take() {
+        if let Some(ConnectionBackend::Stdio {
+            mut process,
+            #[cfg(unix)]
+            mut process_group,
+            ..
+        }) = self.backend.take()
+        {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = process.start_kill();
         }
     }

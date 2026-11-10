@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use super::*;
 use crate::mcp::config::McpServerConfig;
+#[cfg(unix)]
+use crate::tools::process_utils::{assert_process_reaped, read_fixture_pid};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc};
@@ -35,22 +37,7 @@ fn stub_config(name: &str) -> McpServerConfig {
 
 #[cfg(unix)]
 async fn assert_stdio_reader_released(disconnect: bool) {
-    struct WorkerCleanup(std::path::PathBuf);
-    impl Drop for WorkerCleanup {
-        fn drop(&mut self) {
-            if let Some(pid) = std::fs::read_to_string(&self.0)
-                .ok()
-                .and_then(|pid| pid.parse::<i32>().ok())
-                .filter(|pid| *pid > 0)
-            {
-                // SAFETY: this PID belongs to the worker created by this fixture.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-            }
-        }
-    }
-
     let worker_pid = tempfile::NamedTempFile::new().unwrap();
-    let _worker_cleanup = WorkerCleanup(worker_pid.path().to_path_buf());
     let mut config = stub_config("inherited-stdout");
     config.command = Some("python3".into());
     config.args = vec!["-u".into(), "-c".into(), r"
@@ -80,6 +67,14 @@ for line in sys.stdin:
     config.timeout = Some(10_000);
     let mut connection = McpConnection::new(config);
     connection.connect().await.unwrap();
+    // This fixture owns the writer independently of the connection. Keep it
+    // alive through reader teardown so EOF cannot make the assertion pass.
+    let worker_group = match connection.backend.as_mut().unwrap() {
+        ConnectionBackend::Stdio { process_group, .. } => {
+            std::mem::replace(process_group, crate::tools::ProcessGroupGuard::new(None))
+        }
+        ConnectionBackend::Http(_) => unreachable!("stdio fixture"),
+    };
     let pid: i32 = std::fs::read_to_string(worker_pid.path())
         .unwrap()
         .parse()
@@ -107,6 +102,8 @@ for line in sys.stdin:
         0,
         "worker must still hold stdout open"
     );
+    drop(worker_group);
+    assert_process_reaped(u32::try_from(pid).unwrap()).await;
 }
 
 #[cfg(unix)]
@@ -328,17 +325,19 @@ async fn completed_stdio_delivery_wins_after_start_when_cancellation_is_ready() 
 #[cfg(unix)]
 #[tokio::test]
 async fn abandoned_stdio_requests_release_pending_entries() {
-    let mut process = Command::new("python3")
+    let mut command = Command::new("python3");
+    command
         .args(["-c", "import time; time.sleep(60)"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+        .kill_on_drop(true);
+    crate::tools::set_new_process_group(&mut command);
+    let mut process = command.spawn().unwrap();
     let stdin = process.stdin.take().unwrap();
     let (_, notification_rx) = notification_channel();
     let mut connection = McpConnection::new(stub_config("abandoned-requests"));
     connection.backend = Some(ConnectionBackend::Stdio {
+        process_group: crate::tools::ProcessGroupGuard::new(process.id()),
         process,
         stdin,
         notification_rx,
@@ -375,18 +374,20 @@ async fn abandoned_stdio_requests_release_pending_entries() {
 #[cfg(unix)]
 #[tokio::test]
 async fn pre_cancelled_stdio_request_preserves_connected_transport() {
-    let mut process = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg("sleep 60")
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn healthy MCP stub");
+        .stdout(Stdio::piped());
+    crate::tools::set_new_process_group(&mut command);
+    let mut process = command.spawn().expect("spawn healthy MCP stub");
     let stdin = process.stdin.take().expect("stub stdin");
     let (_notification_tx, notification_rx) = notification_channel();
 
     let mut connection = McpConnection::new(stub_config("healthy-pre-cancelled"));
     connection.backend = Some(ConnectionBackend::Stdio {
+        process_group: crate::tools::ProcessGroupGuard::new(process.id()),
         process,
         stdin,
         notification_rx,
@@ -420,13 +421,15 @@ async fn pre_cancelled_stdio_request_preserves_connected_transport() {
 async fn cancelled_stdio_reconnect_reaps_partial_backend() {
     let temp = tempfile::tempdir().expect("tempdir");
     let pid_file = temp.path().join("reconnect-pid");
+    let descendant_pid_file = temp.path().join("reconnect-descendant-pid");
     let mut config = stub_config("cancelled-reconnect");
     config.command = Some("sh".to_string());
     config.args = vec![
         "-c".to_string(),
-        "echo $$ > \"$1\"; sleep 60".to_string(),
+        "sleep 60 & printf '%s\\n' \"$!\" > \"$2\"; echo $$ > \"$1\"; wait".to_string(),
         "reconnect-stub".to_string(),
         pid_file.to_string_lossy().into_owned(),
+        descendant_pid_file.to_string_lossy().into_owned(),
     ];
     config.timeout = Some(5_000);
 
@@ -444,6 +447,7 @@ async fn cancelled_stdio_reconnect_reaps_partial_backend() {
 
     let mut connection = McpConnection::new(config);
     connection.backend = Some(ConnectionBackend::Stdio {
+        process_group: crate::tools::ProcessGroupGuard::new(None),
         process: dead_process,
         stdin,
         notification_rx,
@@ -505,6 +509,7 @@ async fn cancelled_stdio_reconnect_reaps_partial_backend() {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ESRCH)
     );
+    assert_process_reaped(read_fixture_pid(&descendant_pid_file).await).await;
 }
 
 #[cfg(unix)]
@@ -542,18 +547,25 @@ fn saturate_pipe_and_leave_nonblocking(fd: std::os::fd::RawFd) {
 #[cfg(unix)]
 #[tokio::test]
 async fn cancellation_during_stdio_write_drops_pending_and_transport() {
-    let mut process = Command::new("sh")
+    let directory = tempfile::tempdir().unwrap();
+    let pid_file = directory.path().join("writer-descendant-pid");
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
-        .arg("sleep 60")
+        .arg("sleep 60 & printf '%s\\n' \"$!\" > \"$1\"; wait")
+        .arg("blocked-writer-fixture")
+        .arg(&pid_file)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn non-reading MCP stub");
+        .stdout(Stdio::piped());
+    crate::tools::set_new_process_group(&mut command);
+    let mut process = command.spawn().expect("spawn non-reading MCP stub");
+    let descendant = read_fixture_pid(&pid_file).await;
     let stdin = process.stdin.take().expect("stub stdin");
     let (_notification_tx, notification_rx) = notification_channel();
 
     let mut connection = McpConnection::new(stub_config("blocked-writer"));
     connection.backend = Some(ConnectionBackend::Stdio {
+        process_group: crate::tools::ProcessGroupGuard::new(process.id()),
         process,
         stdin,
         notification_rx,
@@ -584,6 +596,7 @@ async fn cancellation_during_stdio_write_drops_pending_and_transport() {
         connection.pending.lock().unwrap().is_empty(),
         "cancelled request must not leave a pending waiter"
     );
+    assert_process_reaped(descendant).await;
 }
 
 #[cfg(unix)]
@@ -595,18 +608,19 @@ async fn saturated_stdio_cancellation_delivery_is_bounded_and_disconnects() {
     let ready = temp.path().join("read-complete");
     let request = McpRequest::call_tool(11, "mutate", serde_json::json!({"value": "original"}));
 
-    let mut process = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-c")
         .arg(
             "IFS= read -r _request; \
-                 : > \"$1\"; sleep 60",
+                 sleep 60 & printf '%s\\n' \"$!\" > \"$1\"; wait",
         )
         .arg("stdio-cancel-test")
         .arg(&ready)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn selectively-reading MCP stub");
+        .stdout(Stdio::piped());
+    crate::tools::set_new_process_group(&mut command);
+    let mut process = command.spawn().expect("spawn selectively-reading MCP stub");
     let stdin = process.stdin.take().expect("stub stdin");
     // SAFETY: `dup` creates a separately owned descriptor referring to
     // the same pipe; OwnedFd below assumes ownership of exactly that dup.
@@ -618,6 +632,7 @@ async fn saturated_stdio_cancellation_delivery_is_bounded_and_disconnects() {
     let (_notification_tx, notification_rx) = notification_channel();
     let mut connection = McpConnection::new(stub_config("saturated-cancel-writer"));
     connection.backend = Some(ConnectionBackend::Stdio {
+        process_group: crate::tools::ProcessGroupGuard::new(process.id()),
         process,
         stdin,
         notification_rx,
@@ -627,9 +642,14 @@ async fn saturated_stdio_cancellation_delivery_is_bounded_and_disconnects() {
 
     let cancel = CancellationToken::new();
     let cancel_after_request = cancel.clone();
+    let descendant_pid_file = ready.clone();
     tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !ready.exists() {
+            while std::fs::read_to_string(&ready)
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .is_none()
+            {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -658,6 +678,7 @@ async fn saturated_stdio_cancellation_delivery_is_bounded_and_disconnects() {
         connection.pending.lock().unwrap().is_empty(),
         "failed cancellation delivery must not retain the response waiter"
     );
+    assert_process_reaped(read_fixture_pid(&descendant_pid_file).await).await;
 }
 
 async fn read_http_request(socket: &mut TcpStream) -> Option<(String, String)> {
