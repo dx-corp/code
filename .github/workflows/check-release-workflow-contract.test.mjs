@@ -1144,14 +1144,38 @@ async function runGhcrShellStep(t, script, image, overrides = {}) {
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const bin = join(directory, "bin");
 	await mkdir(bin);
-	await writeFile(join(bin, "docker"), '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DOCKER_CALLS"\n');
+	await writeFile(join(bin, "docker"), `#!/bin/sh
+printf '%s\\n' "$@" > "$DOCKER_CALLS"
+if [ "$DOCKER_FAIL_ONCE" = 1 ] && [ ! -e "$DOCKER_ATTEMPTED" ]; then
+  touch "$DOCKER_ATTEMPTED"
+  exit 1
+fi
+`);
 	await writeFile(join(bin, "gh"), '#!/bin/sh\necho "unexpected deployment dispatch" >&2\nexit 91\n');
+	await writeFile(join(bin, "git"), `#!/bin/sh
+printf '%s\\n' "$@" > "$GIT_CALLS"
+if [ "$LIVE_MAIN_STATUS" != 0 ]; then
+  echo "fatal: remote HTTP 503" >&2
+  exit "$LIVE_MAIN_STATUS"
+fi
+if [ -e "$GIT_ATTEMPTED" ] && [ -n "$NEXT_MAIN_RESPONSE" ]; then
+  printf '%s\\n' "$NEXT_MAIN_RESPONSE"
+else
+  touch "$GIT_ATTEMPTED"
+  printf '%s\\n' "$LIVE_MAIN_RESPONSE"
+fi
+`);
+	await writeFile(join(bin, "sleep"), "#!/bin/sh\nexit 0\n");
+	await chmod(join(bin, "sleep"), 0o755);
+	await chmod(join(bin, "git"), 0o755);
 	await chmod(join(bin, "docker"), 0o755);
 	await chmod(join(bin, "gh"), 0o755);
 	const sourceSha = "a".repeat(40);
 	const digest = `sha256:${"b".repeat(64)}`;
 	const summary = join(directory, "published image.md");
 	const dockerCalls = join(directory, "docker-calls");
+	const gitCalls = join(directory, "git-calls");
+	const output = join(directory, "step-output");
 	const result = spawnSync("bash", ["-c", script], {
 		env: {
 			...process.env,
@@ -1161,6 +1185,16 @@ async function runGhcrShellStep(t, script, image, overrides = {}) {
 			DIGEST: digest,
 			GH_TOKEN: "",
 			DOCKER_CALLS: dockerCalls,
+			GIT_CALLS: gitCalls,
+			GIT_ATTEMPTED: join(directory, "git-attempted"),
+			DOCKER_ATTEMPTED: join(directory, "docker-attempted"),
+			DOCKER_FAIL_ONCE: "0",
+			NEXT_MAIN_RESPONSE: "",
+			LIVE_MAIN_STATUS: "0",
+			LIVE_MAIN_RESPONSE: `${sourceSha}\trefs/heads/main`,
+			ALIASES_UPDATED: "true",
+			LIVE_MAIN_SHA: sourceSha,
+			GITHUB_OUTPUT: output,
 			GITHUB_STEP_SUMMARY: summary,
 			...overrides,
 		},
@@ -1169,7 +1203,7 @@ async function runGhcrShellStep(t, script, image, overrides = {}) {
 	});
 	assert.equal(result.error, undefined);
 	assert.equal(result.signal, null);
-	return { result, sourceSha, digest, summary, dockerCalls };
+	return { result, sourceSha, digest, summary, dockerCalls, gitCalls, output };
 }
 
 test("GHCR publisher preserves image publication without Platform deployment dispatch", async () => {
@@ -1184,6 +1218,9 @@ test("GHCR publisher preserves image publication without Platform deployment dis
 	assert.equal(build.with.platforms, "linux/amd64");
 	const retag = job.steps.findIndex((step) => step.name === "Retag main and latest from the immutable digest");
 	assert.ok(retag > job.steps.indexOf(build));
+	assert.equal(job.steps[retag].id, "retag");
+	assert.equal(job.steps.at(-1).env.ALIASES_UPDATED, "${{ steps.retag.outputs.aliases_updated }}");
+	assert.equal(job.steps.at(-1).env.LIVE_MAIN_SHA, "${{ steps.retag.outputs.live_main_sha }}");
 	assert.equal(job.steps.at(-1).name, "Summarize published image");
 	assert.equal(job.steps.at(-1).condition, "");
 	assert.equal(job.steps.at(-1).continueOnError, "");
@@ -1217,6 +1254,11 @@ test("GHCR retagging uses the pushed digest for main, latest and short SHA", asy
 	const step = job.steps.find((step) => step.name === "Retag main and latest from the immutable digest");
 	const receipt = await runGhcrShellStep(t, step.run, image);
 	assert.equal(receipt.result.status, 0, receipt.result.stderr);
+	assert.match(await readFile(receipt.output, "utf8"), /^aliases_updated=true$/mu);
+	assert.deepEqual((await readFile(receipt.gitCalls, "utf8")).trim().split("\n"), [
+		"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=20",
+		"ls-remote", "--exit-code", "origin", "refs/heads/main",
+	]);
 	assert.deepEqual((await readFile(receipt.dockerCalls, "utf8")).trim().split("\n"), [
 		"buildx", "imagetools", "create",
 		"--tag", `${image}:main`,
@@ -1225,6 +1267,60 @@ test("GHCR retagging uses the pushed digest for main, latest and short SHA", asy
 		`${image}@${receipt.digest}`,
 	]);
 });
+
+test("GHCR retagging skips aliases for a stale source while retaining its immutable receipt", async (t) => {
+	const { job, image } = await readGhcrPublisher();
+	const liveMain = "c".repeat(40);
+	const step = job.steps.find((step) => step.name === "Retag main and latest from the immutable digest");
+	const receipt = await runGhcrShellStep(t, step.run, image, {
+		LIVE_MAIN_RESPONSE: `${liveMain}\trefs/heads/main`,
+	});
+	assert.equal(receipt.result.status, 0, receipt.result.stderr);
+	assert.equal(existsSync(receipt.dockerCalls), false, "stale runs must not mutate aliases");
+	assert.match(await readFile(receipt.output, "utf8"), /^aliases_updated=false$/mu);
+	assert.match(await readFile(receipt.output, "utf8"), new RegExp(`^live_main_sha=${liveMain}$`, "mu"));
+	const summaryReceipt = await runGhcrShellStep(t, job.steps.at(-1).run, image, {
+		ALIASES_UPDATED: "false", LIVE_MAIN_SHA: liveMain,
+	});
+	assert.equal(summaryReceipt.result.status, 0, summaryReceipt.result.stderr);
+	const summary = await readFile(summaryReceipt.summary, "utf8");
+	assert.ok(summary.includes(`${image}:sha-${receipt.sourceSha}`));
+	assert.ok(summary.includes(`${image}@${receipt.digest}`));
+	assert.match(summary, /Skipped tags: main, latest/u);
+	assert.ok(summary.includes(liveMain));
+	assert.doesNotMatch(summary, /Updated tags/u);
+});
+
+test("GHCR retagging rechecks main before retrying a failed alias mutation", async (t) => {
+	const { job, image } = await readGhcrPublisher();
+	const step = job.steps.find((step) => step.id === "retag");
+	const liveMain = "c".repeat(40);
+	const receipt = await runGhcrShellStep(t, step.run, image, {
+		DOCKER_FAIL_ONCE: "1",
+		NEXT_MAIN_RESPONSE: `${liveMain}\trefs/heads/main`,
+	});
+	assert.equal(receipt.result.status, 0, receipt.result.stderr);
+	assert.match(await readFile(receipt.output, "utf8"), /^aliases_updated=false$/mu);
+	assert.doesNotMatch(await readFile(receipt.output, "utf8"), /^aliases_updated=true$/mu);
+	assert.ok(receipt.result.stdout.includes(liveMain));
+});
+
+for (const [label, overrides] of [
+	["remote HTTP failure", { LIVE_MAIN_STATUS: "128" }],
+	["malformed pushed digest", { DIGEST: "sha256:bad" }],
+	["empty main response", { LIVE_MAIN_RESPONSE: "" }],
+	["malformed main SHA", { LIVE_MAIN_RESPONSE: "not-a-sha\trefs/heads/main" }],
+	["wrong branch", { LIVE_MAIN_RESPONSE: `${"a".repeat(40)}\trefs/heads/other` }],
+	["multiple refs", { LIVE_MAIN_RESPONSE: `${"a".repeat(40)}\trefs/heads/main\n${"c".repeat(40)}\trefs/heads/main` }],
+]) {
+	test(`GHCR retagging fails closed on ${label}`, async (t) => {
+		const { job, image } = await readGhcrPublisher();
+		const step = job.steps.find((step) => step.name === "Retag main and latest from the immutable digest");
+		const receipt = await runGhcrShellStep(t, step.run, image, overrides);
+		assert.notEqual(receipt.result.status, 0);
+		assert.equal(existsSync(receipt.dockerCalls), false);
+	});
+}
 
 test("GHCR retagging refuses an absent pushed digest before invoking Docker", async (t) => {
 	const { job, image } = await readGhcrPublisher();
