@@ -4,11 +4,16 @@ import "./source-provenance-link.test.mjs";
 import "./check-release-identity.test.mjs";
 import "./release-propagation.test.mjs";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
 	checkReleaseWorkflow,
+	parseWorkflow,
 	validateReleaseWorkflow,
 } from "./check-release-workflow-contract.mjs";
 
@@ -1124,6 +1129,110 @@ for (const line of ['          git merge-base --is-ancestor "$release_sha" FETCH
   assert.ok(validateReleaseWorkflow(completeWorkflow.replace(line, "")).some(f => f.includes("ancestry verification")));
  });
 }
+
+async function readGhcrPublisher() {
+	const source = await readFile(new URL("./ghcr-publish.yml", import.meta.url), "utf8");
+	const job = parseWorkflow(source).jobs["publish-image"];
+	assert.ok(job, "GHCR publisher job exists");
+	const image = source.match(/^  IMAGE_NAME:\s+(\S+)$/mu)?.[1];
+	assert.ok(image, "publisher has one canonical image reference");
+	return { source, job, image };
+}
+
+async function runGhcrShellStep(t, script, image, overrides = {}) {
+	const directory = await mkdtemp(join(tmpdir(), "code publisher contract-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const bin = join(directory, "bin");
+	await mkdir(bin);
+	await writeFile(join(bin, "docker"), '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DOCKER_CALLS"\n');
+	await writeFile(join(bin, "gh"), '#!/bin/sh\necho "unexpected deployment dispatch" >&2\nexit 91\n');
+	await chmod(join(bin, "docker"), 0o755);
+	await chmod(join(bin, "gh"), 0o755);
+	const sourceSha = "a".repeat(40);
+	const digest = `sha256:${"b".repeat(64)}`;
+	const summary = join(directory, "published image.md");
+	const dockerCalls = join(directory, "docker-calls");
+	const result = spawnSync("bash", ["-c", script], {
+		env: {
+			...process.env,
+			PATH: `${bin}:${process.env.PATH ?? ""}`,
+			IMAGE_NAME: image,
+			SOURCE_SHA: sourceSha,
+			DIGEST: digest,
+			GH_TOKEN: "",
+			DOCKER_CALLS: dockerCalls,
+			GITHUB_STEP_SUMMARY: summary,
+			...overrides,
+		},
+		encoding: "utf8",
+		timeout: 5_000,
+	});
+	assert.equal(result.error, undefined);
+	assert.equal(result.signal, null);
+	return { result, sourceSha, digest, summary, dockerCalls };
+}
+
+test("GHCR publisher preserves image publication without Platform deployment dispatch", async () => {
+	const { source, job } = await readGhcrPublisher();
+	assert.doesNotMatch(source, /RUNTIME_IMAGE_SYNC_TOKEN|k8s|maestro_runtime_image_published|catch-up/iu);
+	assert.deepEqual(job.permissions, { contents: "read", packages: "write" });
+	const metadata = job.steps.find((step) => step.id === "meta");
+	const build = job.steps.find((step) => step.id === "push-sha");
+	assert.equal(metadata.with.images, "${{ env.IMAGE_NAME }}");
+	assert.equal(build.with.tags, "${{ env.IMAGE_NAME }}:sha-${{ github.sha }}");
+	assert.equal(build.with.push, "true");
+	assert.equal(build.with.platforms, "linux/amd64");
+	const retag = job.steps.findIndex((step) => step.name === "Retag main and latest from the immutable digest");
+	assert.ok(retag > job.steps.indexOf(build));
+	assert.equal(job.steps.at(-1).name, "Summarize published image");
+	assert.equal(job.steps.at(-1).condition, "");
+	assert.equal(job.steps.at(-1).continueOnError, "");
+});
+
+test("GHCR publication summary records the actual immutable tag and digest", async (t) => {
+	const { job, image } = await readGhcrPublisher();
+	const receipt = await runGhcrShellStep(t, job.steps.at(-1).run, image);
+	assert.equal(receipt.result.status, 0, receipt.result.stderr);
+	assert.ok(existsSync(receipt.summary), "successful publication must write its receipt");
+	const summary = await readFile(receipt.summary, "utf8");
+	assert.ok(summary.includes(`${image}:sha-${receipt.sourceSha}`));
+	assert.ok(summary.includes(`${image}@${receipt.digest}`));
+	for (const tag of ["main", "latest", `sha-${receipt.sourceSha.slice(0, 7)}`]) {
+		assert.ok(summary.includes(tag));
+	}
+	assert.doesNotMatch(summary, /deploy|k8s|catch-up/iu);
+});
+
+for (const missing of ["IMAGE_NAME", "SOURCE_SHA", "DIGEST"]) {
+	test(`GHCR publication summary refuses missing ${missing}`, async (t) => {
+		const { job, image } = await readGhcrPublisher();
+		const receipt = await runGhcrShellStep(t, job.steps.at(-1).run, image, { [missing]: "" });
+		assert.notEqual(receipt.result.status, 0, "missing publication identity must fail");
+		assert.equal(existsSync(receipt.summary), false);
+	});
+}
+
+test("GHCR retagging uses the pushed digest for main, latest and short SHA", async (t) => {
+	const { job, image } = await readGhcrPublisher();
+	const step = job.steps.find((step) => step.name === "Retag main and latest from the immutable digest");
+	const receipt = await runGhcrShellStep(t, step.run, image);
+	assert.equal(receipt.result.status, 0, receipt.result.stderr);
+	assert.deepEqual((await readFile(receipt.dockerCalls, "utf8")).trim().split("\n"), [
+		"buildx", "imagetools", "create",
+		"--tag", `${image}:main`,
+		"--tag", `${image}:latest`,
+		"--tag", `${image}:sha-${receipt.sourceSha.slice(0, 7)}`,
+		`${image}@${receipt.digest}`,
+	]);
+});
+
+test("GHCR retagging refuses an absent pushed digest before invoking Docker", async (t) => {
+	const { job, image } = await readGhcrPublisher();
+	const step = job.steps.find((step) => step.name === "Retag main and latest from the immutable digest");
+	const receipt = await runGhcrShellStep(t, step.run, image, { DIGEST: "" });
+	assert.notEqual(receipt.result.status, 0);
+	assert.equal(existsSync(receipt.dockerCalls), false);
+});
 for (const replacement of ["echo skipped", 'if false; then node scripts/verify-staged-release.mjs release-binaries "$RELEASE_VERSION"; fi']) {
  test(`rejects bypassed authentication: ${replacement}`, () => {
   assert.ok(validateReleaseWorkflow(completeWorkflow.replace('node scripts/verify-staged-release.mjs release-binaries "$RELEASE_VERSION"', replacement)).some(f => f.includes("must be authenticated")));
@@ -1147,3 +1256,12 @@ for (const [before, after] of [
   assert.ok(validateReleaseWorkflow(changed).some(f => f.includes("Identity preflight") || f.includes("authenticated registry replay")));
  });
 }
+
+
+test("GHCR publication uses the dedicated Code image namespace", async () => {
+  const workflow = await readFile(new URL("./ghcr-publish.yml", import.meta.url), "utf8");
+  assert.match(workflow, /^  IMAGE_NAME: ghcr\.io\/dx-corp\/code$/mu);
+  assert.doesNotMatch(workflow, /ghcr\.io\/dx-corp\/maestro/u);
+  assert.ok(workflow.includes("images: ${{ env.IMAGE_NAME }}"));
+  assert.ok(workflow.includes("tags: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}"));
+});
