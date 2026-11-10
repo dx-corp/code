@@ -9,6 +9,8 @@ COPY Cargo.toml Cargo.lock ./
 # and lint configuration.
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
+COPY vendor/sqlite-compat ./vendor/sqlite-compat
+COPY vendor/workspace-hack-stub ./vendor/workspace-hack-stub
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
 COPY vendor/zip-9.0.3 ./vendor/zip-9.0.3
 COPY vendor/zstd-0.13.3 ./vendor/zstd-0.13.3
@@ -57,6 +59,8 @@ FROM chef AS native
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
+COPY vendor/sqlite-compat ./vendor/sqlite-compat
+COPY vendor/workspace-hack-stub ./vendor/workspace-hack-stub
 # External dex-loop imports the actual shared library during dependency cooking.
 COPY packages/codemode-rs ./packages/codemode-rs
 COPY vendor/rquickjs-core-0.13.0 ./vendor/rquickjs-core-0.13.0
