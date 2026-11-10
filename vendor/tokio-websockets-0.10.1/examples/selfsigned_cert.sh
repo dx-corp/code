@@ -1,6 +1,6 @@
 #!/bin/bash
 mkdir certs
-cd certs
+cd certs || exit 1
 
 openssl req -x509 -out localhost.crt -keyout localhost.key \
   -newkey rsa:4096 -nodes -sha256 \

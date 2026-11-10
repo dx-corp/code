@@ -1,5 +1,7 @@
 use super::*;
-use std::sync::{Mutex, PoisonError};
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use dex_loop::{Context, ExecutorKind, GovernanceClass, ModelChunk, ModelError, ToolSpec};
@@ -76,16 +78,47 @@ async fn start(dir: &Path, tools: HostTools, scripts: Vec<Script>) -> HostTurnRu
     .expect("start turn")
 }
 
+const PRODUCER_STALL_WINDOW: Duration = Duration::from_secs(10);
+
+/// Require accepted log growth in each watchdog window until the producer completes.
+async fn finish_producer<F, P, PF>(producer: F, mut progress: P) -> F::Output
+where
+    F: Future,
+    P: FnMut() -> PF,
+    PF: Future<Output = u64>,
+{
+    let mut accepted = tokio::time::timeout(PRODUCER_STALL_WINDOW, progress())
+        .await
+        .expect("read durable producer progress");
+    tokio::pin!(producer);
+    loop {
+        tokio::select! {
+            biased;
+            finished = &mut producer => return finished,
+            () = tokio::time::sleep(PRODUCER_STALL_WINDOW) => {
+                let current = tokio::time::timeout(PRODUCER_STALL_WINDOW, progress())
+                    .await
+                    .expect("read durable producer progress");
+                assert!(
+                    current > accepted,
+                    "producer must finish independently of observer speed (durable offset {accepted} -> {current})"
+                );
+                accepted = current;
+            }
+        }
+    }
+}
+
 /// Start the producer without pulling any output, then wait on its actual
 /// completion. A bounded channel with awaiting sends would stall here.
 async fn finish_without_pulling(run: &mut HostTurnRun<ScriptedModel>) {
     run.spawn();
-    let finished = tokio::time::timeout(
-        Duration::from_secs(10),
-        run.running.as_mut().expect("producer started"),
-    )
+    let local = run.local.clone();
+    let finished = finish_producer(run.running.as_mut().expect("producer started"), || {
+        let local = local.clone();
+        async move { local.observer_offset().await.expect("durable progress") }
+    })
     .await
-    .expect("producer must finish independently of observer speed")
     .expect("turn task joined");
     run.running = None;
     run.finished = Some(finished);
@@ -94,6 +127,53 @@ async fn finish_without_pulling(run: &mut HostTurnRun<ScriptedModel>) {
         run.buffered.is_empty(),
         "paused caller has no payload copies"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn observer_watchdog_accepts_durable_progress_beyond_one_window() {
+    let progress = Arc::new(AtomicU64::new(0));
+    let writer = Arc::clone(&progress);
+    let producer = async move {
+        for offset in 1..=3 {
+            tokio::time::sleep(PRODUCER_STALL_WINDOW / 2).await;
+            writer.store(offset, Ordering::SeqCst);
+        }
+        "finished"
+    };
+    let result = finish_producer(producer, || {
+        std::future::ready(progress.load(Ordering::SeqCst))
+    })
+    .await;
+    assert_eq!(result, "finished");
+}
+
+#[tokio::test(start_paused = true)]
+async fn observer_watchdog_accepts_completion_at_the_deadline() {
+    let producer = async {
+        tokio::time::sleep(PRODUCER_STALL_WINDOW).await;
+        "finished"
+    };
+    assert_eq!(
+        finish_producer(producer, || std::future::ready(0)).await,
+        "finished"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+#[should_panic(expected = "producer must finish independently of observer speed")]
+async fn observer_watchdog_rejects_a_producer_blocked_on_delivery() {
+    let progress = AtomicU64::new(0);
+    let (sender, _paused_observer) = tokio::sync::mpsc::channel(1);
+    let producer = async {
+        for offset in 1..=3 {
+            progress.store(offset, Ordering::SeqCst);
+            sender.send(()).await.expect("observer remains connected");
+        }
+    };
+    finish_producer(producer, || {
+        std::future::ready(progress.load(Ordering::SeqCst))
+    })
+    .await;
 }
 
 async fn pull_until_outcome(run: &mut HostTurnRun<ScriptedModel>) -> (Vec<Observed>, Step) {
