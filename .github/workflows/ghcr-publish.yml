@@ -151,6 +151,6 @@ jobs:
             if [[ "$ALIASES_UPDATED" == true ]]; then
               printf -- '- Updated tags: main, latest, sha-%s\n' "${SOURCE_SHA:0:7}"
             else
-              printf -- '- Skipped tags: main, latest, sha-%s (current main: %s)\n' "${SOURCE_SHA:0:7}" "$LIVE_MAIN_SHA"
+              printf -- '- Alias update not completed: main, latest, sha-%s (current main: %s)\n' "${SOURCE_SHA:0:7}" "$LIVE_MAIN_SHA"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

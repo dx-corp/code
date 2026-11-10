@@ -1286,7 +1286,7 @@ test("GHCR retagging skips aliases for a stale source while retaining its immuta
 	const summary = await readFile(summaryReceipt.summary, "utf8");
 	assert.ok(summary.includes(`${image}:sha-${receipt.sourceSha}`));
 	assert.ok(summary.includes(`${image}@${receipt.digest}`));
-	assert.match(summary, /Skipped tags: main, latest/u);
+	assert.match(summary, /Alias update not completed: main, latest/u);
 	assert.ok(summary.includes(liveMain));
 	assert.doesNotMatch(summary, /Updated tags/u);
 });
