@@ -1,0 +1,20 @@
+# Empty stand-in for the cargo-hakari workspace-hack (rust/.config/hakari.toml).
+# Workspaces outside rust/ that path-depend on rust/ members add
+#   [patch.crates-io]
+#   evalops-workspace-hack = { path = "<relative>/rust/workspace-hack-stub" }
+# so the members' `evalops-workspace-hack.workspace = true` line resolves here
+# and they inherit none of the unified dependencies. rust/Cargo.toml excludes
+# this directory from the workspace.
+
+[package]
+name = "evalops-workspace-hack"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+description = "empty stand-in for the rust/ workspace-hack outside the rust/ workspace"
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
