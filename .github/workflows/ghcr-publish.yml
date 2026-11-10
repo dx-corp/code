@@ -146,7 +146,7 @@ jobs:
           fi
           {
             printf '%s\n\n' '## Published image'
-            printf -- '- Immutable tag: %s:sha-%s\n' "$IMAGE_NAME" "$SOURCE_SHA"
+            printf -- '- Commit tag: %s:sha-%s\n' "$IMAGE_NAME" "$SOURCE_SHA"
             printf -- '- Digest: %s@%s\n' "$IMAGE_NAME" "$DIGEST"
             if [[ "$ALIASES_UPDATED" == true ]]; then
               printf -- '- Updated tags: main, latest, sha-%s\n' "${SOURCE_SHA:0:7}"
