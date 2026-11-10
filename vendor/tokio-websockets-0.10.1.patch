@@ -10,6 +10,41 @@ diff --git a/Cargo.toml b/Cargo.toml
  optional = true
  default-features = false
  
+diff --git a/examples/selfsigned_cert.sh b/examples/selfsigned_cert.sh
+--- a/examples/selfsigned_cert.sh
++++ b/examples/selfsigned_cert.sh
+@@ -1,6 +1,6 @@
+ #!/bin/bash
+ mkdir certs
+-cd certs
++cd certs || exit 1
+ 
+ openssl req -x509 -out localhost.crt -keyout localhost.key \
+   -newkey rsa:4096 -nodes -sha256 \
+diff --git a/scripts/autobahn_client.sh b/scripts/autobahn_client.sh
+--- a/scripts/autobahn_client.sh
++++ b/scripts/autobahn_client.sh
+@@ -1,2 +1,2 @@
+ #!/usr/bin/bash
+-podman run --rm -it -v $(pwd)/autobahn/config:/config -v $(pwd)/autobahn/reports:/reports -p 9001:9001 --security-opt label=disable --name autobahn crossbario/autobahn-testsuite
++podman run --rm -it -v "$(pwd)/autobahn/config:/config" -v "$(pwd)/autobahn/reports:/reports" -p 9001:9001 --security-opt label=disable --name autobahn crossbario/autobahn-testsuite
+diff --git a/scripts/autobahn_server.sh b/scripts/autobahn_server.sh
+--- a/scripts/autobahn_server.sh
++++ b/scripts/autobahn_server.sh
+@@ -1,2 +1,2 @@
+ #!/usr/bin/bash
+-podman run --rm -it -v $(pwd)/autobahn/config:/config -v $(pwd)/autobahn/reports:/reports --net host --security-opt label=disable --name autobahn crossbario/autobahn-testsuite wstest -m fuzzingclient -s /config/fuzzingclient.json
++podman run --rm -it -v "$(pwd)/autobahn/config:/config" -v "$(pwd)/autobahn/reports:/reports" --net host --security-opt label=disable --name autobahn crossbario/autobahn-testsuite wstest -m fuzzingclient -s /config/fuzzingclient.json
+diff --git a/scripts/benchmark.sh b/scripts/benchmark.sh
+--- a/scripts/benchmark.sh
++++ b/scripts/benchmark.sh
+@@ -11,5 +11,5 @@
+     --name bench \
+     --security-opt label=disable \
+     --userns=keep-id \
+-    -v $(pwd)/benches:/benches \
++    -v "$(pwd)/benches:/benches" \
+     bench:latest
 diff --git a/BUILD.bazel b/BUILD.bazel
 --- /dev/null
 +++ b/BUILD.bazel

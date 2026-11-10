@@ -38,4 +38,4 @@ tokio-stream.workspace = true
 dex-loop = { path = "../../vendor/dex-loop", features = ["testing"] }
 maestro-local-host.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }

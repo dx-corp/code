@@ -11,5 +11,5 @@ podman run \
     --name bench \
     --security-opt label=disable \
     --userns=keep-id \
-    -v $(pwd)/benches:/benches \
+    -v "$(pwd)/benches:/benches" \
     bench:latest

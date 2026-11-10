@@ -199,7 +199,7 @@
       "Cargo.lock"
     ],
     "patch": "tokio-websockets-0.10.1.patch",
-    "patch_sha256": "4bbc9b009d984161f382879197b72b04ec0288382f3ff25bfd300b265959f8e8",
+    "patch_sha256": "2e2f5d5f43913440c7de3e11af5922e8f63d92221734d9ad1978aa79a0e73296",
     "path": "tokio-websockets-0.10.1",
     "version": "0.10.1"
   },
