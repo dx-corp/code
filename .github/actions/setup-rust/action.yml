@@ -49,7 +49,7 @@ runs:
         CACHE_GROUP_INPUT: ${{ inputs.cache-group }}
         TOOLCHAIN_INPUT: ${{ inputs.toolchain }}
         WORKSPACES_INPUT: ${{ inputs.workspaces }}
-      run: | # zizmor: ignore[github-env] every exported value is scrubbed to a safe charset by the safe_* substitutions below
+      run: | # zizmor: ignore[github-env] runner paths reject CR/LF and identifiers are scrubbed by the safe_* substitutions below
         set -euo pipefail
         safe_repo="${GITHUB_REPOSITORY:-repo}"
         safe_repo="${safe_repo//[^A-Za-z0-9_.-]/-}"
@@ -58,11 +58,17 @@ runs:
         safe_cache_group="${CACHE_GROUP_INPUT:-validation}"
         safe_cache_group="${safe_cache_group//[^A-Za-z0-9_.-]/-}"
         case "${RUNNER_OS:-}" in
-          Linux|macOS) cache_root=/tmp/maestro-rust ;;
-          *) cache_root="${RUNNER_TEMP:-${GITHUB_WORKSPACE:-$PWD}/.tmp}/maestro-rust" ;;
+          Linux|macOS) legacy_cache_root=/tmp/maestro-rust ;;
+          *) legacy_cache_root="${RUNNER_TEMP:-${GITHUB_WORKSPACE:-$PWD}/.tmp}/maestro-rust" ;;
         esac
-        # Cache archive paths and toolchain homes stay stable across compatible
-        # jobs. Profile-specific target artifacts remain separated by cache-group.
+        # RUNNER_TEMP belongs to this runner's job. A host-wide /tmp home can
+        # belong to another UID or still serve another runner's compiler.
+        cache_root="${RUNNER_TEMP:?Runner temporary directory is required}/maestro-rust"
+        if [[ "$cache_root" == *$'\n'* || "$cache_root" == *$'\r'* ]]; then
+          echo "::error::Runner temporary directory contains a line break" >&2
+          exit 1
+        fi
+        # Paths stay stable per runner; cache-group separates target artifacts.
         base="${cache_root%/}/${safe_repo}/${safe_toolchain}"
         root="$base/home"
         cargo_home="$root/cargo"
@@ -132,7 +138,7 @@ runs:
         # login profiles. Refresh only those owned entries to this active home.
         if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
           bash "${GITHUB_ACTION_PATH}/repair-login-profile.sh" \
-            "$cache_root" "$safe_toolchain" "$cargo_home" \
+            "$legacy_cache_root" "$safe_toolchain" "$cargo_home" \
             "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.zprofile"
         fi
 
@@ -230,7 +236,7 @@ runs:
       uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
       with:
         workspaces: ${{ steps.rust-paths.outputs.cache-workspaces }}
-        shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.host-abi.outputs.value }}-cargo-inputs-v3-${{ inputs.cache-group }}
+        shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.host-abi.outputs.value }}-cargo-inputs-v4-runner-temp-${{ inputs.cache-group }}
         add-job-id-key: "false"
         # Compiler outputs belong in the Google-backed sccache bucket. Keep the
         # GitHub cache limited to Cargo inputs/tooling rather than duplicating target/.
