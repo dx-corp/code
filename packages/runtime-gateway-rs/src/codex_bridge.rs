@@ -1044,17 +1044,32 @@ pub(crate) fn codex_bridge_temp_dir(cwd: &Path) -> PathBuf {
     sandbox_visible_temp_dir(cwd, "maestro-codex-bridge", &CODEX_BRIDGE_TEMP_COUNTER)
 }
 
+async fn codex_cancellation(
+    owner: Option<&tokio_util::sync::CancellationToken>,
+    shutdown: Option<&tokio_util::sync::CancellationToken>,
+) {
+    tokio::select! {
+        () = async { match owner { Some(token) => token.cancelled().await, None => std::future::pending().await } } => {},
+        () = async { match shutdown { Some(token) => token.cancelled().await, None => std::future::pending().await } } => {},
+    }
+}
+
 async fn run_codex_bridge_command(
     mut command: Command,
     cancel: Option<&tokio_util::sync::CancellationToken>,
+    shutdown: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<std::process::Output, String> {
     command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    maestro_local_host::tools::set_new_process_group(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to run Codex app-server bridge: {error}"))?;
+    #[cfg(unix)]
+    let mut process_group = maestro_local_host::tools::ProcessGroupGuard::new(child.id());
     let mut stdout = child
         .stdout
         .take()
@@ -1074,7 +1089,9 @@ async fn run_codex_bridge_command(
 
     let waited = tokio::select! {
         result = tokio::time::timeout(codex_app_server_timeout(), child.wait()) => result,
-        _ = async { match cancel { Some(cancel) => cancel.cancelled().await, None => std::future::pending().await } } => {
+        _ = codex_cancellation(cancel, shutdown) => {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = stdout_task.await;
@@ -1086,6 +1103,8 @@ async fn run_codex_bridge_command(
         Ok(status) => status
             .map_err(|error| format!("failed to wait for Codex app-server bridge: {error}"))?,
         Err(_) => {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = stdout_task.await;
@@ -1093,6 +1112,8 @@ async fn run_codex_bridge_command(
             return Err("Codex app-server request timed out".to_string());
         }
     };
+    #[cfg(unix)]
+    process_group.terminate();
     let stdout = stdout_task
         .await
         .map_err(|error| format!("failed to join Codex app-server stdout reader: {error}"))?
@@ -1147,8 +1168,16 @@ pub(crate) async fn run_codex_app_server_cli(
     prompt: &str,
     attachment_paths: &[String],
 ) -> Result<CodexBridgeOutput, String> {
-    run_codex_app_server_cli_cancellable(cwd, model, approval_mode, prompt, attachment_paths, None)
-        .await
+    run_codex_app_server_cli_cancellable(
+        cwd,
+        model,
+        approval_mode,
+        prompt,
+        attachment_paths,
+        None,
+        None,
+    )
+    .await
 }
 
 pub(crate) async fn run_codex_app_server_cli_cancellable(
@@ -1158,6 +1187,7 @@ pub(crate) async fn run_codex_app_server_cli_cancellable(
     prompt: &str,
     attachment_paths: &[String],
     cancel: Option<&tokio_util::sync::CancellationToken>,
+    shutdown: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<CodexBridgeOutput, String> {
     let cli_path = codex_app_server_cli_path();
     if !cli_path.exists() {
@@ -1195,7 +1225,7 @@ pub(crate) async fn run_codex_app_server_cli_cancellable(
             bridge_prompt.temp_dir.join("usage.json"),
         );
 
-    let output_result = run_codex_bridge_command(command, cancel).await;
+    let output_result = run_codex_bridge_command(command, cancel, shutdown).await;
     let _ = tokio::fs::remove_dir_all(&bridge_prompt.temp_dir).await;
     let output = output_result?;
 
@@ -1465,7 +1495,7 @@ async fn handle_codex_headless_approval_request(
     let owner = stream.native_turn();
     let decision = tokio::select! {
         decision = receiver.recv() => decision,
-        _ = async { match &owner { Some(owner) => owner.cancel.cancelled().await, None => std::future::pending().await } } => {
+        _ = codex_cancellation(owner.as_ref().map(|owner| &owner.cancel), Some(&state.lifecycle().cancel)) => {
             return Err("Codex turn stopped while awaiting its existing approval owner".to_string());
         }
     };
@@ -1567,9 +1597,13 @@ pub(crate) async fn run_codex_app_server_headless_cli(
             bridge_prompt.temp_dir.join("usage.json"),
         );
 
+    #[cfg(unix)]
+    maestro_local_host::tools::set_new_process_group(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to run Codex headless bridge: {error}"))?;
+    #[cfg(unix)]
+    let mut process_group = maestro_local_host::tools::ProcessGroupGuard::new(child.id());
     let mut stdin = child
         .stdin
         .take()
@@ -1621,7 +1655,7 @@ pub(crate) async fn run_codex_app_server_headless_cli(
         loop {
             let next_line = tokio::select! {
                 result = tokio::time::timeout(request_timeout, lines.next_line()) => result,
-                _ = async { match &native_owner { Some(owner) => owner.cancel.cancelled().await, None => std::future::pending().await } } => {
+                _ = codex_cancellation(native_owner.as_ref().map(|owner| &owner.cancel), Some(&state.lifecycle().cancel)) => {
                     return Err("Codex turn stopped by its authenticated owner".to_string());
                 }
             };
@@ -1748,6 +1782,8 @@ pub(crate) async fn run_codex_app_server_headless_cli(
     cleanup_codex_headless_approvals(state, &pending_approval_ids).await;
     let output = request_result;
     if output.is_err() {
+        #[cfg(unix)]
+        process_group.terminate();
         let _ = child.kill().await;
         let _ = child.wait().await;
         let _ = stderr_task.await;
@@ -1759,9 +1795,14 @@ pub(crate) async fn run_codex_app_server_headless_cli(
             return Err(format!("failed to wait for Codex headless bridge: {error}"));
         }
         Err(_) => {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.kill().await;
         }
     }
+    #[cfg(unix)]
+    process_group.terminate();
+    let _ = child.wait().await;
     let _stderr = stderr_task
         .await
         .map_err(|error| format!("failed to join Codex headless stderr reader: {error}"))?

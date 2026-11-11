@@ -266,6 +266,9 @@ pub(crate) fn spawn_scheduler(state: AppState) {
 }
 
 async fn tick(state: &AppState) {
+    if state.lifecycle().is_draining() {
+        return;
+    }
     let runtime = &state.pull_request_watches;
     for session_id in runtime.monitors.sessions() {
         runtime
@@ -277,8 +280,12 @@ async fn tick(state: &AppState) {
         let Some(guard) = runtime.claim_idle(&session_id) else {
             continue;
         };
+        let admission = match state.lifecycle().admit() {
+            Ok(admission) => admission,
+            Err(()) => return,
+        };
         let state = state.clone();
-        tokio::spawn(async move {
+        crate::lifecycle::spawn(admission, async move {
             let _guard = guard;
             wake(&state, &session_id).await;
         });

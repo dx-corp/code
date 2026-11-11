@@ -10,6 +10,25 @@ pub(crate) fn snapshot_env(
         .collect()
 }
 
+pub(crate) struct SavedEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl SavedEnv {
+    pub(crate) fn capture(names: &'static [&'static str]) -> Self {
+        Self(snapshot_env(names))
+    }
+}
+
+impl Drop for SavedEnv {
+    fn drop(&mut self) {
+        for (name, value) in self.0.drain(..) {
+            match value {
+                Some(value) => env::set_var(name, value),
+                None => env::remove_var(name),
+            }
+        }
+    }
+}
+
 pub(crate) fn clear_env(names: &[&str]) {
     for name in names {
         env::remove_var(name);

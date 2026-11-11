@@ -313,8 +313,12 @@ async fn handle_endpoint(
             state.native_turns.queue(&binding),
         );
         if accepted.start_lane {
+            let admission = state.lifecycle().admit().map_err(|()| TurnError {
+                status: 503,
+                message: "Runtime is draining".into(),
+            })?;
             let state = state.clone();
-            tokio::spawn(async move {
+            crate::lifecycle::spawn(admission, async move {
                 run_lane(state, binding).await;
             });
         }

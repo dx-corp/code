@@ -56,6 +56,12 @@ fn serve_dispatches_to_in_process_control_plane() {
 }
 
 #[test]
+fn drain_dispatches_to_the_native_control_client_without_credential_arguments() {
+    assert_eq!(classify(["drain"]).unwrap(), Command::Drain);
+    assert!(classify(["drain", "--api-key", "must-stay-in-env"]).is_err());
+}
+
+#[test]
 fn exec_is_forwarded_to_native_dispatch() {
     // `classify` no longer distinguishes exec/print/headless/utility argv from
     // one another; it only needs to know whether to serve the in-process
@@ -105,6 +111,7 @@ fn frozen_cli_routes_are_owned_by_native_dispatch() {
         }
         let command = result.unwrap_or_else(|error| panic!("{}: {error}", case.name));
         match (case.route.as_str(), case.name.as_str()) {
+            ("native-control-plane", "drain") => assert_eq!(command, Command::Drain),
             ("native-control-plane", _) => {
                 assert_eq!(
                     command,

@@ -277,9 +277,6 @@ pub(crate) async fn handle_extended_endpoint(
                 Err(error) => json_response(500, &serde_json::json!({ "error": error })),
             }
         }
-        ("POST", "/.well-known/evalops/remote-runner/drain") => {
-            json_response(200, &serde_json::json!({ "ok": true, "draining": true }))
-        }
         ("GET", "/api/a2a/cockpit") => json_response(
             200,
             &serde_json::json!({ "agents": [], "tasks": [], "runtime": "rust-control-plane" }),
@@ -406,6 +403,10 @@ pub(crate) async fn handle_extended_endpoint(
                 };
             }
             if action == Some("run") {
+                let admission = match state.lifecycle().admit() {
+                    Ok(admission) => admission,
+                    Err(()) => return crate::lifecycle::unavailable(),
+                };
                 let fallback_model = {
                     let model = state.selected_model.lock().await;
                     format!("{}/{}", model.provider, model.id)
@@ -425,6 +426,8 @@ pub(crate) async fn handle_extended_endpoint(
                             state.extended_api.clone(),
                             state.config.cwd.clone(),
                             claim,
+                            state.lifecycle().clone(),
+                            admission,
                         );
                         json_response(
                             202,

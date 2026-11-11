@@ -883,6 +883,10 @@ pub(crate) async fn cancel_a2a_task(
             "A2A task cannot be canceled from its current state",
         ));
     }
+    let continuation = state
+        .lifecycle()
+        .continue_accepted()
+        .map_err(|()| crate::lifecycle::unavailable())?;
     let context_id = task
         .get("contextId")
         .and_then(Value::as_str)
@@ -914,8 +918,11 @@ pub(crate) async fn cancel_a2a_task(
     if let Some(sender) = state.a2a_cancel_senders.lock().await.remove(task_id) {
         let _ = sender.send(true);
     }
-    publish_a2a_task_update(state, &task).await;
-    persist_a2a_tasks(state).await;
+    crate::lifecycle::scope(Some(continuation), async {
+        publish_a2a_task_update(state, &task).await;
+        persist_a2a_tasks(state).await;
+    })
+    .await;
 
     Ok(task)
 }
@@ -1129,7 +1136,7 @@ pub(super) async fn publish_a2a_task_update_locked(
         event
     };
     let _ = state.a2a_task_events.send(event);
-    dispatch_a2a_push_notifications(task);
+    dispatch_a2a_push_notifications(task, state);
 }
 
 async fn a2a_list_tasks_response(
@@ -1771,8 +1778,12 @@ pub(crate) async fn handle_a2a_message_send(
             metadata.clone(),
         );
         let task = store_a2a_task_unless_canceled(state, &task_id, task).await;
+        let admission = match state.lifecycle().admit() {
+            Ok(admission) => admission,
+            Err(()) => return crate::lifecycle::unavailable(),
+        };
         let state = state.clone();
-        tokio::spawn(async move {
+        crate::lifecycle::spawn(admission, async move {
             let _ = complete_a2a_task_with_capsule(
                 &state,
                 A2ACompletionRequest {

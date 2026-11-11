@@ -211,6 +211,7 @@ mod codex_bridge_shutdown;
 
 mod a2a_local_endpoints;
 mod a2a_tasks;
+mod lifecycle;
 mod session_messaging;
 #[allow(unused_imports)]
 pub(crate) use self::session_messaging::{
@@ -251,7 +252,7 @@ mod headless_sessions;
 mod test_support;
 #[allow(unused_imports)]
 pub(crate) use self::test_support::{
-    clear_env, hs256_signed_claims, inbox_of, now_secs, snapshot_env, tcp_stream_pair,
+    SavedEnv, clear_env, hs256_signed_claims, inbox_of, now_secs, snapshot_env, tcp_stream_pair,
     unique_test_dir,
 };
 mod cli_daemon;

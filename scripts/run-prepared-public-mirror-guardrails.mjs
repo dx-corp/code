@@ -22,6 +22,11 @@ function parseTarget(argv) {
 export function preparedPublicMirrorGuardrailCommands() {
 	return [
 		{
+			command: "node",
+			args: ["--test", "deploy/helm/maestro/tests/render.test.mjs"],
+			label: "Rendered native Helm lifecycle contract",
+		},
+		{
 			command: "npm",
 			args: ["run", "check:hosted-orb-delegation"],
 			label: "Hosted Computer delegation contract",

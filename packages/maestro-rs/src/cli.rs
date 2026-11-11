@@ -18,6 +18,7 @@ pub enum Command {
         parent_pid: Option<u32>,
         liveness_fd: Option<i32>,
     },
+    Drain,
     Forward,
     Help,
     Version,
@@ -53,6 +54,12 @@ where
         Some("--help" | "-h" | "--help-hidden" | "--help-all")
     ) {
         return Ok(Command::Help);
+    }
+    if first == Some("drain") {
+        if strings.len() != 1 {
+            return Err("`maestro drain` does not accept arguments".into());
+        }
+        return Ok(Command::Drain);
     }
     if first == Some("serve") {
         let mut port = None;

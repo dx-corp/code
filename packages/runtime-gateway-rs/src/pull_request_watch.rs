@@ -450,6 +450,9 @@ pub(crate) fn spawn_scheduler(state: AppState) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            if state.lifecycle().is_draining() {
+                return;
+            }
             let keys: Vec<_> = state
                 .pull_request_watches
                 .watches
@@ -459,8 +462,12 @@ pub(crate) fn spawn_scheduler(state: AppState) {
                 .cloned()
                 .collect();
             for key in keys {
+                let admission = match state.lifecycle().admit() {
+                    Ok(admission) => admission,
+                    Err(()) => return,
+                };
                 let state = state.clone();
-                tokio::spawn(async move {
+                crate::lifecycle::spawn(admission, async move {
                     poll_watch(&state, &key).await;
                 });
             }
@@ -523,9 +530,13 @@ async fn poll_watch(state: &AppState, key: &(String, String)) {
     let Some(guard) = state.pull_request_watches.claim_idle(&owner.id) else {
         return;
     };
+    let admission = match state.lifecycle().admit() {
+        Ok(admission) => admission,
+        Err(()) => return,
+    };
     let state = state.clone();
     let key = key.clone();
-    tokio::spawn(async move {
+    crate::lifecycle::spawn(admission, async move {
         let _guard = guard;
         if binding(&state, &owner.id, &auth).await.as_ref() != Some(&owner) {
             return;

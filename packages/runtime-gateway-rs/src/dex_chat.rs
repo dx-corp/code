@@ -462,12 +462,17 @@ impl<W: ChatEventWriter> Sink<'_, W> {
     }
 }
 
-/// Resolves when the native turn that owns this run is stopped; never for an
-/// observer-only stream.
-async fn owner_cancelled(owner: Option<&Arc<NativeTurn>>) {
-    match owner {
-        Some(owner) => owner.cancel.cancelled().await,
-        None => std::future::pending().await,
+/// Resolves when the execution owner or process shutdown requests cancellation.
+/// Closing an observer alone does not cancel native-owned work.
+async fn owner_cancelled(state: &AppState, owner: Option<&Arc<NativeTurn>>) {
+    tokio::select! {
+        () = state.lifecycle().cancel.cancelled() => {},
+        () = async {
+            match owner {
+                Some(owner) => owner.cancel.cancelled().await,
+                None => std::future::pending().await,
+            }
+        } => {},
     }
 }
 
@@ -524,7 +529,7 @@ async fn await_pending(
             }
             (approved, result)
         }),
-        () = owner_cancelled(owner) => None,
+        () = owner_cancelled(state, owner) => None,
     };
     state.pending_tool_responses.lock().await.remove(id);
     state.pending_tool_response_sessions.lock().await.remove(id);
@@ -539,13 +544,19 @@ pub(crate) async fn run_dex_chat(
     turn: DexChatTurn<'_>,
     snapshot: &mut Option<ChatSnapshot>,
 ) -> Result<bool, String> {
+    let admission = turn
+        .state
+        .lifecycle()
+        .admit()
+        .map_err(|()| "Runtime is draining".to_string())?;
     let dir = turn_dir("maestro-dex-chat");
     let mut sink = Sink {
         wire,
         stream,
         detached: false,
     };
-    let outcome = drive(&mut sink, &turn, snapshot, &dir).await;
+    let outcome =
+        crate::lifecycle::scope(Some(admission), drive(&mut sink, &turn, snapshot, &dir)).await;
     let _ = tokio::fs::remove_dir_all(&dir).await;
     match outcome {
         Ok(completed) => Ok(completed),
@@ -787,7 +798,7 @@ async fn drive<W: ChatEventWriter>(
         }
         let step = tokio::select! {
             step = run.next() => step?,
-            () = owner_cancelled(native_owner.as_ref()), if !stop_requested => {
+            () = owner_cancelled(state, native_owner.as_ref()), if !stop_requested => {
                 stop_requested = true;
                 run.cancel();
                 continue;
@@ -974,7 +985,7 @@ async fn drive<W: ChatEventWriter>(
                             }),
                             false,
                         ),
-                        () = owner_cancelled(native_owner.as_ref()) => (None, true),
+                        () = owner_cancelled(state, native_owner.as_ref()) => (None, true),
                     };
                     state
                         .pending_tool_responses

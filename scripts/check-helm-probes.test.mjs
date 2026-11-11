@@ -15,8 +15,8 @@ const exactSpaHealthPath = /^\s+path:\s+\/health\s*$/mu;
 test("Helm HTTP probes use the control-plane health endpoint", () => {
 	assert.equal(
 		[...deploymentTemplate.matchAll(/^\s+path:\s+\/healthz\s*$/gmu)].length,
-		2,
-		"deployment liveness and readiness probes must use /healthz",
+		1,
+		"deployment liveness must use /healthz",
 	);
 	assert.doesNotMatch(
 		deploymentTemplate,
