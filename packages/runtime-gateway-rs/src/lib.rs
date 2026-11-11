@@ -925,9 +925,11 @@ async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Re
             return Ok(());
         }
     };
+    // Heap-pin the routing future before the task-local wrappers so unoptimized
+    // requests fit the default thread stack.
     let result = lifecycle::scope(
         admission,
-        with_response_cors_origin(response_origin, async move {
+        with_response_cors_origin(response_origin, Box::pin(async move {
             if !host_header_allowed(&head, &state.config) {
                 let response = json_response(
                     421,
@@ -1040,7 +1042,7 @@ async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Re
                 .context("failed to write not-yet-migrated fallback response")?;
             let _ = stream.shutdown().await;
             Ok(())
-        }),
+        })),
     )
     .instrument(span.clone())
     .await;

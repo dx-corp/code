@@ -412,6 +412,7 @@ async fn shared_model_preserves_optional_ports_inputs_and_results() {
             context_window_tokens: Some(200_000),
             voice: None,
             page: None,
+            asker: None,
             approval_mode: ApprovalMode::Interactive,
         },
     );

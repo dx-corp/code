@@ -32,6 +32,13 @@ service DeixicPublicService {
   rpc DeleteBusinessObject(DeleteBusinessObjectRequest) returns (DeleteBusinessObjectResponse);
   rpc ListBusinessObjects(ListBusinessObjectsRequest) returns (ListBusinessObjectsResponse);
   rpc ListBusinessObjectTypes(ListBusinessObjectTypesRequest) returns (ListBusinessObjectTypesResponse);
+  // Publishes a workspace type revision; expected_revision 0 creates the type.
+  rpc DefineBusinessObjectType(DefineBusinessObjectTypeRequest) returns (DefineBusinessObjectTypeResponse);
+  // Reads one immutable published revision of a type.
+  rpc GetBusinessObjectType(GetBusinessObjectTypeRequest) returns (GetBusinessObjectTypeResponse);
+  // Creates the record whose declared unique field holds the given value, or
+  // updates the one that already does, atomically on the server.
+  rpc UpsertBusinessObject(UpsertBusinessObjectRequest) returns (UpsertBusinessObjectResponse);
   rpc ListBusinessBlueprints(ListBusinessBlueprintsRequest) returns (ListBusinessBlueprintsResponse);
   rpc BindBusinessObjectSource(BindBusinessObjectSourceRequest) returns (BindBusinessObjectSourceResponse);
   rpc ListBusinessObjectRelationships(ListBusinessObjectRelationshipsRequest) returns (ListBusinessObjectRelationshipsResponse);
@@ -483,18 +490,90 @@ message BusinessBlueprintOrigin {
   int64 version = 2;
   string source_type_id = 3;
 }
+enum BusinessFieldKind {
+  BUSINESS_FIELD_KIND_UNSPECIFIED = 0;
+  BUSINESS_FIELD_KIND_TEXT = 1;
+  BUSINESS_FIELD_KIND_INTEGER = 2;
+  BUSINESS_FIELD_KIND_BOOLEAN = 3;
+  BUSINESS_FIELD_KIND_DECIMAL = 4;
+  BUSINESS_FIELD_KIND_MONEY = 5;
+  BUSINESS_FIELD_KIND_ENUM = 6;
+  BUSINESS_FIELD_KIND_DATE = 7;
+  BUSINESS_FIELD_KIND_TIMESTAMP = 8;
+  BUSINESS_FIELD_KIND_REFERENCE = 9;
+  BUSINESS_FIELD_KIND_ARTIFACT = 10;
+  BUSINESS_FIELD_KIND_TEXT_LIST = 11;
+}
 message BusinessObjectTypeField {
   string field_id = 1;
   string group_id = 2;
+  // Output only: derived from the field kind.
   bool source_mappable = 3;
+  string name = 4;
+  BusinessFieldKind kind = 5;
+  bool required = 6;
+  // At most one live record of the type holds a given value.
+  bool unique = 7;
+  repeated string enum_values = 8;
+  string reference_type_id = 9;
+  string description = 10;
+  // TEXT only: maximum Unicode code points, from 1 through 8192.
+  optional uint32 max_length = 11;
+}
+message BusinessObjectTypeRelationship {
+  string relationship_id = 1;
+  string name = 2;
+  string target_type_id = 3;
 }
 message BusinessObjectType {
   string type_id = 1;
   string name = 2;
+  // Output only: the published revision.
   int64 revision = 3;
+  // Output only: assigned when a built-in blueprint member is cloned.
   BusinessBlueprintOrigin blueprint_origin = 4;
   string display_field_id = 5;
   repeated BusinessObjectTypeField fields = 6;
+  repeated BusinessObjectTypeRelationship relationships = 7;
+  string plural_name = 8;
+  string description = 9;
+}
+message DefineBusinessObjectTypeRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  BusinessObjectType definition = 4;
+  // The revision this change replaces; 0 creates the type.
+  int64 expected_revision = 5;
+}
+message DefineBusinessObjectTypeResponse {
+  BusinessObjectType definition = 1;
+}
+message GetBusinessObjectTypeRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string type_id = 3;
+  // A published revision, from DefineBusinessObjectType or ListBusinessObjectTypes.
+  int64 revision = 4;
+}
+message GetBusinessObjectTypeResponse {
+  BusinessObjectType definition = 1;
+}
+message UpsertBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string type_id = 4;
+  // Published schema revision for a new record; zero keeps an existing record's.
+  int64 schema_revision = 5;
+  // A field the type declares unique; `values` must carry it.
+  string unique_field_id = 6;
+  repeated BusinessFieldValue values = 7;
+}
+message UpsertBusinessObjectResponse {
+  BusinessObject object = 1;
+  // True when this call created the record, false when it updated one.
+  bool created = 2;
 }
 message ListBusinessObjectTypesRequest {
   string organization_id = 1;
@@ -933,6 +1012,7 @@ message GetControlRequest {
   string workspace_id = 2;
   string control_id = 3;
 }
+
 // One framework requirement a control maps to.
 message ControlRequirement {
   string framework_id = 1;
@@ -940,6 +1020,7 @@ message ControlRequirement {
   // automatic, reviewed or proposed; proposed mappings do not count.
   string review_state = 3;
 }
+
 // One test that verifies a control, with its own state.
 message ControlTestState {
   string test_id = 1;
@@ -988,6 +1069,7 @@ message ListTestsResponse {
   // False when an owner source was unavailable or the read was truncated.
   bool complete = 4;
 }
+
 // A resource's latest result for one test.
 enum TestResultState {
   TEST_RESULT_STATE_UNSPECIFIED = 0;
@@ -1176,6 +1258,7 @@ message GetAuditRequest {
 message GetAuditResponse {
   Audit audit = 1;
 }
+
 // One item on an audit's request list (the auditor's information request list).
 message AuditRequestItem {
   string item_id = 1;

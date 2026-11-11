@@ -40,6 +40,7 @@ fn context(output: Output) -> Context {
                     context_window_tokens: None,
                     voice: None,
                     page: None,
+                    asker: None,
                     principal: PrincipalId::new("alice"),
                     text: "Inspect the image and peer".into(),
                     attachments: vec![],
