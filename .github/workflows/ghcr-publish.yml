@@ -21,9 +21,9 @@ env:
 jobs:
   publish-image:
     runs-on: ${{ vars.PUBLIC_RELEASE_RUNNER || 'ubuntu-latest' }}
-    # Internal main-push image builds can take longer than the public mirror on
-    # the private runner because the Rust control-plane layer compiles there.
-    timeout-minutes: 45
+    # Allow cold cache transfers and serial Rust compilation on owned runners.
+    # Keep the publication budget bounded while the build limits memory use.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
