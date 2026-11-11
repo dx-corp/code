@@ -1208,6 +1208,7 @@ fi
 
 test("GHCR publisher preserves image publication without Platform deployment dispatch", async () => {
 	const { source, job } = await readGhcrPublisher();
+	assert.match(source, /^    timeout-minutes: 90$/mu, "cold serial image builds have a bounded 90-minute budget");
 	assert.doesNotMatch(source, /RUNTIME_IMAGE_SYNC_TOKEN|k8s|maestro_runtime_image_published|catch-up/iu);
 	assert.deepEqual(job.permissions, { contents: "read", packages: "write" });
 	const metadata = job.steps.find((step) => step.id === "meta");
