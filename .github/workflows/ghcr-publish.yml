@@ -1,6 +1,6 @@
 name: GHCR Publish
 
-# Image receipts are consumed by the authoritative evalops/k8s runtime lane.
+# Publish the source commit as an immutable image, then update branch tags.
 
 on:
   push:
@@ -15,11 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Every consumer (helm values, service registry, remote-runner chart)
-  # references ghcr.io/dx-corp/maestro. The evalops/maestro target matched no
-  # consumer and no package, and a dx-corp GITHUB_TOKEN cannot push
-  # cross-org ("The requested installation does not exist").
-  IMAGE_NAME: ghcr.io/dx-corp/maestro
+  # Public Code publication uses its own image namespace.
+  IMAGE_NAME: ghcr.io/dx-corp/code
 
 jobs:
   publish-image:
@@ -75,6 +72,7 @@ jobs:
           provenance: false
 
       - name: Retag main and latest from the immutable digest
+        id: retag
         env:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           SOURCE_SHA: ${{ github.sha }}
@@ -85,15 +83,40 @@ jobs:
             echo "::error::Build/push did not produce an image digest."
             exit 1
           fi
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ || ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid immutable image identity."
+            exit 1
+          fi
           short_sha="${SOURCE_SHA:0:7}"
           source_ref="${IMAGE_NAME}@${DIGEST}"
-          # Retries absorb intermittent GHCR intermediary 403s without rebuilding.
+          # Check the remote, including on retries: an older rerun must not rewind aliases.
           attempt=1
-          until docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:main" \
-            --tag "${IMAGE_NAME}:latest" \
-            --tag "${IMAGE_NAME}:sha-${short_sha}" \
-            "${source_ref}"; do
+          while true; do
+            live_main_ref="$(timeout 30s git \
+              -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
+              ls-remote --exit-code origin refs/heads/main)" || {
+              echo "::error::Cannot read current main; refusing to update image aliases."
+              exit 1
+            }
+            if [[ ! "$live_main_ref" =~ ^([0-9a-f]{40})[[:space:]]refs/heads/main$ ]]; then
+              echo "::error::Malformed current main response; refusing to update image aliases."
+              exit 1
+            fi
+            live_main_sha="${BASH_REMATCH[1]}"
+            echo "live_main_sha=${live_main_sha}" >> "$GITHUB_OUTPUT"
+            if [[ "$live_main_sha" != "$SOURCE_SHA" ]]; then
+              echo "aliases_updated=false" >> "$GITHUB_OUTPUT"
+              echo "Immutable image published; skipping aliases because current main is ${live_main_sha}."
+              exit 0
+            fi
+            # Retries absorb intermittent GHCR intermediary 403s without rebuilding.
+            if docker buildx imagetools create \
+              --tag "${IMAGE_NAME}:main" \
+              --tag "${IMAGE_NAME}:latest" \
+              --tag "${IMAGE_NAME}:sha-${short_sha}" \
+              "${source_ref}"; then
+              break
+            fi
             if [[ "$attempt" -ge 4 ]]; then
               echo "::error::Failed to retag ${source_ref} after ${attempt} attempts."
               exit 1
@@ -102,24 +125,32 @@ jobs:
             attempt=$((attempt + 1))
             sleep $((attempt * 5))
           done
+          echo "aliases_updated=true" >> "$GITHUB_OUTPUT"
           echo "Published ${source_ref} as main, latest, and sha-${short_sha}."
 
-      # The receipt is consumed by K8s; keep this dispatch explicit for auditability.
-      - name: Dispatch K8s GitOps image sync
+      - name: Summarize published image
         env:
-          GH_TOKEN: ${{ secrets.RUNTIME_IMAGE_SYNC_TOKEN }}
+          ALIASES_UPDATED: ${{ steps.retag.outputs.aliases_updated }}
+          LIVE_MAIN_SHA: ${{ steps.retag.outputs.live_main_sha }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
           SOURCE_SHA: ${{ github.sha }}
+          DIGEST: ${{ steps.push-sha.outputs.digest }}
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "::notice::RUNTIME_IMAGE_SYNC_TOKEN is not configured; skipping evalops/k8s image sync dispatch. K8s catch-up remains available."
-            exit 0
+          : "${IMAGE_NAME:?Published image name is unavailable}"
+          : "${SOURCE_SHA:?Published source revision is unavailable}"
+          : "${DIGEST:?Published image digest is unavailable}"
+          if [[ "$ALIASES_UPDATED" != true && "$ALIASES_UPDATED" != false ]]; then
+            echo "::error::Image alias result is unavailable."
+            exit 1
           fi
-
-          image_tag="sha-${SOURCE_SHA:0:7}"
-          gh api \
-            --method POST \
-            repos/evalops/k8s/dispatches \
-            -f event_type=maestro_runtime_image_published \
-            -f "client_payload[source_sha]=${SOURCE_SHA}" \
-            -f "client_payload[image_tag]=${image_tag}"
+          {
+            printf '%s\n\n' '## Published image'
+            printf -- '- Commit tag: %s:sha-%s\n' "$IMAGE_NAME" "$SOURCE_SHA"
+            printf -- '- Digest: %s@%s\n' "$IMAGE_NAME" "$DIGEST"
+            if [[ "$ALIASES_UPDATED" == true ]]; then
+              printf -- '- Updated tags: main, latest, sha-%s\n' "${SOURCE_SHA:0:7}"
+            else
+              printf -- '- Alias update not completed: main, latest, sha-%s (current main: %s)\n' "${SOURCE_SHA:0:7}" "$LIVE_MAIN_SHA"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
