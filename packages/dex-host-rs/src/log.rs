@@ -355,6 +355,7 @@ mod tests {
             context_window_tokens: None,
             voice: None,
             page: None,
+            asker: None,
             principal: PrincipalId::new("alice"),
             text: text.into(),
             attachments: Vec::new(),

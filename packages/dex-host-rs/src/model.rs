@@ -763,6 +763,7 @@ mod tests {
                     context_window_tokens: None,
                     voice: None,
                     page: None,
+                    asker: None,
                     principal: PrincipalId::new("alice"),
                     text: "read a.txt".into(),
                     attachments: Vec::new(),

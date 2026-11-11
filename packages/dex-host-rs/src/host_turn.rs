@@ -177,6 +177,7 @@ impl<M: Model + 'static> HostTurnRun<M> {
                 context_window_tokens: None,
                 voice: None,
                 page: None,
+                asker: None,
                 principal: turn.principal.clone(),
                 text: turn.prompt,
                 attachments: turn
