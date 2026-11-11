@@ -356,6 +356,8 @@ export function getLatestReachableReleaseTag(ref = "HEAD") {
 }
 
 /**
+ * Collect commits that touch the current workspace directory.
+ * In a standalone repository this includes the whole repository.
  * @param {string} [fromRef]
  * @param {string} [toRef]
  */
@@ -364,7 +366,7 @@ export function collectReleaseNoteSubjects(
 	toRef = "HEAD",
 ) {
 	const range = fromRef ? `${fromRef}..${toRef}` : toRef;
-	const output = execFileSync("git", ["log", "--no-merges", "--format=%s", range], {
+	const output = execFileSync("git", ["log", "--no-merges", "--format=%s", range, "--", "."], {
 		encoding: "utf8",
 	});
 	return output
