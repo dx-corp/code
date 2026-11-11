@@ -29,7 +29,15 @@ test("internal tag-release dispatches public-release-mirror after creating a tag
 	assert.match(internalWorkflow, /github\.repository == 'dx-corp\/mono'/);
 	assert.match(internalWorkflow, /needs\.tag-current-version\.outputs\.tag_exists != 'true'/);
 	assert.match(internalWorkflow, /dispatch maestro-public-release-mirror\.yml/);
-	assert.match(internalWorkflow, /dispatch maestro-release\.yml/);
+	assert.doesNotMatch(internalWorkflow, /dispatch maestro-release\.yml/);
+	assert.match(internalWorkflow, /"dispatch_native":"true"/);
+	const mirrorWorkflow = readFileSync(
+		new URL("../../../.github/workflows/maestro-public-release-mirror.yml", import.meta.url),
+		"utf8",
+	);
+	assert.match(mirrorWorkflow, /dispatch-native-release:\s+needs: mirror-release/);
+	assert.match(mirrorWorkflow, /needs\.mirror-release\.result == 'success'/);
+	assert.match(mirrorWorkflow, /maestro-release\.yml\/dispatches/);
 	assert.match(internalWorkflow, /curl --config - --fail-with-body/);
 	assert.match(internalWorkflow, /"publish_npm":"false"/);
 	assert.match(internalWorkflow, /resolve-maestro-version-commit\.py/);
