@@ -51,6 +51,53 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.112] - 2026-11-10
+
+### Added
+
+- Add CI rules for workflow and script-test bugs (#21731). <!-- maestro-release-note:af0a1f530e28 -->
+- Flag hard-coded "complete": true in Rust json! responses (#21728). <!-- maestro-release-note:d4106d6b504d -->
+- Return verified claims beside Dex's prose over converse (#20995). <!-- maestro-release-note:8c7dc6d0c3ba -->
+- Headless gateway sessions receive and wake on monitor notifications (#20897). <!-- maestro-release-note:775b3e1b3566 -->
+- Monitor notifications wake an idle agent and append when busy (#20891). <!-- maestro-release-note:e2e2c16986c6 -->
+- Background_tasks monitor streams script stdout as notifications (#20885). <!-- maestro-release-note:cbc9b735bd0f -->
+- Read-only audits and audit request lists (#19040). <!-- maestro-release-note:019d9a67d7c5 -->
+- Read-only ListAssets and GetAsset (#19032). <!-- maestro-release-note:70501a0a1b2e -->
+- Read-only evidence, versions and content (#19007). <!-- maestro-release-note:a6c296e5e075 -->
+- Read-only ListTests and GetTest (#18985). <!-- maestro-release-note:afab2e61ec74 -->
+- Read-only ListControls and GetControl (#18972). <!-- maestro-release-note:b1f35e7877ee -->
+- Name MCP and agent tools `knowledge_*` and preserve legacy aliases (#18969). <!-- maestro-release-note:b1b20ad6fd49 -->
+
+### Changed
+
+- Watch durable progress while observers are paused (#21830). <!-- maestro-release-note:ac54eb48c01f -->
+- Bump react in /products/maestro/desktop (#21413). <!-- maestro-release-note:feef7472bfd1 -->
+- Unify workspace dependency features with cargo-hakari workspace-hack (#21391). <!-- maestro-release-note:460b0b4242e7 -->
+- Use the new Dex ask tool wire name (#21246). <!-- maestro-release-note:ac847653ac58 -->
+- Bump @hono/node-server in /products/maestro/desktop (#20133). <!-- maestro-release-note:14117dbf665a -->
+- Bump react in /products/maestro/desktop (#19969). <!-- maestro-release-note:71ba9824f2b0 -->
+- Skip stable timeline prefix validation (#19497). <!-- maestro-release-note:fc515b84a1a6 -->
+- Bump @hono/node-server in /products/maestro/desktop (#19227). <!-- maestro-release-note:6677f2efc2a3 -->
+- Highlight streamed code in batches of 12 updates (#19241). <!-- maestro-release-note:3e3e85aefb24 -->
+- Bump node-forge in /products/maestro/desktop (#19089). <!-- maestro-release-note:3b21e8fa9c0a -->
+- Bump follow-redirects in /products/maestro/desktop (#19090). <!-- maestro-release-note:6bf8f885699c -->
+- Bump @hono/node-server in /products/maestro/desktop (#19156). <!-- maestro-release-note:fe164e07d6c3 -->
+
+### Fixed
+
+- Plan both Code Darwin targets on the existing signing runner (#21940). <!-- maestro-release-note:0a872472e0c7 -->
+- Repair vendored websocket shell helpers (#21823). <!-- maestro-release-note:cb3f66d9cf7f -->
+- Repair SQLite WAL and Computer MCP advisories (#21716). <!-- maestro-release-note:478c2e57bc37 -->
+- Copy the workspace-hack stand-in into the Maestro image (#21568). <!-- maestro-release-note:8cc59ad41a3d -->
+- Declare the local timeline validation patch (#20868). <!-- maestro-release-note:09495f3d7d0e -->
+- Copy serializer patches into image build stages (#20600). <!-- maestro-release-note:e3e6789d3de2 -->
+- Repair selected AWS serializer ownership and depth (#20595). <!-- maestro-release-note:cf84e880854c -->
+- Resolve maintained Smithy dependencies (#20567). <!-- maestro-release-note:252a268fd309 -->
+- Use maintained testcontainers source (#20465). <!-- maestro-release-note:fe857ad210b2 -->
+- Replace unmaintained audit storage dependencies (#20416). <!-- maestro-release-note:9f42a4ed5fe7 -->
+- Align desktop lockfile with pnpm overrides (#20192). <!-- maestro-release-note:8d5332ecd027 -->
+- The deixic code mirror builds and its install test passes (#20112). <!-- maestro-release-note:5d510bd0e4da -->
+
 ## [0.10.111] - 2026-09-30
 
 ### Added
