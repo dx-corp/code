@@ -56,6 +56,9 @@ RUN sed -i '/^    "packages\/codemode-rs",$/d' Cargo.toml \
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
+# Release compilation otherwise follows the CPU count and exhausts small CI
+# runners. Apply the same bound to dependency cooking and the final binary.
+ENV CARGO_BUILD_JOBS=1
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract

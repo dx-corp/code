@@ -295,3 +295,110 @@ async fn signal_shutdown_closes_late_cancellation_admission_before_mutation() {
         .unwrap()
         .unwrap();
 }
+
+// Exercise the Linux native-container transport without configuring host interfaces.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_drain_uses_the_configured_loopback_bind() {
+    let _lock = ENV_LOCK.lock().await;
+    const KEYS: &[&str] = &["MAESTRO_CONTROL_HOST", "PORT", "MAESTRO_WEB_API_KEY"];
+    let _environment = SavedEnv::capture(KEYS);
+    let listener = TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut state = test_app_state_with_sessions(HashMap::new());
+    let mut config = (*state.config).clone();
+    config.listen_host = "127.0.0.2".into();
+    config.api_key = Some("loopback-drain-test-key".into());
+    config.require_key = true;
+    state.config = Arc::new(config);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crate::lifecycle::serve_connections(
+        listener,
+        state,
+        async {
+            stopped.await.unwrap();
+            "test-owner-ended".into()
+        },
+    ));
+    env::set_var(KEYS[0], "127.0.0.2");
+    env::set_var(KEYS[1], address.port().to_string());
+    env::set_var(KEYS[2], "loopback-drain-test-key");
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("http://{address}");
+    assert_eq!(
+        client
+            .get(format!("{url}/readyz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(format!("{url}{}", crate::lifecycle::DRAIN_PATH))
+            .header("x-maestro-api-key", "wrong-key")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        client
+            .get(format!("{url}/readyz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    crate::lifecycle::drain()
+        .await
+        .expect("drain must connect to the configured loopback listener");
+    assert_eq!(
+        client
+            .get(format!("{url}/readyz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        503
+    );
+    assert_eq!(
+        client
+            .get(format!("{url}/healthz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn drain_destination_keeps_the_process_key_on_loopback() {
+    for (host, expected) in [
+        ("127.0.0.2", "127.0.0.2:8123"),
+        ("0.0.0.0", "127.0.0.1:8123"),
+        ("[::1]", "[::1]:8123"),
+        ("[::]", "[::1]:8123"),
+        ("192.0.2.1", "127.0.0.1:8123"),
+        ("[2001:db8::1]", "[::1]:8123"),
+        ("example.invalid", "127.0.0.1:8123"),
+    ] {
+        let destination = crate::lifecycle::drain_address(host, 8123);
+        assert!(
+            destination.ip().is_loopback(),
+            "process key destination: {host}"
+        );
+        assert_eq!(destination.to_string(), expected);
+    }
+}

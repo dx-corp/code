@@ -265,6 +265,28 @@ pub(crate) async fn serve_connections(
     Ok(())
 }
 
+pub(super) fn drain_address(host: &str, port: u16) -> std::net::SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    let host = host.trim();
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    let address = literal
+        .parse::<IpAddr>()
+        .ok()
+        .filter(IpAddr::is_loopback)
+        .unwrap_or_else(|| {
+            if host.contains(':') {
+                Ipv6Addr::LOCALHOST.into()
+            } else {
+                Ipv4Addr::LOCALHOST.into()
+            }
+        });
+    SocketAddr::new(address, port)
+}
+
 /// Native preStop client. The API key stays in the process environment and is
 /// sent only to a loopback socket, without proxying or redirects.
 pub async fn drain() -> anyhow::Result<()> {
@@ -274,12 +296,7 @@ pub async fn drain() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "8080".into())
         .parse::<u16>()?;
     let host = env::var("MAESTRO_CONTROL_HOST").unwrap_or_default();
-    let loopback = if host.contains(':') {
-        "[::1]"
-    } else {
-        "127.0.0.1"
-    };
-    let url = format!("http://{loopback}:{port}{DRAIN_PATH}");
+    let url = format!("http://{}{DRAIN_PATH}", drain_address(&host, port));
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
