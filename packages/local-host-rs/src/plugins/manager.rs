@@ -357,6 +357,8 @@ fn git_command() -> Command {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "ssh".to_string());
     command.env("GIT_SSH_COMMAND", format!("{base_ssh} -oBatchMode=yes"));
+    #[cfg(unix)]
+    crate::tools::process_utils::set_std_process_group(&mut command);
     command
 }
 
@@ -425,17 +427,24 @@ fn run_git_capture(command: &mut Command, timeout: Duration, label: &str) -> Res
         .stderr(std::process::Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to run {label}"))?;
-    let status = match child
-        .wait_timeout(timeout)
-        .with_context(|| format!("failed while waiting for {label}"))?
-    {
-        Some(status) => status,
-        None => {
+    #[cfg(unix)]
+    let mut process_group = crate::tools::ProcessGroupGuard::new(Some(child.id()));
+    let status = match child.wait_timeout(timeout) {
+        Ok(Some(status)) => status,
+        result => {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.kill();
             let _ = child.wait();
+            let _ = result.with_context(|| format!("failed while waiting for {label}"))?;
             bail!("{label} timed out");
         }
     };
+    // A successfully exited git process may also leave a credential helper or
+    // transport descendant holding its captured pipes. Release that ownership
+    // before reading through EOF, while retaining the direct child's status.
+    #[cfg(unix)]
+    drop(process_group);
     // Read after the wait rather than through `wait_with_output`, which would
     // wait a second time on an already-reaped child. Both commands here write
     // one short line, well under the pipe buffer, so nothing can block.
@@ -503,14 +512,16 @@ fn wait_for_clone(
     source: &str,
     timeout: Duration,
 ) -> Result<std::process::ExitStatus> {
-    match child
-        .wait_timeout(timeout)
-        .context("failed while waiting for git clone")?
-    {
-        Some(status) => Ok(status),
-        None => {
+    #[cfg(unix)]
+    let mut process_group = crate::tools::ProcessGroupGuard::new(Some(child.id()));
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => Ok(status),
+        result => {
+            #[cfg(unix)]
+            process_group.terminate();
             let _ = child.kill();
             let _ = child.wait();
+            let _ = result.context("failed while waiting for git clone")?;
             bail!("git clone timed out for {source}");
         }
     }
@@ -1132,9 +1143,21 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn clone_wait_timeout_kills_stalled_child() {
-        let mut child = Command::new("sh").args(["-c", "sleep 5"]).spawn().unwrap();
+    #[tokio::test]
+    async fn clone_wait_timeout_kills_stalled_child() {
+        let directory = TempDir::new().unwrap();
+        let pid_file = directory.path().join("descendant-pid");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 60 & printf '%s\\n' \"$!\" > \"$1\"; wait",
+                "clone-fixture",
+            ])
+            .arg(&pid_file);
+        crate::tools::process_utils::set_std_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let descendant = crate::tools::process_utils::read_fixture_pid(&pid_file).await;
         let error = wait_for_clone(
             &mut child,
             "stalled.example/plugin.git",
@@ -1143,6 +1166,7 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("git clone timed out"));
         assert!(child.try_wait().unwrap().is_some());
+        crate::tools::process_utils::assert_process_reaped(descendant).await;
     }
 
     #[test]

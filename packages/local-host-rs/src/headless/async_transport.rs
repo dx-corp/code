@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::{Duration, Instant, timeout};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::local_controller_capabilities;
 use super::messages::{
@@ -200,6 +200,8 @@ pub struct AsyncAgentTransport {
     decided_tool_executions: Mutex<HashSet<String>>,
     /// Cancellation token for graceful shutdown
     cancel_token: CancellationToken,
+    /// Dropping the transport must also release its detached task owners.
+    _cancel_on_drop: DropGuard,
     /// Handle to the reader task
     _reader_handle: tokio::task::JoinHandle<()>,
     /// Handle to the writer task
@@ -228,9 +230,13 @@ impl AsyncAgentTransport {
             cmd.env(key, value);
         }
 
+        #[cfg(unix)]
+        crate::tools::set_new_process_group(&mut cmd);
         let mut child = spawn_agent_command(&mut cmd)
             .await
             .map_err(AsyncTransportError::SpawnFailed)?;
+        #[cfg(unix)]
+        let process_group = crate::tools::ProcessGroupGuard::new(child.id());
 
         let stdin = child.stdin.take().ok_or_else(|| {
             AsyncTransportError::SpawnFailed(std::io::Error::other("Failed to get stdin"))
@@ -266,6 +272,8 @@ impl AsyncAgentTransport {
         let reader_cancel = cancel_token.clone();
         let reader_event_notification = Arc::clone(&event_notification);
         let reader_handle = tokio::spawn(async move {
+            #[cfg(unix)]
+            let _process_group = process_group;
             Self::reader_loop(
                 stdout,
                 child,
@@ -284,6 +292,7 @@ impl AsyncAgentTransport {
             event_notification,
             state: AgentState::default(),
             decided_tool_executions: Mutex::new(HashSet::new()),
+            _cancel_on_drop: cancel_token.clone().drop_guard(),
             cancel_token,
             _reader_handle: reader_handle,
             _writer_handle: writer_handle,
@@ -892,13 +901,15 @@ mod tests {
                 args: serde_json::json!({}),
                 started_at_ms: None,
             });
+        let cancel_token = CancellationToken::new();
         let mut transport = AsyncAgentTransport {
             message_tx,
             event_rx,
             event_notification: Arc::new(Notify::new()),
             state,
             decided_tool_executions: Mutex::new(HashSet::new()),
-            cancel_token: CancellationToken::new(),
+            _cancel_on_drop: cancel_token.clone().drop_guard(),
+            cancel_token,
             _reader_handle: tokio::spawn(async {}),
             _writer_handle: tokio::spawn(async {}),
         };
@@ -973,13 +984,15 @@ mod tests {
                 args: serde_json::json!({}),
                 started_at_ms: None,
             });
+        let cancel_token = CancellationToken::new();
         let mut transport = AsyncAgentTransport {
             message_tx,
             event_rx,
             event_notification: Arc::new(Notify::new()),
             state,
             decided_tool_executions: Mutex::new(HashSet::new()),
-            cancel_token: CancellationToken::new(),
+            _cancel_on_drop: cancel_token.clone().drop_guard(),
+            cancel_token,
             _reader_handle: tokio::spawn(async {}),
             _writer_handle: tokio::spawn(async {}),
         };
@@ -1051,13 +1064,15 @@ mod tests {
                 args: serde_json::json!({}),
                 started_at_ms: None,
             });
+        let cancel_token = CancellationToken::new();
         let transport = AsyncAgentTransport {
             message_tx,
             event_rx,
             event_notification: Arc::new(Notify::new()),
             state,
             decided_tool_executions: Mutex::new(HashSet::new()),
-            cancel_token: CancellationToken::new(),
+            _cancel_on_drop: cancel_token.clone().drop_guard(),
+            cancel_token,
             _reader_handle: tokio::spawn(async {}),
             _writer_handle: tokio::spawn(async {}),
         };
@@ -1099,20 +1114,36 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn spawned_transport_notifies_on_ready_event() {
+        assert_spawned_transport_cleanup(false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropping_spawned_transport_reaps_descendants() {
+        assert_spawned_transport_cleanup(true).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn assert_spawned_transport_cleanup(drop_transport: bool) {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("tempdir");
         let script = temp.path().join("ready.sh");
+        let descendant_pid = temp.path().join("descendant-pid");
         fs::write(
             &script,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"ready\",\"model\":\"test\",\"provider\":\"test\"}'\nsleep 1\n",
+            "#!/bin/sh\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$CHILD_PID_FILE\"\nprintf '%s\\n' '{\"type\":\"ready\",\"model\":\"test\",\"provider\":\"test\"}'\nwait\n",
         )
         .expect("write script");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod script");
 
         let mut transport = AsyncAgentTransport::spawn(AsyncTransportConfig {
             cli_path: script.to_string_lossy().into_owned(),
+            env: vec![(
+                "CHILD_PID_FILE".into(),
+                descendant_pid.to_string_lossy().into_owned(),
+            )],
             ..AsyncTransportConfig::default()
         })
         .await
@@ -1128,10 +1159,16 @@ mod tests {
                 if model == "test" && provider == "test"
         ));
 
-        transport
-            .shutdown_and_wait()
-            .await
-            .expect("shutdown scripted transport");
+        if drop_transport {
+            drop(transport);
+        } else {
+            transport
+                .shutdown_and_wait()
+                .await
+                .expect("shutdown scripted transport");
+        }
+        let descendant = crate::tools::process_utils::read_fixture_pid(&descendant_pid).await;
+        crate::tools::process_utils::assert_process_reaped(descendant).await;
     }
 
     #[tokio::test]
@@ -1161,6 +1198,7 @@ mod tests {
             event_notification: Arc::new(Notify::new()),
             state: AgentState::default(),
             decided_tool_executions: Mutex::new(HashSet::new()),
+            _cancel_on_drop: cancel_token.clone().drop_guard(),
             cancel_token,
             _reader_handle: noop,
             _writer_handle: tokio::spawn(async move {
