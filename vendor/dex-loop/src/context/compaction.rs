@@ -385,6 +385,7 @@ mod tests {
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         }
     }
     fn append(events: &mut Vec<(Cursor, Event)>, event: Event) {
@@ -971,6 +972,7 @@ mod cut_tests {
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         }
     }
 

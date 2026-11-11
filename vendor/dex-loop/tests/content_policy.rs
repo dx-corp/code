@@ -38,6 +38,7 @@ fn start(log: &FakeLog, policy: TurnContentPolicy) -> Context {
         })),
         approval_mode: ApprovalMode::Interactive,
         page: None,
+        asker: None,
     });
     log.rehydrate()
 }
