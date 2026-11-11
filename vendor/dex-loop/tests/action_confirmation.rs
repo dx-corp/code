@@ -208,6 +208,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         },
         Event::ModelStepCompleted {
             interruption: None,

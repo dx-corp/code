@@ -358,21 +358,7 @@ async fn a_legacy_parked_call_is_granted_on_rehydrate_and_the_step_continues() {
         alice(),
     );
     for event in [
-        Event::UserMessage {
-            interaction_mode: dex_loop::InteractionMode::Unspecified,
-            turn: TurnId::new("t1"),
-            message_id: None,
-            principal: alice(),
-            text: "email them".into(),
-            attachments: vec![],
-            client_tools: vec![],
-            authorized_tools: Vec::new(),
-            model_binding: None,
-            context_window_tokens: None,
-            voice: None,
-            approval_mode: dex_loop::ApprovalMode::Interactive,
-            page: None,
-        },
+        user_message("t1", "email them"),
         Event::StepStarted {
             step: 1,
             control_through: Cursor::START,
@@ -959,21 +945,7 @@ async fn crashed_read_runs_again() {
 #[tokio::test]
 async fn crash_mid_stream_abandons_the_attempt_and_reissues_it() {
     let log = FakeLog::default();
-    log.host_append(Event::UserMessage {
-        interaction_mode: dex_loop::InteractionMode::Unspecified,
-        turn: dex_loop::TurnId::new("t1"),
-        message_id: None,
-        principal: alice(),
-        text: "hi".into(),
-        attachments: vec![],
-        client_tools: vec![],
-        authorized_tools: Vec::new(),
-        model_binding: None,
-        context_window_tokens: None,
-        voice: None,
-        approval_mode: dex_loop::ApprovalMode::Interactive,
-        page: None,
-    });
+    log.host_append(user_message("t1", "hi"));
     log.host_append(Event::StepStarted {
         step: 1,
         control_through: dex_loop::Cursor::START,
@@ -1146,21 +1118,7 @@ async fn started_mutation_with_missing_ledger_never_dispatches_again() {
 async fn same_turn_id_in_two_threads_dispatches_under_distinct_threads() {
     async fn run_one(thread: dex_loop::ThreadId) -> FakeTools {
         let log = FakeLog::default();
-        log.host_append(Event::UserMessage {
-            interaction_mode: dex_loop::InteractionMode::Unspecified,
-            turn: dex_loop::TurnId::new("t1"),
-            message_id: None,
-            principal: alice(),
-            text: "go".into(),
-            attachments: vec![],
-            client_tools: vec![],
-            authorized_tools: Vec::new(),
-            model_binding: None,
-            context_window_tokens: None,
-            voice: None,
-            approval_mode: dex_loop::ApprovalMode::Interactive,
-            page: None,
-        });
+        log.host_append(user_message("t1", "go"));
         let model = FakeModel::new(vec![vec![call("update", json!({}))], vec![text("done")]]);
         let tools = FakeTools::new(vec![write_tool("update")]);
         let effects = FakeEffects::default();

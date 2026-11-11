@@ -131,7 +131,7 @@ runs:
         # Earlier repository names left absolute Rust env sources in runner
         # login profiles. Refresh only those owned entries to this active home.
         if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-          bash .github/actions/setup-rust/repair-login-profile.sh \
+          bash "${GITHUB_ACTION_PATH}/repair-login-profile.sh" \
             "$cache_root" "$safe_toolchain" "$cargo_home" \
             "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.zprofile"
         fi

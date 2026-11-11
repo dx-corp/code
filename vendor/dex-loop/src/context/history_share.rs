@@ -16,6 +16,7 @@ fn user(text: &str) -> Event {
         voice: None,
         approval_mode: ApprovalMode::Interactive,
         page: None,
+        asker: None,
     }
 }
 

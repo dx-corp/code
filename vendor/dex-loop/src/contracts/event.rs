@@ -680,6 +680,11 @@ pub enum Event {
         /// authority. Older turns carry none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         page: Option<Box<crate::PageContext>>,
+        /// Who asked, as the authenticated host resolved them, validated
+        /// against `principal`. Identifies the person; grants no authority.
+        /// Older turns carry none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asker: Option<Box<crate::TurnAsker>>,
     },
     /// Control: becomes a user message from `principal` before the next model
     /// call. Calls the model then proposes act under `principal`.
@@ -1201,6 +1206,7 @@ mod tests {
                     label: "Reading your tab".into(),
                 }],
                 page: None,
+                asker: None,
             },
             Event::ClientToolRequested {
                 call: CallId::new("t1-1-0"),
@@ -1314,6 +1320,7 @@ mod tests {
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         };
         let json = serde_json::to_string(&event).expect("serialize");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
@@ -1347,6 +1354,7 @@ mod tests {
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 page: None,
+                asker: None,
             }
         );
     }

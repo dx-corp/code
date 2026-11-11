@@ -356,6 +356,7 @@ impl<M: Model> ModelSummarizer<M> {
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 page: None,
+                asker: None,
             },
         );
         input.retain_owner_evidence_from(ctx);
@@ -746,6 +747,7 @@ mod tests {
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 page: None,
+                asker: None,
             },
         );
         ctx
@@ -811,6 +813,7 @@ mod tests {
                 voice: None,
                 approval_mode: ApprovalMode::Interactive,
                 page: None,
+                asker: None,
             },
         )];
         for step in 1..=4 {
@@ -864,6 +867,7 @@ mod tests {
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         };
         events.push((Cursor(11), current_event));
         let mut current = rehydrate(context().thread().clone(), &events);
@@ -1768,6 +1772,7 @@ mod tests {
             voice: None,
             approval_mode: ApprovalMode::Interactive,
             page: None,
+            asker: None,
         };
         let blocks = vec![
             OutputBlock::Text {

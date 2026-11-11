@@ -114,6 +114,7 @@ pub fn user_message(turn: &str, text: &str) -> Event {
         voice: None,
         approval_mode: dex_loop::ApprovalMode::Interactive,
         page: None,
+        asker: None,
     }
 }
 
@@ -160,6 +161,7 @@ impl FakeLog {
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
             page: None,
+            asker: None,
         });
         self.rehydrate()
     }
@@ -186,6 +188,7 @@ impl FakeLog {
             voice: None,
             approval_mode,
             page: None,
+            asker: None,
         });
         self.rehydrate()
     }
@@ -986,6 +989,7 @@ pub fn crashed_after_start(log: &FakeLog, call: &ProposedCall) {
             voice: None,
             approval_mode: dex_loop::ApprovalMode::Interactive,
             page: None,
+            asker: None,
         },
         Event::StepStarted {
             step: 1,

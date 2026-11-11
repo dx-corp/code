@@ -37,6 +37,7 @@ fn message_from(principal: PrincipalId, turn: &str, text: &str) -> Event {
         voice: None,
         approval_mode: ApprovalMode::Interactive,
         page: None,
+        asker: None,
     }
 }
 

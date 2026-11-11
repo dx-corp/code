@@ -239,6 +239,7 @@ pub struct Context {
     context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
     page: Option<crate::PageContext>,
+    asker: Option<crate::TurnAsker>,
     /// Last completed serving route in this turn, derived from existing events.
     /// Kept outside compactable history so recovery does not retry a failed primary.
     last_served: Option<ServedBy>,
@@ -307,6 +308,7 @@ struct PendingTurn {
     context_window_tokens: Option<u64>,
     voice: Option<crate::TurnVoice>,
     page: Option<crate::PageContext>,
+    asker: Option<crate::TurnAsker>,
 }
 
 impl Context {
@@ -340,6 +342,7 @@ impl Context {
             context_window_tokens: None,
             voice: None,
             page: None,
+            asker: None,
             last_served: None,
             authorized_principal: None,
             uncertain_calls: Vec::new(),
@@ -459,6 +462,12 @@ impl Context {
     /// The Deixic page the current turn was asked from, when it was.
     pub fn page(&self) -> Option<&crate::PageContext> {
         self.page.as_ref()
+    }
+
+    /// Who asked the current turn, as the host resolved them. Identifies the
+    /// person only; the turn's authority is [`Self::authorized_principal`].
+    pub fn asker(&self) -> Option<&crate::TurnAsker> {
+        self.asker.as_ref()
     }
 
     /// The last completed model step's route in the current turn. New turns
@@ -757,6 +766,7 @@ impl Context {
                 voice,
                 interaction_mode,
                 page,
+                asker,
             } => {
                 let next = PendingTurn {
                     turn: turn.clone(),
@@ -772,6 +782,7 @@ impl Context {
                     context_window_tokens: *context_window_tokens,
                     voice: voice.as_deref().cloned(),
                     page: page.as_deref().cloned(),
+                    asker: asker.as_deref().cloned(),
                 };
                 if self.status == Status::Running {
                     // This message's cursor landed while the current turn was
@@ -1364,6 +1375,7 @@ impl Context {
             voice,
             interaction_mode,
             page,
+            asker,
         } = next;
         if self.acting.as_ref() != Some(&principal) {
             self.exposed.clear();
@@ -1398,6 +1410,7 @@ impl Context {
         self.context_window_tokens = context_window_tokens;
         self.voice = voice;
         self.page = page;
+        self.asker = asker;
         self.interaction_mode = interaction_mode;
         self.last_served = None;
         self.authorized_principal = Some(principal.clone());

@@ -22,6 +22,8 @@
 #[cfg(test)]
 extern crate self as dex_loop;
 
+#[path = "context/asker.rs"]
+mod asker;
 #[path = "execution/budget/mod.rs"]
 mod budget;
 #[path = "execution/codemode_output.rs"]
@@ -54,6 +56,7 @@ mod voice;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub use asker::{AskerChannel, AskerFact, TurnAsker};
 pub use budget::{Budget, BudgetAxis, RemainingBudget};
 pub use compaction::{
     Compaction, CompactionPlan, Compactor, DEFAULT_OUTPUT_TOKENS, NoCompaction, Summarize, Summary,
