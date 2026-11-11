@@ -1104,16 +1104,27 @@ pub(crate) fn spawn_scheduler(
     api: std::sync::Arc<Mutex<crate::extended::ExtendedApiState>>,
     cwd: PathBuf,
     selected_model: std::sync::Arc<Mutex<crate::ModelInfo>>,
+    lifecycle: std::sync::Arc<crate::lifecycle::Lifecycle>,
 ) {
     tokio::spawn(async move {
         let owner = format!("gateway-scheduler-{}", std::process::id());
         loop {
+            let admission = match lifecycle.admit() {
+                Ok(admission) => admission,
+                Err(()) => return,
+            };
             let now_ms = crate::now_millis();
             let claim =
                 scheduler_claim_due(api.clone(), selected_model.clone(), owner.clone(), now_ms)
                     .await;
             if let Some(claim) = claim {
-                spawn_claimed(api.clone(), cwd.clone(), claim);
+                spawn_claimed(
+                    api.clone(),
+                    cwd.clone(),
+                    claim,
+                    lifecycle.clone(),
+                    admission,
+                );
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -1156,8 +1167,10 @@ pub(crate) fn spawn_claimed(
     api: std::sync::Arc<Mutex<crate::extended::ExtendedApiState>>,
     cwd: PathBuf,
     claim: ClaimedAutomationRun,
+    lifecycle: std::sync::Arc<crate::lifecycle::Lifecycle>,
+    admission: crate::lifecycle::Admission,
 ) {
-    tokio::spawn(async move {
+    crate::lifecycle::spawn(admission, async move {
         let heartbeat_api = api.clone();
         let heartbeat_claim = claim.clone();
         let heartbeat = tokio::spawn(async move {
@@ -1186,7 +1199,7 @@ pub(crate) fn spawn_claimed(
                 }
             }
         });
-        let result = execute_native_turn(&claim, &cwd).await;
+        let result = execute_native_turn(&claim, &cwd, &lifecycle.cancel).await;
         heartbeat.abort();
         let completion_claim = claim.clone();
         let completion = retry_automation_mutation(api, move |store| {
@@ -1232,7 +1245,11 @@ where
     .await
 }
 
-async fn execute_native_turn(claim: &ClaimedAutomationRun, cwd: &Path) -> AutomationRunResult {
+async fn execute_native_turn(
+    claim: &ClaimedAutomationRun,
+    cwd: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> AutomationRunResult {
     let Ok(kernel) = compose(KernelRequest {
         model: claim.model.clone(),
         cwd: cwd.to_string_lossy().to_string(),
@@ -1259,8 +1276,17 @@ async fn execute_native_turn(claim: &ClaimedAutomationRun, cwd: &Path) -> Automa
     };
     let mut digest = Sha256::new();
     let mut output_bytes = 0_u64;
+    let mut stopping = false;
     loop {
-        match run.next().await {
+        let step = tokio::select! {
+            step = run.next() => step,
+            () = cancel.cancelled(), if !stopping => {
+                stopping = true;
+                run.cancel();
+                continue;
+            }
+        };
+        match step {
             Ok(Step::Observed(Observed::Text(content))) => {
                 output_bytes = output_bytes.saturating_add(content.len() as u64);
                 digest.update(content.as_bytes());

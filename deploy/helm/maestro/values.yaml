@@ -22,11 +22,11 @@ operatingLayer:
   evidenceRetentionDays: 90
 
 image:
-  repository: ghcr.io/dx-corp/maestro
-  # Defaults to Chart.appVersion when empty. Prefer immutable sha-* tags or digest.
+  repository: ghcr.io/dx-corp/code
+  # Empty selects the publisher-guaranteed main tag. Pin sha-* or digest for releases.
   tag: ""
   digest: ""
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 auth:
   # Leave empty to generate an API key on first install and preserve it on upgrades.
@@ -60,7 +60,7 @@ writableTmp:
   sizeLimit: 1Gi
   mountPath: /tmp
 
-terminationGracePeriodSeconds: 45
+terminationGracePeriodSeconds: 60
 
 startupProbe:
   httpGet:
@@ -74,33 +74,8 @@ gracefulShutdown:
   preStop:
     exec:
       command:
-        - /bin/sh
-        - -c
-        - |
-          node <<'EOF' || true
-          const port = process.env.PORT || "8080";
-          const controller = new AbortController();
-          setTimeout(() => controller.abort(), 4000).unref();
-          fetch(`http://127.0.0.1:${port}/.well-known/evalops/remote-runner/drain`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              reason: "kubernetes_prestop",
-              requested_by: "kubernetes_prestop",
-            }),
-            signal: controller.signal,
-          }).then(async (res) => {
-            if (res.status === 404) return;
-            if (!res.ok) {
-              console.error(await res.text());
-              process.exitCode = 1;
-            }
-          }).catch((error) => {
-            console.error(error?.message ?? String(error));
-            process.exitCode = 1;
-          });
-          EOF
-          sleep 5
+        - maestro
+        - drain
 
 podDisruptionBudget:
   enabled: true

@@ -28,6 +28,7 @@
 			"route": "native-headless"
 		},
 		{ "name": "serve", "argv": ["serve"], "route": "native-control-plane" },
+		{ "name": "drain", "argv": ["drain"], "route": "native-control-plane" },
 		{ "name": "a2a", "argv": ["a2a", "--help"], "route": "native" },
 		{
 			"name": "hosted-runner",

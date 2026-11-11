@@ -53,7 +53,9 @@ mod governed_changes;
 mod governed_native;
 mod hosted_threads;
 mod http;
+mod lifecycle;
 mod local;
+pub use lifecycle::drain;
 mod markitdown;
 mod migrations;
 mod model_catalog;
@@ -537,6 +539,12 @@ struct AppState {
     extended_api: Arc<Mutex<ExtendedApiState>>,
 }
 
+impl AppState {
+    fn lifecycle(&self) -> &Arc<lifecycle::Lifecycle> {
+        &self.native_turns.lifecycle
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PendingToolResponseOwner {
     Session(String),
@@ -773,7 +781,7 @@ async fn wait_for_owner_loss(watch: OwnershipWatch) -> String {
     }
 }
 
-async fn write_daemon_exit_receipt(reason: &str) -> anyhow::Result<()> {
+async fn write_daemon_exit_receipt(reason: &str, status: &str) -> anyhow::Result<()> {
     let Some(path) = env::var_os("MAESTRO_DAEMON_EXIT_RECEIPT").map(PathBuf::from) else {
         return Ok(());
     };
@@ -786,7 +794,7 @@ async fn write_daemon_exit_receipt(reason: &str) -> anyhow::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
     let payload = serde_json::to_vec_pretty(&serde_json::json!({
         "schemaVersion": 1,
-        "status": "stopped",
+        "status": status,
         "reason": reason,
         "pid": std::process::id(),
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -880,43 +888,20 @@ pub async fn serve_listener(
         state.extended_api.clone(),
         state.config.cwd.clone(),
         state.selected_model.clone(),
+        state.lifecycle().clone(),
     );
     pull_request_watch::spawn_scheduler(state.clone());
     monitor_wake::spawn_scheduler(state.clone());
     maybe_spawn_a2a_platform_registration_loop(config.clone());
 
-    let mut owner_loss = Box::pin(async move {
+    let owner_loss = Box::pin(async move {
         match ownership_watch {
             Some(watch) => wait_for_owner_loss(watch).await,
             None => std::future::pending::<String>().await,
         }
     });
 
-    loop {
-        let accepted = tokio::select! {
-            reason = &mut owner_loss => {
-                eprintln!("runtime-gateway owner lost: {reason}");
-                state.native_turns.shutdown();
-                write_daemon_exit_receipt(&reason).await?;
-                return Ok(());
-            }
-            accepted = listener.accept() => accepted,
-        };
-        let (stream, _) = match accepted {
-            Ok(connection) => connection,
-            Err(error) => {
-                eprintln!("runtime-gateway accept failed: {error}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-        };
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(error) = handle_connection(stream, state).await {
-                eprintln!("runtime-gateway request failed: {error:#}");
-            }
-        });
-    }
+    lifecycle::serve_connections(listener, state, owner_loss).await
 }
 
 async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Result<()> {
@@ -933,111 +918,130 @@ async fn handle_connection(mut stream: TcpStream, state: AppState) -> anyhow::Re
     let span = server_span(&head.method, &route_class(&head.path), &parent);
     let started = Instant::now();
 
-    let result = with_response_cors_origin(response_origin, async move {
-        if !host_header_allowed(&head, &state.config) {
+    let admission = match lifecycle::admit_request(&state, &head) {
+        Ok(admission) => admission,
+        Err(()) => {
+            stream.write_all(&lifecycle::unavailable()).await?;
+            return Ok(());
+        }
+    };
+    let result = lifecycle::scope(
+        admission,
+        with_response_cors_origin(response_origin, async move {
+            if !host_header_allowed(&head, &state.config) {
+                let response = json_response(
+                    421,
+                    &serde_json::json!({
+                        "error": "Host header does not match the server's loopback bind address",
+                        "runtime": "rust-control-plane"
+                    }),
+                );
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write misdirected request response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
+            if matches!(head.method.as_str(), "POST" | "GET") && head.path == lifecycle::DRAIN_PATH
+            {
+                let response = lifecycle::drain_response(&head, &stream, &state);
+                stream.write_all(&response).await?;
+                return Ok(());
+            }
+
+            if is_chat_websocket_endpoint(&head) {
+                return handle_chat_websocket_endpoint(stream, initial, head, state)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("chat websocket endpoint failed");
+            }
+
+            if is_chat_endpoint(&head) {
+                return handle_chat_endpoint(stream, initial, head, state)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("chat endpoint failed");
+            }
+
+            if is_a2a_streaming_endpoint(&head) {
+                return handle_a2a_streaming_endpoint(stream, initial, head, state)
+                    .await
+                    .map_err(anyhow::Error::msg)
+                    .context("a2a streaming endpoint failed");
+            }
+
+            if is_a2a_endpoint(&head) {
+                let response = handle_a2a_endpoint(&mut stream, &mut initial, head, &state).await;
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write a2a response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
+            if is_platform_a2a_push_endpoint(&head) {
+                let response =
+                    handle_platform_a2a_push_endpoint(&mut stream, &mut initial, head, &state)
+                        .await;
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write platform a2a push response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
+            if is_extended_endpoint(&head) {
+                let response =
+                    handle_extended_endpoint(&mut stream, &mut initial, head, &state).await;
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write extended endpoint response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
+            if is_hosted_thread_endpoint(&head) {
+                let response =
+                    handle_hosted_thread_endpoint(&mut stream, &mut initial, head, &state).await;
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write hosted thread response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
+            if is_local_endpoint(&head) {
+                let response = handle_local_endpoint(&mut stream, &mut initial, head, &state).await;
+                stream
+                    .write_all(&response)
+                    .await
+                    .context("failed to write local endpoint response")?;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+
             let response = json_response(
-                421,
+                501,
                 &serde_json::json!({
-                    "error": "Host header does not match the server's loopback bind address",
+                    "error": "route has not been migrated to the Rust server yet",
+                    "path": head.path,
                     "runtime": "rust-control-plane"
                 }),
             );
             stream
                 .write_all(&response)
                 .await
-                .context("failed to write misdirected request response")?;
+                .context("failed to write not-yet-migrated fallback response")?;
             let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_chat_websocket_endpoint(&head) {
-            return handle_chat_websocket_endpoint(stream, initial, head, state)
-                .await
-                .map_err(anyhow::Error::msg)
-                .context("chat websocket endpoint failed");
-        }
-
-        if is_chat_endpoint(&head) {
-            return handle_chat_endpoint(stream, initial, head, state)
-                .await
-                .map_err(anyhow::Error::msg)
-                .context("chat endpoint failed");
-        }
-
-        if is_a2a_streaming_endpoint(&head) {
-            return handle_a2a_streaming_endpoint(stream, initial, head, state)
-                .await
-                .map_err(anyhow::Error::msg)
-                .context("a2a streaming endpoint failed");
-        }
-
-        if is_a2a_endpoint(&head) {
-            let response = handle_a2a_endpoint(&mut stream, &mut initial, head, &state).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write a2a response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_platform_a2a_push_endpoint(&head) {
-            let response =
-                handle_platform_a2a_push_endpoint(&mut stream, &mut initial, head, &state).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write platform a2a push response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_extended_endpoint(&head) {
-            let response = handle_extended_endpoint(&mut stream, &mut initial, head, &state).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write extended endpoint response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_hosted_thread_endpoint(&head) {
-            let response =
-                handle_hosted_thread_endpoint(&mut stream, &mut initial, head, &state).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write hosted thread response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        if is_local_endpoint(&head) {
-            let response = handle_local_endpoint(&mut stream, &mut initial, head, &state).await;
-            stream
-                .write_all(&response)
-                .await
-                .context("failed to write local endpoint response")?;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
-
-        let response = json_response(
-            501,
-            &serde_json::json!({
-                "error": "route has not been migrated to the Rust server yet",
-                "path": head.path,
-                "runtime": "rust-control-plane"
-            }),
-        );
-        stream
-            .write_all(&response)
-            .await
-            .context("failed to write not-yet-migrated fallback response")?;
-        let _ = stream.shutdown().await;
-        Ok(())
-    })
+            Ok(())
+        }),
+    )
     .instrument(span.clone())
     .await;
     record_outcome(
@@ -1225,6 +1229,7 @@ async fn handle_local_endpoint(
 
     match (head.method.as_str(), head.path.as_str()) {
         ("GET", "/healthz") => text_response(200, "ok\n"),
+        ("GET", "/readyz") if state.lifecycle().is_draining() => lifecycle::unavailable(),
         ("GET", "/readyz") => json_response(200, &serde_json::json!({ "status": "ready" })),
         ("GET", "/api/native/capabilities") => {
             let auth = match authorized_context(&head, &state.config) {

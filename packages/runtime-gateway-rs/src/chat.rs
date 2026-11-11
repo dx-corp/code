@@ -236,6 +236,7 @@ async fn handle_codex_app_server_chat_transport_scoped(
             prompt,
             attachment_paths,
             native_owner.as_ref().map(|owner| &owner.cancel),
+            Some(&state.lifecycle().cancel),
         )
         .await
     };
@@ -868,6 +869,23 @@ pub(crate) async fn handle_chat_websocket_endpoint(
 }
 
 pub(crate) async fn execute_chat_websocket_turn(
+    stream: &mut impl ChatEventWriter,
+    chat: ChatRequest,
+    auth: AuthContext,
+    state: AppState,
+) -> Result<(), String> {
+    let admission = state
+        .lifecycle()
+        .admit()
+        .map_err(|()| "Runtime is draining".to_string())?;
+    crate::lifecycle::scope(
+        Some(admission),
+        execute_admitted_websocket_turn(stream, chat, auth, state),
+    )
+    .await
+}
+
+pub(crate) async fn execute_admitted_websocket_turn(
     stream: &mut impl ChatEventWriter,
     chat: ChatRequest,
     auth: AuthContext,

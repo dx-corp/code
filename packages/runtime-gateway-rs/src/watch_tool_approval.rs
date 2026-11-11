@@ -22,6 +22,19 @@ pub(crate) async fn dispatch(
         tool,
         args,
     } = request;
+    let admission = match state.lifecycle().admit() {
+        Ok(admission) => admission,
+        Err(()) => {
+            let _ = native_sender.send((
+                call_id.into(),
+                false,
+                None,
+                ExecutionSource::RemoteClient,
+                None,
+            ));
+            return Some(approval_blocked_tool_event(call_id, tool));
+        }
+    };
     if mode == "auto" {
         let result =
             match crate::pull_request_watch::capture_action_scope(state, auth, session, tool, args)
@@ -86,8 +99,29 @@ pub(crate) async fn dispatch(
     let call_id_owned = call_id.to_owned();
     let tool_owned = tool.to_owned();
     let args_owned = args.clone();
-    tokio::spawn(async move {
-        let Some((_, approved, _, _, _)) = approvals.recv().await else {
+    crate::lifecycle::spawn(admission, async move {
+        let decision = tokio::select! {
+            decision = approvals.recv() => decision,
+            () = state.lifecycle().cancel.cancelled() => None,
+        };
+        let Some((_, approved, _, _, _)) = decision else {
+            state
+                .pending_tool_responses
+                .lock()
+                .await
+                .remove(&call_id_owned);
+            state
+                .pending_tool_response_sessions
+                .lock()
+                .await
+                .remove(&call_id_owned);
+            let _ = native_sender.send((
+                call_id_owned,
+                false,
+                None,
+                ExecutionSource::RemoteClient,
+                None,
+            ));
             return;
         };
         let approved = approved

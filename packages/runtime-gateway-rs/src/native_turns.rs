@@ -446,6 +446,7 @@ pub(super) struct NativeTurnRuntime {
     epoch: String,
     entries: StdMutex<Entries>,
     shutdown: CancellationToken,
+    pub(super) lifecycle: Arc<crate::lifecycle::Lifecycle>,
 }
 impl Default for NativeTurnRuntime {
     fn default() -> Self {
@@ -456,6 +457,7 @@ impl Default for NativeTurnRuntime {
             epoch: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy),
             entries: StdMutex::new(Entries::default()),
             shutdown: CancellationToken::new(),
+            lifecycle: Arc::new(crate::lifecycle::Lifecycle::default()),
         }
     }
 }

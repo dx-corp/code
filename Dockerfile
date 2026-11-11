@@ -56,6 +56,9 @@ RUN sed -i '/^    "packages\/codemode-rs",$/d' Cargo.toml \
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
+# Release compilation otherwise follows the CPU count and exhausts small CI
+# runners. Apply the same bound to dependency cooking and the final binary.
+ENV CARGO_BUILD_JOBS=1
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
@@ -120,7 +123,7 @@ COPY --from=native /app/target/release/maestro /usr/local/bin/maestro
 COPY skills ./skills
 # The image binds to every interface, so the runtime gateway requires API-key
 # auth. Supply a key at run time, for example:
-#   docker run -p 3000:3000 -e MAESTRO_WEB_API_KEY="$(openssl rand -hex 32)" ghcr.io/dx-corp/maestro
+#   docker run -p 3000:3000 -e MAESTRO_WEB_API_KEY="$(openssl rand -hex 32)" ghcr.io/dx-corp/code
 # Do not add MAESTRO_WEB_REQUIRE_KEY=0 here: it is only honored for loopback
 # binds and the server refuses to start when it is combined with 0.0.0.0.
 ENV MAESTRO_CONTROL_HOST=0.0.0.0 PORT=3000

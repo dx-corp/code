@@ -15,12 +15,16 @@ function parseTarget(argv) {
 
 /**
  * Projection-specific checks on the prepared public tree before opening or
- * updating the sync PR. Full Cargo validation already ran on internal main,
- * but public-only replacement scripts and sanitized contracts exist only in
- * this tree and must be exercised here.
+ * updating the sync PR. Public-only replacement scripts and sanitized
+ * contracts exist only in this tree and must be exercised here.
  */
 export function preparedPublicMirrorGuardrailCommands() {
 	return [
+		{
+			command: "node",
+			args: ["--test", "deploy/helm/maestro/tests/render.test.mjs"],
+			label: "Rendered native Helm lifecycle contract",
+		},
 		{
 			command: "npm",
 			args: ["run", "check:hosted-orb-delegation"],
@@ -30,6 +34,11 @@ export function preparedPublicMirrorGuardrailCommands() {
 			command: "cargo",
 			args: ["metadata", "--locked", "--no-deps", "--format-version", "1"],
 			label: "Public Cargo dependency containment",
+		},
+		{
+			command: "npm",
+			args: ["run", "check:docker-runtime-workspaces"],
+			label: "Standalone Docker workspace contract",
 		},
 		{
 			command: "npm",

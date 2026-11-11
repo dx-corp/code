@@ -695,7 +695,7 @@ fn append_task_artifact(task: &mut Value, artifact: Value) {
     artifacts.push(artifact);
 }
 
-pub(super) fn dispatch_a2a_push_notifications(task: &Value) {
+pub(super) fn dispatch_a2a_push_notifications(task: &Value, state: &AppState) {
     if env_bool("MAESTRO_A2A_PUSH_DISABLE_DELIVERY").unwrap_or(false) {
         return;
     }
@@ -705,11 +705,20 @@ pub(super) fn dispatch_a2a_push_notifications(task: &Value) {
     }
     let tenant_headers = a2a_push_notification_tenant_headers(task);
     let payloads = a2a_push_notification_payloads(task);
+    let Ok(admission) = state.lifecycle().admit() else {
+        return;
+    };
     for config in configs {
+        let admission = admission.clone();
+        let cancel = state.lifecycle().cancel.clone();
         let payloads = payloads.clone();
         let tenant_headers = tenant_headers.clone();
         std::mem::drop(tokio::task::spawn_blocking(move || {
+            let _admission = admission;
             for payload in payloads {
+                if cancel.is_cancelled() {
+                    break;
+                }
                 send_a2a_push_notification(&payload, &config, tenant_headers.as_ref());
             }
         }));
@@ -1271,3 +1280,7 @@ pub(super) async fn handle_a2a_push_notification_config_delete(
     persist_a2a_tasks(state).await;
     json_response(200, &serde_json::json!({}))
 }
+
+#[cfg(test)]
+#[path = "push_lifecycle_tests.rs"]
+mod lifecycle_tests;

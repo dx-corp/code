@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,8 +16,13 @@ const embeddedConfigCopy =
 	"COPY config/vendor-corrections.json ./config/vendor-corrections.json";
 
 const sourceCargoManifest = readFileSync(join(repositoryRoot, "Cargo.toml"), "utf8");
+const standaloneProjection = existsSync(join(repositoryRoot, ".repository-projection.json"));
 
-function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = false, viaVendor = false, crossWorkspace = false, codemodeDependencies = "", platformCrate = false } = {}) {
+function monoContextTest(name, run) {
+	test(name, { skip: standaloneProjection && "Mono named build contexts are not part of the standalone image" }, run);
+}
+
+function runChecker(dockerfile, cargoManifest = sourceCargoManifest, { transitive = false, standalone = standaloneProjection, viaVendor = false, crossWorkspace = false, codemodeDependencies = "", platformCrate = false } = {}) {
 	const directory = mkdtempSync(join(tmpdir(), "maestro-docker-runtime-"));
 	const fixtureRoot = join(directory, "products/maestro");
 	mkdirSync(fixtureRoot, { recursive: true });
@@ -154,10 +159,15 @@ test("Docker runtime guard requires embedded vendor corrections before compilati
 });
 
 test("Docker runtime guard rejects missing or late vendored Cargo inputs", () => {
-	const paths = [...sourceCargoManifest.matchAll(/\bpath\s*=\s*"(vendor\/[^"\n]+)"/g)]
-		.map((match) => match[1]);
-	assert.equal(new Set(paths).size, 8);
-	for (const path of new Set(paths)) {
+	const paths = new Set([...sourceCargoManifest.matchAll(/\bpath\s*=\s*"(vendor\/[^"\n]+)"/g)]
+		.map((match) => match[1]));
+	if (standaloneProjection) {
+		assert.ok(paths.has("vendor/sqlite-compat"), "standalone sqlite facade");
+		assert.ok(paths.has("vendor/workspace-hack-stub"), "standalone workspace-hack facade");
+	} else {
+		assert.equal(paths.size, 8);
+	}
+	for (const path of paths) {
 		const copy = `COPY ${path} ./${path}`;
 		const without = sourceDockerfile.replaceAll(`${copy}\n`, "");
 		assert.throws(() => runChecker(without), /before cargo chef/);
@@ -188,18 +198,18 @@ test("Docker runtime guard rejects a workspace member no stage copies", () => {
 	);
 });
 
-test("Docker runtime guard rejects a missing named-context dependency manifest", () => {
+monoContextTest("Docker runtime guard rejects a missing named-context dependency manifest", () => {
 	const copy = "COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract\n";
 	assert.throws(() => runChecker(sourceDockerfile.replace(copy, "")),
 		/managed-inference-contract.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard rejects a named-context dependency outside the narrowed workspace", () => {
+monoContextTest("Docker runtime guard rejects a named-context dependency outside the narrowed workspace", () => {
 	assert.throws(() => runChecker(sourceDockerfile.replace(', "crates/managed-inference-contract"', "")),
 		/managed-inference-contract.*narrowed Rust workspace/);
 });
 
-test("Docker runtime guard rejects a missing workspace-hack stand-in copy", () => {
+monoContextTest("Docker runtime guard rejects a missing workspace-hack stand-in copy", () => {
 	const copy = "COPY --from=dex-loop-workspace /workspace-hack-stub /rust/workspace-hack-stub\n";
 	assert.ok(
 		sourceDockerfile.includes(copy),
@@ -209,7 +219,7 @@ test("Docker runtime guard rejects a missing workspace-hack stand-in copy", () =
 		/workspace-hack-stub.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard rejects a workspace-hack stand-in copied after preparation", () => {
+monoContextTest("Docker runtime guard rejects a workspace-hack stand-in copied after preparation", () => {
 	const copy = "COPY --from=dex-loop-workspace /workspace-hack-stub /rust/workspace-hack-stub\n";
 	const without = sourceDockerfile.replace(copy, "");
 	const tooLate = without.replace(
@@ -219,7 +229,7 @@ test("Docker runtime guard rejects a workspace-hack stand-in copied after prepar
 	assert.throws(() => runChecker(tooLate), /workspace-hack-stub.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard resolves transitive target dependencies from Cargo manifests", () => {
+monoContextTest("Docker runtime guard resolves transitive target dependencies from Cargo manifests", () => {
 	assert.throws(() => runChecker(sourceDockerfile, sourceCargoManifest, { transitive: true }),
 		/receipt-contract.*before cargo chef prepare/);
 	const complete = sourceDockerfile
@@ -229,14 +239,14 @@ test("Docker runtime guard resolves transitive target dependencies from Cargo ma
 	assert.match(runChecker(complete, sourceCargoManifest, { transitive: true }), /Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard rejects a named-context copy after recipe preparation", () => {
+monoContextTest("Docker runtime guard rejects a named-context copy after recipe preparation", () => {
 	const copy = "COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract\n";
 	const late = sourceDockerfile.replace(copy, "").replace(
 		"RUN cargo chef prepare --recipe-path recipe.json", `RUN cargo chef prepare --recipe-path recipe.json\n${copy}`);
 	assert.throws(() => runChecker(late), /managed-inference-contract.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard requires planner dependencies before the native cook", () => {
+monoContextTest("Docker runtime guard requires planner dependencies before the native cook", () => {
 	const copy = "COPY --from=planner /rust /rust\n";
 	const without = sourceDockerfile.replace(copy, "");
 	assert.throws(() => runChecker(without), /planner Rust dependency tree before cargo chef cook/);
@@ -251,7 +261,7 @@ test("Docker runtime guard keeps standalone local dependencies inside their proj
 		/Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard follows external Rust paths through a nonmember vendor crate", () => {
+monoContextTest("Docker runtime guard follows external Rust paths through a nonmember vendor crate", () => {
 	const copy = "COPY --from=dex-loop-workspace /crates/managed-inference-contract /rust/crates/managed-inference-contract\n";
 	assert.throws(() => runChecker(sourceDockerfile.replace(copy, ""), sourceCargoManifest, { viaVendor: true }),
 		/managed-inference-contract.*before cargo chef prepare/);
@@ -261,7 +271,7 @@ test("Docker runtime guard follows external Rust paths through a nonmember vendo
 		/Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard remaps a Rust dependency back into the Maestro image workspace", () => {
+monoContextTest("Docker runtime guard remaps a Rust dependency back into the Maestro image workspace", () => {
 	const remap = `    && sed -i 's#path = "../products/maestro/#path = "/app/#g' /rust/Cargo.toml`;
 	assert.ok(sourceDockerfile.includes(remap));
 	assert.match(runChecker(sourceDockerfile, sourceCargoManifest, { crossWorkspace: true }),
@@ -275,7 +285,7 @@ test("Docker runtime guard remaps a Rust dependency back into the Maestro image 
 		/Rust-to-Maestro dependency path.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard preserves an actual library consumed by external Rust during cook", () => {
+monoContextTest("Docker runtime guard preserves an actual library consumed by external Rust during cook", () => {
 	const filter = `sed -i '/^    "packages\\/codemode-rs",$/d' Cargo.toml`;
 	const exclude = `sed -i 's|"vendor"|"vendor", "packages/codemode-rs"|' Cargo.toml`;
 	assert.ok(sourceDockerfile.includes(filter));
@@ -299,7 +309,7 @@ test("Docker runtime guard preserves an actual library consumed by external Rust
 		/original Maestro workspace after cook and before native build/);
 });
 
-test("Docker runtime guard copies shared external dependencies into the fresh native stage before cook", () => {
+monoContextTest("Docker runtime guard copies shared external dependencies into the fresh native stage before cook", () => {
 	const nativeStart = sourceDockerfile.indexOf("FROM chef AS native");
 	const native = sourceDockerfile.slice(nativeStart);
 	const cook = "RUN cargo chef cook --release --locked -p maestro --recipe-path recipe.json";
@@ -317,7 +327,7 @@ test("Docker runtime guard copies shared external dependencies into the fresh na
 		/Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard rejects workspace inheritance in an image-excluded shared library", () => {
+monoContextTest("Docker runtime guard rejects workspace inheritance in an image-excluded shared library", () => {
 	// Run 37264900952: `sha2.workspace = true` in codemode-rs, which the image
 	// moves out of the Maestro workspace, failed `cargo chef cook`.
 	assert.match(runChecker(sourceDockerfile, sourceCargoManifest,
@@ -341,13 +351,13 @@ const withPlatformCrate = sourceDockerfile
 	.replace(/(c\\members = \[[^\]]*)\]/, '$1, "crates/extra-client"]')
 	.replace(/^COPY --from=planner \/rust \/rust\n/m, (line) => line.endsWith("\n") && sourceDockerfile.includes(handleNativeCopy) ? line : line + handleNativeCopy);
 
-test("Docker runtime guard accepts a platform crate through its own build context", () => {
+monoContextTest("Docker runtime guard accepts a platform crate through its own build context", () => {
 	assert.ok(withPlatformCrate.includes(handleCopy));
 	assert.match(runChecker(withPlatformCrate, sourceCargoManifest, { platformCrate: true }),
 		/Verified native-only Docker runtime contract\./);
 });
 
-test("Docker runtime guard rejects a platform crate that reaches the image any other way", () => {
+monoContextTest("Docker runtime guard rejects a platform crate that reaches the image any other way", () => {
 	const options = { platformCrate: true };
 	assert.throws(() => runChecker(withPlatformCrate.replace(handleCopy, ""), sourceCargoManifest, options),
 		/extra-handle \(COPY --from=extra-handle-source\) before cargo chef prepare in the planner stage/);
@@ -363,7 +373,7 @@ test("Docker runtime guard rejects a platform crate that reaches the image any o
 		/extra-client.*before cargo chef prepare/);
 });
 
-test("Docker runtime guard needs the platform tree in the native stage before the cook", () => {
+monoContextTest("Docker runtime guard needs the platform tree in the native stage before the cook", () => {
 	const noNativeCopy = withPlatformCrate.split(handleNativeCopy).join("");
 	assert.throws(() => runChecker(noNativeCopy, sourceCargoManifest, { platformCrate: true }),
 		/before cargo chef cook in the native stage/);

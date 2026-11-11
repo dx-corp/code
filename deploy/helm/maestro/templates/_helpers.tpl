@@ -51,13 +51,13 @@ Service account name
 
 {{/*
 Resolve the container image reference. image.digest wins; otherwise an empty
-image.tag falls back to Chart.appVersion so the chart never defaults to latest.
+image.tag falls back to main, which the public image publisher always creates.
 */}}
 {{- define "maestro.image" -}}
 {{- if .Values.image.digest -}}
 {{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
 {{- else -}}
-{{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
+{{- printf "%s:%s" .Values.image.repository (default "main" .Values.image.tag) -}}
 {{- end -}}
 {{- end }}
 

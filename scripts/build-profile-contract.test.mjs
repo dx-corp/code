@@ -93,7 +93,7 @@ test("native materialization honors CARGO_TARGET_DIR", () => {
 	}
 });
 
-test("release and container entrypoints select optimized release", () => {
+test("release and container entrypoints select optimized release", async () => {
 	assert.match(packageJson.scripts["build:release"], /--profile release/);
 	assert.match(packageJson.scripts["release:check"], /build:release/);
 	assert.match(releaseBuilder, /profile: "release"/);
@@ -110,6 +110,12 @@ test("release and container entrypoints select optimized release", () => {
 	);
 	const nativeStage = dockerfile.match(/^FROM chef AS native\n([\s\S]*?)(?=^FROM )/m)?.[1];
 	assert.ok(nativeStage, "native Docker stage must exist");
+	const jobsLimitIndex = nativeStage.search(/^ENV CARGO_BUILD_JOBS=1$/m);
+	const cookIndex = nativeStage.indexOf("RUN cargo chef cook");
+	assert.ok(
+		jobsLimitIndex >= 0 && jobsLimitIndex < cookIndex,
+		"dependency cooking and final release compilation must share the small-runner Cargo job limit",
+	);
 	const installerCopy = "COPY " + embeddedInstallerPath + " ./" + embeddedInstallerPath;
 	const buildCommand = "RUN cargo build --release --locked -p maestro";
 	const installerCopyIndex = nativeStage.indexOf(installerCopy);
@@ -139,7 +145,13 @@ test("release and container entrypoints select optimized release", () => {
 		assert.ok(release.indexOf("Authenticate artifacts and release receipts") < release.indexOf("Materialize native npm package"));
 		const verifier = readFileSync(new URL("./verify-staged-release.mjs", import.meta.url), "utf8");
 		assert.match(verifier, /cosign/);
-		assert.match(verifier, /maestro-release\.yml@refs\/heads\/main/);
+		const { releaseCertificateIdentityRegexp } = await import("./verify-staged-release.mjs");
+		const releaseIdentity = new RegExp(releaseCertificateIdentityRegexp);
+		for (const owner of ["dx-corp", "evalops"]) {
+			assert.match(`https://github.com/${owner}/mono/.github/workflows/maestro-release.yml@refs/heads/main`, releaseIdentity);
+		}
+		assert.doesNotMatch("https://github.com/dx-corp/code/.github/workflows/maestro-release.yml@refs/heads/main", releaseIdentity);
+		assert.doesNotMatch("https://github.com/dx-corp/mono/.github/workflows/maestro-releaseXyml@refs/heads/main", releaseIdentity);
 	} else {
 		assert.match(release, /build-release-binary\.mjs --platform/);
 	}
