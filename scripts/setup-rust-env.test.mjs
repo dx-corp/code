@@ -10,12 +10,11 @@ test("copied rustup recreates the env file sourced by an existing login profile"
   try {
     const action = readFileSync(".github/actions/setup-rust/action.yml", "utf8");
     const step = action.split("      run: | # zizmor:")[1].split("\n    - name:")[0];
-    const script = step.split("\n").slice(1).map((line) => line.startsWith("        ") ? line.slice(8) : line).join("\n")
-      .replace("cache_root=/tmp/maestro-rust", `cache_root="${root}/cache"`);
+    const script = step.split("\n").slice(1).map((line) => line.startsWith("        ") ? line.slice(8) : line).join("\n");
     const bin = join(root, "bin"); mkdirSync(bin);
     writeFileSync(join(bin, "rustup"), "#!/bin/sh\nexit 0\n", {mode: 0o755});
-    const env = {...process.env, GITHUB_ACTIONS: "false", PATH: `${bin}:${process.env.PATH}`, RUNNER_OS: "Linux", GITHUB_REPOSITORY: "conformance/env", TOOLCHAIN_INPUT: "1.95.0", WORKSPACES_INPUT: ".", GITHUB_ENV: join(root,"env"), GITHUB_PATH: join(root,"path"), GITHUB_OUTPUT: join(root,"output")};
-    const cargoHome = join(root,"cache/conformance-env/1.95.0/home/cargo");
+    const env = {...process.env, GITHUB_ACTIONS: "false", PATH: `${bin}:${process.env.PATH}`, RUNNER_OS: "Linux", RUNNER_TEMP: join(root,"runner-temp"), GITHUB_REPOSITORY: "conformance/env", TOOLCHAIN_INPUT: "1.95.0", WORKSPACES_INPUT: ".", GITHUB_ENV: join(root,"env"), GITHUB_PATH: join(root,"path"), GITHUB_OUTPUT: join(root,"output")};
+    const cargoHome = join(env.RUNNER_TEMP,"maestro-rust/conformance-env/1.95.0/home/cargo");
     const profile = join(root,"profile"); writeFileSync(profile, `. "${cargoHome}/env"\n`);
     for (let run = 0; run < 2; run++) {
       execFileSync("bash", ["-c", script], {env, cwd: process.cwd()});
