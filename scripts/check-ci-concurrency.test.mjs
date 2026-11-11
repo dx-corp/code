@@ -290,7 +290,7 @@ test("Rust setup uses Google-backed sccache and forbids the GitHub backend", () 
 	assert.match(configure, /rust-toolchain: \$\{\{ inputs\.toolchain \}\}/);
 	assert.match(configure, /allow-gha-fallback: "false"/);
 	assert.doesNotMatch(configure, /SCCACHE_GHA_ENABLED/);
-	assert.match(cargoCache, /cargo-inputs-v3/);
+	assert.match(cargoCache, /cargo-inputs-v4-runner-temp/);
 	assert.match(cargoCache, /cache-targets: "false"/);
 });
 

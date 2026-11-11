@@ -39,6 +39,9 @@ service DeixicPublicService {
   // Creates the record whose declared unique field holds the given value, or
   // updates the one that already does, atomically on the server.
   rpc UpsertBusinessObject(UpsertBusinessObjectRequest) returns (UpsertBusinessObjectResponse);
+  // Moves a record of a type with a lifecycle facet through one declared
+  // transition at an exact revision.
+  rpc TransitionBusinessObject(TransitionBusinessObjectRequest) returns (TransitionBusinessObjectResponse);
   rpc ListBusinessBlueprints(ListBusinessBlueprintsRequest) returns (ListBusinessBlueprintsResponse);
   rpc BindBusinessObjectSource(BindBusinessObjectSourceRequest) returns (BindBusinessObjectSourceResponse);
   rpc ListBusinessObjectRelationships(ListBusinessObjectRelationshipsRequest) returns (ListBusinessObjectRelationshipsResponse);
@@ -537,6 +540,94 @@ message BusinessObjectType {
   repeated BusinessObjectTypeRelationship relationships = 7;
   string plural_name = 8;
   string description = 9;
+  // Optional behaviour of this revision; unset keeps the default behaviour.
+  // Immutable with the published revision.
+  BusinessTypeFacets facets = 10;
+}
+
+// Behaviour facets of one published type revision, in the workflow-record
+// grammar. Every facet is optional.
+message BusinessTypeFacets {
+  BusinessLifecycleFacet lifecycle = 1;
+  BusinessGraphFacet graph = 2;
+  BusinessIndexFacet index = 3;
+  BusinessDisplayFacet display = 4;
+  BusinessPermissionFacet permissions = 5;
+}
+
+// States, transitions, approval and due date.
+message BusinessLifecycleFacet {
+  repeated BusinessLifecycleState states = 1;
+  repeated BusinessLifecycleTransition transitions = 2;
+  BusinessLifecycleApproval approval = 3;
+  BusinessLifecycleDue due = 4;
+}
+message BusinessLifecycleState {
+  string state_id = 1;
+  string name = 2;
+  bool initial = 3;
+  bool terminal = 4;
+}
+message BusinessLifecycleTransition {
+  string transition_id = 1;
+  string name = 2;
+  repeated string from_states = 3;
+  string to_state = 4;
+  bool note_required = 5;
+  // Refused unless the record's current revision is approved.
+  bool requires_approval = 6;
+  // Entitlements a workspace member needs, beyond write access.
+  repeated string entitlements = 7;
+  // Kind of the record this transition creates, if any.
+  string creates_kind = 8;
+  // Event kind sent through the record notification owner, if any.
+  string notify = 9;
+}
+message BusinessLifecycleApproval {
+  string reviewer_entitlement = 1;
+  bool distinct_from_creator = 2;
+  string notify = 3;
+  // A declared state the approval also moves the record to.
+  string to_state = 4;
+}
+message BusinessLifecycleDue {
+  string field_id = 1;
+  string assignee_field_id = 2;
+  bool future = 3;
+  optional uint32 max_days_ahead = 4;
+}
+
+// How records project into the graph.
+message BusinessGraphFacet {
+  string thing_kind = 1;
+  repeated BusinessGraphRelation relations = 2;
+}
+
+// The relation one reference field draws.
+message BusinessGraphRelation {
+  string field_id = 1;
+  string relation = 2;
+  // The referenced record is the edge's source.
+  bool inbound = 3;
+}
+
+// Fields readers filter and sort by.
+message BusinessIndexFacet {
+  repeated string indexed_field_ids = 1;
+  repeated string sortable_field_ids = 2;
+}
+
+// Navigation and list presentation.
+message BusinessDisplayFacet {
+  string icon = 1;
+  string nav_section = 2;
+  repeated string list_field_ids = 3;
+}
+
+// Entitlement names a member needs to read or write records.
+message BusinessPermissionFacet {
+  string read_entitlement = 1;
+  string write_entitlement = 2;
 }
 message DefineBusinessObjectTypeRequest {
   string organization_id = 1;
@@ -569,6 +660,26 @@ message UpsertBusinessObjectRequest {
   // A field the type declares unique; `values` must carry it.
   string unique_field_id = 6;
   repeated BusinessFieldValue values = 7;
+}
+message TransitionBusinessObjectRequest {
+  string organization_id = 1;
+  string workspace_id = 2;
+  string idempotency_key = 3;
+  string type_id = 4;
+  string object_id = 5;
+  int64 expected_revision = 6;
+  string transition_id = 7;
+  // A person's reason; required when the transition declares note_required.
+  string note = 8;
+}
+message TransitionBusinessObjectResponse {
+  string object_id = 1;
+  // The record's revision after the transition.
+  int64 revision = 2;
+  // The state the record is now in.
+  string state = 3;
+  // The record the transition created, when it declares one.
+  string created_object_id = 4;
 }
 message UpsertBusinessObjectResponse {
   BusinessObject object = 1;
