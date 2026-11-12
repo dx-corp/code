@@ -419,6 +419,7 @@ message BusinessFieldValue {
     BusinessObjectReference reference = 10;
     BusinessArtifactReference artifact = 11;
     BusinessTextList text_list = 12;
+    BusinessTextList enum_list = 13;
   }
 }
 message BusinessObject {
@@ -506,6 +507,8 @@ enum BusinessFieldKind {
   BUSINESS_FIELD_KIND_REFERENCE = 9;
   BUSINESS_FIELD_KIND_ARTIFACT = 10;
   BUSINESS_FIELD_KIND_TEXT_LIST = 11;
+  // Several of the field's enum values, each at most once.
+  BUSINESS_FIELD_KIND_ENUM_LIST = 12;
 }
 message BusinessObjectTypeField {
   string field_id = 1;

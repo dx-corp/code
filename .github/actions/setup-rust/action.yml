@@ -68,7 +68,7 @@ runs:
           echo "::error::Runner temporary directory contains a line break" >&2
           exit 1
         fi
-        # Paths stay stable per runner; cache-group separates target artifacts.
+        # Paths are isolated to this job; cache-group separates target artifacts.
         base="${cache_root%/}/${safe_repo}/${safe_toolchain}"
         root="$base/home"
         cargo_home="$root/cargo"
@@ -129,13 +129,13 @@ runs:
         fi
 
         # A copied rustup binary skips rustup-init, which normally creates env.
-        # Recreate that file after clearing our tool root: a runner login profile
-        # from an earlier install may still source this exact stable path.
+        # Recreate it for explicit use during this job, keeping PATH expansion
+        # at source time. Persistent profiles must not depend on this file.
         printf 'case ":${PATH}:" in\n  *:"%s":*) ;;\n  *) export PATH="%s:$PATH" ;;\nesac\n' \
           "$cargo_home/bin" "$cargo_home/bin" > "$cargo_home/env"
 
-        # Earlier repository names left absolute Rust env sources in runner
-        # login profiles. Refresh only those owned entries to this active home.
+        # Rustup and earlier repository names left generated absolute sources in
+        # login profiles. Retire only those entries; job exports below own PATH.
         if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
           bash "${GITHUB_ACTION_PATH}/repair-login-profile.sh" \
             "$legacy_cache_root" "$safe_toolchain" "$cargo_home" \
@@ -146,6 +146,8 @@ runs:
         echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
         echo "$cargo_home/bin" >> "$GITHUB_PATH"
         {
+          echo "profile-cache-root=$legacy_cache_root"
+          echo "profile-toolchain=$safe_toolchain"
           echo "cache-workspaces<<MAESTRO_CACHE_WORKSPACES"
           cat "$cache_workspaces"
           echo "MAESTRO_CACHE_WORKSPACES"
@@ -178,6 +180,22 @@ runs:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
+
+    - name: Retire job-local Rust login profile sources
+      id: rust-profile-cleanup
+      shell: bash
+      env:
+        PROFILE_CACHE_ROOT: ${{ steps.rust-paths.outputs.profile-cache-root }}
+        PROFILE_TOOLCHAIN: ${{ steps.rust-paths.outputs.profile-toolchain }}
+      run: |
+        set -euo pipefail
+        # rustup-init can append profile entries during a fresh installation.
+        # Remove those too before this job's tool home is eventually cleared.
+        if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+          bash "${GITHUB_ACTION_PATH}/repair-login-profile.sh" \
+            "$PROFILE_CACHE_ROOT" "$PROFILE_TOOLCHAIN" "$CARGO_HOME" \
+            "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.zprofile"
+        fi
 
     - name: Ensure Rustup tool proxies
       shell: bash

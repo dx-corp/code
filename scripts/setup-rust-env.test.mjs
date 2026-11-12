@@ -27,7 +27,7 @@ test("copied rustup recreates the env file sourced by an existing login profile"
   } finally { rmSync(root, {recursive:true,force:true}); }
 });
 
-test("legacy Maestro Rust profile sources refresh to the active repository home", () => {
+test("legacy Maestro Rust profile sources retire without a persistent job dependency", () => {
   const root = mkdtempSync(join(tmpdir(), "maestro-rust-legacy-profile-"));
   try {
     const cacheRoot = join(root, "cache");
@@ -43,7 +43,7 @@ test("legacy Maestro Rust profile sources refresh to the active repository home"
     for (let run = 0; run < 2; run++) {
       execFileSync("bash", [".github/actions/setup-rust/repair-login-profile.sh", cacheRoot, "1.95.0", cargoHome, profile]);
       const content = readFileSync(profile, "utf8");
-      assert.equal(content, `${untouched}. "${cargoHome}/env"\nsource "${cargoHome}/env" # generated Rust source\n`);
+      assert.equal(content, `${untouched}# generated Rust source\n`);
       assert.equal(statSync(profile).mode & 0o777, 0o640);
       const output = execFileSync("bash", ["-c", `. "${profile}"; printf '%s:%s' "$MAESTRO_PROFILE_MARKER" runtime-conformance-shell`], { encoding: "utf8" });
       assert.equal(output, "preserved:runtime-conformance-shell");
@@ -59,5 +59,8 @@ test("legacy Maestro Rust profile sources refresh to the active repository home"
     symlinkSync(unrelated, linkedProfile);
     assert.throws(() => execFileSync("bash", [".github/actions/setup-rust/repair-login-profile.sh", cacheRoot, "1.95.0", cargoHome, linkedProfile], { stdio: "pipe" }), /non-symlink profile/);
     assert.equal(readFileSync(unrelated, "utf8"), unrelatedContent);
+    const danglingProfile = join(root, "dangling-profile");
+    symlinkSync(join(root, "missing-profile"), danglingProfile);
+    assert.throws(() => execFileSync("bash", [".github/actions/setup-rust/repair-login-profile.sh", cacheRoot, "1.95.0", cargoHome, danglingProfile], { stdio: "pipe" }), /non-symlink profile/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
