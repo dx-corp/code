@@ -51,6 +51,32 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.113] - 2026-11-12
+
+### Added
+
+- Declare type facets and transition records through the SDK (#22380). <!-- maestro-release-note:7ebcb4878355 -->
+- Define and read types, and upsert records by unique key (#22291). <!-- maestro-release-note:a4c806f2389b -->
+
+### Changed
+
+- Retire job-local Rust sources from runner login profiles (#22495). <!-- maestro-release-note:3d965dada9d8 -->
+- Fix native Code Helm drain and shutdown (#22151). <!-- maestro-release-note:14a521e546ca -->
+
+### Fixed
+
+- Project vendored provenance without private consumers (#22499). <!-- maestro-release-note:1acf29b23137 -->
+- Use reviewed testcontainers archive support (#22476). <!-- maestro-release-note:f90014b97532 -->
+- Align Rust bootstrap consumers with runner temp homes (#22411). <!-- maestro-release-note:1e1abe19c3b9 -->
+- Prepare the public tag before native publishing (#22381). <!-- maestro-release-note:ddafddc7ae8e -->
+- Update rustix for xattr buffer initialization (#22363). <!-- maestro-release-note:4cb5f839a315 -->
+- Isolate Rust bootstrap caches in runner-owned temp paths (#22338). <!-- maestro-release-note:db1e8c8002a2 -->
+- Restore public native builds and lifecycle tests (#22301). <!-- maestro-release-note:2ae0745e6126 -->
+- Load Rust bootstrap from workflow revision (#22220). <!-- maestro-release-note:70fff89bcb32 -->
+- Drain the configured loopback listener (#22182). <!-- maestro-release-note:3aadac9922c8 -->
+- Bound container release compilation on small runners (#22179). <!-- maestro-release-note:fc4a1df99b54 -->
+- Validate standalone Docker fixtures in public trees (#22167). <!-- maestro-release-note:f9edaf122096 -->
+
 ## [0.10.112] - 2026-11-10
 
 ### Added

@@ -82,11 +82,6 @@
     "patch": "testcontainers-0.27.3.patch",
     "patch_sha256": "27990257be9346d2af46827069a172773d0fa371b3f035b7bbbfb2fbc00fc423",
     "path": "testcontainers-0.27.3",
-    "version": "0.27.3",
-    "workspaces": [
-      "rust",
-      "tests/business-objects-integration",
-      "products/sentinel"
-    ]
+    "version": "0.27.3"
   }
 ]
