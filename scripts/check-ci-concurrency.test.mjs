@@ -52,6 +52,7 @@ if (args.join(' ') === 'llvm-cov --version') { console.log('cargo-llvm-cov 0.9.0
 if (args.join(' ') === 'nextest --version') { console.log('cargo-nextest 0.9.143'); process.exit(0); }
 fs.appendFileSync(process.env.COVERAGE_CALLS, JSON.stringify({args, target:process.env.CARGO_TARGET_DIR}) + '\\n');
 if (args[1] === 'nextest' && args.includes('--')) { console.error('Nextest received unsupported test-binary arguments'); process.exit(96); }
+if (args[1] === 'nextest' && args.includes('--ignore-run-fail') && args.includes('--no-fail-fast')) { console.error('--ignore-run-fail may not be used together with --no-fail-fast'); process.exit(97); }
 `, { mode: 0o755 });
 		for (const tool of ["cargo-llvm-cov", "cargo-nextest"]) {
 			writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -67,9 +68,10 @@ if (args[1] === 'nextest' && args.includes('--')) { console.error('Nextest recei
 		const run = recorded[0];
 		assert.deepEqual(run.args.slice(0, 2), ["llvm-cov", "nextest"]);
 		assert.equal(run.args[run.args.indexOf("--profile") + 1], "ci");
-		for (const flag of ["--workspace", "--lib", "--locked", "--no-clean", "--ignore-run-fail", "--no-fail-fast"]) {
+		for (const flag of ["--workspace", "--lib", "--locked", "--no-clean", "--ignore-run-fail"]) {
 			assert.ok(run.args.includes(flag), `missing coverage option ${flag}`);
 		}
+		assert.ok(!run.args.includes("--no-fail-fast"), "--ignore-run-fail already enables --no-fail-fast");
 		assert.equal(run.target, join(root, "cache", "cargo-target-cov"));
 		assert.deepEqual(recorded.slice(1).map(call => call.args), [
 			["llvm-cov", "report", "--summary-only"],

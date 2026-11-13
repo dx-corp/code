@@ -79,7 +79,7 @@ pub use event::{
     AttemptNext, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass,
     ErrorCode, Event, HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output,
     OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming,
-    ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
+    ThreadContextProfile, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use page::{

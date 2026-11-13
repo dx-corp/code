@@ -109,7 +109,42 @@ pub struct ThreadId {
     pub thread: String,
 }
 
+/// The immutable context boundary of an owner-reserved runtime thread.
+/// A restricted execution never shares an id with a normal workspace chat.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThreadContextProfile {
+    #[default]
+    Workspace,
+    HandshakeCoordinator,
+    HandshakeConsultation,
+}
+
 impl ThreadId {
+    pub const HANDSHAKE_COORDINATOR_NAMESPACE: &str = "dex_handshake_coordinator_";
+    pub const HANDSHAKE_CONSULTATION_NAMESPACE: &str = "dex_handshake_consultation_";
+    pub const HANDSHAKE_PRIVATE_NAMESPACE: &str = "thread:handshake-private:";
+    pub const HANDSHAKE_COORDINATOR_PRINCIPAL: &str = "dex:handshake-coordinator";
+
+    pub fn context_profile(&self) -> ThreadContextProfile {
+        // The namespace is persisted in the immutable thread coordinate.
+        // Treat malformed reserved names as restricted too; ingress rejects
+        // them, and replay must never fall back to workspace enrichment.
+        if self
+            .thread
+            .starts_with(Self::HANDSHAKE_COORDINATOR_NAMESPACE)
+            || self.thread.starts_with("thread:handshake:")
+        {
+            ThreadContextProfile::HandshakeCoordinator
+        } else if self
+            .thread
+            .starts_with(Self::HANDSHAKE_CONSULTATION_NAMESPACE)
+            || self.thread.starts_with(Self::HANDSHAKE_PRIVATE_NAMESPACE)
+        {
+            ThreadContextProfile::HandshakeConsultation
+        } else {
+            ThreadContextProfile::Workspace
+        }
+    }
     /// Namespace for private turns that only write evidence notice prose.
     pub const EVIDENCE_NOTICE_COPY_NAMESPACE: &str = "dex_evidence_notice_copy";
 
@@ -1035,6 +1070,10 @@ impl Event {
         Ok(event)
     }
 }
+
+#[cfg(test)]
+#[path = "handshake_profile_tests.rs"]
+mod handshake_profile_tests;
 
 #[cfg(test)]
 mod tests {

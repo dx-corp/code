@@ -56,14 +56,14 @@ fi
 # cargo-llvm-cov 0.9.0 rejects combining a deferred report with --no-clean.
 # Keep --no-clean so the isolated target dir stays incremental; generate the
 # lcov/summary reports in the commands below.
+# --ignore-run-fail already enables --no-fail-fast; specifying both is rejected.
 timeout --signal=TERM --kill-after=30s 25m cargo llvm-cov nextest \
   --workspace \
   --lib \
   --locked \
   --no-clean \
   --ignore-run-fail \
-  --profile ci \
-  --no-fail-fast
+  --profile ci
 
 cargo llvm-cov report --summary-only
 mkdir -p coverage-report
