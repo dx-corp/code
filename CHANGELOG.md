@@ -51,6 +51,17 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.114] - 2026-11-13
+
+### Changed
+
+- Reuse immutable review reply fixture (#22820). <!-- maestro-release-note:abdaccba9eb3 -->
+- Bump undici in /products/maestro/desktop (#22155). <!-- maestro-release-note:658aabe61d44 -->
+
+### Fixed
+
+- Sync public ENUM_LIST bindings and fingerprints (#22692). <!-- maestro-release-note:5d46b305ce40 -->
+
 ## [0.10.113] - 2026-11-12
 
 ### Added
