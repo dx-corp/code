@@ -2663,10 +2663,10 @@ where
 
 fn search_spec() -> ToolSpec {
     ToolSpec {
-        description: "Find tools this conversation does not have yet. Say what you need to do; \
-                      matching tools are added to your tools from the next step, and the \
-                      result lists their names. Searchable: compliance frameworks (SOC 2, \
-                      ISO 27001 requirements and Deixic controls)."
+        description: "Find tools this conversation does not have yet. Describe the operation \
+                      needed for the person's task; matching tools are added to your tools \
+                      from the next step, and the result lists their names. Reuse a tool \
+                      whose description and schema are already available."
             .into(),
         name: ToolName::new(TOOLS_SEARCH),
         label: "Finding the right tools".into(),
@@ -2819,12 +2819,17 @@ mod search_spec_tests {
     use super::*;
 
     #[test]
-    fn the_always_on_search_description_names_compliance_in_a_few_words() {
+    fn the_always_on_search_description_is_task_scoped_and_small() {
         let spec = search_spec();
         assert!(
-            spec.description.contains(
-                "compliance frameworks (SOC 2, ISO 27001 requirements and Deixic controls)"
-            ),
+            spec.description
+                .contains("operation needed for the person's task"),
+            "{}",
+            spec.description
+        );
+        assert!(
+            spec.description
+                .contains("Reuse a tool whose description and schema are already available"),
             "{}",
             spec.description
         );

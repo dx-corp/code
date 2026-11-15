@@ -563,15 +563,19 @@ impl Context {
         })
     }
 
-    /// The model's view of the thread.
     /// Per-attempt guidance when an earlier turn ended without an answer.
-    /// Without it, the next turn sees an unanswered request above a new message
-    /// and answers both (production 2026-11-06, thread mcp-9bbf1a9e). History
-    /// stays as it was, so the cached prefix is unchanged.
+    /// Corrections and status questions can continue the unfinished goal;
+    /// unrelated requests must not revive it. History stays unchanged, so
+    /// this note does not rewrite the cached prefix or recorded outcomes.
     pub fn unanswered_turn_guidance(&self) -> Option<String> {
         self.previous_turn_unanswered.then(|| {
-            "An earlier request in this conversation ended before it was answered. Answer only \
-             the person's latest message. Do not answer the earlier request unless they ask again."
+            "An earlier request in this conversation ended before it was answered. Use the latest \
+             message to steer the ongoing task. When it corrects, clarifies, asks for status or \
+             continues the same work, address it and carry the unfinished authorized goal forward. \
+             Honor narrowed scope, cancellation and replacement tasks; do not answer an unrelated \
+             earlier request merely because it remains unanswered. Resume from recorded results \
+             without repeating completed changes, and check any unknown effect before retrying. \
+             Current authority and confirmation requirements still apply."
                 .to_owned()
         })
     }
