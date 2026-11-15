@@ -42,6 +42,10 @@ mod context;
 mod engine;
 #[path = "contracts/event.rs"]
 mod event;
+/// Field names and machine timestamps in text a person reads, and their
+/// plain-words rewrite.
+#[path = "safety/human_text.rs"]
+pub mod human_text;
 #[path = "context/page.rs"]
 mod page;
 #[path = "contracts/ports.rs"]
@@ -54,6 +58,10 @@ mod sanitize;
 mod summary;
 #[path = "contracts/voice.rs"]
 mod voice;
+/// Dex's voice standard as mechanical checks: what every surface holds a
+/// message Dex writes to before a person reads it.
+#[path = "safety/voice_check.rs"]
+pub mod voice_check;
 
 #[cfg(feature = "testing")]
 pub mod testing;

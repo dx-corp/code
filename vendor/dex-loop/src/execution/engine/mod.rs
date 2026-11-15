@@ -449,7 +449,32 @@ where
             }
             None => reply.into(),
         };
+        self.grade_voice(ctx, &text);
         Event::Final { text, claims }
+    }
+
+    /// Every reply, for every host and surface, is graded against Dex's
+    /// voice standard here, where it becomes the turn's `Final`. The loop
+    /// does not know who asked, so it holds the reply to what no question
+    /// excuses ([`crate::voice_check::Occasion::Reply`]) and reports the
+    /// defects by code; the text is recorded as written. A surface that
+    /// knows Dex started the turn applies the stricter standard and its
+    /// rewrite when it delivers.
+    fn grade_voice(&self, ctx: &Context, text: &str) {
+        let defects = crate::voice_check::standard(crate::voice_check::Occasion::Reply, text);
+        if defects.is_empty() {
+            return;
+        }
+        let thread = ctx.thread();
+        let codes: Vec<&'static str> = defects.iter().map(|defect| defect.code()).collect();
+        tracing::warn!(
+            event = "dex_final_voice_defect",
+            organization_id = %thread.org,
+            workspace_id = %thread.workspace,
+            thread_id = %thread.thread,
+            defects = ?codes,
+            "the turn's final reply has voice defects"
+        );
     }
 
     /// How long a `Client`-executor call waits for `Event::ClientToolResult`
