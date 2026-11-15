@@ -17,6 +17,9 @@ use crate::event::{
 const NOT_RUN_NEW_TURN: &str = "not run: a new turn started first";
 const UNKNOWN_NEW_TURN: &str = "outcome unknown: a new turn started before the result was recorded";
 const MAX_ACTION_RECORDS: usize = 128;
+/// Consecutive identical failures after which the stall guard refuses the
+/// call and the model is told to change approach or report the blocker.
+const STALL_FAILURES: u32 = 3;
 // A public question permits 4096 characters, each at most four UTF-8 bytes.
 const MAX_ACTION_ARGUMENT_BYTES: usize = 16 * 1024;
 
@@ -148,6 +151,12 @@ struct FailedCall {
     tool: ToolName,
     args: serde_json::Value,
     count: u32,
+    /// The model step whose result made this the third consecutive failure;
+    /// every later model call carries the recovery guidance.
+    stalled_at: Option<u32>,
+    /// The guard refused this call in a model step after `stalled_at`: the
+    /// model saw the guidance and proposed the identical call again.
+    repeated_after_guidance: bool,
 }
 
 /// One succeeded tool result of the running turn, as a final check reads it:
@@ -484,12 +493,29 @@ impl Context {
 
     pub(crate) fn for_model(&self, mut remaining: crate::RemainingBudget) -> Self {
         let mut ctx = self.clone();
-        if self.answer_continuation_started {
+        if self.answer_continuation_started || self.stalled_call_refused() {
             remaining.answer_only = true;
             remaining.tool_steps = 0;
         }
         ctx.remaining_budget = Some(remaining);
         ctx
+    }
+
+    /// The stall guard refused the identical call in a model step after the
+    /// one that made it the third failure: the model saw the recovery
+    /// guidance and proposed the same call again, so the next model call
+    /// offers no tools and must answer with what is established, naming the
+    /// blocker. A refusal inside the step that reached three failures (a
+    /// codemode script retrying in a loop) does not count: the model has not
+    /// yet seen the guidance. Without this a
+    /// model that ignores the refusal spends one model call per refusal until
+    /// the step or wall budget runs out (production 2026-11-15, turn
+    /// operating_turn_3af07df2: 27 refused `dex.describe` calls, no answer
+    /// in 50 s). A successful call or new user input resets the guard.
+    pub(crate) fn stalled_call_refused(&self) -> bool {
+        self.failed_call
+            .as_ref()
+            .is_some_and(|failure| failure.repeated_after_guidance)
     }
 
     pub(crate) fn interrupted_answer(&self) -> Option<&str> {
@@ -523,14 +549,14 @@ impl Context {
         if self.answer_continuation_started {
             return Some("The preceding assistant answer was interrupted by a transient stream failure. Its visible text is already committed. Continue exactly after its last visible words, without repeating the prefix or restarting the answer. This is the single answer-only continuation: use only established results and do not call tools. Proposed calls from the interrupted step were not accepted; do not claim they ran, and do not repeat any earlier completed or uncertain operation.".into());
         }
-        self.failed_call.as_ref().filter(|failure| failure.count >= 3).map(|failure| {
+        self.failed_call.as_ref().filter(|failure| failure.count >= STALL_FAILURES).map(|failure| {
             format!("The same call to {} failed {} consecutive times without progress. Do not repeat the identical call. Inspect the failure, change the inputs or approach, use another available capability, or report the concrete blocker. A successful intervening call or new user input resets this guard. Never retry a mutation with an unknown outcome.", failure.tool, failure.count)
         })
     }
 
     pub(crate) fn has_stalled_call(&self, call: &ProposedCall) -> bool {
         self.failed_call.as_ref().is_some_and(|failure| {
-            failure.count >= 3
+            failure.count >= STALL_FAILURES
                 && failure.principal == call.principal
                 && failure.tool == call.tool
                 && failure.args == call.args
@@ -1171,20 +1197,27 @@ impl Context {
                         || !self.nested_calls.iter().any(|nested| nested.id.as_str().starts_with(&format!("{}:codemode:", call.as_str()))))
                 {
                     if *outcome == Outcome::Failed {
-                        let count = self
-                            .failed_call
-                            .as_ref()
-                            .filter(|failure| {
-                                failure.principal == proposal.principal
-                                    && failure.tool == proposal.tool
-                                    && failure.args == proposal.args
-                            })
-                            .map_or(1, |failure| failure.count.saturating_add(1));
+                        let previous = self.failed_call.as_ref().filter(|failure| {
+                            failure.principal == proposal.principal
+                                && failure.tool == proposal.tool
+                                && failure.args == proposal.args
+                        });
+                        let count = previous.map_or(1, |failure| failure.count.saturating_add(1));
+                        let stalled_at = previous
+                            .and_then(|failure| failure.stalled_at)
+                            .or((count >= STALL_FAILURES).then_some(self.step));
+                        let repeated_after_guidance = previous
+                            .is_some_and(|failure| failure.repeated_after_guidance)
+                            || stalled_at.is_some_and(|stalled| {
+                                count > STALL_FAILURES && self.step > stalled
+                            });
                         self.failed_call = Some(FailedCall {
                             principal: proposal.principal.clone(),
                             tool: proposal.tool.clone(),
                             args: proposal.args.clone(),
                             count,
+                            stalled_at,
+                            repeated_after_guidance,
                         });
                     } else {
                         self.failed_call = None;
