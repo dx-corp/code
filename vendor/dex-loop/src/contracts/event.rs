@@ -375,6 +375,12 @@ pub struct ProposedCall {
     /// The principal whose authority the call runs under: the author of the
     /// most recent user input the step acts on.
     pub principal: PrincipalId,
+    /// What the engine interpreted in the model's arguments before proposing
+    /// the call (`crate::arguments`): each variant accepted, correction made
+    /// or routed field left out. `args` and `args_digest` are the interpreted
+    /// call; the result shows these so nothing changes silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interpreted: Vec<String>,
 }
 
 impl ProposedCall {
@@ -391,7 +397,15 @@ impl ProposedCall {
             args,
             args_digest,
             principal,
+            interpreted: Vec::new(),
         }
+    }
+
+    /// This call with what the engine interpreted in its arguments.
+    #[must_use]
+    pub fn interpreted(mut self, interpreted: Vec<String>) -> Self {
+        self.interpreted = interpreted;
+        self
     }
 }
 

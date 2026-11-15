@@ -17,15 +17,20 @@
 
 mod act;
 mod codemode;
+mod validation;
 mod wrappers;
+
 pub use act::{ACT, plan_digest};
+pub use validation::validate_args;
+#[cfg(test)]
+use validation::{argument_schema_cache, compiled_validator};
+use validation::{arguments_refusal, with_interpreted};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::{Pin, pin};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use sha2::{Digest, Sha256};
 use std::task::Poll;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -980,8 +985,14 @@ where
                     StreamStep::Chunk(Ok(ModelChunk::ToolCall { name, args })) => {
                         let index = calls.len();
                         let id = call_id(&turn, step, index);
+                        let offered = self
+                            .wrapper(&name)
+                            .map(|wrapper| wrapper.spec.schema.clone());
                         let (name, args) = self.unwrap_tool_call(ctx, name, args);
-                        let call = ProposedCall::new(id, name, args, principal.clone());
+                        let (args, interpreted) =
+                            self.interpret_arguments(&name, args, offered.as_ref());
+                        let call = ProposedCall::new(id, name, args, principal.clone())
+                            .interpreted(interpreted);
                         // The answer-only call offers no tools, so nothing may
                         // start on it.
                         if !answer_only {
@@ -1595,6 +1606,8 @@ where
             // executor: the model sees why and can call again. (A call the
             // stream already started passed this check before it ran.)
             if let Err(reason) = validate_args(&spec, &call.args) {
+                let reason = arguments_refusal(&spec, &call.args)
+                    .map_or(reason.clone(), |refusal| format!("{reason}. {refusal}"));
                 // Counted per tool: one the model keeps getting wrong through
                 // `tools.call` is a candidate for the core set.
                 tracing::info!(
@@ -2463,6 +2476,7 @@ where
         call: &ProposedCall,
         result: ToolResult,
     ) -> Result<(), Fenced> {
+        let result = with_interpreted(call, result);
         let result = crate::grc_context::finish(ctx, call, result);
         let result = crate::context_pocket::finish(ctx, call, result);
         let mut events = Vec::new();
@@ -2779,113 +2793,6 @@ fn non_empty_str<'a>(call: &'a ProposedCall, key: &str) -> Option<&'a str> {
         .get(key)
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-}
-
-/// Compiled argument schemas, keyed by the schema document. Arguments and
-/// caller authority are checked on every call and are not stored. A full
-/// cache returns a fresh validator without evicting an older schema.
-const COMPILED_ARGUMENT_SCHEMAS: usize = 4096;
-
-fn argument_schema_cache() -> &'static Mutex<HashMap<[u8; 32], Arc<jsonschema::Validator>>> {
-    static CACHE: OnceLock<Mutex<HashMap<[u8; 32], Arc<jsonschema::Validator>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn compiled_validator(schema: &serde_json::Value) -> Result<Arc<jsonschema::Validator>, String> {
-    let bytes =
-        serde_json::to_vec(schema).map_err(|error| format!("invalid tool schema: {error}"))?;
-    let key: [u8; 32] = Sha256::digest(bytes).into();
-    {
-        let cache = argument_schema_cache()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(validator) = cache.get(&key) {
-            return Ok(Arc::clone(validator));
-        }
-    }
-    let compiled = Arc::new(
-        jsonschema::validator_for(schema)
-            .map_err(|error| format!("invalid tool schema: {error}"))?,
-    );
-    let mut cache = argument_schema_cache()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if let Some(validator) = cache.get(&key) {
-        return Ok(Arc::clone(validator));
-    }
-    if cache.len() < COMPILED_ARGUMENT_SCHEMAS {
-        cache.insert(key, Arc::clone(&compiled));
-    }
-    Ok(compiled)
-}
-
-/// Validate boolean and object JSON schemas; malformed schemas fail closed.
-pub fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), String> {
-    let validator = compiled_validator(&spec.schema)?;
-    let corrections: Vec<String> = validator
-        .iter_errors(args)
-        .take(MAX_ARGUMENT_CORRECTIONS)
-        .map(|error| argument_correction(&error))
-        .collect();
-    if corrections.is_empty() {
-        return Ok(());
-    }
-    Err(format!("invalid arguments: {}", corrections.join("; ")))
-}
-
-/// Corrections returned for one call; the model fixes these and sees any others next.
-const MAX_ARGUMENT_CORRECTIONS: usize = 5;
-/// How much of a sent value a correction repeats.
-const MAX_SENT_VALUE_CHARS: usize = 200;
-
-fn json_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
-
-/// What the model must change: the field by its path, then for a wrong type the
-/// expected type and what it sent. Never coerces: the model sends the value again.
-fn argument_correction(error: &jsonschema::ValidationError<'_>) -> String {
-    let path = error
-        .instance_path()
-        .as_str()
-        .trim_start_matches('/')
-        .replace('/', ".");
-    let field = if path.is_empty() {
-        "arguments"
-    } else {
-        path.as_str()
-    };
-    if let jsonschema::error::ValidationErrorKind::Type { kind } = error.kind() {
-        let sent = error.instance().to_string();
-        let sent = if sent.chars().count() > MAX_SENT_VALUE_CHARS {
-            format!(
-                "{}...",
-                sent.chars().take(MAX_SENT_VALUE_CHARS).collect::<String>()
-            )
-        } else {
-            sent
-        };
-        let expected = match kind {
-            jsonschema::error::TypeKind::Single(kind) => kind.to_string(),
-            jsonschema::error::TypeKind::Multiple(kinds) => kinds
-                .iter()
-                .map(|kind| kind.to_string())
-                .collect::<Vec<_>>()
-                .join(" or "),
-        };
-        return format!(
-            "{field}: expected {expected}, got {} {sent}",
-            json_type_name(error.instance()),
-        );
-    }
-    format!("{field}: {error}")
 }
 
 fn started(call: &ProposedCall, spec: &ToolSpec) -> Event {

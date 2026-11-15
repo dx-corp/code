@@ -65,6 +65,9 @@ pub enum Rule {
     /// Not an obvious variant: an unknown field's single nearest field,
     /// used only by [`ArgumentsInvalid::corrected`].
     SuggestedField,
+    /// A field the routing wrapper offers for another route, which the
+    /// tool this call routes to does not declare: left out ([`route`]).
+    Dropped,
 }
 
 impl Rule {
@@ -79,6 +82,7 @@ impl Rule {
             Self::DateTime => "date_time",
             Self::Suggested => "suggested",
             Self::SuggestedField => "suggested_field",
+            Self::Dropped => "dropped",
         }
     }
 }
@@ -101,6 +105,12 @@ impl fmt::Display for Interpretation {
                 "interpreted field {} as {}",
                 short(&self.sent),
                 short(&self.used)
+            ),
+            Rule::Dropped => write!(
+                f,
+                "left out {} {}: the tool this call routes to does not take it",
+                self.path,
+                short(&self.sent)
             ),
             Rule::SuggestedField => write!(
                 f,
@@ -298,6 +308,51 @@ pub fn normalize(
         interpreted: walk.interpreted,
         suggested: walk.suggested,
     })
+}
+
+/// `args` of a call a wrapper routed to `target`. A wrapper declares the
+/// union of its routes' fields (`offered`), so a call may carry fields only
+/// another route takes: each field `offered` declares that a closed `target`
+/// does not declare, in any name variant, is left out and recorded as
+/// [`Rule::Dropped`]. The rest is [`normalize`]d against `target`; a field
+/// neither schema declares is refused or corrected there, never dropped.
+pub fn route(
+    target: &Value,
+    offered: &Value,
+    args: &Map<String, Value>,
+) -> Result<Normalized, ArgumentsInvalid> {
+    let declared = target.get("properties").and_then(Value::as_object);
+    let closed = target.get("additionalProperties") == Some(&Value::Bool(false));
+    let offered = offered.get("properties").and_then(Value::as_object);
+    let mut kept = Map::new();
+    let mut dropped = Vec::new();
+    for (field, value) in args {
+        let other_route = closed
+            && offered.is_some_and(|offered| offered.contains_key(field))
+            && declared.is_some_and(|declared| {
+                !declared.contains_key(field)
+                    && !declared.keys().any(|name| same_field(field, name))
+            });
+        if other_route {
+            dropped.push(Interpretation {
+                path: field.clone(),
+                sent: value.clone(),
+                used: Value::Null,
+                rule: Rule::Dropped,
+            });
+        } else {
+            kept.insert(field.clone(), value.clone());
+        }
+    }
+    let prepend = |interpreted: &mut Vec<Interpretation>| {
+        interpreted.splice(0..0, dropped.iter().cloned());
+    };
+    let mut result = normalize(target, &kept);
+    match &mut result {
+        Ok(normalized) => prepend(&mut normalized.interpreted),
+        Err(refused) => prepend(&mut refused.interpreted),
+    }
+    result
 }
 
 #[derive(Default)]
