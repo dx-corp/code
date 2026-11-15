@@ -582,9 +582,13 @@ fn is_bare_refusal(text: &str) -> bool {
     if !REFUSALS.iter().any(|refusal| lower.contains(refusal)) {
         return false;
     }
-    // "I can not" is no offer.
+    // "I can not" is no offer, and "so I can inspect the logs" is what the
+    // missing access is for, not a next step.
     for refusal in REFUSALS {
         lower = lower.replace(refusal, " ");
+    }
+    for purpose in ["so i can ", "so that i can "] {
+        lower = lower.replace(purpose, " ");
     }
     let asks = sentences(&prose)
         .iter()
