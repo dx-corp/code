@@ -1,6 +1,6 @@
 # Tool System Architecture
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The tool system now lives in `packages/tui-rs/src/tools/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The tool system now lives in `packages/local-host-rs/src/tools/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 The tool system is the largest module in Maestro (~335KB), providing a framework for defining, validating, executing, and caching tool operations that the LLM can invoke.
@@ -333,7 +333,7 @@ function generateCacheKey(
 |----------|---------|----------------|
 | File Watch | File modified | read, edit |
 | Git Status | Working tree changed | All file tools |
-| TTL Expiry | Time elapsed | websearch, webfetch |
+| TTL Expiry | Time elapsed | `websearch`, `webfetch` |
 | Manual | User request | All |
 
 ## Built-in Tools
@@ -351,8 +351,8 @@ function generateCacheKey(
 
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
-| `search` | Ripgrep search | `pattern`, `path`, `type` |
-| `websearch` | Web search via Exa | `query`, `domains` |
+| `search` | `ripgrep` search | `pattern`, `path`, `type` |
+| `websearch` | Web search via `Exa` | `query`, `domains` |
 | `codesearch` | Semantic code search | `query`, `scope` |
 
 ### Shell Tools
@@ -391,7 +391,7 @@ interface ToolAnnotations {
 
 ## Sandbox Integration
 
-Tools can execute within a sandboxed environment:
+Tools can execute within a sandbox-protected environment:
 
 ```typescript
 interface ToolRunContext<Details> {
@@ -465,7 +465,7 @@ function interpolateContext(value: string): string {
 
 1. **Validator Caching**: Compiled validators are cached per schema
 2. **WeakMap for GC**: Cache uses WeakMap to allow garbage collection
-3. **Batch Validation**: AJV's `allErrors: false` stops at first error
+3. **Batch Validation**: `AJV` schema `allErrors: false` stops at first error
 4. **LRU Cache**: Tool results use LRU eviction to bound memory
 5. **Abort Signals**: All tools respect abort signals for fast cancellation
 

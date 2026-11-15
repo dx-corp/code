@@ -1,6 +1,6 @@
 # Headless Protocol Reference
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless protocol dispatch now lives in `packages/tui-rs/src/headless/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless protocol dispatch now lives in `packages/local-host-rs/src/headless/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 Maestro's headless mode is the embedding-oriented JSON-over-stdio contract used
@@ -8,11 +8,11 @@ by native TUIs and external control planes such as EvalOps Chat.
 
 Transport rules:
 
-- stdin carries one JSON object per line into Maestro
-- stdout emits one JSON object per line back to the client
-- stderr is diagnostics only and is not part of the protocol contract
-- startup failures should emit a fatal `error` protocol message on stdout when
-  the headless transport has been requested, with human diagnostics on stderr
+- `stdin` carries one JSON object per line into Maestro
+- `stdout` emits one JSON object per line back to the client
+- `stderr` is diagnostics only and is not part of the protocol contract
+- startup failures should emit a fatal `error` protocol message on `stdout` when
+  the headless transport has been requested, with human diagnostics on `stderr`
 
 ## Compatibility
 
@@ -24,7 +24,7 @@ Current version: `2026-08-07`
 Source of truth:
 
 - generated constants: [packages/local-host-rs/src/headless/generated_protocol.rs](../../packages/local-host-rs/src/headless/generated_protocol.rs)
-- runtime message shapes: [src/cli/headless-protocol.ts](../../src/cli/headless-protocol.ts)
+- runtime message shapes: `src/cli/headless-protocol.ts` (removed TypeScript source)
 - transport implementation: [packages/local-host-rs/src/headless_server.rs](../../packages/local-host-rs/src/headless_server.rs)
 - hosted runner contract: [docs/protocols/hosted-runner-contract.md](./hosted-runner-contract.md)
 - hosted runner retention: [docs/protocols/hosted-runner-retention.md](./hosted-runner-retention.md)
@@ -38,7 +38,7 @@ Compatibility expectations:
 - versioned clients must currently match `2026-08-07`; the runtime does not
   downgrade emitted message types for older clients
 
-## Hosted / HeadlessRuntimeService backend
+## Hosted / HeadlessRuntimeService service implementation
 
 `HeadlessRuntimeService` (web attach, hosted runner, in-process host) owns the
 Node-side control plane: connection leases, hello/hello_ok, utility commands,
@@ -55,18 +55,18 @@ On native spawn/start failure the service throws. Native protocol messages
 are published into the Node broker directly (no TS
 `translator.handleAgentEvent`). Automatic memory extraction/consolidation runs
 via short-lived native one-shots
-([native-memory.ts](../../src/server/native-memory.ts)) when
+(`native-memory.ts` (removed TypeScript source)) when
 `MAESTRO_NATIVE_MEMORY` is on (default). Disable with `MAESTRO_NATIVE_MEMORY=0`
-for no-ops from [native-memory-noop.ts](../../src/server/native-memory-noop.ts).
+for no-ops from `native-memory-noop.ts` (removed TypeScript source).
 Failures warn and continue; never soft-fall back to `createAgent`.
 
 Implementation:
 
-- [src/server/headless-native-bridge.ts](../../src/server/headless-native-bridge.ts) — start + publish bridge
-- [src/server/native-headless-client.ts](../../src/server/native-headless-client.ts) — NDJSON client
-- [src/server/native-memory.ts](../../src/server/native-memory.ts) — native one-shot auto memory
-- [src/server/native-memory-noop.ts](../../src/server/native-memory-noop.ts) — no-op auto memory when disabled
-- [src/server/headless-runtime-service.ts](../../src/server/headless-runtime-service.ts) — hosted native headless runtime
+- `src/server/headless-native-bridge.ts` (removed TypeScript source): start + publish bridge
+- `src/server/native-headless-client.ts` (removed TypeScript source): NDJSON client
+- `src/server/native-memory.ts` (removed TypeScript source): native one-shot auto memory
+- `src/server/native-memory-noop.ts` (removed TypeScript source): no-op auto memory when disabled
+- `src/server/headless-runtime-service.ts` (removed TypeScript source): hosted native headless runtime
 
 
 ## Hosted Remote-Runner Identity
@@ -591,7 +591,7 @@ Supported `error_type` values:
 - `cancelled`
 - `protocol`
 
-## Embedder Notes
+## Embedding client Notes
 
 - Treat `response_chunk` as append-only.
 - Persist `response_end.usage` and `response_end.tools_summary` instead of
@@ -608,7 +608,7 @@ Supported `error_type` values:
 - Web chat bridge: `src/server/native-headless-event-adapter.ts` maps
   `HeadlessFromAgentMessage` into runtime `AgentEvent` frames so chat-ws can
   forward native headless streams without an in-process TypeScript Agent.
-  Prefer negotiated `raw_agent_event` passthrough when available; the adapter
+  Prefer negotiated `raw_agent_event` pass-through when available; the adapter
   reconstructs message/tool lifecycle events from protocol messages otherwise.
 - Server native approvals fail closed: explicit `auto` remains automatic;
   `prompt` and `fail` map to `fail` until an interactive approval/client-tools

@@ -1,6 +1,6 @@
 # Headless Runtime Conformance
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless runtime code now lives in `packages/tui-rs/src/headless/` and `packages/runtime-gateway-rs`; the specific TS conformance test files referenced below have no confirmed Rust test replacement. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless runtime code now lives in `packages/local-host-rs/src/headless/` and `packages/runtime-gateway-rs`; the specific TS conformance test files referenced below have no confirmed Rust test replacement. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 Maestro's hosted runtime contract is protocol-first. The current TypeScript
@@ -9,7 +9,7 @@ observable session behavior before Platform or deploy code depends on a runner
 implementation detail.
 
 The executable suite starts in
-[`test/headless/runtime-conformance.test.ts`](../../test/headless/runtime-conformance.test.ts).
+`test/headless/runtime-conformance.test.ts` (removed TypeScript source).
 It defines a small runtime adapter, then runs the same scenarios against the
 current TypeScript in-process host. It also includes a Rust adapter that
 spawns `hosted_runner_conformance_fixture` and drives
@@ -66,7 +66,7 @@ The first conformance tranche covers:
 - hosted restore from a drain manifest for adapters with hosted lifecycle hooks,
   including reset replay and post-restore controller mutation
 - hosted incomplete restore semantics for Rust unit coverage: failed or skipped
-  runtime flush manifests preserve inspectable state but stay not-ready
+  runtime flush manifests preserve available for inspection state but stay not-ready
 - disconnect behavior that clears subscriptions and controller leases without
   destroying the runtime state
 

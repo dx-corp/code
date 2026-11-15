@@ -1,6 +1,14 @@
 # Hooks System Design
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The hooks system now lives in `packages/tui-rs/src/hooks/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The hooks system now lives in `packages/local-host-rs/src/hooks/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+
+The current native loader reads `~/.composer/hooks.{toml,json}` and project
+`.composer/hooks.{toml,json}`. Project configuration requires workspace trust
+from the global configuration. `IntegratedHookSystem` invokes script and WASM
+executors for `PreToolUse`; its post-tool path dispatches the native registry.
+Standalone executors having post-tool methods does not establish integrated
+post-tool execution. See the [native hook guide](../../packages/local-host-rs/src/hooks/README.md) for current setup.
+
 
 
 The hooks system allows external programs to intercept, modify, or block agent operations at various lifecycle points. This enables custom workflows, validation, and integrations.
@@ -71,7 +79,7 @@ prevented call.
 
 `SessionStart` and `SessionEnd` fire on the real session transitions: starting a
 new session, creating the session file for one, resuming a session, forking, and
-an orderly exit. Both are advisory — their results are logged and cannot stop a
+an orderly exit. Both are advisory—their results are logged and cannot stop a
 transition the user has already made.
 
 `SessionEnd` is best-effort. A crash, a `SIGKILL`, or a terminal that goes away
@@ -105,21 +113,21 @@ A command hook is started with these variables set:
 
 | Variable | Meaning |
 | --- | --- |
-| `HOOK_EVENT_NAME` | The event that fired the hook, e.g. `PreToolUse` |
+| `HOOK_EVENT_NAME` | The event that fired the hook, for example, `PreToolUse` |
 | `TOOL_NAME` | The tool being invoked; set only for tool events |
 | `INPUT_JSON` | Copy of the JSON payload, set only when it is at most 64 KiB |
 | `INPUT_JSON_OMITTED` | Byte length of the payload when it was too large for `INPUT_JSON`; unset otherwise |
 
-Stdin is the only complete transport for the payload and has no size limit;
+Standard input is the only complete transport for the payload and has no size limit;
 read it (`INPUT=$(cat)`) rather than relying on `INPUT_JSON`. The environment
 copy is bounded because a single environment entry over the operating system
 limit (`MAX_ARG_STRLEN`, 128 KiB on Linux) fails the spawn with `E2BIG`, which
 would stop the hook from running at all.
 
-The payload's top-level fields use the camelCase names in "Hook Input Format"
+The payload's top-level fields use the `camelCase` names in "Hook Input Format"
 below (`toolName`, `toolInput`, `hookEventName`, `durationMs`). The equivalent
-snake_case names (`tool_name`, `tool_input`) are also present because earlier
-builds emitted only those; write new hooks against the camelCase names. Keys
+`snake_case` names (`tool_name`, `tool_input`) are also present because earlier
+builds emitted only those; write new hooks against the `camelCase` names. Keys
 inside `toolInput` are the tool's own arguments and are passed through
 unchanged.
 

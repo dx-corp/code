@@ -12,23 +12,15 @@ JetBrains IDE integration for [Deixic Code](https://github.com/evalops/maestro),
 
 ## Supported IDEs
 
-This plugin supports all JetBrains IDEs based on IntelliJ Platform 2024.3+:
-
-- IntelliJ IDEA (Community & Ultimate)
-- PyCharm
-- WebStorm
-- GoLand
-- Rider
-- CLion
-- RubyMine
-- PhpStorm
-- DataGrip
-- Android Studio
+The build targets IntelliJ IDEA Community 2024.3 and declares IntelliJ
+platform build 243 as its minimum. Other IDE compatibility depends on the
+platform and language plugins available in that IDE; verify the target with
+the `Gradle` plugin verifier before claiming support.
 
 ## Requirements
 
 1. **Deixic Code Server** - The plugin connects to a running Deixic Code server
-2. **JDK 17+** - Required for building the plugin
+2. **JDK 21** - Required for building the plugin
 
 ## Getting Started
 
@@ -39,19 +31,15 @@ This plugin supports all JetBrains IDEs based on IntelliJ Platform 2024.3+:
 npm install -g @evalops/maestro
 
 # Start the web server with the canonical command
-deixic-code web
+deixic-code serve --port 8080
 ```
 
-The server will start on `http://localhost:8080` by default.
+The explicit port matches the plugin's default endpoint, `http://localhost:8080`.
 
 ### 2. Install the Plugin
 
-#### From Marketplace (Recommended)
-1. Open **Settings** → **Plugins** → **Marketplace**
-2. Search for "Deixic Code"
-3. Click **Install**
+Build from `products/maestro/packages/jetbrains-plugin` in Mono:
 
-#### From Source
 ```bash
 # Build the plugin
 ./gradlew buildPlugin
@@ -65,7 +53,7 @@ Then install via **Settings** → **Plugins** → ⚙️ → **Install Plugin fr
 
 1. Open **Settings** → **Tools** → **Deixic Code**
 2. Set the **API Endpoint** (default: `http://localhost:8080`)
-3. Choose your **Default Model** (e.g., `claude-sonnet-4-5`)
+3. Choose your **Default Model** (for example `claude-sonnet-4-5`)
 
 ### 4. Use Deixic Code
 
@@ -97,10 +85,18 @@ When connected to the Deixic Code server, the plugin provides IDE-aware tools:
 
 ### Status
 
-The JetBrains plugin is kept as an active package. Pull requests that touch
-`packages/jetbrains-plugin/`, the shared headless proto, or the JetBrains
-GitHub Actions `jetbrains-plugin` job, which executes
-`./gradlew check buildPlugin --no-daemon`.
+The standalone Maestro workflow declares a `jetbrains-plugin` job that calls
+`scripts/run-ci-jetbrains.sh`. Mono selects checks through
+[components/maestro.yaml](../../../../components/maestro.yaml); nested
+`.github/workflows/` files do not register Mono jobs. Run the `Gradle` checks
+explicitly for plugin changes:
+
+```sh
+./gradlew check buildPlugin --no-daemon
+```
+
+A successful local package build does not establish Marketplace publication
+or compatibility with a running gateway.
 
 ### Build
 
@@ -118,7 +114,7 @@ GitHub Actions `jetbrains-plugin` job, which executes
 ### Project Structure
 
 ```
-src/main/kotlin/com/evalops/maestro/
+src/main/kotlin/com/evalops/composer/
 ├── api/                    # HTTP/SSE client and data models
 ├── services/               # Application and project services
 ├── settings/               # Plugin settings
@@ -130,14 +126,14 @@ src/main/kotlin/com/evalops/maestro/
 ### Dependencies
 
 - **OkHttp** - HTTP client with SSE support
-- **Gson** - JSON serialization
-- **Kotlin Coroutines** - Async operations
+- **`Gson`** - JSON serialization
+- **Kotlin asynchronous tasks** - Async operations
 
 ## Troubleshooting
 
 ### "Disconnected" Status
 
-1. Ensure the Deixic Code server is running: `deixic-code web`
+1. Ensure the Deixic Code server is running: `deixic-code serve --port 8080`
 2. Check the API endpoint in settings matches the server URL
 3. Look for errors in **Help** → **Diagnostic Tools** → **Debug Log**
 
@@ -145,14 +141,14 @@ src/main/kotlin/com/evalops/maestro/
 
 The PSI-based tools require:
 1. The file must be within the project
-2. Language support must be available (e.g., Java plugin for Java files)
+2. Language support must be available (for example Java plugin for Java files)
 3. Indexing must be complete
 
 ### Plugin Build Errors
 
 Ensure you have:
-- JDK 17 or later
-- Gradle 8.11+
+- JDK 21, as selected by `jvmToolchain(21)`
+- The checked-in `Gradle` wrapper (`./gradlew`), pinned to 8.11.1
 - Internet access for dependency downloads
 
 ## License

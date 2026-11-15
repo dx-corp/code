@@ -4,6 +4,10 @@ This is an example WebAssembly hook plugin that blocks dangerous shell commands.
 
 ## Building
 
+Build Rust on dev-desktop through cargo-slot. The runtime binary also needs
+the `maestro-local-host/wasm` feature; compiling this plugin alone does not
+enable the host interpreter.
+
 ```bash
 # Install WASM target
 rustup target add wasm32-unknown-unknown
@@ -27,7 +31,7 @@ cp target/wasm32-unknown-unknown/release/safety_plugin.wasm ~/.maestro/plugins/
 
 ## Configuration
 
-Add to `~/.maestro/hooks.toml`:
+Add to `~/.composer/hooks.toml`, the global path read by the native hook loader:
 
 ```toml
 [[hooks]]
@@ -67,7 +71,7 @@ This plugin blocks these dangerous command patterns:
 
 - `rm -rf /` - Recursive delete of root
 - `rm -rf /*` - Recursive delete of root contents
-- `rm -rf ~` - Recursive delete of home directory
+- `rm -rf ~` - Recursive delete of home folder
 - `mkfs.` - Filesystem creation
 - `dd if=/dev/zero of=/dev/sd` - Disk overwrite
 - `> /dev/sda` - Disk overwrite via redirect

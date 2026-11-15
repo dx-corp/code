@@ -4,28 +4,30 @@ This document provides context for AI agents working on the Rust TUI codebase.
 
 ## Quick Reference
 
+Run from `products/maestro` in Mono. Follow the root
+[Rust build instructions](../../../../docs/development.md#rust-builds-for-agents):
+agents compile and test on dev-desktop through cargo-slot and select affected
+packages. Cargo uses the configured workspace target directory.
+
 ```bash
-# Build
-cargo build --release
-
-# Test
-cargo test
-
-# Run
-./target/release/composer-tui
+cargo build --locked --release -p maestro-tui --bin maestro-tui
+cargo test --locked -p maestro-tui
+cargo run --locked -p maestro
 ```
 
 ## Architecture Overview
 
-This is a **native Rust TUI** with a fully native agent runtime, AI provider clients, and tool execution. It does **not** require a Node.js subprocess for normal operation. A small Node bridge is used only for optional TypeScript hook execution.
+This is a native Rust TUI. The shared runtime, provider clients, and local
+tool execution are Rust. The separate Electron/React desktop client connects
+to that runtime.
 
 ### Key Design Decisions
 
-1. **Native Agent Architecture**: AI communication and streaming live in maestro-runtime; local tool execution and runtime construction live in maestro-local-host. The TUI reexports historical module paths. This enables a standalone binary and avoids cross-process latency. A Node hook bridge exists only for running TS hooks when enabled.
+1. **Native Agent Architecture**: AI communication and streaming live in maestro-runtime; local tool execution and runtime construction live in maestro-local-host. The TUI reexports historical module paths. This enables a standalone binary and avoids cross-process latency.
 
 2. **Cursor Positioning**: Uses native terminal cursor (adapted from OpenAI Codex) rather than inline cursor rendering. See `components/textarea.rs` for the implementation.
 
-3. **Modal System**: Single `ActiveModal` enum in `app.rs` controls which modal is visible. Only one modal can be active at a time.
+3. **Modal System**: Single `ActiveModal` enumeration in `app.rs` controls which modal is visible. Only one modal can be active at a time.
 
 4. **Session Persistence**: Sessions are JSONL files in `~/.maestro/sessions/`. The format matches the TypeScript TUI for compatibility.
 
@@ -35,16 +37,16 @@ This is a **native Rust TUI** with a fully native agent runtime, AI provider cli
 
 | Aspect | TypeScript TUI | Rust TUI |
 |--------|---------------|----------|
-| **Rendering** | React-like component model with lifecycle hooks | Immediate-mode rendering (Ratatui) - stateless widgets |
+| **Rendering** | React-like component model with lifecycle hooks | Immediate-mode rendering (`ratatui`) - stateless widgets |
 | **State** | Distributed across components with subscriptions | Centralized `AppState` struct passed by `&mut` reference |
 | **Async** | Event emitters, subscriptions, observers | MPSC channels (`tokio::sync::mpsc`) |
-| **Modals** | Lifecycle-based (mount/unmount/dispose) | Enum-based (`ActiveModal`) with direct field access |
+| **Modals** | Lifecycle-based (mount/unmount/dispose) | Enumeration-based (`ActiveModal`) with direct field access |
 | **Updates** | Reactive (state changes trigger re-renders) | Imperative (explicit render calls each frame) |
 
 #### Patterns That Do NOT Apply to Rust TUI
 
 1. **Component Lifecycle Hooks** (`onMount`, `onUnmount`, `dispose`)
-   - Ratatui widgets are **stateless** - they render and are discarded each frame
+   - `ratatui` widgets are **stateless** - they render and are discarded each frame
    - State lives in `AppState`, not in components
    - No cleanup callbacks needed - Rust's ownership handles resource cleanup
 
@@ -118,7 +120,7 @@ Before making changes, understand these foundational files:
 | `app.rs` | Main event loop, keyboard handling, modal management | Adding modals, changing input handling |
 | `products/maestro/packages/local-host-rs/src/tools/registry.rs` | Tool definitions, schemas, execution dispatch | Adding or modifying tools |
 | `products/maestro/packages/runtime-rs/src/agent/native.rs` | Agent lifecycle, tool handling, provider orchestration | Changing agent behavior |
-| `products/maestro/packages/runtime-rs/src/agent/protocol.rs` | `FromAgent` enum - all agent→UI events | Adding new agent events |
+| `products/maestro/packages/runtime-rs/src/agent/protocol.rs` | `FromAgent` enumeration - all agent→UI events | Adding new agent events |
 | `products/maestro/packages/session-rs/src/session/manager.rs` | Session CRUD, `SessionInfo` struct | Working with sessions |
 | `products/maestro/packages/session-rs/src/session/entries.rs` | JSONL entry types (`SessionEntry`, `ThinkingLevel`, etc.) | Modifying session format |
 | `components/message.rs` | Chat UI widgets (`ChatView`, `MessageWidget`, etc.) | Changing message rendering |
@@ -131,7 +133,7 @@ Before making changes, understand these foundational files:
 - `App::render()` draws the UI and positions cursor
 
 ### `components/` - UI Widgets
-All widgets implement ratatui's `Widget` trait.
+All widgets implement the `ratatui::Widget` trait.
 
 - **`message.rs`**: `ChatView`, `ChatInputWidget`, `MessageWidget`, `StatusBarWidget`
 - **`approval.rs`**: `ApprovalModal`, `ApprovalController` for tool approval flow
@@ -148,7 +150,7 @@ All widgets implement ratatui's `Widget` trait.
 ### `agent/` - Runtime Compatibility Exports
 - **`mod.rs`**: Reexports the shared host constructors.
 - Local tools, hooks, credentials, and the runtime adapter live in `products/maestro/packages/local-host-rs/src`.
-- Child-agent lifecycle and the injectable child factory live in the shared host `products/maestro/packages/local-host-rs/src/subagents/` module.
+- Child-agent lifecycle and the caller-supplied child factory live in the shared host `products/maestro/packages/local-host-rs/src/subagents/` module.
 - The native actor and provider loop live in `products/maestro/packages/runtime-rs/src/agent/`. Shared events live in maestro-runtime-contracts.
 
 ### `products/maestro/packages/session-rs/src/session/` - Persistence
@@ -182,7 +184,7 @@ Command::new("mycommand", "Description")
 ### Adding a New Modal
 
 1. Create component in `components/my_modal.rs`
-2. Add variant to `ActiveModal` enum in `app.rs`
+2. Add variant to `ActiveModal` enumeration in `app.rs`
 3. Add field to `App` struct
 4. Handle in `App::handle_key_event()` and `App::render()`
 
@@ -201,20 +203,20 @@ frame.set_cursor_position((area.x + 1 + col, area.y + 1));
 
 ```bash
 # Run all tests
-cargo test
+cargo test --locked -p maestro-tui
 
 # Run specific test
-cargo test test_name
+cargo test --locked -p maestro-tui test_name
 
 # Run tests for a module
-cargo test commands::
+cargo test --locked -p maestro-tui commands::
 ```
 
 - `tests/pty_e2e.rs` runs the real `maestro-tui` binary in a pseudo-terminal
   against a mock OpenAI-compatible server (scripted SSE turns; no network, API
   key, or display needed) and asserts on the captured terminal output. Add
   interactive end-to-end scenarios there. The tests serialize on a shared
-  mutex — concurrent TUI spinners starve the PTY reader thread and get
+  `mutex`; concurrent TUI spinners starve the PTY reader thread and get
   keystrokes eaten by the app's per-frame cursor-position probes.
 
 ## Code Style
@@ -222,7 +224,7 @@ cargo test commands::
 - Use `rustfmt` defaults
 - Prefer explicit error handling over `.unwrap()`
 - Document public APIs with `///` doc comments
-- Keep widgets stateless when possible (pass data as constructor args)
+- Keep widgets stateless when possible (pass data as constructor arguments)
 
 ## Dependencies
 
@@ -238,13 +240,13 @@ Key crates:
 
 ```bash
 # Build with debug symbols
-cargo build
+cargo build --locked -p maestro-tui --bin maestro-tui
 
 # Run with RUST_BACKTRACE
-RUST_BACKTRACE=1 ./target/debug/composer-tui
+RUST_BACKTRACE=1 cargo run --locked -p maestro
 
 # Log to file (if logging is enabled)
-RUST_LOG=debug ./target/debug/composer-tui 2> debug.log
+RUST_LOG=debug cargo run --locked -p maestro 2> debug.log
 ```
 
 ## Advanced Architecture Patterns
@@ -265,7 +267,7 @@ The agent uses a **channel-based actor model** with a lightweight handle and bac
 - `ToAgent`: `Prompt`, `ToolResponse`, `Cancel`, `SetModel`, `SetThinkingLevel`
 - `FromAgent`: `ResponseChunk`, `ToolCall`, `ResponseEnd`, `Error`, `Ready`
 
-**Why Unbounded Channels**: Commands are user-initiated (low volume), events are streamed but backpressure handled by TUI renderer. No risk of unbounded growth.
+**Why Unbounded Channels**: Commands are user-initiated (low volume), events are streamed but backpressure handled by TUI renderer.
 
 ### Tool Execution Flow
 
@@ -303,7 +305,7 @@ Return ToolResult { success, output, error }
 
 **Doom Loop Detection** (`products/maestro/packages/runtime-rs/src/agent/safety.rs`):
 - Sliding window of recent tool calls
-- Detects repeated identical calls (same tool + args hash)
+- Detects repeated identical calls (same tool + argument hash)
 - Blocks if threshold exceeded (default: 3 identical)
 - Prevents infinite retry loops
 
@@ -313,14 +315,13 @@ Return ToolResult { success, output, error }
 
 ### Hooks System (`products/maestro/packages/local-host-rs/src/hooks/`)
 
-Multi-backend extensibility system:
+Hook execution engines:
 
-| Backend | Use Case | Implementation |
+| Engine | Use Case | Implementation |
 |---------|----------|----------------|
-| **Rust traits** | Zero overhead, inline hooks | Direct trait impl |
-| **Lua scripts** | Lightweight scripting | `mlua` crate |
-| **WASM plugins** | Sandboxed, polyglot | WASM runtime |
-| **Node.js bridge** | TypeScript hook compat | IPC subprocess |
+| **Rust traits** | Zero overhead, inline hooks | Direct trait implementation |
+| **`Lua` scripts** | Lightweight scripting | `mlua` crate |
+| **WASM plugins** | Sandbox-protected plugins | WASM runtime |
 
 **Hook Types**:
 - `PreToolUse` / `PostToolUse` - intercept/modify tool calls
@@ -342,7 +343,7 @@ pub struct SkillDefinition {
 }
 ```
 
-**Activation**: Skills auto-activate via case-insensitive trigger matching on user input. Example: "frontend-design" skill activates on "build a landing page".
+**Activation**: Skills auto-activate via case-insensitive trigger matching on user input. Example: "frontend-design" skill activates on "build a landing page."
 
 ### Swarm Mode (`maestro-swarm`)
 
@@ -373,7 +374,7 @@ Uses `once_cell::sync::Lazy<RwLock<MaestroConfig>>` for thread-safe global state
 
 ### Session Format (`products/maestro/packages/session-rs/src/session/entries.rs`)
 
-Tagged enum with serde discriminator:
+Tagged enumeration with `serde` discriminator:
 
 ```rust
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -411,7 +412,7 @@ Run their tests with `cargo test -p maestro-ui -p maestro-sandbox -p
 maestro-workspace -p maestro-codex -p maestro-swarm -p maestro-context --locked` from the Maestro workspace. The application-owned
 `sandbox_policy` module lives in maestro-local-host alongside configuration and approval policy.
 
-## Known Issues / TODOs
+## Known Issues
 
 1. Headless/RPC mode is routed through the native Rust entrypoint and runtime;
    keep its protocol and request-parity tests aligned with the interactive agent.

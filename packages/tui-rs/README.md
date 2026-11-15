@@ -1,6 +1,6 @@
 # Deixic Code TUI (Rust)
 
-Native terminal UI for Deixic Code, built with Rust using ratatui and crossterm. Inspired by [OpenAI Codex TUI](https://github.com/openai/codex/tree/main/codex-rs).
+Native terminal UI for Deixic Code, built with Rust using `ratatui` and `crossterm`. Inspired by [OpenAI Codex TUI](https://github.com/openai/codex/tree/main/codex-rs).
 
 ## User Guide
 
@@ -8,13 +8,13 @@ Numbered end-user docs for install, auth, shortcuts, slash commands, config, MCP
 
 - **[TUI User Guide](docs/user-guide/README.md)**
 
-## Why Rust?
+## Terminal rendering
 
-The TypeScript TUI has limitations with SSH sessions where content that scrolls above the viewport becomes inaccessible. This Rust implementation:
+The native renderer provides:
 
 1. **Native terminal scrollback**: Pushes content into the terminal's scrollback buffer using ANSI scroll regions (DECSTBM), persisting even over SSH
 2. **Differential rendering**: Only sends changed cells, minimizing bytes over slow connections
-3. **Native performance**: Rust + crossterm handles terminal rendering directly
+3. **Native performance**: Rust + `crossterm` handles terminal rendering directly
 4. **Standalone binary**: Single executable with native AI provider integrations - no Node.js runtime required
 
 ## Architecture
@@ -34,7 +34,10 @@ sessions, and hosted entrypoints. Reusable code has independent Cargo boundaries
 | `maestro-ai` | Provider clients |
 | `maestro-execpolicy` | Command execution policy parsing and evaluation |
 | `maestro-runtime-contracts` | Runtime identity, protocols, receipts, and telemetry contracts |
-| `maestro-runtime` | Compatibility facade and future native runtime loop owner |
+| `maestro-runtime` | Native agent actor, turn loop, and host execution contracts |
+| `maestro-local-host` | Local tools, hooks, credentials, configuration, and host composition |
+| `maestro-session` | Local session persistence, forks, indexes, exports, and checkpoints |
+| `maestro-tui-kit` | Terminal setup, keybindings, themes, and shared TUI support |
 
 The extracted crates do not depend on `maestro-tui`. Historical imports such as
 `maestro_tui::wrapping`, `maestro_tui::sandbox`, and `maestro_tui::files` remain
@@ -44,17 +47,13 @@ available through re-exports. Their tests run in the owning crate:
 cargo test -p maestro-ui -p maestro-sandbox -p maestro-workspace -p maestro-codex -p maestro-swarm --locked
 ```
 
-`agent`, `tools`, `session`, `config`, and the application still have mutual
-dependencies. Separating the agent from the application requires moving the
-shared event/state contracts and replacing application callbacks first.
-`sandbox_policy` remains in the application because it resolves product
-configuration; `maestro-sandbox` enforces the resulting policy. Codex login,
-profile selection, and CLI commands stay with application configuration;
-`maestro-codex` owns the protocol client and thread bindings. `maestro-swarm`
-executes task graphs through a caller-provided task function; it does not own
-the native agent lifecycle. `maestro-runtime-contracts` owns the dependency-light
-runtime contracts; `maestro-runtime` retains the historical facade and will own
-the native loop.
+`src/lib.rs` re-exports shared implementations from their owning crates.
+`src/agent/mod.rs` re-exports `maestro-local-host`'s agent interface; the
+actor and provider loop live in `maestro-runtime`. `sandbox_policy` lives in
+`maestro-local-host`, where it resolves product configuration before native
+sandbox enforcement. Codex login and profile selection also use local-host
+configuration; `maestro-codex` owns transport and thread bindings.
+`maestro-swarm` runs task graphs through a caller-provided function.
 
 ## Features
 
@@ -72,33 +71,23 @@ the native loop.
 - **Clipboard Copy/Paste**: Enable with `cargo build --features clipboard`
 - **Native Cursor**: Proper terminal cursor positioning (adapted from Codex)
 
-## Building
+## Build and run
 
-```bash
-cd packages/tui-rs
-cargo build --release
+Run from `products/maestro` in Mono or from the standalone Code checkout root.
+Mono agents use the
+[approved Rust build host](../../../../docs/development.md#rust-builds-for-agents).
+
+```sh
+cargo build --locked --release -p maestro-tui --bin maestro-tui
+cargo run --locked -p maestro -- setup
+cargo run --locked -p maestro
+cargo run --locked -p maestro -- --resume
 ```
 
-The binary will be at `target/release/maestro-tui`.
-
-## Running
-
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY=sk-...
-# or
-export OPENAI_API_KEY=sk-...
-
-# Run with default settings (uses Claude by default)
-./target/release/maestro-tui
-
-# Specify a model
-./target/release/maestro-tui --model gpt-4o
-./target/release/maestro-tui --model claude-sonnet-4-5-20250514
-
-# Resume last session
-./target/release/maestro-tui --resume
-```
+Cargo writes the TUI binary to the workspace target directory, or to
+`CARGO_TARGET_DIR` when configured; it does not create a crate-local target
+by default. The `maestro` package supplies the installed command dispatcher.
+Read [Models](../../docs/MODELS.md) for inference routes and model selection.
 
 ## Environment Variables
 
@@ -134,50 +123,19 @@ println!("Deixic Code version: {:?}", status.version);
 This is useful for tooling or diagnostics that need to confirm the bridge is
 online before connecting from Conductor.
 
-## Module Structure
+## Source map
 
-```
-src/
-├── agent/           # Native agent implementation
-│   ├── native.rs    # Agent loop, tool handling, AI communication
-│   └── protocol.rs  # Message types (FromAgent, ToAgent)
-├── ai/              # AI provider clients
-│   ├── anthropic.rs # Claude API (Messages API)
-│   ├── openai.rs    # OpenAI API (Responses API)
-│   └── client.rs    # Unified client interface
-├── tools/           # Native tool implementations
-│   ├── registry.rs  # Tool definitions and execution
-│   └── bash.rs      # Shell command execution
-├── app.rs           # Main application & event loop
-├── commands/        # Slash command system
-│   ├── registry.rs  # Command registration
-│   ├── matcher.rs   # Fuzzy matching & tab completion
-│   └── types.rs     # Command definitions
-├── components/      # UI widgets (ratatui)
-│   ├── message.rs   # Chat view, input, status bar
-│   ├── approval.rs  # Tool approval modal
-│   ├── command_palette.rs
-│   ├── file_search.rs
-│   ├── session_switcher.rs
-│   └── textarea.rs  # Text input with cursor (from Codex)
-├── files/           # Workspace file indexing
-│   ├── workspace.rs # File discovery
-│   └── search.rs    # Fuzzy file search
-├── headless/        # Headless mode for scripting
-├── session/         # Session persistence
-│   ├── manager.rs   # List/load/save sessions
-│   ├── reader.rs    # JSONL parsing
-│   └── writer.rs    # JSONL writing
-├── terminal/        # Terminal setup & history
-│   ├── setup.rs     # Raw mode, alternate screen
-│   └── history.rs   # Scrollback buffer management
-├── themes/          # Theme system
-├── state.rs         # Application state
-├── markdown.rs      # Markdown rendering
-├── syntax.rs        # Syntax highlighting (tree-sitter)
-├── diff.rs          # Diff display
-└── wrapping.rs      # Text wrapping utilities
-```
+| Source | Responsibility |
+| --- | --- |
+| `src/app/` | Interactive application, input handlers, and startup |
+| `src/commands/` | Slash commands |
+| `src/components/` | Application widgets and dialog boxes |
+| `src/state.rs` | Application state |
+| `src/entrypoint.rs` | CLI target routing |
+| `src/lib.rs` | Public module surface and compatibility re-exports |
+
+Use the crate table for extracted implementations. Re-exported paths such as
+`maestro_tui::tools` do not imply a `src/tools/` implementation in this crate.
 
 ## Keyboard Shortcuts
 
@@ -191,7 +149,8 @@ src/
 | `Ctrl+K` | Unified resource palette |
 | `Ctrl+O` | Session switcher |
 | `Ctrl+T` | Toggle last tool call details |
-| `Tab` | Toggle thinking / Cycle completions |
+| `Shift+Tab` | Cycle thinking effort for the selected model |
+| `Tab` | Context-dependent completion, suggestion, or follow-up action |
 | `@` | File search (in input) |
 | `/` | Slash command (in input) |
 | `↑/↓` | Navigate history/lists |

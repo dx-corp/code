@@ -1,6 +1,11 @@
 # DO Session Hub (Prototype)
 
-Minimal Durable Objects session hub example for Maestro.
+Historical Durable Objects session hub prototype for Maestro.
+
+This directory now retains only this README and `wrangler.toml`. The configured
+entrypoint `src/worker.ts` is absent, so the recorded local commands cannot run
+from this checkout. The behavior and commands below describe the earlier
+prototype; they are retained as design history.
 
 ## What it shows
 
@@ -16,7 +21,7 @@ Minimal Durable Objects session hub example for Maestro.
 - Backpressure or rate limiting
 - Full event replay
 
-## Run locally (Cloudflare Workers)
+## Historical local commands (Cloudflare Workers)
 
 1. Install `wrangler`
 2. `wrangler dev` from this directory
@@ -28,4 +33,4 @@ Minimal Durable Objects session hub example for Maestro.
 ## Notes
 
 This is a prototype and not wired into Maestro's build. The demo replay button fetches
-events in pages of 100 (up to 5 pages per click); click Replay again to continue.
+events in pages of 100 (up to 5 pages per select); select Replay again to continue.

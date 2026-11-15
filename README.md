@@ -31,7 +31,10 @@ curl -fsSL https://raw.githubusercontent.com/evalops/maestro/main/scripts/instal
 deixic-code --version
 ```
 
-To build and install the checked-out source from the Mono root:
+The source installer below builds on the machine where it runs. Agents in Mono
+follow the [Rust build-host instructions](../../docs/development.md#rust-builds-for-agents);
+they do not run this installer on the Mac. For a developer building and installing
+the checked-out source, run from the Mono root:
 
 ```sh
 bash products/maestro/scripts/install-native-local.sh
@@ -148,10 +151,17 @@ Rust owns every agent/runtime path:
 - `packages/session-history-rs`: remote redacted session-history adapter
 - `packages/runtime-gateway-rs`: HTTP/SSE/WebSocket runtime gateway
 
-The repository contains no TypeScript source or TypeScript build toolchain. Agent execution, protocols, adapters, CLI, and TUI are Rust.
+Agent execution, protocols, adapters, CLI, and TUI are Rust. The separate
+[desktop client](desktop/README.md) uses Electron and React and connects to the
+native runtime. Its dependencies are managed in `desktop/`.
+
+Run these commands from `products/maestro` in Mono, or from the root of the
+standalone Code checkout. In Mono, agents use the
+[approved Rust build host](../../docs/development.md#rust-builds-for-agents)
+for Cargo commands, including npm scripts that invoke Cargo.
 
 ```sh
-cargo test --workspace --locked
+cargo test --locked -p maestro-runtime
 npm run check:rust-only-runtime
 ```
 

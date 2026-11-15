@@ -30,9 +30,8 @@ Maestro ships three system skills for common EvalOps operator workflows:
   mitigation, and preserves evidence.
 
 Each package includes `SKILL.md`, scoped `reference/` guidance, bounded
-`mcp.json`, and executable `toolbox/` helpers for Unix and Windows shells. They
-are scored by `npm run evals:skill-package` alongside the synthetic pass/fail
-corpus.
+`mcp.json`, and executable `toolbox/` helpers for Unix and Windows shells. Use `maestro skill eval <package-path>` to inspect their package checks.
+The current `package.json` has no `evals:skill-package` script.
 
 ## Bundled MCP Server
 
@@ -88,7 +87,7 @@ Use this manifest in harnesses and adapters when you need to see which
 references, toolbox executables, MCP servers, and tool bounds become active. MCP
 environment values remain in `mcp.json`; they are not copied into the activation
 manifest. Servers with missing or malformed `includeTools` are reported as
-warnings and omitted from the activatable server list.
+warnings and omitted from the available server list.
 
 ## Eval Harness
 
@@ -102,10 +101,10 @@ maestro skill eval .maestro/skills/reviewing-prs --json
 
 The eval harness scores each package against the local Agent Core constraints:
 loadable `SKILL.md`, bounded MCP `includeTools`, runnable toolbox entries, and
-the progressive-disclosure budget. The checked-in smoke corpus runs with:
+the progressive-disclosure budget. Evaluate the selected package with:
 
 ```bash
-npm run evals:skill-package
+maestro skill eval .maestro/skills/reviewing-prs --json
 ```
 
 ## OSS Publish And Install
@@ -133,8 +132,8 @@ maestro skill publish-check ./packages/review-skills --json
 ```
 
 The emitted install hint mirrors the checked source. Local checks print a
-`local:` command, git checks print the stable `git:` spec, and npm checks print
-the npm install spec rather than inferring one from package metadata.
+`local:` command, git checks print the stable `git:` specification, and npm checks print
+the npm install specification rather than inferring one from package metadata.
 
 Consumers install through the same package runtime used by the TUI package
 commands:

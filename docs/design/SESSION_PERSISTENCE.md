@@ -1,6 +1,6 @@
 # Session Recovery & Persistence Design
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Session persistence now lives in `packages/tui-rs/src/session/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Session persistence now lives in `packages/session-rs/src/session/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 The session management system enables conversation persistence, crash recovery, and session branching. Sessions are stored as JSONL files with buffered writes and atomic operations.

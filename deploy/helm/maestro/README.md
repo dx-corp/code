@@ -4,7 +4,9 @@ This chart runs the standalone native Deixic Code image. It does not promote
 Platform's separately signed `platform/maestro` image or dispatch a Platform
 production deployment.
 
-The image publisher creates `main`, `latest`, and full/short `sha-*` tags.
+The standalone image publisher creates `main`, `latest`, and short `sha-*`
+tags for main pushes. Its recovery path can publish a full `sha-*` tag; do not
+assume that every commit has both tag lengths.
 An empty `image.tag` uses `main` with `pullPolicy: Always`. For a repeatable
 release, set `image.digest` or `image.tag` to the reviewed immutable image.
 `image.digest` takes precedence over a tag. Registry access is configured
