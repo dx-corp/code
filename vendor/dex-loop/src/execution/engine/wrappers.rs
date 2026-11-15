@@ -21,6 +21,54 @@ where
             .find(|wrapper| &wrapper.spec.name == name)
     }
 
+    /// `args` of a proposed call to `name` as the engine runs them, with
+    /// what it interpreted (`crate::arguments`). A call a wrapper routed
+    /// (`offered` is the wrapper's schema) leaves out fields only another
+    /// route takes; every call accepts obvious variants of its tool's
+    /// declared fields and values. A read also takes the one correction of
+    /// arguments with exactly one candidate per problem; a change never does,
+    /// so a suggestion for it is refused with the suggestion instead. Calls
+    /// the engine handles itself, unknown tools and arguments the layer
+    /// refuses keep the model's arguments, so dispatch reports what to fix.
+    pub(super) fn interpret_arguments(
+        &self,
+        name: &ToolName,
+        args: serde_json::Value,
+        offered: Option<&serde_json::Value>,
+    ) -> (serde_json::Value, Vec<String>) {
+        if [TOOLS_SEARCH, TOOLS_CALL, CODEMODE, ACT].contains(&name.as_str())
+            || self.wrapper(name).is_some()
+        {
+            return (args, Vec::new());
+        }
+        let Some(spec) = self.tools.spec(name) else {
+            return (args, Vec::new());
+        };
+        let Some(object) = args.as_object() else {
+            return (args, Vec::new());
+        };
+        let result = match offered {
+            Some(offered) => crate::arguments::route(&spec.schema, offered, object),
+            None => crate::arguments::normalize(&spec.schema, object),
+        };
+        let normalized = match result {
+            Ok(normalized) => normalized,
+            Err(refused) => match refused.corrected() {
+                Some(corrected) if spec.read_only => corrected,
+                _ => return (args, Vec::new()),
+            },
+        };
+        if normalized.interpreted.is_empty() {
+            return (args, Vec::new());
+        }
+        let notes = normalized
+            .interpreted
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        (serde_json::Value::Object(normalized.args), notes)
+    }
+
     /// Whether a declared wrapper routes to `name`, which makes it callable.
     pub(super) fn routed_by_wrapper(&self, name: &ToolName) -> bool {
         self.tools

@@ -204,3 +204,101 @@ async fn value_routes_split_one_field_and_a_wrapper_can_replace_tools_search() {
     );
     assert_eq!(log.rehydrate(), ctx);
 }
+
+/// `search` as Dex declares it: the union of its routes' fields, so every
+/// field is offered for every scope. Each routed tool's own schema is closed.
+fn scoped_search() -> (dex_loop::ToolWrapper, Vec<ToolSpec>) {
+    let closed = |name: &str, properties: serde_json::Value| ToolSpec {
+        schema: json!({"type": "object", "additionalProperties": false, "properties": properties}),
+        ..hidden_read_tool(name)
+    };
+    let find = closed(
+        "x.find",
+        json!({"scope": {"type": "string"}, "query": {"type": "string"},
+            "limit": {"type": "integer"}, "cursor": {"type": "string"}}),
+    );
+    let describe = closed(
+        "x.describe",
+        json!({"scope": {"type": "string"}, "name": {"type": "string"},
+            "offset": {"type": "integer"}}),
+    );
+    let mut wrapper = search_wrapper();
+    wrapper.spec.schema = json!({"type": "object", "additionalProperties": false, "properties": {
+        "scope": {"type": "string"}, "query": {"type": "string"}, "limit": {"type": "integer"},
+        "cursor": {"type": "string"}, "name": {"type": "string"}, "offset": {"type": "integer"}}});
+    (wrapper, vec![find, describe])
+}
+
+// Production shape (dex_tool_arguments_rejected tool=dex.describe, the
+// stalled turn operating_turn_3af07df2): `search` offers find's fields for
+// every scope, and a describe-scoped call that carried them was refused by
+// dex.describe on every step. The routed call now runs with only the fields
+// its tool declares, and says what it left out; a field no route declares is
+// still refused, naming the fields and a valid call.
+#[tokio::test]
+async fn a_scoped_call_sends_its_tool_only_the_fields_it_declares() {
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![
+        vec![
+            call(
+                "search",
+                json!({"scope": "capabilities", "query": "assign training", "limit": 5}),
+            ),
+            call(
+                "search",
+                json!({"scope": "records", "query": "acme", "offset": 10}),
+            ),
+            call("search", json!({"scope": "capabilities", "owner": "me"})),
+        ],
+        vec![text("done")],
+    ]);
+    let (wrapper, specs) = scoped_search();
+    let tools = FakeTools::new(specs).wrappers(vec![wrapper]);
+    let engine = engine(&log, &model, &tools, budget());
+    let mut ctx = log.start_turn("t1", "what can you do");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(
+        tools.run_of(&CallId::new("t1-1-0")).args,
+        json!({"scope": "capabilities"})
+    );
+    assert_eq!(
+        tools.run_of(&CallId::new("t1-1-1")).args,
+        json!({"scope": "records", "query": "acme"})
+    );
+    let proposed = ctx
+        .history()
+        .iter()
+        .find_map(|entry| match &entry.message {
+            dex_loop::Message::Assistant { calls, .. } if calls.len() == 3 => Some(calls.clone()),
+            _ => None,
+        })
+        .expect("step one's calls");
+    assert_eq!(proposed[0].tool, ToolName::new("x.describe"));
+    assert_eq!(
+        proposed[0].interpreted,
+        [
+            "left out limit 5: the tool this call routes to does not take it",
+            "left out query \"assign training\": the tool this call routes to does not take it",
+        ]
+    );
+    assert_eq!(
+        proposed[1].interpreted,
+        ["left out offset 10: the tool this call routes to does not take it"]
+    );
+    // A field neither route declares is not dropped: the call is refused,
+    // naming the tool's fields and a valid call, and does not run.
+    assert!(!tools.run_ids().contains(&"t1-1-2".to_owned()));
+    let results = view(&model.seen()[1]).join("\n");
+    assert!(
+        results.contains("owner is not a field here. Its fields are: name, offset, scope."),
+        "{results}"
+    );
+    assert!(
+        results.contains(r#"A valid call built from its schema: {"scope":"capabilities"}"#),
+        "{results}"
+    );
+    assert_eq!(log.rehydrate(), ctx);
+}
