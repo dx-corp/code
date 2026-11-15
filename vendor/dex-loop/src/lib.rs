@@ -22,6 +22,8 @@
 #[cfg(test)]
 extern crate self as dex_loop;
 
+#[path = "execution/arguments.rs"]
+pub mod arguments;
 #[path = "context/asker.rs"]
 mod asker;
 #[path = "execution/budget/mod.rs"]
