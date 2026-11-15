@@ -36,11 +36,11 @@ action boundary.
 Every native tool declares and validates its JSON input contract before
 execution. Serde-backed argument types apply defaults and reject malformed or
 incompatible fields with a structured tool error. Definitions and dispatch live
-under `packages/tui-rs/src/tools`.
+under `packages/local-host-rs/src/tools`.
 
 ## Error Handling for Tool Authors
 
-Implement tools through the native registry in `packages/tui-rs/src/tools/registry`.
+Implement tools through the native registry in `packages/local-host-rs/src/tools/registry`.
 Return typed errors instead of successful text that merely describes a failure;
 the protocol layer maps them to `isError: true`. Sanitize secrets and absolute
 paths before attaching diagnostic context, and preserve retryable versus terminal
@@ -50,10 +50,10 @@ error distinctions.
 
 | Tool | Description | Key Options / Notes |
 | ---- | ----------- | ------------------- |
-| `background_tasks` | Runs commands in the background and manages lifecycle. | `action` supports `start`, `monitor`, `list`, `stop`, `logs`, and `waitForRotation`. `monitor` runs a shell script whose stdout lines (batched per 200ms, rate-limited, flood-stopped) become owner-scoped notifications until it exits or `timeout_ms` (default 5 min, max 30 min) elapses; stderr goes to the task log. `/monitor` attaches bounded stdout/stderr regex notifications to existing tasks; regex matches do not start model turns. |
-| `read` | Reads file contents with syntax-aware chunking. Supports text, images, PDFs, and Jupyter notebooks. | Accepts `path`, optional `startLine`/`endLine`. Images are optimized with Sharp if available. PDFs are extracted to text. Notebooks display formatted cells with outputs. |
+| `background_tasks` | Runs commands in the background and manages lifecycle. | `action` supports `start`, `monitor`, `list`, `stop`, `logs`, and `waitForRotation`. `monitor` runs a shell script whose `stdout` lines (batched per 200ms, rate-limited, flood-stopped) become owner-scoped notifications until it exits or `timeout_ms` (default 5 min, max 30 min) elapses; `stderr` goes to the task log. `/monitor` attaches bounded stdout/stderr regex notifications to existing tasks; regex matches do not start model turns. |
+| `read` | Reads file contents with syntax-aware chunking. Supports text, images, PDF files, and Jupyter notebooks. | Accepts `path`, optional `startLine`/`endLine`. Images are optimized with Sharp if available. PDF files are extracted to text. Notebooks display formatted cells with outputs. |
 | `list` | Lists files in a directory (non-recursive by default). | Supports glob filters and depth. Used for context discovery. |
-| `search` | Ripgrep-style text search. | Args mirror `rg` (`pattern`, `path`, `glob`). Output includes file:line matches. Default max results now capped to avoid huge responses; oversized outputs are truncated and marked. |
+| `search` | Ripgrep-style text search. | Arguments mirror `rg` (`pattern`, `path`, `glob`). Output includes file:line matches. Default max results now capped to avoid huge responses; oversized outputs are truncated and marked. |
 | `repository_symbols` | Experimental Rust symbol localization backed by a session-local incremental index. | Takes one unqualified `symbol` and optional `maxResults` (1-100). Results include definitions, referencing files, a content revision, age, and explicit truncation/skipped-file metadata. It is a search projection, not authorization evidence. |
 | `diff` | Wrapper around `git diff`. | Modes: workspace, staged, or custom ranges. Also supports `mode: "status"` (legacy) but prefer the dedicated `status` tool. |
 | `status` | Structured `git status` (porcelain v2). | Options: `branchSummary` (-b), `includeIgnored` (`--ignored=matching`), `paths`. Returns parsed status in details + summary text. |
@@ -64,9 +64,9 @@ error distinctions.
 | `todo` | Generates TodoWrite-style task lists. | Stored near the project (`~/.maestro/todos.json`). Tracks tasks independently. |
 | `notebook_edit` | Edit Jupyter notebook (.ipynb) files at the cell level. | Modes: `replace` (default), `insert`, `delete`. Identify cells by `cell_id` or `cell_index`. Specify `cell_type` (code/markdown) for inserts. |
 | `ask_user` | Ask structured questions with predefined options. | 1-4 questions per call, each with 2-4 options. Supports `multiSelect` for non-exclusive choices. "Other" option auto-added. |
-| `websearch` | Search the web via Exa AI for real-time information. | Supports neural/keyword search, domain filtering, date ranges. Requires `EXA_API_KEY` env var. Large result text is previewed with truncation and overall output is capped. |
-| `codesearch` | Search GitHub/docs/Stack Overflow for code examples via Exa Code. | Returns working code snippets with context. Requires `EXA_API_KEY` env var. |
-| `webfetch` | Fetch content from specific URLs via Exa. | Converts HTML to markdown, truncates very long content, and caps total output. Requires `EXA_API_KEY` env var. |
+| `websearch` | Search the web via `Exa` AI for real-time information. | Supports neural/keyword search, domain filtering, date ranges. Requires `EXA_API_KEY` env var. Large result text is previewed with truncation and overall output is capped. |
+| `codesearch` | Search GitHub/docs/Stack Overflow for code examples via `Exa` Code. | Returns working code snippets with context. Requires `EXA_API_KEY` env var. |
+| `webfetch` | Fetch content from specific URLs via `Exa`. | Converts HTML to markdown, truncates very long content, and caps total output. Requires `EXA_API_KEY` env var. |
 
 ## GitHub CLI Tools
 
@@ -110,7 +110,7 @@ error distinctions.
 
 ## CLI Commands
 
-For install/build/test entrypoints, use `docs/QUICKSTART.md` (canonical). Key dev helpers are `cargo run --manifest-path packages/maestro-rs/Cargo.toml -- --help`, `npm run check:scenario-replay-gate`, and `npm test`.
+For install/build/test entrypoints, use `docs/QUICKSTART.md` (canonical). Key development helpers are `cargo run --manifest-path packages/maestro-rs/Cargo.toml -- --help`, `npm run check:scenario-replay-gate`, and `npm test`.
 
 The hosted Computer console is available from the CLI and TUI. A handoff freezes
 explicit files, artifacts, and/or the current remote diff into Computer's
@@ -156,6 +156,6 @@ diff selection are required.
 
 If you add a tool, expose it in:
 
-1. `packages/tui-rs/src/tools/registry` (implementation and registration)
+1. `packages/local-host-rs/src/tools/registry` (implementation and registration)
 2. Docs (update this file + CLI help if needed)
 3. Tests/evals if the behavior is user-facing

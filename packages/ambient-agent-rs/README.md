@@ -38,8 +38,8 @@ Flow: WATCH → FILTER → DECIDE → PLAN → ROUTE → EXECUTE → CRITIQUE �
 |-----------|---------|
 | **EventBus** | Receives and normalizes events from GitHub (issues, PRs, comments) |
 | **Decider** | Determines whether to act on an event and plans the task |
-| **Cascader** | Routes tasks to appropriate model tier based on complexity |
-| **Executor** | Executes tasks by calling LLMs and applying file changes |
+| **`Cascader`** | Routes tasks to appropriate model tier based on complexity |
+| **Executor** | Executes tasks by calling language models and applying file changes |
 | **FilePermissionPolicy** | Evaluates executor writes with ordered allow/ask/deny path rules |
 | **PromptBuilder** | Renders system/user prompts from plans and bounded context |
 | **Critic** | LLM-as-Judge that reviews agent outputs before shipping |
@@ -83,11 +83,19 @@ Set `MAESTRO_AMBIENT_FRONTIER_MODEL` to pin a model such as
 `MAESTRO_AMBIENT_LLM_API=anthropic` only when intentionally testing the
 Anthropic Messages API path.
 
-## Installation
+## Build
+
+From `products/maestro` in Mono, build this package and install the binary into
+Cargo's configured bin directory:
 
 ```bash
-cargo build --release
+cargo install --locked --path packages/ambient-agent-rs
 ```
+
+Mono agents run Rust compilation on the
+[approved build host](../../../../docs/development.md#rust-builds-for-agents).
+For a build without installation, use `cargo build --locked -p ambient-agent --release`;
+the `ambient` binary is in the configured workspace target directory.
 
 ## Usage
 
@@ -208,7 +216,7 @@ ambient start --data-dir /path/to/data
 ### Run tests
 
 ```bash
-cargo test
+cargo test --locked -p ambient-agent
 ```
 
 ### Run with debug logging

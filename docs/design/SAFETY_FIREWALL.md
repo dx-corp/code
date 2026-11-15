@@ -1,9 +1,9 @@
 # Safety & Firewall System Design
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The action firewall now lives in `packages/tui-rs/src/safety/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. The action firewall now lives in `packages/local-host-rs/src/safety/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
-The action firewall is the central decision point for tool safety. Before any tool executes, it passes through the firewall which evaluates rules and returns a verdict: allow, require_approval, or block.
+The action firewall is the central decision point for tool safety. Before any tool executes, it passes through the firewall which evaluates rules and returns a verdict: allow, `require_approval`, or block.
 
 ## Overview
 
@@ -13,7 +13,7 @@ The safety system provides:
 - **Enterprise Policy**: Organizational restrictions on tools/paths
 - **Dangerous Command Detection**: Regex and tree-sitter analysis
 - **Workspace Containment**: Prevent writes outside project
-- **PII Protection**: Block egress of unredacted sensitive data
+- **PII Protection**: Block egress of sensitive data
 - **Semantic Analysis**: Optional LLM-based intent verification
 
 ## Architecture

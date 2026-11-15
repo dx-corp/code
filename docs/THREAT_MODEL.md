@@ -46,7 +46,7 @@ output is not authorization by itself.
 
 **Threat:** Instructions embedded in repository files, web content, MCP
 responses, or model output attempt to change the task, gain authority, or
-exfiltrate data.
+steal data.
 
 **Controls:**
 
@@ -79,7 +79,7 @@ modify the host, escalate privileges, or destroy data.
 - `MAESTRO_NO_EGRESS_SHELL=1` makes shell egress primitives such as `curl`,
   `wget`, `ssh`, `scp`, and `nc` approval-gated.
 - `packages/sandbox-rs/src/lib.rs` provides native child-process enforcement:
-  Seatbelt on macOS and Landlock plus seccomp on Linux. `read-only` and
+  Seatbelt on macOS and `Landlock` plus `seccomp` on Linux. `read-only` and
   `workspace-write` restrict the child; `danger-full-access` deliberately
   does not.
 
@@ -99,7 +99,7 @@ symlink to a protected path, or uses traversal to reach host data.
 
 **Controls:**
 
-- `packages/local-host-rs/src/safety/path_containment.rs` canonicalizes paths where
+- `packages/local-host-rs/src/safety/path_containment.rs` resolves paths where
   possible and checks traversal, workspace/safe-zone containment, and
   protected system paths.
 - The firewall applies these checks to read, write, edit, search, and related
@@ -113,7 +113,7 @@ symlink to a protected path, or uses traversal to reach host data.
 workspace access as a substitute for OS isolation when the repository is
 hostile.
 
-### Network access and data exfiltration
+### Network access and data theft
 
 **Threat:** The agent sends source, credentials, or private-network requests
 to an attacker-controlled endpoint.
@@ -142,14 +142,14 @@ logs, approval prompts, or human-facing tools.
 
 **Controls:**
 
-- `packages/tui-rs/src/agent/credential_store.rs` redacts recognized
+- `packages/runtime-rs/src/agent/credential_store.rs` redacts recognized
   credential formats in tool arguments and JSON/text output, while preserving
   internal credential references where required.
-- Sandboxed and unsandboxed child-command helpers clear the inherited
+- Sandbox-protected and unrestricted child-command helpers clear the inherited
   environment and pass only the filtered environment constructed by the
   executor.
 - `safety/workflow_state.rs` tracks PII capture/redaction state and the
-  firewall can block unredacted PII before a human-facing egress tool.
+  firewall can block unfiltered PII before a human-facing egress tool.
 - Sensitive path names are approval-gated by the firewall.
 
 **Residual risk:** High. Pattern-based redaction is not perfect, file contents
@@ -252,7 +252,7 @@ For a local or shared deployment:
   and configure CSRF for remote access.
 - Keep approval mode at prompt or fail for untrusted work. Do not combine
   automatic approval with `danger-full-access`.
-- Select `read-only` or `workspace-write` sandboxing where the host supports
+- Select `read-only` or `workspace-write` sandbox enforcement where the host supports
   it, and verify `/sandbox` in the TUI.
 - Set `MAESTRO_NO_EGRESS_SHELL=1` for sensitive work and review MCP servers.
 - Prefer signed releases and set `MAESTRO_REQUIRE_SIGNED_INSTALL=1` when

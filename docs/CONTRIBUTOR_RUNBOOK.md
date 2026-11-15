@@ -1,64 +1,69 @@
-# Contributor Runbook
+# Contributor runbook
 
-Audience: engineers touching code; use as the day-one checklist.  
-Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md) · [Tools Reference](TOOLS_REFERENCE.md) · [Safety](SAFETY.md)
+Run commands from `products/maestro` in Mono, or the root of the standalone
+Code checkout. Start with [Contributing](../CONTRIBUTING.md) for package
+selection and the [documentation index](README.md) for runtime guides.
 
-## 0. Clone and install
+## Setup
 
-- Install stable Rust and Node.js 22 or newer.
-- `package.json` has zero runtime dependencies and one locked, test-only development dependency. Run `npm ci` before repository and workflow contract tests; Node otherwise runs the native packaging and repository-check scripts under `scripts/`.
-- Export provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) or place them in `~/.maestro/keys.json`.
+Use Mono's [pinned toolchain](../../../mise.toml). Node runs packaging and
+repository checks; Rust builds the CLI, TUI, and runtime gateway. Install
+locked script dependencies with `npm ci`.
 
-## 1. Build and verify
+Mono agents run Rust builds and tests on the
+[approved build host](../../../docs/development.md#rust-builds-for-agents),
+including npm scripts that invoke Cargo.
 
-```bash
-npm run check
-npm run lint
-npm test
+```sh
+npm ci
 npm run build
-npm run smoke:release-native-only
+./bin/deixic-code --version
+./bin/deixic-code setup
 ```
 
-Product code, protocols, adapters, CLI, TUI, and the runtime gateway are Rust.
+`setup` reports authentication/configuration state and the next setup step.
+Use [Models](MODELS.md) for supported inference routes and configuration.
+Repository checks do not require a provider key; a model-backed coding turn
+requires an authorized inference route.
 
-## 2. Inner loop
+## Development
 
-- Interactive TUI: `cargo run --manifest-path packages/maestro-rs/Cargo.toml`
-- One-shot CLI: `cargo run --manifest-path packages/maestro-rs/Cargo.toml -- exec "summarize this repository"`
-- Web runtime gateway: `cargo run --manifest-path packages/maestro-rs/Cargo.toml -- web --port 3000`
-- Focused crate test: `cargo test --manifest-path packages/tui-rs/Cargo.toml <test-name>`
+```sh
+cargo run --locked -p maestro -- --help
+cargo run --locked -p maestro -- exec "summarize this repository"
+cargo run --locked -p maestro -- serve --port 3000
+```
 
-## 3. Safety checks
+The gateway command remains running. From another terminal,
+`curl http://127.0.0.1:3000/healthz` checks process health. Read
+[Safety](SAFETY.md) before exposing a gateway or changing approvals.
 
-- Approvals/firewall: see `docs/SAFETY.md`; exposed web auto-approval should be paired with Docker or authentication.
-- The Rust-only guards run through `npm run check:rust-only-runtime`.
+For UI work, use `./dev ui list` and `./dev ui inspect <story>` to find the
+owning adapter and its verification commands. See the
+[UI contributor workflow](ui-contributor-workflow.md).
 
-<!--
-  Removed: "Run `scripts/guardian.sh --staged` (or `/guardian` in the TUI) before
-  commits." The script was deleted wholesale in the Rust-only runtime migration
-  (#3016, merged 2026-07-22) with no Rust replacement and no surviving `/guardian`
-  TUI command. Re-add once an owner decides whether guardian's pre-commit checks
-  get reimplemented natively or are superseded by `cargo clippy`/`cargo fmt --check`.
--->
+## Verify the changed package
 
-## 4. Docs and references
+```sh
+npm run check:rust-only-runtime
+cargo fmt --all --check
+cargo clippy --locked -p maestro-tui --all-targets -- -D warnings
+cargo test --locked -p maestro-tui <test-name>
+```
 
-- TUI/CLI UX: `docs/FEATURES.md`
-- Tool behavior: `docs/TOOLS_REFERENCE.md`
-- Native crates: `packages/maestro-rs`, `packages/tui-rs`, `packages/runtime-gateway-rs`, and `packages/ambient-agent-rs`
-- Historical design documents are reference material, not current build instructions.
+Replace the package and test filter with the affected scope. Select relevant
+consumers when shared contracts change. `npm run check`, `npm run lint`, and
+`npm test` include workspace-wide Cargo commands; use the Mono build-host
+instructions for agent verification. Release checks and packed-install smoke
+requirements are described in [Contributing](../CONTRIBUTING.md#verification).
 
-## 5. Pre-PR checklist
+Record the tested commit, commands, results, and omitted checks in the pull
+request. Update current documentation when flags or behavior change.
+Historical designs do not establish current runtime behavior.
 
-- `npm run check`
-- `npm run lint`
-- `npm test`
-- `npm run build`
-- Update canonical docs when flags or behavior change.
+## References
 
-## 6. Troubleshooting
-
-- Missing keys: `maestro --diag`
-- Approval blocks: check `docs/SAFETY.md`
-- Runtime gateway: `curl http://localhost:3000/api/health`
-- Sessions: see `docs/SESSIONS.md`
+- [Features](FEATURES.md): CLI and TUI behavior.
+- [Tools reference](TOOLS_REFERENCE.md): commands and flags.
+- [Sessions](SESSIONS.md): persistence and continuation.
+- [Architecture](ARCHITECTURE.md): native crate boundaries.

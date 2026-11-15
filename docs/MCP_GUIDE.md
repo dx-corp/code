@@ -1,9 +1,9 @@
 # MCP Server Integration Guide
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. MCP integration now lives in `packages/tui-rs/src/mcp/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. MCP integration now lives in `packages/local-host-rs/src/mcp/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
-Contents: [What is MCP?](#what-is-mcp) · [Quick Start](#quick-start) · [Configuration](#configuration) · [Usage](#usage) · [Troubleshooting](#troubleshooting)
+Contents: [What is MCP?](#what-is-mcp) · [Quick Start](#quick-start) · [Configuration](#configuration) · [Resources and prompts](#resources-and-prompts) · [Troubleshooting](#troubleshooting)
 
 This guide explains how to create, configure, and use custom MCP (Model Context Protocol) servers with Deixic Code.
 
@@ -117,7 +117,7 @@ Deixic Code supports two configuration formats:
 Deixic Code auto-detects the transport type:
 
 - **stdio**: Default when `command` is provided
-- **sse**: When URL contains `/sse` or `sse` subdomain
+- **`sse`**: When URL contains `/sse` or `sse` subdomain
 - **http**: For other URLs
 
 ### EvalOps Knowledge MCP
@@ -143,7 +143,7 @@ For Knowledge, set scopes deliberately:
 - `cerebro:read` exposes `knowledge_search`, `knowledge_gather_facts`,
   `knowledge_debug_beliefs`, and the other read tools.
 - `cerebro:assert` additionally exposes `knowledge_assert_fact` for explicit,
-  evidence-backed session learnings.
+  evidence-backed session findings.
 
 Agents should search or gather facts before asserting. Use
 `knowledge_assert_fact` only when the session learned durable context that future
@@ -178,7 +178,7 @@ Optional runtime settings:
 
 Deixic Code launches Fathom with the `canonical` profile by default so desktop
 computer-use stays focused. The canonical profile keeps observation,
-activation, native click/context-menu, focused text entry, visible-text
+activation, native selection and context menus, focused text entry, visible-text
 selection, structured controls, keyboard, and tool-search primitives. Broad
 diagnostic primitives such as raw drag, paste, move-mouse, low-level scroll, and
 window mutation stay behind the explicit `full`/`debug` profiles. File
@@ -359,7 +359,7 @@ MCP tools can include behavior hints that Deixic Code respects:
 |------------|---------|
 | `readOnlyHint` | Tool doesn't modify its environment |
 | `destructiveHint` | Tool may perform destructive updates |
-| `idempotentHint` | Safe to call repeatedly with same args |
+| `idempotentHint` | Safe to call repeatedly with same arguments |
 | `openWorldHint` | Tool interacts with external systems |
 
 ## Resources and Prompts
@@ -495,7 +495,7 @@ watch("./src", { recursive: true }, (event, filename) => {
 
 ### Server crashes on startup
 
-- Check stderr output from the server
+- Check `stderr` output from the server
 - Ensure all dependencies are installed
 - Verify the working directory (`cwd`) is correct
 
@@ -504,7 +504,7 @@ watch("./src", { recursive: true }, (event, filename) => {
 1. **Environment Isolation**: MCP servers only receive explicitly configured env vars
 2. **Input Validation**: Always validate tool inputs before execution
 3. **Principle of Least Privilege**: Only expose necessary tools
-4. **Secrets Management**: Use env vars for API keys, never hardcode
+4. **Secrets Management**: Use env vars for API keys, never embed
 
 ## API Reference
 

@@ -153,6 +153,9 @@ cargo test --locked -p maestro-dex-host --test recovery_contract
 
 ## Checks
 
+Agents run Rust commands on dev-desktop through cargo-slot; see the
+[build recipes](../../../../docs/development.md#rust-builds-for-agents).
+
 From the public repository root:
 
 ```bash

@@ -1,6 +1,6 @@
 # Headless Control Plane Design
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless/remote runtime code now lives in `packages/tui-rs/src/headless/` and `packages/runtime-gateway-rs`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. Headless/remote runtime code now lives in `packages/local-host-rs/src/headless/` and `packages/runtime-gateway-rs`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 This document describes the next architectural step for Maestro's headless and remote runtime stack. It builds on the current `src/server/headless-runtime-service.ts` and Rust remote transport work, and uses OpenAI Codex's `codex-rs/app-server` as a reference point for stronger lifecycle and protocol discipline.
@@ -12,7 +12,7 @@ Maestro already supports:
 - long-lived headless runtimes with replayable cursors
 - HTTP + SSE remote attach
 - Rust-side local/remote transport unification
-- state replay and reconnect support in `packages/tui-rs/src/headless`
+- state replay and reconnect support in `packages/local-host-rs/src/headless`
 
 Those features are useful, but the server is still mostly **runtime-centric**:
 
@@ -472,7 +472,7 @@ Update:
 - `src/server/headless-runtime-service.ts`
 - `src/cli/headless-protocol.ts`
 
-Deliverables:
+Outputs:
 
 - new internal `ServerRequest` model
 - replayable `server_request` and `server_request_resolved`
@@ -485,7 +485,7 @@ Update:
 - `src/server/headless-runtime-service.ts`
 - `src/server/handlers/headless-sessions.ts`
 
-Deliverables:
+Outputs:
 
 - mailbox-backed delivery
 - overflow handling
@@ -503,7 +503,7 @@ Update:
 - `src/server/handlers/headless-sessions.ts`
 - `packages/local-host-rs/src/headless/remote_transport.rs`
 
-Deliverables:
+Outputs:
 
 - `hello`
 - negotiated capabilities
@@ -517,7 +517,7 @@ Update:
 - `src/server/handlers/headless-sessions.ts`
 - client transports
 
-Deliverables:
+Outputs:
 
 - explicit subscriber lifecycle
 - deterministic unload rules
@@ -528,10 +528,10 @@ Create:
 
 - `src/server/headless-in-process-host.ts`
 
-Deliverables:
+Outputs:
 
 - in-process control-plane client
-- no HTTP or stdio boundary required for local embedders
+- no HTTP or stdio boundary required for local embedding clients
 
 ## Testing Strategy
 

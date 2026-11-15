@@ -1,6 +1,6 @@
 # MCP Protocol Integration Design
 
-> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. MCP integration now lives in `packages/tui-rs/src/mcp/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
+> **Status:** This document predates the Rust-only runtime migration (#3016, #3017, merged 2026-07-22), which deleted Maestro's TypeScript agent runtime and SDK. MCP integration now lives in `packages/local-host-rs/src/mcp/`. Some file paths below may be stale; they are kept for design context and updated only where a corresponding Rust module was confirmed.
 
 
 The Model Context Protocol (MCP) integration enables dynamic tool loading from external servers, extending Maestro's capabilities through a standardized interface.

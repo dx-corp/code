@@ -1,17 +1,30 @@
 # Maestro Hook System
 
-The Rust TUI includes a comprehensive hook system for intercepting and modifying agent behavior.
+`maestro-local-host` owns hook configuration and execution. The TUI keeps
+compatibility exports under `maestro_tui::hooks`.
 
 ## Features
 
-- **Multiple backends**: Native Rust, Lua scripting, WASM plugins
-- **17 Event types**: Full lifecycle coverage from message to tool execution
+- **Multiple backends**: Native Rust, `lua` scripting, WASM plugins
+- **Event types**: `types.rs::HookEventType` declares the lifecycle events; each execution implementation supports a subset.
 - **Safety hooks**: Built-in protection against dangerous commands
 - **Metrics**: Execution timing and call counts
 - **Hot reload**: Reload hooks without restarting
 - **Notification system**: Terminal (OSC 9) and external program notifications
 
 ## Event Types
+
+The table describes the common native hook events. `types.rs` also declares
+session-tree, session-switch, branch, and stop-failure events. A declared event
+does not guarantee that each scripting implementation dispatches it.
+
+`IntegratedHookSystem` invokes the `lua` and WASM executors for `PreToolUse`.
+Their standalone executor types also define post-tool methods, but the
+integrated post-tool path calls the native registry only. External
+command and HTTP hooks support the events registered by
+`integration.rs::register_external_hook`. Prompt hooks support
+`UserPromptSubmit`. Check that registration before choosing an implementation.
+
 
 | Event | When | Can Block | Can Modify |
 |-------|------|-----------|------------|
@@ -36,8 +49,13 @@ The Rust TUI includes a comprehensive hook system for intercepting and modifying
 ## Configuration
 
 Hooks are configured via TOML files:
-- `~/.maestro/hooks.toml` - Global hooks
-- `.maestro/hooks.toml` - Project-local hooks
+- `~/.composer/hooks.toml` - Global hooks
+- `.composer/hooks.toml` - Project-local hooks
+
+The loader also accepts JSON files in those `.composer` directories. It loads
+project hooks only when the global configuration marks that workspace trusted.
+These paths are retained compatibility names; the loader does not search
+`.maestro/hooks.toml`.
 
 ### Example Configuration
 
@@ -72,23 +90,7 @@ event = "PreToolUse"
 required = false # set explicitly for advisory behavior
 wasm = "~/.maestro/plugins/safety.wasm"
 
-# Block long messages
-[[hooks]]
-event = "PreMessage"
-lua = """
-if #message > 100000 then
-    return { block = true, reason = "Message too long" }
-end
-return { continue = true }
-"""
 
-# Log errors
-[[hooks]]
-event = "OnError"
-lua = """
-print(string.format("[ERROR] %s: %s", error_kind, error))
-return { continue = true }
-"""
 ```
 
 ## Hook Types
@@ -173,16 +175,14 @@ registry.register_on_error(Arc::new(ErrorLoggerHook));
 | `SubagentStopHook` | SubagentStop | `SubagentStopInput` |
 | `PermissionRequestHook` | PermissionRequest | `PermissionRequestInput` |
 
-### Lua Hooks
+### `lua` Hooks
 
-Lua scripts receive globals and return a result table:
+`lua` scripts receive global variables and return a result table:
 
 ```lua
 -- Globals available:
 -- event_type, tool_name, tool_input, cwd, session_id
--- message, attachments, model (for PreMessage)
--- error, error_kind, context, recoverable (for OnError)
--- response, input_tokens, output_tokens, duration_ms, stop_reason (for PostMessage)
+-- PostToolUse also exposes its tool result fields; inspect lua.rs for names.
 
 -- PreToolUse example
 if tool_name == "Bash" then
@@ -206,7 +206,12 @@ return {
 }
 ```
 
-Enable with: `cargo build --features lua`
+From `products/maestro`, enable `lua` in the native CLI with
+`cargo build --locked -p maestro --features maestro-local-host/lua`.
+Agents run Rust builds on dev-desktop through cargo-slot.
+
+`LuaHookExecutor` removes `os`, `io`, `loadfile`, `dofile`, `load`, and `require`. Hooks cannot
+use those APIs for file logging or desktop notifications.
 
 ### WASM Hooks
 
@@ -240,7 +245,9 @@ linear-memory limit, bounded tables/instances, and a 1 MiB result limit.
 Required `PreToolUse` hooks block on resource, timeout, or malformed-result
 failures; hooks configured with `required = false` remain advisory.
 
-Enable with: `cargo build --features wasm`
+From `products/maestro`, enable WASM in the native CLI with
+`cargo build --locked -p maestro --features maestro-local-host/wasm`.
+Build the plugin separately for `wasm32-unknown-unknown`.
 
 ## Hook Results
 
@@ -315,7 +322,7 @@ export MAESTRO_NOTIFY_PROGRAM=/path/to/script
 export MAESTRO_NOTIFY_EVENTS=turn-complete,session-end,error
 export MAESTRO_NOTIFY_TERMINAL=true  # Enable OSC 9 notifications
 
-# Or via ~/.maestro/hooks.json
+# Or via ~/.composer/hooks.json
 {
   "notify": {
     "program": "/path/to/script",
@@ -325,7 +332,7 @@ export MAESTRO_NOTIFY_TERMINAL=true  # Enable OSC 9 notifications
 }
 ```
 
-Supported terminals for OSC 9: iTerm2, Ghostty, WezTerm, Windows Terminal
+Supported terminals for OSC 9: iTerm2, `Ghostty`, WezTerm, Windows Terminal
 
 ## Metrics
 
@@ -374,8 +381,8 @@ The TUI includes a `/hooks` command:
 
 | Flag | Description |
 |------|-------------|
-| `lua` | Enable Lua scripting (requires mlua) |
-| `wasm` | Enable WASM plugins (requires wasmtime) |
+| `lua` | Enable `lua` scripting (requires `mlua`) |
+| `wasm` | Enable WASM plugins (requires `wasmtime`) |
 | `hot-reload` | Enable file watching for auto-reload |
 | `hooks-full` | Enable all hook features |
 
@@ -383,8 +390,9 @@ The TUI includes a `/hooks` command:
 
 See `examples/hooks/` for:
 - `hooks.toml` - Full configuration example
-- `lua/safety.lua` - Lua safety hook
-- `lua/logging.lua` - Lua logging hook
+- `lua/safety.lua` - `lua` safety hook
+- `lua/logging.lua` - historical logging example; its file APIs are unavailable
+  in the current interpreter
 - `wasm-plugin/` - Complete WASM plugin example
 
 ## Use Cases
@@ -399,22 +407,6 @@ if tool_name == "Bash" then
     local cmd = tool_input.command or ""
     if cmd:match("psql.*prod") or cmd:match("mysql.*production") then
         return { block = true, reason = "Production database access blocked" }
-    end
-end
-return { continue = true }
-```
-
-### Audit Logging
-
-Log all file modifications for compliance:
-
-```lua
--- Log every file write
-if tool_name == "Write" or tool_name == "Edit" then
-    local log = io.open(os.getenv("HOME") .. "/.maestro/audit.log", "a")
-    if log then
-        log:write(os.date("%Y-%m-%d %H:%M:%S") .. " " .. tool_input.file_path .. "\n")
-        log:close()
     end
 end
 return { continue = true }
@@ -435,82 +427,9 @@ end
 return { continue = true }
 ```
 
-### Cost Control
+### Input Rewriting / Isolation
 
-Enforce token budgets per session:
-
-```toml
-[[hooks]]
-event = "PostMessage"
-lua = """
--- Track cumulative tokens (use external state file for persistence)
-local total = (input_tokens or 0) + (output_tokens or 0)
-if total > 500000 then
-    return { block = true, reason = "Session token budget (500k) exceeded" }
-end
-return { continue = true }
-"""
-```
-
-### Desktop Notifications
-
-Get notified when long-running tasks complete:
-
-```toml
-[[hooks]]
-event = "SessionEnd"
-lua = """
-os.execute('osascript -e \\'display notification \"Session complete\" with title \"Maestro\"\\'')
-return { continue = true }
-"""
-```
-
-Or use the built-in notification system:
-
-```bash
-export MAESTRO_NOTIFY_TERMINAL=true
-export MAESTRO_NOTIFY_EVENTS=turn-complete,session-end,error
-```
-
-### Auto-Approval Patterns
-
-Auto-approve safe operations without prompts:
-
-```toml
-[[hooks]]
-event = "PermissionRequest"
-lua = """
--- Auto-approve reads in safe directories
-if tool_name == "Read" then
-    local path = tool_input.file_path or tool_input.path or ""
-    if path:match("^/usr/share/") or path:match("^/etc/") then
-        return { continue = true }  -- auto-approve
-    end
-end
--- Let other requests go through normal approval
-return { continue = true }
-"""
-```
-
-### Subagent Control
-
-Restrict which agent types can be spawned:
-
-```toml
-[[hooks]]
-event = "SubagentStart"
-lua = """
-local allowed = { explore = true, plan = true }
-if not allowed[subagent_type] then
-    return { block = true, reason = "Agent type '" .. subagent_type .. "' not allowed" }
-end
-return { continue = true }
-"""
-```
-
-### Input Rewriting / Sandboxing
-
-Redirect operations to sandboxed locations:
+Redirect operations to isolated locations:
 
 ```toml
 [[hooks]]
@@ -532,64 +451,13 @@ return { continue = true }
 """
 ```
 
-### Rate Limiting
+## Verification limits
 
-Prevent runaway tool execution:
+A `Continue` result leaves execution on its existing approval path; it does
+not grant permission. A post-tool hook observes a completed call and cannot
+undo its effects. Use the budget and approval contracts for
+spend limits and authorization.
 
-```lua
--- Simple rate limiter (resets on hook reload)
-local call_count = 0
-local max_calls = 100
-
-call_count = call_count + 1
-if call_count > max_calls then
-    return { block = true, reason = "Rate limit exceeded (" .. max_calls .. " calls)" }
-end
-return { continue = true }
-```
-
-### Error Recovery
-
-Custom handling for specific error types:
-
-```toml
-[[hooks]]
-event = "OnError"
-lua = """
--- Suppress transient network errors
-if error_kind == "NetworkError" and recoverable then
-    print("[hooks] Suppressing recoverable network error: " .. error)
-    return { block = true }  -- block = suppress error propagation
-end
-return { continue = true }
-"""
-```
-
-### Eval Gating
-
-Control what outputs are acceptable for evaluation:
-
-```toml
-[[hooks]]
-event = "EvalGate"
-lua = """
--- Require non-empty output for Bash commands
-if tool_name == "Bash" and (tool_output == nil or tool_output == "") then
-    return { block = true, reason = "Bash command produced no output" }
-end
-return { continue = true }
-"""
-```
-
-## Performance
-
-Hook execution is extremely fast:
-
-| Operation | Time |
-|-----------|------|
-| System creation | ~85 ns |
-| Empty hook check | ~11 ns |
-| Safety hook execution | ~32 ns |
-| Full pre_tool_use pipeline | ~300 ns |
-
-For comparison, a typical API call takes 500-2000ms. Hook overhead is effectively invisible.
+The examples demonstrate hook inputs and result shapes. They do not establish
+complete shell-command detection, a persistent rate limiter, or measured
+execution latency. Run the affected hook tests on the approved Rust build host.

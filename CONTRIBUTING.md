@@ -1,12 +1,22 @@
 # Contributing to Deixic Code
 
-Deixic Code is developed as one Rust workspace with a thin npm distribution wrapper.
+Deixic Code's CLI, TUI, and runtime share the Rust workspace in this directory.
+The npm package distributes native binaries. The [desktop client](desktop/README.md)
+has its own JavaScript dependencies.
+
+Run commands here from `products/maestro` in Mono or from the root of the
+standalone Code checkout. Mono agents use the
+[approved Rust build host](../../docs/development.md#rust-builds-for-agents)
+for Cargo and npm scripts that invoke it.
 
 ## Setup
 
-Install current Node and stable Rust with `rustfmt` and `clippy`, then run:
+Use the Mono [pinned toolchain](../../mise.toml) when working in this repository.
+The Rust toolchain needs `rustfmt` and `clippy`. Install the locked script
+dependencies and build the native package:
 
 ```bash
+npm ci
 npm run build
 ./bin/maestro --version
 ```
@@ -18,7 +28,7 @@ npm run build
 ```bash
 cargo run -p maestro -- --help
 cargo run -p maestro -- exec "summarize this repository"
-cargo run -p maestro -- web --port 3000
+cargo run -p maestro -- serve --port 3000
 ```
 
 Use `cargo test -p <package> [test-name]` for focused work. Workspace package names include `maestro`, `maestro-tui`, `maestro-runtime`, `maestro-runtime-contracts`, `maestro-runtime-gateway`, and `ambient-agent`.
@@ -46,15 +56,20 @@ compatibility, and pull request evidence.
 
 ## Verification
 
-Before opening a pull request, run the checks relevant to the changed surface. For workspace or release changes, run the full set:
+Select the changed crate and relevant consumers for local verification:
 
 ```bash
-npm run check
+npm run check:rust-only-runtime
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-npm run release:check
+cargo clippy --locked -p maestro-runtime --all-targets -- -D warnings
+cargo test --locked -p maestro-runtime
 ```
+
+Replace `maestro-runtime` with the affected package. `npm run check`, `npm test`,
+and `npm run lint` include workspace-wide Cargo commands; they are not focused
+agent checks. [Mono development](../../docs/development.md#rust-builds-for-agents)
+owns build capacity and package selection. `npm run release:check` builds a
+release binary and runs native release smoke checks.
 
 Release changes must also pass the packed npm install smoke. The installed CLI must resolve the packaged native binary and run without a JavaScript runtime in its child `PATH`.
 

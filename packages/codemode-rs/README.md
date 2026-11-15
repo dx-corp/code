@@ -50,7 +50,7 @@ string fragment, its SHA-256 `revision`, `nextOffsetBytes`, and `complete`.
 Small schemas can be parsed with `JSON.parse(page.json)`. Larger schemas can
 be reconstructed by concatenating pages with the same revision. Byte offsets
 follow UTF-8 character boundaries; an invalid offset or page size fails explicitly.
-An unknown or unadmitted tool returns `null`. Descriptions and schemas grant no
+An unknown or unavailable tool returns `null`. Descriptions and schemas grant no
 execution authority; nested calls continue through the host's existing checks.
 
 Maestro's deferred projection sends a fixed discovery description instead of
@@ -71,7 +71,7 @@ The VM has a 32 MiB heap, a 256 KiB stack, a maximum of 64 nested calls,
 64 KiB of projected text including separators, and a hard 60-second deadline. Existing host deadlines and
 cancellation may stop it sooner. Output-limit violations remain failures even
 when the script catches the exception. A promise with no pending tool call
-fails immediately. Unawaited requests are discarded when the script finishes.
+fails immediately. Pending requests are discarded when the script finishes.
 
 Refused calls and execution failures reject their JavaScript promises. Maestro
 preserves accepted MCP server results as `{content, isError, structuredContent}`,
@@ -110,20 +110,29 @@ measure model quality or full-loop savings. The ignored configured-owner test
 in `dex-runtime` measures real answer selection only when explicitly enabled
 with authorized tenant coordinates and the existing gateway configuration.
 
-The native engine is pinned to `rquickjs` 0.13.0, published September 8, 2026,
-to retain the repository's fourteen-day dependency cooling period. Independent
+## Dependency review history
+
+`Cargo.toml` pins the native engine to `rquickjs` 0.13.0. The following
+archive-review record describes the original admission; its expiry does not
+establish current build approval. Consult the current supply chain policy
+before a build.
+
+The original review recorded publication on September 8, 2026 and applied
+the repository's fourteen-day dependency cooling period. Independent
 archive review verified the three package checksums in both Cargo locks.
 The exact `rquickjs-sys` build-script admission expires October 17, 2026.
-With default features disabled, native builds compile the vendored QuickJS C
-sources through `cc` and use bundled bindings. The optional WASI SDK downloader,
-bindgen, and dynamic loader are outside this native integration.
-The reviewed sys archive SHA-256 is
+With default features disabled, native builds compile the bundled QuickJS C
+sources through `cc` and use bundled bindings. The optional WASI SDK download helper,
+`bindgen`, and dynamic loader are outside this native integration.
+The reviewed `rquickjs-sys` archive SHA-256 is
 `53d0aaff245bed1c6f3c39e477fb6b98d710d9d298bfec7c8dfc589bed0e5cef`;
 its build script SHA-256 is
 `d1e3edaaa8d404a6fe311b9128063594f84ad17bf4b0fc742aad750cae95731b`.
+
+## Deferred tool compatibility
 
 Deferred external-tool configurations must admit both `tool_search` and `codemode`, including governed catalog replacements. This ensures that tools beyond the native schema budget remain callable. Existing embeddings that omit `codemode` can keep the default `Eager` policy.
 
 Codex persistence records a fingerprint of the fixed tool registrations. A legacy or changed projection preserves the previous binding for recovery and starts a new thread with Maestro's available semantic history; an identical projection resumes normally. Deferred catalog updates that leave the direct projection unchanged keep the same thread.
 
-The script VM initially loads tool names and invocation wrappers. `ALL_TOOLS` retains its enumerable metadata properties through memoized getters, and `models.getAvailable()` loads model metadata only when requested. Schemas remain in the immutable host catalog until accessed; JavaScript mutations do not alter host discovery or execution contracts. The 32 MiB VM heap limit remains unchanged.
+The script VM initially loads tool names and invocation wrappers. `ALL_TOOLS` retains its enumerable metadata properties through cached property read functions, and `models.getAvailable()` loads model metadata only when requested. Schemas remain in the immutable host catalog until accessed; JavaScript mutations do not alter host discovery or execution contracts. The 32 MiB VM heap limit remains unchanged.

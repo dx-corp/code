@@ -1,10 +1,10 @@
 # Safety and Action Approvals
 
 > **Status:** Current Rust runtime. The controls documented here live under
-> `packages/tui-rs/src/safety/`, `packages/sandbox-rs/src/lib.rs`, and
+> `packages/local-host-rs/src/safety/`, `packages/sandbox-rs/src/lib.rs`, and
 > `packages/runtime-gateway-rs/src/auth.rs`.
 
-Audience: operators and contributors configuring approvals and sandboxing.
+Audience: operators and contributors configuring approvals and sandbox enforcement.
 
 Nav: [Docs index](README.md) · [Quickstart](QUICKSTART.md)
 
@@ -23,7 +23,7 @@ It returns one of:
 
 For bash, the firewall combines high-severity dangerous-pattern blocks with
 parsed command analysis. The rules cover destructive operations, filesystem
-formatting, disk writes, privilege changes, shell metacharacter risk, and
+formatting, disk writes, privilege changes, shell control character risk, and
 other command shapes. File reads/writes and path-bearing tools also pass
 containment and policy checks.
 
@@ -172,16 +172,16 @@ inspect the active native policy.
 
 | Policy | Effect |
 | --- | --- |
-| `read-only` | No filesystem writes and no network access for the sandboxed child. |
+| `read-only` | No filesystem writes and no network access for the sandbox-protected child. |
 | `workspace-write` | Writes are limited to the workspace and configured writable roots; network access is explicit in the policy. |
 | `danger-full-access` | No native filesystem or network restriction. |
 
 Platform backends:
 
 - macOS: Seatbelt via `/usr/bin/sandbox-exec`;
-- Linux: Landlock for filesystem access plus seccomp for network-disabled
+- Linux: `Landlock` for filesystem access plus `seccomp` for network-disabled
   policies;
-- other platforms: native sandboxing is unavailable.
+- other platforms: native sandbox enforcement is unavailable.
 
 The interactive TUI applies the configured policy by default (`workspace-write`
 unless the config says otherwise). `MAESTRO_SANDBOX_MODE` overrides it for one
@@ -199,9 +199,9 @@ default. Avoid `bypass_sandbox` and full-access mode for untrusted work.
 
 ## Credentials and PII
 
-`packages/tui-rs/src/agent/credential_store.rs` recognizes and redacts common
+`packages/runtime-rs/src/agent/credential_store.rs` recognizes and redacts common
 credential formats in tool arguments and serialized output. The workflow
-tracker in `safety/workflow_state.rs` can block unredacted PII before
+tracker in `safety/workflow_state.rs` can block unfiltered PII before
 human-facing tools.
 
 These are pattern-based controls, not a guarantee. Do not paste long-lived
@@ -246,7 +246,7 @@ dependency-light parsing/migration leaf and is not the live approval path.
 ## Recommended operating posture
 
 - Use `prompt` or `fail` approval for untrusted work.
-- Prefer `read-only` or `workspace-write` native sandboxing.
+- Prefer `read-only` or `workspace-write` native sandbox enforcement.
 - Set `MAESTRO_NO_EGRESS_SHELL=1` for sensitive repositories.
 - Use `MAESTRO_PROFILE=prod` for shared runtime-gateway deployments.
 - Keep provider and MCP credentials short-lived and least-privileged.
