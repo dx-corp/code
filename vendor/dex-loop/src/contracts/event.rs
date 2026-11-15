@@ -350,6 +350,12 @@ pub struct AnswerClaim {
     pub partial: bool,
     /// The tool results that hold the value; never empty.
     pub sources: Vec<ClaimSource>,
+    /// For a status claim, the key of the test the read row holding the value
+    /// is stored under (`console_test_standings.test_id`), taken from that
+    /// row, never from the reply's words. `None` for a count, or when the
+    /// read declares no row identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_id: Option<String>,
 }
 
 /// A tool result a claim rests on: the call that produced it, and the owner
