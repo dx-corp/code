@@ -80,6 +80,7 @@ const NOT_RUN_WALL: &str = "not executed: the time limit was reached before this
 const UNKNOWN_NO_RETRY: &str = "outcome unknown: this call already started; do not retry it without first checking whether it took effect";
 const UNCERTAIN_REPEAT: &str = "not run: the same operation has an unknown outcome in this turn; check whether it took effect before trying again";
 const APPROVER_DECLINED: &str = "denied: the approver declined this call";
+const STALLED_ANSWER_ONLY: &str = "tool calls withheld: the identical call failed three times and was refused, and the answer-only step proposed another tool call instead of reporting the blocker";
 const APPROVAL_MISMATCH: &str = "denied: the approval does not match this call's arguments";
 const MISSING_QUESTION: &str = "invalid call: args.question must be a non-empty string";
 const MISSING_QUERY: &str = "invalid call: args.query must be a non-empty string";
@@ -602,11 +603,12 @@ where
                         control_through: ctx.control_cursor(),
                     },
                 );
-                let owned = if self.budget.answer_only(ctx.step()) {
-                    Vec::new()
-                } else {
-                    self.offered(&projected)
-                };
+                let owned =
+                    if self.budget.answer_only(ctx.step()) || projected.stalled_call_refused() {
+                        Vec::new()
+                    } else {
+                        self.offered(&projected)
+                    };
                 let tools: Vec<&ToolSpec> = owned.iter().collect();
                 let model_ctx = projected.for_model(self.budget.remaining(
                     ctx.step(),
@@ -806,7 +808,7 @@ where
                 control_through: ctx.control_cursor(),
             },
         );
-        let owned = if remaining.answer_only {
+        let owned = if remaining.answer_only || projected.stalled_call_refused() {
             Vec::new()
         } else {
             self.offered(&projected)
@@ -887,10 +889,13 @@ where
         let mut served = None;
         let mut timing = None;
         let answer_continuation = ctx.answer_continuation_started();
+        // The step budget is spent, or the stall guard already refused the
+        // identical call: this call offers no tools and must answer.
+        let stalled = ctx.stalled_call_refused();
+        let tools_withheld = self.budget.answer_only(step.saturating_sub(1)) || stalled;
         {
             // The answer-only call offers nothing, not even `tools.search`.
-            let answer_only =
-                answer_continuation || self.budget.answer_only(step.saturating_sub(1));
+            let answer_only = answer_continuation || tools_withheld;
             let owned = if answer_only {
                 Vec::new()
             } else {
@@ -1244,11 +1249,15 @@ where
                     .await?;
             }
         }
-        if !calls.is_empty() && self.budget.answer_only(step.saturating_sub(1)) {
+        if !calls.is_empty() && tools_withheld {
             // Asked for a tool on the call that offered none. Nothing can run
             // it, so the turn ends here instead of looping. (Nothing was
             // prefetched: the answer-only call offers no tools.)
-            let message = self.budget_message(ctx, BudgetAxis::Steps);
+            let message = if stalled && !self.budget.answer_only(step.saturating_sub(1)) {
+                STALLED_ANSWER_ONLY.to_owned()
+            } else {
+                self.budget_message(ctx, BudgetAxis::Steps)
+            };
             let mut events = pending_usage;
             events.push(Event::ModelAttemptAbandoned { step });
             events.push(Event::Error {

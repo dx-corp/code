@@ -19,6 +19,11 @@ type ModelObservation = (RemainingBudget, Option<String>);
 struct ObservingModel {
     seen: Arc<Mutex<Vec<ModelObservation>>>,
     stubborn: bool,
+    /// Repeats the failed call despite recovery guidance, but answers when
+    /// no tools are offered.
+    ignores_recovery: bool,
+    /// The tool it calls; `read` when empty.
+    tool: &'static str,
 }
 impl Model for ObservingModel {
     fn stream<'a>(
@@ -34,11 +39,16 @@ impl Model for ObservingModel {
             .lock()
             .expect("seen")
             .push((remaining, recovery.clone()));
-        let chunk = if (recovery.is_some() || remaining.answer_only) && !self.stubborn {
+        let heeds = remaining.answer_only || (recovery.is_some() && !self.ignores_recovery);
+        let chunk = if heeds && !self.stubborn {
             ModelChunk::Text("Blocked: the read failed; I could not verify completion.".into())
         } else {
             ModelChunk::ToolCall {
-                name: ToolName::new("read"),
+                name: ToolName::new(if self.tool.is_empty() {
+                    "read"
+                } else {
+                    self.tool
+                }),
                 args: json!({"key":"same"}),
             }
         };
@@ -52,8 +62,11 @@ struct FailingTools {
 }
 impl FailingTools {
     fn new() -> Self {
+        Self::named("read")
+    }
+    fn named(name: &str) -> Self {
         Self {
-            spec: vec![read_tool("read")],
+            spec: vec![read_tool(name)],
             calls: Arc::default(),
         }
     }
@@ -143,9 +156,52 @@ async fn stubborn_model_cannot_redispatch_stalled_reads_or_cross_answer_only_cap
     );
     assert_eq!(*tools.calls.lock().expect("calls"), 3);
     let seen = model.seen.lock().expect("seen");
-    assert_eq!(seen.len(), 6);
-    assert!(seen[5].0.answer_only);
-    assert_eq!(seen[5].0.tool_steps, 0);
+    // Three failures, one refusal, then the answer-only call: the step
+    // budget is never the thing that stops it.
+    assert_eq!(seen.len(), 5);
+    assert!(!seen[3].0.answer_only);
+    assert!(seen[4].0.answer_only);
+    assert_eq!(seen[4].0.tool_steps, 0);
+    assert_eq!(ctx, log.rehydrate());
+}
+
+#[tokio::test]
+async fn a_refused_stalled_call_withholds_tools_so_the_model_reports_the_blocker() {
+    // Production shape (turn operating_turn_3af07df2): the model repeated an
+    // identical failing `dex.describe` call through the recovery guidance and
+    // 27 stall-guard refusals, one model call each, and never answered. With
+    // a 30-step budget the old loop made 31 model calls; the turn must instead
+    // answer on the call after the first refusal.
+    let log = FakeLog::default();
+    let model = ObservingModel {
+        ignores_recovery: true,
+        tool: "dex.describe",
+        ..Default::default()
+    };
+    let tools = FailingTools::named("dex.describe");
+    let engine = Engine::new(
+        log.clone(),
+        model.clone(),
+        tools.clone(),
+        FakeEffects::default(),
+        Lexicon::default(),
+        budget(30),
+    );
+    let mut ctx = log.start_turn("t1", "describe what you can do");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(*tools.calls.lock().expect("calls"), 3);
+    let seen = model.seen.lock().expect("seen");
+    assert_eq!(seen.len(), 5, "three failures, one refusal, one answer");
+    assert!(
+        seen[..4]
+            .iter()
+            .all(|(remaining, _)| !remaining.answer_only)
+    );
+    assert!(seen[4].0.answer_only);
+    assert_eq!(seen[4].0.tool_steps, 0);
     assert_eq!(ctx, log.rehydrate());
 }
 
