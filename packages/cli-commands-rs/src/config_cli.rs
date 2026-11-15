@@ -1955,7 +1955,8 @@ fn provider_presets() -> Vec<ProviderPreset> {
             id: "openrouter",
             name: "OpenRouter",
             api: "openai-completions",
-            default_model: "openai/o4-mini",
+            default_model: crate::model_catalog::default_model_for_provider("openrouter")
+                .expect("OpenRouter has a built-in provider default"),
             base_url: Some("https://openrouter.ai/api/v1"),
             requires_api_key: true,
             api_key_env: Some("OPENROUTER_API_KEY"),
@@ -2421,6 +2422,21 @@ You are a helpful AI coding assistant.
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn openrouter_preset_names_a_bundled_route() {
+        let preset = provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == "openrouter")
+            .expect("OpenRouter preset");
+        assert!(
+            crate::model_catalog::bundled_models()
+                .iter()
+                .any(|model| model.provider == preset.id && model.id == preset.default_model),
+            "OpenRouter's preset must name one of its bundled routes: {}",
+            preset.default_model,
+        );
+    }
 
     #[test]
     fn provider_presets_take_their_limits_from_the_catalog() {

@@ -5,16 +5,18 @@
 //! shape of an answer in chat, where a person reads a message and not a
 //! report: the answer comes first, it is about four sentences or five
 //! bullets (fewer when the person asked for short, any length when they
-//! asked for the detail), it has no headings or bold-label sections, it
-//! shows no internal identifier, and when Dex cannot do something it says
-//! what it can do instead.
+//! asked for the detail), it has no headings, bold-label sections or bold
+//! for emphasis, it shows no internal identifier, when Dex cannot do
+//! something it says what it can do instead, and it ends on the answer, a
+//! commitment or a question, never on an offer left open.
 //!
 //! [`check`] reports each defect once, in [`Defect`] order. [`rewrite`]
 //! repairs what it can without losing a fact or inventing a word: an
 //! identifier in brackets goes, a sentence that only states one goes, a
-//! heading line goes, a bold label loses its bold, and a sentence that is
-//! only a disclaimer or a nameless offer goes. Length, a buried answer and a
-//! bare refusal need the writer, so they are reported.
+//! heading line goes, a bold label or phrase loses its bold, and a sentence
+//! that is only a disclaimer or a nameless offer goes. Length, a buried
+//! answer, a bare refusal and an open offer need the writer, so they are
+//! reported.
 //!
 //! The recorded cases in `evals/dex-voice/chat_cases.toml` are replies Dex
 //! posted to the founder's Slack DM and the messages the style aims for.
@@ -37,15 +39,24 @@ pub enum Defect {
     OverBudget,
     /// "I cannot ..." with nothing Dex will do instead and no question.
     BareRefusal,
+    /// Bold on a phrase inside a sentence ("You have *114 failing tests*").
+    /// A chat message carries its weight in its words.
+    BoldEmphasis,
+    /// The reply ends on an offer left open ("I can list them by owner
+    /// next."): neither a commitment ("I'll ...") nor a question the person
+    /// can answer with yes ("Want me to ...?").
+    OpenOffer,
 }
 
 /// Every defect, in order.
-pub const ALL: [Defect; 5] = [
+pub const ALL: [Defect; 7] = [
     Defect::BuriedLead,
     Defect::SectionLabel,
     Defect::InternalId,
     Defect::OverBudget,
     Defect::BareRefusal,
+    Defect::BoldEmphasis,
+    Defect::OpenOffer,
 ];
 
 impl Defect {
@@ -57,6 +68,8 @@ impl Defect {
             Defect::InternalId => "internal_id",
             Defect::OverBudget => "over_budget",
             Defect::BareRefusal => "bare_refusal",
+            Defect::BoldEmphasis => "bold_emphasis",
+            Defect::OpenOffer => "open_offer",
         }
     }
 }
@@ -180,6 +193,29 @@ const NEXT_STEPS: [&str; 14] = [
     "next:",
 ];
 
+/// How a closing sentence offers work without committing to it or asking.
+const OPEN_OFFERS: [&str; 9] = [
+    "i can ",
+    "i could ",
+    "i'm happy to ",
+    "i am happy to ",
+    "if you'd like",
+    "if you would like",
+    "if you want",
+    "if it helps",
+    "if helpful",
+];
+
+/// How a person asks what Dex is able to do. "I can ..." answers that.
+const CAPABILITY_ASKS: [&str; 6] = [
+    "can you",
+    "could you",
+    "what can",
+    "are you able",
+    "able to",
+    "something you can do",
+];
+
 /// Every defect of `text`, a reply to `question`, as the person reads it
 /// (Slack mrkdwn, or Markdown).
 pub fn check(question: &str, text: &str) -> Vec<Defect> {
@@ -211,16 +247,23 @@ pub fn check(question: &str, text: &str) -> Vec<Defect> {
     if is_bare_refusal(text) {
         found.push(Defect::BareRefusal);
     }
+    if lines.iter().any(|line| has_bold_emphasis(line, 1)) {
+        found.push(Defect::BoldEmphasis);
+    }
+    if ends_on_open_offer(question, text, &lines) {
+        found.push(Defect::OpenOffer);
+    }
     found
 }
 
 /// `text`, in the Markdown Dex wrote it in, with the defects a rewrite can
 /// remove without losing a fact: an internal id in brackets, a sentence
 /// whose only fact is an internal id, a heading line and the rule under
-/// it, the bold on a label, and a sentence that is only a disclaimer or an
-/// offer that names nothing. A reply to a person who asked for the detail
-/// keeps its headings and labels; an id the person asked about stays. Code
-/// blocks are never touched, and every other word is kept as written.
+/// it, the bold on a label or a phrase, and a sentence that is only a
+/// disclaimer or an offer that names nothing. A reply to a person who asked
+/// for the detail keeps its headings, labels and bold; an id the person
+/// asked about stays. Code blocks are never touched, and every other word
+/// is kept as written.
 pub fn rewrite(question: &str, text: &str) -> String {
     let keeps_structure = budget(question).is_none();
     let mut out: Vec<String> = Vec::new();
@@ -254,7 +297,13 @@ pub fn rewrite(question: &str, text: &str) -> String {
         } else {
             label(&rebuilt, 2).map(|(prefix, inner, rest)| format!("{prefix}{inner}{rest}"))
         };
-        let rebuilt = unlabelled.unwrap_or(rebuilt).trim_end().to_owned();
+        let rebuilt = unlabelled.unwrap_or(rebuilt);
+        let rebuilt = if keeps_structure {
+            rebuilt
+        } else {
+            without_bold(&rebuilt, 2)
+        };
+        let rebuilt = rebuilt.trim_end().to_owned();
         if rebuilt == line.trim_end() {
             out.push(line.to_owned());
             continue;
@@ -390,6 +439,109 @@ fn label(line: &str, stars: usize) -> Option<(&str, &str, &str)> {
     let (inner, rest) = leading_bold(body, stars)?;
     let is_label = inner.trim_end().ends_with(':') || rest.starts_with(':');
     (is_label && inner.chars().count() <= 80).then_some((prefix, inner, rest))
+}
+
+/// The bold spans of `line` as byte ranges, markers included, outside code
+/// spans and Slack links. `stars` is the marker: one asterisk in Slack
+/// mrkdwn, two in Markdown. A span opens on a marker that starts a word and
+/// closes on one that ends a word, so "2 * 3", "*.rs" and "s3:Get*" are not
+/// bold.
+fn bold_spans(line: &str, stars: usize) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let marker = |at: usize| {
+        at + stars <= bytes.len()
+            && bytes[at..at + stars].iter().all(|b| *b == b'*')
+            && bytes.get(at + stars) != Some(&b'*')
+            && (at == 0 || bytes[at - 1] != b'*')
+    };
+    let mut spans = Vec::new();
+    let mut open: Option<usize> = None;
+    let (mut in_code, mut in_link) = (false, false);
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'`' => in_code = !in_code,
+            b'<' if !in_code => in_link = true,
+            b'>' if !in_code => in_link = false,
+            b'*' if !in_code && !in_link && marker(at) => {
+                let before = line[..at].chars().next_back();
+                let after = line[at + stars..].chars().next();
+                match open {
+                    None if after.is_some_and(|c| !c.is_whitespace())
+                        && before.is_none_or(|c| !c.is_alphanumeric()) =>
+                    {
+                        open = Some(at);
+                    }
+                    Some(start)
+                        if before.is_some_and(|c| !c.is_whitespace())
+                            && after.is_none_or(|c| !c.is_alphanumeric())
+                            && at > start + stars =>
+                    {
+                        spans.push((start, at + stars));
+                        open = None;
+                    }
+                    _ => {}
+                }
+                at += stars;
+                continue;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    spans
+}
+
+/// Whether `line` has bold that is neither a heading nor the label that
+/// opens it: emphasis inside a sentence.
+fn has_bold_emphasis(line: &str, stars: usize) -> bool {
+    if is_heading(line, stars) {
+        return false;
+    }
+    let body = label(line, stars).map_or_else(|| after_marker(line), |(_, _, rest)| rest);
+    !bold_spans(body, stars).is_empty()
+}
+
+/// `line` with the markers of its bold spans removed and every word kept.
+fn without_bold(line: &str, stars: usize) -> String {
+    let body = after_marker(line);
+    let prefix = &line[..line.len() - body.len()];
+    let mut out = String::from(prefix);
+    let mut from = 0;
+    for (start, end) in bold_spans(body, stars) {
+        out.push_str(&body[from..start]);
+        out.push_str(&body[start + stars..end - stars]);
+        from = end;
+    }
+    out.push_str(&body[from..]);
+    out
+}
+
+/// Whether the reply ends on an offer left open: its last sentence offers
+/// work ("I can ... next.") without committing to it or asking. Not when the
+/// person asked what Dex can do, and not beside a refusal or a question,
+/// where "I can ..." is the thing Dex will do instead.
+fn ends_on_open_offer(question: &str, text: &str, lines: &[&str]) -> bool {
+    let asked = question.to_lowercase().replace('’', "'");
+    if CAPABILITY_ASKS.iter().any(|ask| asked.contains(ask)) {
+        return false;
+    }
+    let (_, prose) = split_links(&lines.join("\n"));
+    let all = sentences(&prose);
+    let Some(last) = all.last() else {
+        return false;
+    };
+    if all.iter().any(|sentence| sentence.ends_with('?')) {
+        return false;
+    }
+    let (_, whole) = split_links(text);
+    let whole = whole.to_lowercase().replace('’', "'");
+    if REFUSALS.iter().any(|refusal| whole.contains(refusal)) {
+        return false;
+    }
+    let last = last.to_lowercase().replace('’', "'");
+    let last = last.trim_start_matches(|c: char| !c.is_alphanumeric());
+    OPEN_OFFERS.iter().any(|offer| last.starts_with(offer))
 }
 
 /// Sentences outside list items, and list items. A heading is neither.

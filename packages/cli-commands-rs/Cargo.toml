@@ -40,6 +40,7 @@ libc.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 maestro-ai = { workspace = true, features = ["test-support"] }
+maestro-local-host = { workspace = true, features = ["test-support"] }
 prost = "0.14"
 
 [lints.clippy]
