@@ -187,6 +187,8 @@ mod session_context_tests {
         }))
         .unwrap()
     }
+    // Claude Haiku 4.5 is a 200k-context model on Anthropic's published
+    // context-windows list. (Claude Sonnet 4 was retired and left the catalog.)
     #[test]
     fn session_context_uses_latest_request_and_excludes_output_and_lifetime_totals() {
         let first = project(
@@ -199,7 +201,7 @@ mod session_context_tests {
                 ..Default::default()
             }),
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .unwrap();
         assert_eq!(first.used_tokens, Some(150));
@@ -212,7 +214,7 @@ mod session_context_tests {
                 ..Default::default()
             }),
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .unwrap();
         assert_eq!(last.used_tokens, Some(5));
@@ -230,7 +232,7 @@ mod session_context_tests {
                     }),
                 },
                 "anthropic",
-                "claude-sonnet-4",
+                "claude-haiku-4-5",
             )
             .is_none()
         );
@@ -267,7 +269,7 @@ mod session_context_tests {
                 ..Default::default()
             }),
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .unwrap();
         let compact = FromAgent::Compaction {
@@ -279,7 +281,7 @@ mod session_context_tests {
             continuation: None,
             timestamp: "2026-10-03T00:00:00Z".into(),
         };
-        let after = project(Some(&before), &compact, "anthropic", "claude-sonnet-4").unwrap();
+        let after = project(Some(&before), &compact, "anthropic", "claude-haiku-4-5").unwrap();
         assert_eq!(after.used_tokens, None);
         assert_eq!(after.source, ContextSource::Estimated);
         assert_eq!(after.compaction.as_ref().unwrap().tokens_before, 190_000);
@@ -290,7 +292,7 @@ mod session_context_tests {
                 ..Default::default()
             }),
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .unwrap();
         assert_eq!(observed.used_tokens, Some(1_500));
@@ -323,7 +325,7 @@ mod session_context_tests {
             &generation,
             &event,
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .await;
         let (restored, valid) = load_session_store(&state.config.session_store_path).await;
@@ -351,7 +353,7 @@ mod session_context_tests {
             &generation,
             &event,
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .await;
         assert!(
@@ -366,7 +368,7 @@ mod session_context_tests {
             &generation,
             &event,
             "anthropic",
-            "claude-sonnet-4",
+            "claude-haiku-4-5",
         )
         .await;
         assert!(state.sessions.lock().await.sessions.is_empty());

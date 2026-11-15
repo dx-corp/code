@@ -8,6 +8,29 @@
       "value": 200000,
       "source": "https://platform.claude.com/docs/en/build-with-claude/context-windows",
       "reason": "OpenRouter advertises context_length 1000000 for this route. #10159 removed this correction on the reasoning that OpenRouter sends the 1M-context beta header on its own account, so the route genuinely served 1M. That reasoning is wrong: Anthropic's context-windows page says \"For every model with a 1M-token context window, 1M is the default: you don't need a beta header\", and lists the 1M models by name without Sonnet 4.5, then says \"Other Claude models, including Claude Sonnet 4.5, have a 200k-token context window\". There is no beta path to 1M for this model, so no route can serve it. A 1M declaration lets a conversation grow past 200k input and the API returns 400 invalid_request_error, prompt is too long."
+    },
+    {
+      "id": "grok-4.3",
+      "field": "reasoning_efforts",
+      "value": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "source": "https://docs.x.ai/docs/guides/reasoning",
+      "reason": "models.dev added xhigh to grok-4.3's effort options. xAI's reasoning guide says \"xhigh\" is available on grok-4.6 and later, and that on models that do not support it requests with \"xhigh\" are treated as \"high\". Offering xhigh here would bill and label a setting the model does not have."
+    },
+    {
+      "id": "grok-4.5",
+      "field": "reasoning_efforts",
+      "value": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "source": "https://docs.x.ai/docs/guides/reasoning",
+      "reason": "models.dev added xhigh to grok-4.5's effort options. xAI's reasoning guide lists grok-4.5 with reasoning.effort \"low\" / \"medium\" / \"high\" (default) and names grok-4.5 as a model where \"xhigh\" is treated as \"high\"; xhigh starts at grok-4.6."
     }
   ]
 }

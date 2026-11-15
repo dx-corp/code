@@ -7,6 +7,7 @@ import { getGlobalInstallCommand, getPackageMetadata } from "./package-metadata.
 const checkOnly = process.argv.includes("--check");
 const { name, cliCommand, canonicalPackageName } = getPackageMetadata();
 const npmInstall = getGlobalInstallCommand("npm");
+const serverCommand = `${cliCommand} serve --port 8080`;
 const publishedPackageSummary =
 	name === canonicalPackageName
 		? `- The release workflow currently publishes \`${name}\`.`
@@ -41,9 +42,9 @@ const targets = [
 			);
 			next = replaceRequired(
 				next,
-				/^(?:composer|maestro|deixic-code) web$/m,
-				`${cliCommand} web`,
-				"JetBrains README web command",
+				/^(?:composer|maestro|deixic-code) (?:web|serve)(?: --port \d+)?$/m,
+				serverCommand,
+				"JetBrains README server command",
 			);
 			return next;
 		},
@@ -59,9 +60,9 @@ const targets = [
 			);
 			next = replaceRequired(
 				next,
-				/<code>(?:composer|maestro|deixic-code) web<\/code>/,
-				`<code>${cliCommand} web</code>`,
-				"JetBrains plugin XML web command",
+				/<code>(?:composer|maestro|deixic-code) (?:web|serve)(?: --port \d+)?<\/code>/,
+				`<code>${serverCommand}</code>`,
+				"JetBrains plugin XML server command",
 			);
 			return next;
 		},

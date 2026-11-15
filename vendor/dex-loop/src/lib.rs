@@ -28,6 +28,8 @@ pub mod arguments;
 mod asker;
 #[path = "execution/budget/mod.rs"]
 mod budget;
+#[path = "safety/chat_style.rs"]
+pub mod chat_style;
 #[path = "execution/codemode_output.rs"]
 mod codemode_output;
 #[path = "execution/codemode_state.rs"]

@@ -173,18 +173,19 @@ pub fn rewrite(text: &str) -> String {
 /// about the person's records, so dropping it loses no fact. "Bottom line:"
 /// and "let me know if" can open a sentence that does state one, so those
 /// are reported, never dropped.
-const FILLER: [&str; 6] = [
+const FILLER: [&str; 7] = [
     "isn't a verdict",
     "is not a verdict",
     "want me to fix it?",
     "want me to look?",
     "anything else i can",
     "happy to help",
+    "is there anything specific",
 ];
 
 /// Whether a sentence is only a disclaimer or an offer that names nothing.
 /// A sentence that carries a link is never one: the link is a fact.
-fn is_filler(sentence: &str) -> bool {
+pub(crate) fn is_filler(sentence: &str) -> bool {
     if sentence.contains('<') || sentence.contains("](") || sentence.contains("http") {
         return false;
     }
@@ -198,7 +199,7 @@ fn is_filler(sentence: &str) -> bool {
 /// The end of a Slack link followed by whitespace ends one too: a link that
 /// closes a line of facts ("<url|Reconnect GitHub> Want me to fix it?") is
 /// not part of the offer after it.
-fn line_sentences(line: &str) -> Vec<&str> {
+pub(crate) fn line_sentences(line: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut start = 0;
     let mut in_link = false;
@@ -243,12 +244,13 @@ const MACHINERY: [&str; 5] = [
 const DISCLAIMERS: [&str; 3] = ["isn't a verdict", "is not a verdict", "bottom line:"];
 
 /// Offers that name nothing Dex would do.
-const GENERIC_OFFERS: [&str; 5] = [
+const GENERIC_OFFERS: [&str; 6] = [
     "want me to fix it?",
     "want me to look?",
     "let me know if",
     "anything else i can",
     "happy to help",
+    "is there anything specific",
 ];
 
 /// A note's own words for "nothing needs you".
@@ -498,7 +500,7 @@ fn has_internal_id(prose: &str) -> bool {
 
 /// Slack links (`<url|label>`, `<url>`) and the text with each replaced by
 /// its label, so URLs never read as prose.
-fn split_links(text: &str) -> (Vec<(String, String)>, String) {
+pub(crate) fn split_links(text: &str) -> (Vec<(String, String)>, String) {
     let mut links = Vec::new();
     let mut prose = String::with_capacity(text.len());
     let mut rest = text;

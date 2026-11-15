@@ -19,7 +19,7 @@
     <h3>Getting Started</h3>
     <ol>
         <li>Install Deixic Code: <code>npm install -g @evalops/maestro</code> (compatibility package)</li>
-        <li>Start the web server: <code>deixic-code web</code></li>
+        <li>Start the web server: <code>deixic-code serve --port 8080</code></li>
         <li>Open the Deixic Code tool window in your IDE</li>
     </ol>
     ]]></description>
