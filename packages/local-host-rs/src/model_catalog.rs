@@ -160,7 +160,7 @@ struct VendorCorrections {
 struct VendorCorrection {
     id: String,
     field: String,
-    value: u32,
+    value: serde_json::Value,
     source: String,
 }
 
@@ -204,22 +204,38 @@ static VENDOR_CORRECTIONS: LazyLock<VendorCorrections> = LazyLock::new(|| {
 /// a vendor-verified context or output limit.
 fn apply_vendor_corrections(models: &mut [ModelInfo]) -> anyhow::Result<()> {
     for correction in &VENDOR_CORRECTIONS.corrections {
+        let tokens = || {
+            correction
+                .value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "vendor correction {} {} needs a token count",
+                        correction.id,
+                        correction.field
+                    )
+                })
+        };
         for model in models.iter_mut().filter(|model| model.id == correction.id) {
             let changed = match correction.field.as_str() {
-                "capabilities.context_tokens"
-                    if model.capabilities.context_tokens != correction.value =>
-                {
-                    model.capabilities.context_tokens = correction.value;
-                    true
+                "capabilities.context_tokens" => {
+                    let value = tokens()?;
+                    let changed = model.capabilities.context_tokens != value;
+                    model.capabilities.context_tokens = value;
+                    changed
                 }
-                "capabilities.context_tokens" => false,
-                "capabilities.output_tokens"
-                    if model.capabilities.output_tokens != Some(correction.value) =>
-                {
-                    model.capabilities.output_tokens = Some(correction.value);
-                    true
+                "capabilities.output_tokens" => {
+                    let value = tokens()?;
+                    let changed = model.capabilities.output_tokens != Some(value);
+                    model.capabilities.output_tokens = Some(value);
+                    changed
                 }
-                "capabilities.output_tokens" => false,
+                // The runtime ModelInfo carries no effort ladder: request
+                // capabilities live in maestro-ai's model_capabilities, which
+                // is pinned against the generated snapshot where the
+                // generator already applied this correction.
+                "reasoning_efforts" => false,
                 other => anyhow::bail!("unsupported vendor correction field: {other}"),
             };
             if changed {
@@ -1600,10 +1616,13 @@ mod tests {
     /// be reviewed before entering the catalog.
     #[test]
     fn every_catalogued_model_has_a_published_price() {
-        const PRICED_AT_ROUTING_TIME: [&str; 7] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 8] = [
             // https://openrouter.ai/nvidia/switchyard: billed at the chosen model's rates.
             "nvidia/switchyard",
             "openrouter/auto",
+            // https://openrouter.ai/openrouter/auto-code: the Auto Router's engine for
+            // coding agents; /api/v1/models lists its pricing as -1, like openrouter/auto.
+            "openrouter/auto-code",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
             "openrouter/fusion",
@@ -1639,9 +1658,10 @@ mod tests {
     /// The routing exceptions must stay real models, not a stale allowlist.
     #[test]
     fn every_routing_time_exception_is_still_catalogued() {
-        const PRICED_AT_ROUTING_TIME: [&str; 7] = [
+        const PRICED_AT_ROUTING_TIME: [&str; 8] = [
             "nvidia/switchyard",
             "openrouter/auto",
+            "openrouter/auto-code",
             "openrouter/auto-beta",
             "openrouter/bodybuilder",
             "openrouter/fusion",
@@ -1664,10 +1684,11 @@ mod tests {
     /// survives a regeneration.
     #[test]
     fn anthropic_context_windows_match_the_published_list() {
-        const ONE_MILLION: [&str; 11] = [
+        const ONE_MILLION: [&str; 12] = [
             "claude-haiku-5-5",
             "claude-fable-5",
             "claude-fable-5-1",
+            "claude-fable-5-2",
             "claude-opus-4-6",
             "claude-opus-4-7",
             "claude-opus-4-8",
@@ -2795,10 +2816,11 @@ mod tests {
             bundled_limits("vertex-ai/gemini-3.7-flash"),
             Some((1_048_576, Some(65_536)))
         );
-        // Sonnet 4.5 is 200k; models.dev says 1M and the snapshot carries the
-        // documented correction.
+        // Sonnet 4.5 is 200k. The direct row left the snapshot when models.dev
+        // marked it deprecated; OpenRouter's route still advertises 1M and the
+        // snapshot carries the documented correction.
         assert_eq!(
-            bundled_limits("claude-sonnet-4-5").map(|(context, _)| context),
+            bundled_limits("anthropic/claude-sonnet-4.5").map(|(context, _)| context),
             Some(200_000)
         );
         // A bare name the catalog holds only as a route resolves to it.

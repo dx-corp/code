@@ -87,6 +87,9 @@ async fn authenticated_drain_changes_readiness_and_rejects_new_work() {
 
 #[tokio::test]
 async fn drain_allows_an_admitted_http_mutation_to_finish() {
+    let _lock = ENV_LOCK.lock().await;
+    let _environment = SavedEnv::capture(RUNTIME_GATEWAY_ENV_NAMES);
+    clear_env(RUNTIME_GATEWAY_ENV_NAMES);
     let mut state = test_app_state_with_sessions(HashMap::new());
     let mut config = (*state.config).clone();
     config.api_key = Some("lifecycle-test-key".into());

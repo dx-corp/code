@@ -560,7 +560,9 @@ function applyVendorCorrections(models, corrections) {
 			missing.push(correction);
 			continue;
 		}
-		if (slot.container[slot.key] === correction.value) {
+		// Compare by value: an effort ladder is an array, and `===` would call
+		// an upstream that already agrees "applied" forever.
+		if (JSON.stringify(slot.container[slot.key]) === JSON.stringify(correction.value)) {
 			noops.push(correction);
 			continue;
 		}

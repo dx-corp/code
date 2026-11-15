@@ -1,5 +1,5 @@
 {
-  "generated_at": 1792050939,
+  "generated_at": 1794728811,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -7,6 +7,27 @@
       "field": "capabilities.context_tokens",
       "value": 200000,
       "source": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "id": "grok-4.3",
+      "field": "reasoning_efforts",
+      "value": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "source": "https://docs.x.ai/docs/guides/reasoning"
+    },
+    {
+      "id": "grok-4.5",
+      "field": "reasoning_efforts",
+      "value": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "source": "https://docs.x.ai/docs/guides/reasoning"
     }
   ],
   "models": [
@@ -80,6 +101,57 @@
         "output": 50,
         "cache_read": 0.25,
         "cache_write": 12.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "claude-fable-5-2",
+      "name": "Claude Fable 5.2",
+      "provider": "anthropic",
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "capabilities": {
+        "protocol": "anthropic",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "cost": {
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.2,
+        "cache_write": 10
+      },
+      "request_modes": {
+        "fast": {
+          "input": 16,
+          "output": 80,
+          "cache_read": 0.4,
+          "cache_write": 20,
+          "trigger": {
+            "body": {
+              "speed": "fast"
+            }
+          }
+        }
       },
       "verification": {
         "state": "catalog",
@@ -498,70 +570,6 @@
       }
     },
     {
-      "id": "claude-sonnet-4-5",
-      "name": "Claude Sonnet 4.5 (latest)",
-      "provider": "anthropic",
-      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
-      "capabilities": {
-        "protocol": "anthropic",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 64000,
-        "temperature": true
-      },
-      "input_modalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "reasoning_efforts": [],
-      "cost": {
-        "input": 3,
-        "output": 15,
-        "cache_read": 0.3,
-        "cache_write": 3.75
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "models.dev"
-      }
-    },
-    {
-      "id": "claude-sonnet-4-5-20250929",
-      "name": "Claude Sonnet 4.5",
-      "provider": "anthropic",
-      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
-      "capabilities": {
-        "protocol": "anthropic",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 64000,
-        "temperature": true
-      },
-      "input_modalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "reasoning_efforts": [],
-      "cost": {
-        "input": 3,
-        "output": 15,
-        "cache_read": 0.3,
-        "cache_write": 3.75
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "models.dev"
-      }
-    },
-    {
       "id": "claude-sonnet-4-6",
       "name": "Claude Sonnet 4.6",
       "provider": "anthropic",
@@ -685,7 +693,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
+        "context_tokens": 1048576,
         "output_tokens": 65536,
         "temperature": true
       },
@@ -700,7 +708,12 @@
       "cost": {
         "input": 2,
         "output": 12,
-        "cache_read": 0.2
+        "cache_read": 0.2,
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4
+        }
       },
       "verification": {
         "state": "catalog",
@@ -718,7 +731,7 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
+        "context_tokens": 1048576,
         "output_tokens": 65536,
         "temperature": true
       },
@@ -733,7 +746,12 @@
       "cost": {
         "input": 2,
         "output": 12,
-        "cache_read": 0.2
+        "cache_read": 0.2,
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4
+        }
       },
       "verification": {
         "state": "catalog",
@@ -1337,6 +1355,83 @@
       }
     },
     {
+      "id": "gemini-4-carbon",
+      "name": "Gemini 4 Carbon",
+      "provider": "google",
+      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy,…",
+      "capabilities": {
+        "protocol": "google",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 32768,
+        "temperature": true
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "input_audio": 2
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "name": "Gemini 4 Hydrogen",
+      "provider": "google",
+      "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context…",
+      "capabilities": {
+        "protocol": "google",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cache_read": 0.075,
+        "input_audio": 1.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
       "id": "gemini-flash-latest",
       "name": "Gemini Flash Latest",
       "provider": "google",
@@ -1413,6 +1508,48 @@
       }
     },
     {
+      "id": "gemini-pro-latest",
+      "name": "Gemini Pro Latest",
+      "provider": "google",
+      "description": "Reasoning-first Gemini preview for agentic coding and complex problem solving",
+      "capabilities": {
+        "protocol": "google",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "cost": {
+        "input": 2,
+        "output": 12,
+        "cache_read": 0.2,
+        "above_200k": {
+          "input": 4,
+          "output": 18,
+          "cache_read": 0.4
+        }
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
       "id": "gemma-4-26b-a4b-it",
       "name": "Gemma 4 26B A4B IT",
       "provider": "google",
@@ -1433,9 +1570,8 @@
       ],
       "reasoning_efforts": [],
       "cost": {
-        "input": 0.09,
-        "output": 0.3,
-        "cache_read": 0.05
+        "input": 0,
+        "output": 0
       },
       "open_weights": true,
       "verification": {
@@ -1464,8 +1600,8 @@
       ],
       "reasoning_efforts": [],
       "cost": {
-        "input": 0.2,
-        "output": 0.4
+        "input": 0,
+        "output": 0
       },
       "open_weights": true,
       "verification": {
@@ -2178,6 +2314,16 @@
               "service_tier": "priority"
             }
           }
+        },
+        "flex": {
+          "input": 1.25,
+          "output": 7.5,
+          "cache_read": 0.125,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
         }
       },
       "verification": {
@@ -2341,7 +2487,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2373,6 +2519,16 @@
           "trigger": {
             "body": {
               "service_tier": "priority"
+            }
+          }
+        },
+        "flex": {
+          "input": 2.5,
+          "output": 15,
+          "cache_read": 0.25,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
             }
           }
         }
@@ -2433,7 +2589,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2491,7 +2647,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2529,6 +2685,17 @@
               "service_tier": "priority"
             }
           }
+        },
+        "flex": {
+          "input": 0.1,
+          "output": 0.6,
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
         }
       },
       "verification": {
@@ -2549,7 +2716,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2587,6 +2754,17 @@
               "service_tier": "priority"
             }
           }
+        },
+        "flex": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
         }
       },
       "verification": {
@@ -2607,7 +2785,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2643,6 +2821,17 @@
           "trigger": {
             "body": {
               "service_tier": "priority"
+            }
+          }
+        },
+        "flex": {
+          "input": 1,
+          "output": 6,
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
             }
           }
         }
@@ -2703,6 +2892,17 @@
             }
           }
         },
+        "flex": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
+        },
         "ultrafast": {
           "input": 60,
           "output": 300,
@@ -2733,7 +2933,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2771,6 +2971,17 @@
               "service_tier": "priority"
             }
           }
+        },
+        "flex": {
+          "input": 0.05,
+          "output": 0.25,
+          "cache_read": 0.005,
+          "cache_write": 0.0625,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
         }
       },
       "verification": {
@@ -2791,7 +3002,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -2827,6 +3038,17 @@
           "trigger": {
             "body": {
               "service_tier": "priority"
+            }
+          }
+        },
+        "flex": {
+          "input": 1,
+          "output": 5,
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
             }
           }
         }
@@ -2887,6 +3109,17 @@
             }
           }
         },
+        "flex": {
+          "input": 1,
+          "output": 5,
+          "cache_read": 0.05,
+          "cache_write": 1.25,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
+            }
+          }
+        },
         "ultrafast": {
           "input": 12,
           "output": 60,
@@ -2895,6 +3128,75 @@
           "trigger": {
             "body": {
               "service_tier": "ultrafast"
+            }
+          }
+        }
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "provider": "openai",
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": true
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "cost": {
+        "input": 1,
+        "output": 5,
+        "cache_read": 0.05,
+        "cache_write": 1.25,
+        "above_200k": {
+          "input": 2,
+          "output": 7.5,
+          "cache_read": 0.1,
+          "cache_write": 2.5
+        }
+      },
+      "request_modes": {
+        "fast": {
+          "input": 2,
+          "output": 10,
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        },
+        "flex": {
+          "input": 0.5,
+          "output": 2.5,
+          "cache_read": 0.025,
+          "cache_write": 0.625,
+          "trigger": {
+            "body": {
+              "service_tier": "flex"
             }
           }
         }
@@ -2917,7 +3219,7 @@
         "streaming": true,
         "context_tokens": 1050000,
         "output_tokens": 128000,
-        "temperature": false
+        "temperature": true
       },
       "input_modalities": [
         "text",
@@ -3131,10 +3433,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 10,
-        "output": 50,
-        "cache_read": 0.25,
-        "cache_write": 12.5
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.2,
+        "cache_write": 10
       },
       "verification": {
         "state": "catalog",
@@ -3234,9 +3536,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.01368,
-        "output": 0.891,
-        "cache_read": 0.0054
+        "input": 0.038,
+        "output": 0.5,
+        "cache_read": 0.01
       },
       "verification": {
         "state": "catalog",
@@ -3259,9 +3561,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.225,
+        "input": 0.0999,
         "output": 8,
-        "cache_read": 0.23
+        "cache_read": 0.0999
       },
       "verification": {
         "state": "catalog",
@@ -3283,9 +3585,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0144,
-        "output": 0.576,
-        "cache_read": 0.0108
+        "input": 0.0434,
+        "output": 0.3,
+        "cache_read": 0.035
       },
       "verification": {
         "state": "catalog",
@@ -3304,14 +3606,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.75,
-        "output": 3.75,
+        "input": 1.5,
+        "output": 7.5,
         "cache_read": 0.075,
-        "cache_write": 0.041667
+        "cache_write": 0.083333
       },
       "verification": {
         "state": "catalog",
@@ -3330,7 +3631,6 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
@@ -3359,9 +3659,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.33,
-        "output": 24,
-        "cache_read": 0.32
+        "input": 0.1824,
+        "output": 11.0055,
+        "cache_read": 0.18
       },
       "verification": {
         "state": "catalog",
@@ -3487,10 +3787,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 2,
-        "output": 12,
-        "cache_read": 0.2,
-        "cache_write": 2.5
+        "input": 1,
+        "output": 5,
+        "cache_read": 0.05,
+        "cache_write": 1.25
       },
       "verification": {
         "state": "catalog",
@@ -3508,14 +3808,14 @@
         "vision": true,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 262144,
+        "context_tokens": 1048576,
         "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 2.5,
-        "output": 7.5,
-        "cache_read": 0.25
+        "input": 0.8,
+        "output": 3.2,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -3539,7 +3839,8 @@
       "cost": {
         "input": 2,
         "output": 6,
-        "cache_read": 0.5
+        "cache_read": 0.5,
+        "cache_write": 0
       },
       "verification": {
         "state": "catalog",
@@ -3558,12 +3859,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.036,
-        "output": 0.9,
-        "cache_read": 0.01125
+        "input": 0.0399,
+        "output": 0.0784,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -3585,9 +3887,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.05,
-        "output": 4.8,
-        "cache_read": 0.049
+        "input": 0.0699,
+        "output": 1.4,
+        "cache_read": 0.0689
       },
       "verification": {
         "state": "catalog",
@@ -3834,6 +4136,7 @@
         "output": 12.5,
         "cache_read": 0.625
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -3880,7 +4183,8 @@
       },
       "cost": {
         "input": 2.5,
-        "output": 5
+        "output": 5,
+        "cache_read": 2.5
       },
       "verification": {
         "state": "catalog",
@@ -3933,6 +4237,32 @@
         "output": 50,
         "cache_read": 0.25,
         "cache_write": 12.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5.2",
+      "name": "Anthropic: Claude Fable 5.2",
+      "provider": "openrouter",
+      "description": "Claude Fable 5.2 is Anthropic's most capable model for the most demanding technical work, with gains over Fable 5.1 in…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.2,
+        "cache_write": 10
       },
       "verification": {
         "state": "catalog",
@@ -4174,32 +4504,6 @@
       }
     },
     {
-      "id": "anthropic/claude-sonnet-4",
-      "name": "Anthropic: Claude Sonnet 4",
-      "provider": "openrouter",
-      "description": "Claude Sonnet 4 significantly enhances the capabilities of its predecessor, Sonnet 3.7, excelling in both coding and…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 64000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 3,
-        "output": 15,
-        "cache_read": 0.3,
-        "cache_write": 3.75
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "anthropic/claude-sonnet-4.5",
       "name": "Anthropic: Claude Sonnet 4.5",
       "provider": "openrouter",
@@ -4304,24 +4608,22 @@
       }
     },
     {
-      "id": "arcee-ai/trinity-large-thinking",
-      "name": "Arcee AI: Trinity Large Thinking",
+      "id": "baidu/ernie-5.5-flash-preview:free",
+      "name": "Baidu: ERNIE-5.5-Flash-Preview (free)",
       "provider": "openrouter",
-      "description": "Trinity Large Thinking is a powerful open source reasoning model from the team at Arcee AI. It shows strong…",
+      "description": "ERNIE 5.5 Flash Preview is the latest foundation model in the ERNIE family, with comprehensive improvements in coding,…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 80000,
+        "context_tokens": 1024000,
         "temperature": true
       },
       "cost": {
-        "input": 0.25,
-        "output": 0.8,
-        "cache_read": 0.06
+        "input": 0,
+        "output": 0
       },
       "verification": {
         "state": "catalog",
@@ -4329,47 +4631,24 @@
       }
     },
     {
-      "id": "bytedance-seed/seed-1.6",
-      "name": "ByteDance Seed: Seed 1.6",
+      "id": "baidu/ernie-light-dt-1.0-intl",
+      "name": "Baidu: ERNIE-Light-DT-1.0",
       "provider": "openrouter",
-      "description": "Seed 1.6 is a general-purpose model released by the ByteDance Seed team. It incorporates multimodal capabilities and…",
+      "description": "ERNIE-Light-DT-1.0 is based on open-source GLM models and includes research findings from Baidu Search's Lightning…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
-        "vision": true,
+        "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
+        "context_tokens": 1024000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.25,
-        "output": 2
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "bytedance-seed/seed-1.6-flash",
-      "name": "ByteDance Seed: Seed 1.6 Flash",
-      "provider": "openrouter",
-      "description": "Seed 1.6 Flash is an ultra-fast multimodal deep thinking model by ByteDance Seed, supporting both text and visual…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.075,
-        "output": 0.3
+        "input": 1.13,
+        "output": 3.94,
+        "cache_read": 0.113
       },
       "verification": {
         "state": "catalog",
@@ -4393,30 +4672,6 @@
       "cost": {
         "input": 0.5,
         "output": 2.5
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "bytedance-seed/seed-2.0-code",
-      "name": "ByteDance Seed: Seed-2.0-Code",
-      "provider": "openrouter",
-      "description": "Seed 2.0 Code is a model from ByteDance Seed optimized for agentic coding. It is suited for frontend development,…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.5,
-        "output": 3
       },
       "verification": {
         "state": "catalog",
@@ -4527,7 +4782,7 @@
       "description": "Command A is an open-weights 111B parameter model with a 256k context window focused on delivering great performance…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": false,
+        "tools": true,
         "vision": false,
         "reasoning": false,
         "streaming": true,
@@ -4624,7 +4879,7 @@
       "description": "Command R7B (12-2024) is a small, fast update of the Command R+ model, delivered in December 2024. It excels at RAG,…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": false,
+        "tools": true,
         "vision": false,
         "reasoning": false,
         "streaming": true,
@@ -4677,12 +4932,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 16384,
+        "output_tokens": 16000,
         "temperature": true
       },
       "cost": {
-        "input": 0.32,
-        "output": 0.89
+        "input": 0.2574,
+        "output": 1.0287
       },
       "verification": {
         "state": "catalog",
@@ -4725,37 +4980,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
         "input": 0.25,
         "output": 0.95,
         "cache_read": 0.13
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "deepseek/deepseek-r1",
-      "name": "DeepSeek: R1",
-      "provider": "openrouter",
-      "description": "DeepSeek R1 is here: Performance on par with [OpenAI o1](/openai/o1), but open-sourced and with fully open reasoning…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 64000,
-        "output_tokens": 16000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.7,
-        "output": 2.5
       },
       "verification": {
         "state": "catalog",
@@ -4774,13 +5004,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32768,
+        "output_tokens": 32000,
         "temperature": true
       },
       "cost": {
-        "input": 0.5,
-        "output": 2.15,
-        "cache_read": 0.35
+        "input": 0.571,
+        "output": 2.286
       },
       "verification": {
         "state": "catalog",
@@ -4825,9 +5054,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.259,
-        "output": 0.8,
-        "cache_read": 0.14
+        "input": 0.26,
+        "output": 0.38,
+        "cache_read": 0.13
       },
       "verification": {
         "state": "catalog",
@@ -4873,9 +5102,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.091,
-        "output": 0.182,
-        "cache_read": 0.0182
+        "input": 0.09,
+        "output": 0.18,
+        "cache_read": 0.018
       },
       "status": "deprecated",
       "verification": {
@@ -4895,12 +5124,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 384000,
         "temperature": true
       },
       "cost": {
-        "input": 0.016,
-        "output": 0.64,
-        "cache_read": 0.016
+        "input": 0.06,
+        "output": 0.18,
+        "cache_read": 0.015
       },
       "verification": {
         "state": "catalog",
@@ -4919,13 +5149,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 262144,
+        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.2156,
-        "output": 0.6468,
-        "cache_read": 0.00686
+        "input": 0.44,
+        "output": 1.32,
+        "cache_read": 0.014
       },
       "status": "deprecated",
       "verification": {
@@ -4945,13 +5175,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 384000,
+        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.95526,
-        "output": 1.91052,
-        "cache_read": 0.079605
+        "input": 0.9,
+        "output": 1.5,
+        "cache_read": 0.25
       },
       "verification": {
         "state": "catalog",
@@ -4970,13 +5200,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 1.32,
-        "output": 3.96,
-        "cache_read": 0.044
+        "input": 0.111,
+        "output": 4.44,
+        "cache_read": 0.097
       },
       "verification": {
         "state": "catalog",
@@ -4995,12 +5224,38 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
+        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.01368,
-        "output": 0.891,
-        "cache_read": 0.0054
+        "input": 0.0507,
+        "output": 0.2028,
+        "cache_read": 0.001014
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash-1017",
+      "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+      "provider": "openrouter",
+      "description": "DeepSeek V4.1 Flash 1017 is the October 17, 2026 snapshot of DeepSeek V4.1 Flash, served by DeepSeek under the…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 393216,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.003
       },
       "verification": {
         "state": "catalog",
@@ -5024,6 +5279,32 @@
       "cost": {
         "input": 0,
         "output": 0
+      },
+      "status": "deprecated",
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "elorian/glimpse",
+      "name": "Elorian: Glimpse",
+      "provider": "openrouter",
+      "description": "Glimpse is a multimodal visual reasoning model from Elorian, built for visual understanding and complex visual…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 256000,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.6,
+        "output": 3,
+        "cache_read": 0.06
       },
       "verification": {
         "state": "catalog",
@@ -5101,6 +5382,7 @@
         "cache_read": 0.03,
         "cache_write": 0.083333
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -5558,9 +5840,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.75,
-        "output": 3.75,
-        "cache_read": 0.075,
+        "input": 0.825,
+        "output": 4.125,
+        "cache_read": 0.0825,
         "cache_write": 0.041667
       },
       "verification": {
@@ -5580,7 +5862,7 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 65536,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
@@ -5588,6 +5870,58 @@
         "output": 10,
         "cache_read": 0.1,
         "cache_write": 0.1875
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "google/gemini-4-carbon",
+      "name": "Google: Gemini 4 Carbon",
+      "provider": "openrouter",
+      "description": "Gemini 4 Carbon is a frontier Gemini 4 model from Google for coding, agentic and complex reasoning work. It takes…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 32768,
+        "temperature": true
+      },
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 0.1875
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "google/gemini-4-hydrogen",
+      "name": "Google: Gemini 4 Hydrogen",
+      "provider": "openrouter",
+      "description": "Gemini 4 Hydrogen is the high-efficiency workhorse model of the Gemini 4 family from Google, built for high-throughput…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cache_read": 0.075,
+        "cache_write": 0.083333
       },
       "verification": {
         "state": "catalog",
@@ -5611,6 +5945,54 @@
       "cost": {
         "input": 1.5,
         "output": 7.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "google/gemini-omni-1.1-flash",
+      "name": "Google: Gemini Omni 1.1 Flash",
+      "provider": "openrouter",
+      "description": "Gemini Omni 1.1 Flash is Google's native multimodal video generation and editing model, the generally available…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 131072,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.5,
+        "output": 9
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "google/gemini-omni-1.2-flash",
+      "name": "Google: Gemini Omni 1.2 Flash",
+      "provider": "openrouter",
+      "description": "Gemini Omni 1.2 Flash is Google's native multimodal video generation and editing model, the successor to Gemini Omni…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 131072,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.5,
+        "output": 9
       },
       "verification": {
         "state": "catalog",
@@ -5681,7 +6063,7 @@
       },
       "cost": {
         "input": 0.08,
-        "output": 0.45,
+        "output": 0.35,
         "cache_read": 0.04
       },
       "verification": {
@@ -5729,9 +6111,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 0.3,
-        "cache_read": 0.05
+        "input": 0.0675,
+        "output": 0.225,
+        "cache_read": 0.0375
       },
       "verification": {
         "state": "catalog",
@@ -5882,29 +6264,6 @@
       }
     },
     {
-      "id": "ibm-granite/granite-4.0-h-micro",
-      "name": "IBM: Granite 4.0 Micro",
-      "provider": "openrouter",
-      "description": "Granite-4.0-H-Micro is a 3B parameter from the Granite 4 family of models. These models are the latest in a series of…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 131000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.017,
-        "output": 0.112
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "ibm-granite/granite-4.2-8b",
       "name": "IBM: Granite 4.2 8B",
       "provider": "openrouter",
@@ -5922,56 +6281,6 @@
         "input": 0.06,
         "output": 0.25,
         "cache_read": 0.015
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "inception/mercury-2",
-      "name": "Inception: Mercury 2",
-      "provider": "openrouter",
-      "description": "Mercury 2 is an extremely fast reasoning LLM, and the first reasoning diffusion LLM (dLLM). Instead of generating…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 50000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.25,
-        "output": 0.75,
-        "cache_read": 0.025
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "inception/mercury-2.5",
-      "name": "Inception: Mercury 2.5",
-      "provider": "openrouter",
-      "description": "Mercury 2.5 is the fastest reasoning LLM, and the latest diffusion LLM (dLLM) from Inception. Instead of generating…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 260000,
-        "output_tokens": 65536,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.04,
-        "output": 0.15,
-        "cache_read": 0.004
       },
       "verification": {
         "state": "catalog",
@@ -6029,6 +6338,31 @@
       }
     },
     {
+      "id": "inclusionai/ling-3.0-tiny",
+      "name": "inclusionAI: Ling 3.0 Tiny",
+      "provider": "openrouter",
+      "description": "Ling 3.0 Tiny is a mixture-of-experts model from InclusionAI, with 1.3B active parameters out of 7.9B total. It is…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 250000,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.015,
+        "output": 0.045,
+        "cache_read": 0.003
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "inclusionai/ling-3.1-flash",
       "name": "inclusionAI: Ling 3.1 Flash",
       "provider": "openrouter",
@@ -6039,13 +6373,38 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
+        "context_tokens": 1000000,
+        "output_tokens": 262144,
         "temperature": true
       },
       "cost": {
-        "input": 0.075,
-        "output": 0.225,
-        "cache_read": 0.015
+        "input": 0.045,
+        "output": 0.135,
+        "cache_read": 0.009
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.2-flash:free",
+      "name": "inclusionAI: Ling 3.2 Flash (free)",
+      "provider": "openrouter",
+      "description": "Ling 3.2 Flash is a hybrid reasoning model from inclusionAI that accepts text and image input, with a 1M-token context…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 262144,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
       },
       "verification": {
         "state": "catalog",
@@ -6064,7 +6423,7 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 128000,
-        "output_tokens": 4096,
+        "output_tokens": 8192,
         "temperature": true
       },
       "cost": {
@@ -6103,23 +6462,23 @@
       }
     },
     {
-      "id": "liquid/lfm-2.5-2.6b:free",
-      "name": "LiquidAI: LFM2.5-2.6B (free)",
+      "id": "kt/midm-k-3.0-pro",
+      "name": "KT: Mi:dm K 3.0 Pro",
       "provider": "openrouter",
-      "description": "LFM2.5-2.6B is a compact reasoning model from Liquid AI. It is suited for agent workflows, data extraction, RAG, and…",
+      "description": "Mi:dm K 3.0 Pro is a Mixture-of-Experts reasoning model from KT, with 120B total and 12B active parameters. It uses a…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 65536,
-        "output_tokens": 8192,
+        "context_tokens": 261795,
         "temperature": true
       },
       "cost": {
-        "input": 0,
-        "output": 0
+        "input": 0.2,
+        "output": 0.8,
+        "cache_read": 0.04
       },
       "verification": {
         "state": "catalog",
@@ -6152,6 +6511,55 @@
       }
     },
     {
+      "id": "liquid/lfm-3-1.7b",
+      "name": "LiquidAI: LFM3-1.7B",
+      "provider": "openrouter",
+      "description": "A compact 1.7B-parameter text model with a 256K-token context, post-trained for agents, tool calling, and structured…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 8192,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.08,
+        "output": 0.2,
+        "cache_read": 0.02
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "liquid/lfm-3-1.7b:free",
+      "name": "LiquidAI: LFM3-1.7B (free)",
+      "provider": "openrouter",
+      "description": "A compact 1.7B-parameter text model with a 256K-token context, post-trained for agents, tool calling, and structured…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 8192,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "mancer/weaver",
       "name": "Mancer: Weaver (alpha)",
       "provider": "openrouter",
@@ -6167,8 +6575,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.4,
-        "output": 0.75
+        "input": 0.3,
+        "output": 0.5,
+        "cache_read": 0.3
       },
       "verification": {
         "state": "catalog",
@@ -6212,12 +6621,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384,
+        "output_tokens": 8192,
         "temperature": true
       },
       "cost": {
-        "input": 0.4,
-        "output": 0.4
+        "input": 0.72,
+        "output": 0.72
       },
       "verification": {
         "state": "catalog",
@@ -6236,12 +6645,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.05,
-        "output": 0.08,
-        "cache_read": 0.025
+        "input": 0.02,
+        "output": 0.04
       },
       "verification": {
         "state": "catalog",
@@ -6306,13 +6715,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.59,
-        "output": 0.79,
-        "cache_read": 0.295
+        "input": 0.71,
+        "output": 0.71,
+        "cache_read": 0.71
       },
       "verification": {
         "state": "catalog",
@@ -6330,14 +6738,14 @@
         "vision": true,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 16384,
+        "context_tokens": 524288,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.1875,
-        "output": 0.6525,
-        "cache_read": 0.05
+        "input": 0.35,
+        "output": 1,
+        "cache_read": 0.17
       },
       "verification": {
         "state": "catalog",
@@ -6356,11 +6764,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 1310720,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.18,
-        "output": 0.59
+        "input": 0.1,
+        "output": 0.3
       },
       "verification": {
         "state": "catalog",
@@ -6385,6 +6794,31 @@
       "cost": {
         "input": 0.18,
         "output": 0.18
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "meta/muse-ember",
+      "name": "Meta: Muse Ember",
+      "provider": "openrouter",
+      "description": "Muse Ember is the smallest and most efficient model from Meta that’s designed for complex reasoning execution and the…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.1,
+        "output": 0.5,
+        "cache_read": 0.004,
+        "cache_write": 0.125
       },
       "verification": {
         "state": "catalog",
@@ -6542,6 +6976,30 @@
       }
     },
     {
+      "id": "meta/muse-spark-open",
+      "name": "Meta: Muse Spark Open",
+      "provider": "openrouter",
+      "description": "Muse Spark Open is a coding-optimized open-weight model. Trained specifically for agentic coding workflows, it…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.25,
+        "output": 4.25,
+        "cache_read": 0.15
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "meta/muse-wonder",
       "name": "Meta: Muse Wonder",
       "provider": "openrouter",
@@ -6589,151 +7047,6 @@
       }
     },
     {
-      "id": "microsoft/wizardlm-2-8x22b",
-      "name": "WizardLM-2 8x22B",
-      "provider": "openrouter",
-      "description": "WizardLM-2 8x22B is Microsoft AI's most advanced Wizard model. It demonstrates highly competitive performance compared…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 65535,
-        "output_tokens": 8000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.62,
-        "output": 0.62
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "minimax/minimax-01",
-      "name": "MiniMax: MiniMax-01",
-      "provider": "openrouter",
-      "description": "MiniMax-01 is a combines MiniMax-Text-01 for text generation and MiniMax-VL-01 for image understanding. It has 456…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 1000192,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.2,
-        "output": 1.1
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "minimax/minimax-m1",
-      "name": "MiniMax: MiniMax M1",
-      "provider": "openrouter",
-      "description": "MiniMax-M1 is a large-scale, open-weight reasoning model designed for extended context and high-efficiency inference.…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1000000,
-        "output_tokens": 40000,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.55,
-        "output": 2.2
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "minimax/minimax-m2",
-      "name": "MiniMax: MiniMax M2",
-      "provider": "openrouter",
-      "description": "MiniMax-M2 is a compact, high-efficiency large language model optimized for end-to-end coding and agentic workflows.…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 204800,
-        "output_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.255,
-        "output": 1.02
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "minimax/minimax-m2-her",
-      "name": "MiniMax: MiniMax M2-her",
-      "provider": "openrouter",
-      "description": "MiniMax M2-her is a dialogue-first large language model built for immersive roleplay, character-driven chat, and…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 65536,
-        "output_tokens": 2048,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.3,
-        "output": 1.2,
-        "cache_read": 0.03
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "minimax/minimax-m2.1",
-      "name": "MiniMax: MiniMax M2.1",
-      "provider": "openrouter",
-      "description": "MiniMax-M2.1 is a lightweight, state-of-the-art large language model optimized for coding, agentic workflows, and…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 204800,
-        "output_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.3,
-        "output": 1.2,
-        "cache_read": 0.03
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "minimax/minimax-m2.5",
       "name": "MiniMax: MiniMax M2.5",
       "provider": "openrouter",
@@ -6744,7 +7057,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 204800,
+        "context_tokens": 198000,
         "output_tokens": 32768,
         "temperature": true
       },
@@ -6769,14 +7082,13 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 204800,
-        "output_tokens": 131072,
+        "context_tokens": 196608,
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 1.2,
-        "cache_read": 0.06
+        "input": 0.21,
+        "output": 0.84,
+        "cache_read": 0.042
       },
       "verification": {
         "state": "catalog",
@@ -6802,6 +7114,31 @@
         "input": 0.3,
         "output": 1.2,
         "cache_read": 0.06
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "minimax/minimax-m3.1-flash",
+      "name": "MiniMax: MiniMax M3.1 Flash",
+      "provider": "openrouter",
+      "description": "MiniMax-M3.1-Flash is a multimodal model from MiniMax. Compared with M3, it delivers significant improvements across…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 524288,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.015
       },
       "verification": {
         "state": "catalog",
@@ -7024,8 +7361,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.68,
-        "output": 2.09,
+        "input": 0.7,
+        "output": 2.1,
         "cache_read": 0.07
       },
       "verification": {
@@ -7241,12 +7578,13 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 16384,
+        "output_tokens": 26214,
         "temperature": true
       },
       "cost": {
-        "input": 0.075,
-        "output": 0.2
+        "input": 0.1,
+        "output": 0.3,
+        "cache_read": 0.01
       },
       "verification": {
         "state": "catalog",
@@ -7297,6 +7635,54 @@
         "input": 0.1,
         "output": 0.3,
         "cache_read": 0.01
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "moondream/moondream3-preview",
+      "name": "Moondream: Moondream 3 Preview",
+      "provider": "openrouter",
+      "description": "Moondream 3 Preview is a vision-language model from Moondream with 9B total parameters and 2B active…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 32000,
+        "output_tokens": 4096,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 2.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "moondream/moondream3.1-9b-a2b",
+      "name": "Moondream: Moondream 3.1",
+      "provider": "openrouter",
+      "description": "Moondream 3.1 is a vision-language model from Moondream, the successor to Moondream 3 Preview, with 9B total…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": false,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 32000,
+        "output_tokens": 4096,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 2.5
       },
       "verification": {
         "state": "catalog",
@@ -7439,9 +7825,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.6712,
-        "output": 3.35,
-        "cache_read": 0.18
+        "input": 0.6,
+        "output": 3.5,
+        "cache_read": 0.16
       },
       "verification": {
         "state": "catalog",
@@ -7463,9 +7849,33 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.45,
-        "output": 15,
-        "cache_read": 0.28
+        "input": 0.192,
+        "output": 16,
+        "cache_read": 0.182
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3.1-pro",
+      "name": "MoonshotAI: Kimi K3.1 Pro",
+      "provider": "openrouter",
+      "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.2375,
+        "output": 8.4114,
+        "cache_read": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -7483,8 +7893,8 @@
         "vision": false,
         "reasoning": false,
         "streaming": true,
-        "context_tokens": 81920,
-        "output_tokens": 38000,
+        "context_tokens": 262144,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
@@ -7514,6 +7924,30 @@
       "cost": {
         "input": 0.9,
         "output": 1.9
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "motif-technologies/motif-3",
+      "name": "Motif Technologies: Motif 3",
+      "provider": "openrouter",
+      "description": "Motif 3 is a Mixture-of-Experts language model from Motif Technologies, with 314B total and 13.2B active parameters.…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 1.2,
+        "cache_read": 0.06
       },
       "verification": {
         "state": "catalog",
@@ -7569,47 +8003,23 @@
       }
     },
     {
-      "id": "nousresearch/hermes-3-llama-3.1-405b",
-      "name": "Nous: Hermes 3 405B Instruct",
+      "id": "nex-agi/nex-n2.6",
+      "name": "Nex AGI: Nex-N2.6",
       "provider": "openrouter",
-      "description": "Hermes 3 is a generalist language model with many improvements over Hermes 2, including advanced agentic capabilities,…",
+      "description": "Nex-N2.6 is an agentic model from Nex AGI, built on [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash-BF16)…",
       "capabilities": {
         "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
         "streaming": true,
-        "context_tokens": 131072,
-        "output_tokens": 16384,
+        "context_tokens": 262144,
         "temperature": true
       },
       "cost": {
-        "input": 1,
-        "output": 1
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "nousresearch/hermes-3-llama-3.1-70b",
-      "name": "Nous: Hermes 3 70B Instruct",
-      "provider": "openrouter",
-      "description": "Hermes 3 is a generalist language model with many improvements over [Hermes…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 131072,
-        "output_tokens": 16384,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.7,
-        "output": 0.7
+        "input": 0.12,
+        "output": 0.4,
+        "cache_read": 0.024
       },
       "verification": {
         "state": "catalog",
@@ -7632,7 +8042,8 @@
       },
       "cost": {
         "input": 1,
-        "output": 3
+        "output": 3,
+        "cache_read": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -7655,7 +8066,8 @@
       },
       "cost": {
         "input": 0.06,
-        "output": 0.24
+        "output": 0.24,
+        "cache_read": 0.012
       },
       "verification": {
         "state": "catalog",
@@ -7698,34 +8110,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.08,
-        "output": 0.45
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "nvidia/nemotron-3-super-120b-a12b:free",
-      "name": "NVIDIA: Nemotron 3 Super (free)",
-      "provider": "openrouter",
-      "description": "NVIDIA Nemotron 3 Super is a 120B-parameter open hybrid MoE model, activating just 12B parameters for maximum compute…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
+        "input": 0.075,
+        "output": 0.4
       },
       "verification": {
         "state": "catalog",
@@ -7804,30 +8194,6 @@
       }
     },
     {
-      "id": "nvidia/nemotron-3.5-content-safety:free",
-      "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
-      "provider": "openrouter",
-      "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 8192,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "nvidia/nemotron-3.5-lightning",
       "name": "NVIDIA: Nemotron 3.5 Lightning",
       "provider": "openrouter",
@@ -7876,10 +8242,58 @@
       }
     },
     {
+      "id": "nvidia/nemotron-3.5-super-vl",
+      "name": "NVIDIA: Nemotron 3.5 Super VL",
+      "provider": "openrouter",
+      "description": "NVIDIA Nemotron 3.5 Super VL is an open multimodal mixture-of-experts model from NVIDIA, with 12B active parameters…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.15,
+        "output": 0.47,
+        "cache_read": 0.02
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-super-vl:free",
+      "name": "NVIDIA: Nemotron 3.5 Super VL (free)",
+      "provider": "openrouter",
+      "description": "NVIDIA Nemotron 3.5 Super VL is an open multimodal mixture-of-experts model from NVIDIA, with 12B active parameters…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "nvidia/switchyard",
       "name": "NVIDIA: Switchyard",
       "provider": "openrouter",
-      "description": "Switchyard is an open-source model router that switches between multiple models to optimize the cost of requests. By…",
+      "description": "Switchyard is an open-source model routing system that switches between multiple models to optimize the cost of…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": false,
@@ -7889,31 +8303,6 @@
         "context_tokens": 1000000,
         "temperature": false
       },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/gpt-3.5-turbo",
-      "name": "OpenAI: GPT-3.5 Turbo",
-      "provider": "openrouter",
-      "description": "GPT-3.5 Turbo is OpenAI's fastest model. It can understand and generate natural language or code, and is optimized for…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 16385,
-        "output_tokens": 4096,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.5,
-        "output": 1.5
-      },
-      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -7967,29 +8356,6 @@
       }
     },
     {
-      "id": "openai/gpt-3.5-turbo-instruct",
-      "name": "OpenAI: GPT-3.5 Turbo Instruct",
-      "provider": "openrouter",
-      "description": "This model is a variant of GPT-3.5 Turbo tuned for instructional prompts and omitting chat-related optimizations.…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 4095,
-        "temperature": true
-      },
-      "cost": {
-        "input": 1.5,
-        "output": 2
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "openai/gpt-4",
       "name": "OpenAI: GPT-4",
       "provider": "openrouter",
@@ -8007,31 +8373,6 @@
       "cost": {
         "input": 30,
         "output": 60
-      },
-      "status": "deprecated",
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/gpt-4-turbo",
-      "name": "OpenAI: GPT-4 Turbo",
-      "provider": "openrouter",
-      "description": "The latest GPT-4 Turbo model with vision capabilities. Vision requests can now use JSON mode and function…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 128000,
-        "output_tokens": 4096,
-        "temperature": true
-      },
-      "cost": {
-        "input": 10,
-        "output": 30
       },
       "status": "deprecated",
       "verification": {
@@ -8107,7 +8448,7 @@
       "cost": {
         "input": 0.1,
         "output": 0.4,
-        "cache_read": 0.025
+        "cache_read": 0.03
       },
       "status": "deprecated",
       "verification": {
@@ -8879,10 +9220,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 4,
-        "output": 20,
-        "cache_read": 0.4,
-        "cache_write": 5
+        "input": 4.4,
+        "output": 22,
+        "cache_read": 0.44,
+        "cache_write": 5.5
       },
       "verification": {
         "state": "catalog",
@@ -9176,6 +9517,58 @@
       }
     },
     {
+      "id": "openai/gpt-6.1-terra",
+      "name": "OpenAI: GPT-6.1 Terra",
+      "provider": "openrouter",
+      "description": "GPT-6.1 Terra is the mid-tier model in OpenAI's GPT-6.1 series, priced below GPT-6.1 Sol. It is suited for everyday…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 1,
+        "output": 5,
+        "cache_read": 0.05,
+        "cache_write": 1.25
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-terra-pro",
+      "name": "OpenAI: GPT-6.1 Terra Pro",
+      "provider": "openrouter",
+      "description": "GPT-6.1 Terra Pro is the same underlying model as [GPT-6.1 Terra](https://openrouter.ai/openai/gpt-6.1-terra), served…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 1,
+        "output": 5,
+        "cache_read": 0.05,
+        "cache_write": 1.25
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "openai/gpt-audio",
       "name": "OpenAI: GPT Audio",
       "provider": "openrouter",
@@ -9285,13 +9678,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.018,
-        "output": 0.09,
-        "cache_read": 0.009
+        "input": 0.03,
+        "output": 0.13,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -9324,57 +9716,6 @@
       }
     },
     {
-      "id": "openai/o1",
-      "name": "OpenAI: o1",
-      "provider": "openrouter",
-      "description": "The latest and strongest model family from OpenAI, o1 is designed to spend more time thinking before responding. The…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 15,
-        "output": 60,
-        "cache_read": 7.5
-      },
-      "status": "deprecated",
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/o1-pro",
-      "name": "OpenAI: o1-pro",
-      "provider": "openrouter",
-      "description": "The o1 series of models are trained with reinforcement learning to think before they answer and perform complex…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 150,
-        "output": 600
-      },
-      "status": "deprecated",
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "openai/o3",
       "name": "OpenAI: o3",
       "provider": "openrouter",
@@ -9393,57 +9734,6 @@
         "input": 2,
         "output": 8,
         "cache_read": 0.5
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/o3-mini",
-      "name": "OpenAI: o3 Mini",
-      "provider": "openrouter",
-      "description": "OpenAI o3-mini is a cost-efficient language model optimized for STEM reasoning tasks, particularly excelling in…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.55
-      },
-      "status": "deprecated",
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/o3-mini-high",
-      "name": "OpenAI: o3 Mini High",
-      "provider": "openrouter",
-      "description": "OpenAI o3-mini-high is the same model as [o3-mini](/openai/o3-mini) with reasoning_effort set to high. o3-mini is a…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.55
       },
       "verification": {
         "state": "catalog",
@@ -9475,61 +9765,10 @@
       }
     },
     {
-      "id": "openai/o4-mini",
-      "name": "OpenAI: o4 Mini",
-      "provider": "openrouter",
-      "description": "OpenAI o4-mini is a compact reasoning model in the o-series, optimized for fast, cost-efficient performance while…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.275
-      },
-      "status": "deprecated",
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "openai/o4-mini-high",
-      "name": "OpenAI: o4 Mini High",
-      "provider": "openrouter",
-      "description": "OpenAI o4-mini-high is the same model as [o4-mini](/openai/o4-mini) with reasoning_effort set to high. OpenAI o4-mini…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 200000,
-        "output_tokens": 100000,
-        "temperature": false
-      },
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.275
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "openrouter/auto",
       "name": "Auto Router",
       "provider": "openrouter",
-      "description": "The Auto Router automatically selects the best model for your prompt, powered by the wisdom of the market. It routes…",
+      "description": "Auto is OpenRouter’s flagship model router, built for general-purpose usage. It adapts to each request, choosing…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -9549,6 +9788,25 @@
       "name": "Auto Router (Beta)",
       "provider": "openrouter",
       "description": "The experimental version of our Auto Router where we test new improvements. Use it to get the latest and greatest…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 2000000,
+        "temperature": true
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openrouter/auto-code",
+      "name": "Auto Code",
+      "provider": "openrouter",
+      "description": "Auto Code is OpenRouter’s router built specifically for coding agents and harnesses. It uses the same routing engine…",
       "capabilities": {
         "protocol": "openai-chat",
         "tools": true,
@@ -9647,6 +9905,55 @@
       }
     },
     {
+      "id": "particle-ai/particle-1",
+      "name": "Particle AI: Particle-1",
+      "provider": "openrouter",
+      "description": "Particle-1 is a token-efficient agentic coding model from Particle AI, post-trained on DeepSeek V4.1 Flash. It is…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.06,
+        "output": 0.5,
+        "cache_read": 0.003
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "particle-ai/particle-1:free",
+      "name": "Particle AI: Particle-1 (free)",
+      "provider": "openrouter",
+      "description": "Particle-1 is a token-efficient agentic coding model from Particle AI, post-trained on DeepSeek V4.1 Flash. It is…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "perceptron/perceptron-mk1",
       "name": "Perceptron: Perceptron Mk1",
       "provider": "openrouter",
@@ -9713,6 +10020,7 @@
         "input": 1,
         "output": 1
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -9737,6 +10045,7 @@
         "input": 2,
         "output": 8
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -9761,6 +10070,7 @@
         "input": 3,
         "output": 15
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -9808,104 +10118,7 @@
         "input": 2,
         "output": 8
       },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "poolside/laguna-s-2.1",
-      "name": "Poolside: Laguna S 2.1",
-      "provider": "openrouter",
-      "description": "Laguna S 2.1 is the latest coding agent model from [Poolside](<https://poolside.ai/>). Laguna S 2.1 is a 118B total…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.09,
-        "output": 0.18,
-        "cache_read": 0.009
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "poolside/laguna-s-2.1:free",
-      "name": "Poolside: Laguna S 2.1 (free)",
-      "provider": "openrouter",
-      "description": "Laguna S 2.1 is the latest coding agent model from [Poolside](<https://poolside.ai/>). Laguna S 2.1 is a 118B total…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "poolside/laguna-xs-2.1",
-      "name": "Poolside: Laguna XS 2.1",
-      "provider": "openrouter",
-      "description": "Laguna XS 2.1 is the latest coding agent model in the 33B-A3B category from [Poolside](https://poolside.ai/) and a…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.06,
-        "output": 0.12,
-        "cache_read": 0.03
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "poolside/laguna-xs-2.1:free",
-      "name": "Poolside: Laguna XS 2.1 (free)",
-      "provider": "openrouter",
-      "description": "Laguna XS 2.1 is the latest coding agent model in the 33B-A3B category from [Poolside](https://poolside.ai/) and a…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -9937,6 +10150,31 @@
       }
     },
     {
+      "id": "prism-ml/ternary-bonsai-2-9b",
+      "name": "PrismML: Ternary Bonsai 2 9B",
+      "provider": "openrouter",
+      "description": "Ternary Bonsai 2 9B is PrismML’s compact, open-weight language model for conversational AI, reasoning, and tool use.…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.08,
+        "output": 0.13,
+        "cache_read": 0.04
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "qwen/qwen-2.5-72b-instruct",
       "name": "Qwen2.5 72B Instruct",
       "provider": "openrouter",
@@ -9954,29 +10192,6 @@
       "cost": {
         "input": 0.36,
         "output": 0.4
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "qwen/qwen-2.5-7b-instruct",
-      "name": "Qwen: Qwen2.5 7B Instruct",
-      "provider": "openrouter",
-      "description": "Qwen2.5 7B is the latest series of Qwen large language models. Qwen2.5 brings the following improvements upon Qwen2: -…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 32768,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.1,
-        "output": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -10092,12 +10307,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 0.55
+        "input": 0.14,
+        "output": 0.8,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -10168,7 +10383,8 @@
       },
       "cost": {
         "input": 0.1,
-        "output": 0.3
+        "output": 0.3,
+        "cache_read": 0.1
       },
       "verification": {
         "state": "catalog",
@@ -10239,8 +10455,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.07,
-        "output": 0.28
+        "input": 0.15,
+        "output": 0.6
       },
       "verification": {
         "state": "catalog",
@@ -10309,35 +10525,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 1.1,
-        "cache_read": 0.07
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "qwen/qwen3-next-80b-a3b-thinking",
-      "name": "Qwen: Qwen3 Next 80B A3B Thinking",
-      "provider": "openrouter",
-      "description": "Qwen3-Next-80B-A3B-Thinking is a reasoning-first chat model in the Qwen3-Next line that outputs structured “thinking”…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.15,
-        "output": 1.2
+        "input": 0.09,
+        "output": 1.1
       },
       "verification": {
         "state": "catalog",
@@ -10500,11 +10693,11 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384,
+        "output_tokens": 81920,
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
+        "input": 0.14,
         "output": 1,
         "cache_read": 0.05
       },
@@ -10525,12 +10718,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 64000,
         "temperature": true
       },
       "cost": {
-        "input": 0.5,
+        "input": 0.6,
         "output": 3.6,
-        "cache_read": 0.3
+        "cache_read": 0.12
       },
       "verification": {
         "state": "catalog",
@@ -10549,13 +10743,15 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 32768,
+        "output_tokens": 40960,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 0.15
+        "input": 0.118,
+        "output": 0.174,
+        "cache_read": 0.107
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -10673,9 +10869,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 1,
-        "cache_read": 0.05
+        "input": 0.1,
+        "output": 0.9,
+        "cache_read": 0.025
       },
       "verification": {
         "state": "catalog",
@@ -10846,13 +11042,13 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1000000,
+        "context_tokens": 1024000,
         "temperature": true
       },
       "cost": {
-        "input": 0.24,
-        "output": 2.2,
-        "cache_read": 0.05
+        "input": 0.15,
+        "output": 1.875,
+        "cache_read": 0.0375
       },
       "verification": {
         "state": "catalog",
@@ -10960,6 +11156,53 @@
       }
     },
     {
+      "id": "recursive/flint-v1.0:free",
+      "name": "Recursive: Flint (free)",
+      "provider": "openrouter",
+      "description": "Flint is an open-weight mixture-of-experts model from Recursive, with about 2.5B active parameters out of 40B total,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 262144,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "reflection/beam-1.0-501b-a23b",
+      "name": "Reflection: Beam 1.0 501B A23B",
+      "provider": "openrouter",
+      "description": "Beam 1.0 is Reflection's open-weight reasoning model for coding and long-horizon agentic workflows. It uses a sparse…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 1,
+        "cache_read": 0.04
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "rekaai/reka-edge",
       "name": "Reka Edge",
       "provider": "openrouter",
@@ -11047,6 +11290,31 @@
       "cost": {
         "input": 1,
         "output": 3
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "ricursiveai/ripple-65b-preview",
+      "name": "Ricursive: Ripple 65B Preview",
+      "provider": "openrouter",
+      "description": "Ripple-65B-Preview by ricursiveAI, a 65B model with native tool calling, served in BF16.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.1,
+        "output": 0.3,
+        "cache_read": 0.025
       },
       "verification": {
         "state": "catalog",
@@ -11201,30 +11469,6 @@
       }
     },
     {
-      "id": "sao10k/l3.3-euryale-70b",
-      "name": "Sao10K: Llama 3.3 Euryale 70B",
-      "provider": "openrouter",
-      "description": "Euryale L3.3 70B is a model focused on creative roleplay from [Sao10k](https://ko-fi.com/sao10k). It is the successor…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": false,
-        "streaming": true,
-        "context_tokens": 131072,
-        "output_tokens": 16384,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.65,
-        "output": 0.75
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "scaledown/extract",
       "name": "ScaleDown: Extract",
       "provider": "openrouter",
@@ -11330,14 +11574,14 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1048576,
+        "context_tokens": 1000000,
         "output_tokens": 64000,
         "temperature": true
       },
       "cost": {
         "input": 1,
         "output": 2.7,
-        "cache_read": 0.05
+        "cache_read": 0.1
       },
       "verification": {
         "state": "catalog",
@@ -11489,6 +11733,31 @@
       }
     },
     {
+      "id": "tencent/hy4",
+      "name": "Tencent: Hy4",
+      "provider": "openrouter",
+      "description": "The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.417,
+        "output": 1.2505,
+        "cache_read": 0.021
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "tencent/hy4-preview",
       "name": "Tencent: Hy4 preview",
       "provider": "openrouter",
@@ -11610,6 +11879,54 @@
       }
     },
     {
+      "id": "thinkingmachines/inkling-2-small",
+      "name": "Thinking Machines: Inkling 2 Small",
+      "provider": "openrouter",
+      "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.3,
+        "output": 1,
+        "cache_read": 0.03
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling-2-small:free",
+      "name": "Thinking Machines: Inkling 2 Small (free)",
+      "provider": "openrouter",
+      "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0,
+        "output": 0
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "thinkingmachines/inkling-small",
       "name": "Thinking Machines: Inkling Small",
       "provider": "openrouter",
@@ -11635,54 +11952,6 @@
       }
     },
     {
-      "id": "thinkingmachines/inkling-small:free",
-      "name": "Thinking Machines: Inkling Small (free)",
-      "provider": "openrouter",
-      "description": "Inkling Small is an open-weight multimodal mixture-of-experts model from Thinking Machines Lab, with 12B active…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "thinkingmachines/inkling:free",
-      "name": "Thinking Machines: Inkling (free)",
-      "provider": "openrouter",
-      "description": "Inkling is an open-weight multimodal mixture-of-experts model from Thinking Machines Lab, with 41B active parameters…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 1048576,
-        "output_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0,
-        "output": 0
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "typesafe/jev-router",
       "name": "TypeSafe: Jev Router",
       "provider": "openrouter",
@@ -11695,6 +11964,31 @@
         "streaming": true,
         "context_tokens": 1000000,
         "temperature": true
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "unbiased/pareto-26.10",
+      "name": "Pareto 26.10",
+      "provider": "openrouter",
+      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": false,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.8,
+        "output": 3.2,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -11766,8 +12060,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.35,
-        "output": 0.65
+        "input": 0.3,
+        "output": 0.5,
+        "cache_read": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -11800,30 +12095,6 @@
       }
     },
     {
-      "id": "upstage/solar-pro-3",
-      "name": "Upstage: Solar Pro 3",
-      "provider": "openrouter",
-      "description": "Solar Pro 3 is Upstage's powerful Mixture-of-Experts (MoE) language model. With 102B total parameters and 12B active…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.15,
-        "output": 0.6,
-        "cache_read": 0.015
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "upstage/solar-pro4",
       "name": "Upstage: Solar Pro 4",
       "provider": "openrouter",
@@ -11839,9 +12110,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 0.36,
-        "cache_read": 0.018
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -12051,15 +12322,16 @@
         "vision": true,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1050000,
-        "output_tokens": 131072,
+        "context_tokens": 1000000,
+        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.14,
-        "output": 0.28,
-        "cache_read": 0.0028
+        "input": 0.4,
+        "output": 2,
+        "cache_read": 0.08
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -12076,7 +12348,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 1050000,
+        "context_tokens": 1024000,
         "output_tokens": 131072,
         "temperature": true
       },
@@ -12085,6 +12357,7 @@
         "output": 0.87,
         "cache_read": 0.0036
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -12185,6 +12458,7 @@
         "output": 2.2,
         "cache_read": 0.11
       },
+      "status": "deprecated",
       "verification": {
         "state": "catalog",
         "source": "openrouter"
@@ -12206,9 +12480,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.13,
-        "output": 0.85,
-        "cache_read": 0.025
+        "input": 0.2,
+        "output": 1.1,
+        "cache_read": 0.03
       },
       "verification": {
         "state": "catalog",
@@ -12306,9 +12580,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 2.2,
-        "cache_read": 0.11
+        "input": 0.4,
+        "output": 1.75,
+        "cache_read": 0.08
       },
       "verification": {
         "state": "catalog",
@@ -12401,13 +12675,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 204800,
-        "output_tokens": 128000,
+        "output_tokens": 131072,
         "temperature": true
       },
       "cost": {
-        "input": 0.966,
-        "output": 3.036,
-        "cache_read": 0.1794
+        "input": 1.4,
+        "output": 4.4,
+        "cache_read": 0.26
       },
       "verification": {
         "state": "catalog",
@@ -12430,9 +12704,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0341,
-        "output": 7,
-        "cache_read": 0.0331
+        "input": 0.007,
+        "output": 6.8,
+        "cache_read": 0.006
       },
       "verification": {
         "state": "catalog",
@@ -12455,9 +12729,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.05,
-        "output": 4.8,
-        "cache_read": 0.049
+        "input": 0.084,
+        "output": 3.6,
+        "cache_read": 0.079
       },
       "verification": {
         "state": "catalog",
@@ -12480,8 +12754,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 0.5,
+        "input": 0.0399,
+        "output": 0.0784,
         "cache_read": 0.03
       },
       "verification": {
@@ -12507,7 +12781,32 @@
       "cost": {
         "input": 0.37,
         "output": 1.25,
-        "cache_read": 0.09
+        "cache_read": 0.075
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "z-ai/glm-5.3-flashx-legal",
+      "name": "Z.ai: GLM 5.3 FlashX Legal",
+      "provider": "openrouter",
+      "description": "GLM-5.3-FlashX-Legal (GLM-Legal) is Z.ai's legal-domain variant of GLM-5.3-FlashX, a native multimodal model that…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.37,
+        "output": 1.25,
+        "cache_read": 0.075
       },
       "verification": {
         "state": "catalog",
@@ -12673,8 +12972,8 @@
         }
       },
       "verification": {
-        "state": "catalog",
-        "source": "models.dev"
+        "state": "verified",
+        "source": "https://docs.x.ai/docs/guides/reasoning"
       }
     },
     {
@@ -12712,8 +13011,8 @@
         }
       },
       "verification": {
-        "state": "catalog",
-        "source": "models.dev"
+        "state": "verified",
+        "source": "https://docs.x.ai/docs/guides/reasoning"
       }
     },
     {

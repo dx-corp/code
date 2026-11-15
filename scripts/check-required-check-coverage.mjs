@@ -14,14 +14,20 @@
  * proves every *required* context can report; this one proves every job that
  * can run on pull_request *is* required (or explicitly opted out below).
  *
- * Required contexts are read live from the GitHub branch protection API.
- * Reading protection needs Administration read, so the token must come from
- * GH_TOKEN (an admin-capable app/PAT token), not the default GITHUB_TOKEN.
+ * Required contexts are read live from GitHub: the branch's effective rules
+ * (`GET /repos/{repo}/rules/branches/{branch}`, every active ruleset that
+ * targets it) unioned with classic branch protection. dx-corp/mono's main is
+ * protected only by rulesets, so classic protection answers 404 "Branch not
+ * protected" there; that exact answer means "no classic rules", not a blind
+ * spot. Reading classic protection needs Administration read, so the token
+ * must come from GH_TOKEN (an admin-capable app/PAT token), not the default
+ * GITHUB_TOKEN.
  *
  * FAIL CLOSED: this script is a monitor — its green run IS the signal. A
- * missing token, a 403/404 from the protection API, or an unreadable
- * workflow tree exits non-zero. There is no non-strict downgrade; see
- * "Monitors fail closed" in AGENTS.md.
+ * missing token, a failed rules read, a 403 or any other 404 from the
+ * protection API, a branch with no required status checks at all, or an
+ * unreadable workflow tree exits non-zero. There is no non-strict downgrade;
+ * see "Monitors fail closed" in AGENTS.md.
  */
 
 import { spawnSync } from "node:child_process";
@@ -111,12 +117,14 @@ export function assertGhOk(result, endpoint) {
 	}
 	if (result.status !== 0) {
 		const detail = (result.stderr || "").trim() || "unknown error";
-		// 403/404 here means the token lacks Administration read on branch
-		// protection. A monitor that cannot read the state it watches must
-		// fail, loudly — never downgrade this to a warning.
+		// A 403/404 here means the token cannot read the branch's rules (repo
+		// read) or classic protection (Administration read). A monitor that
+		// cannot read the state it watches must fail, loudly — never
+		// downgrade this to a warning.
 		throw new CoverageBlindSpotError(
-			`gh api ${endpoint} failed: ${detail}. This monitor cannot read branch ` +
-				"protection (the token needs Administration read on the target " +
+			`gh api ${endpoint} failed: ${detail}. This monitor cannot read the ` +
+				"branch's required checks (rulesets need repository read; classic " +
+				"branch protection needs Administration read on the target " +
 				"repository) and is failing closed rather than reporting a pass " +
 				"it did not verify.",
 		);
@@ -124,13 +132,17 @@ export function assertGhOk(result, endpoint) {
 	return result.stdout;
 }
 
-export function fetchRequiredContexts(repo, branch) {
+// GitHub's answer for a branch with no classic protection, readable only
+// with Administration read. A bare "Not Found (HTTP 404)" can also mean the
+// token cannot see the setting, so only this exact message counts as empty.
+const CLASSIC_UNPROTECTED = /Branch not protected \(HTTP 404\)/u;
+
+export function fetchRequiredContexts(repo, branch, { run = spawnSync } = {}) {
 	const branchPath = `repos/${repo}/branches/${encodeURIComponent(branch)}`;
-	const read = (endpoint, jq) => {
-		const result = spawnSync("gh", ["api", endpoint, "--jq", jq], {
-			encoding: "utf8",
-		});
-		const stdout = assertGhOk(result, endpoint);
+	const rulesPath = `repos/${repo}/rules/branches/${encodeURIComponent(branch)}`;
+	const gh = (endpoint, jq) =>
+		run("gh", ["api", endpoint, "--jq", jq], { encoding: "utf8" });
+	const parse = (endpoint, stdout) => {
 		try {
 			return JSON.parse(stdout);
 		} catch {
@@ -139,18 +151,40 @@ export function fetchRequiredContexts(repo, branch) {
 			);
 		}
 	};
-	return [
-		...new Set([
-			...read(
-				`${branchPath}/protection`,
-				"[.required_status_checks.checks[]?.context]",
-			),
-			...read(
-				`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`,
+
+	// Effective rules: every active ruleset targeting the branch.
+	const rules = parse(
+		rulesPath,
+		assertGhOk(
+			gh(
+				rulesPath,
 				'[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]',
 			),
-		]),
-	];
+			rulesPath,
+		),
+	);
+
+	const protectionPath = `${branchPath}/protection`;
+	const protection = gh(
+		protectionPath,
+		"[.required_status_checks.checks[]?.context]",
+	);
+	const classic =
+		!protection.error &&
+		protection.status !== 0 &&
+		CLASSIC_UNPROTECTED.test(protection.stderr || "")
+			? []
+			: parse(protectionPath, assertGhOk(protection, protectionPath));
+
+	const contexts = [...new Set([...classic, ...rules])];
+	if (contexts.length === 0) {
+		throw new CoverageBlindSpotError(
+			`${repo}@${branch} has no required status checks in its rulesets or ` +
+				"classic branch protection; failing closed rather than reporting " +
+				"coverage against an empty required set.",
+		);
+	}
+	return contexts;
 }
 
 /**
