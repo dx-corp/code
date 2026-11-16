@@ -320,6 +320,26 @@ const FAULTS: [&str; 14] = [
 /// incomplete, and nothing about why.
 pub const STILL_UPDATING: &str = "Part of this is still updating.";
 
+/// What the turn's own tool calls say about our side. Wording cannot tell
+/// our fault from the person's facts: "3 endpoints are not responding" and
+/// "the backup endpoint monitor is down" are about their systems, in the
+/// same words a failed read of ours would be reported in. So a sentence is
+/// replaced by [`STILL_UPDATING`] only in a turn where a call of ours did
+/// not succeed; in any other turn every such sentence is the person's fact
+/// and is delivered as written.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TurnReads {
+    /// A tool call of this turn ended failed or with its outcome unknown.
+    pub failed: bool,
+}
+
+impl TurnReads {
+    /// Every call of the turn succeeded, or it made none.
+    pub const SUCCEEDED: Self = Self { failed: false };
+    /// A call of the turn did not succeed.
+    pub const FAILED: Self = Self { failed: true };
+}
+
 /// How a person asks what Dex is able to do. "I can ..." answers that.
 const CAPABILITY_ASKS: [&str; 6] = [
     "can you",
@@ -400,8 +420,9 @@ pub fn check(question: &str, text: &str) -> Vec<Defect> {
     found
 }
 
-/// Whether `sentence` tells the person that a read, lookup or service of
-/// ours is unavailable or failing.
+/// Whether `sentence` reads like one telling the person that a read, lookup
+/// or service of ours is unavailable or failing. The words alone do not say
+/// whose system it is: [`rewrite`] acts on it only with [`TurnReads::failed`].
 fn is_platform_fault(sentence: &str) -> bool {
     let lower = format!(" {} ", sentence.to_lowercase().replace('`', " "));
     OUR_SIDE.iter().any(|side| lower.contains(side)) && FAULTS.iter().any(|f| lower.contains(f))
@@ -480,12 +501,14 @@ fn plain_names(question: &str, line: &str) -> String {
 /// whose only fact is an internal id, a heading line and the rule under
 /// it, the bold on a label or a phrase, a sentence that is only a
 /// disclaimer or an offer that names nothing, and an internal name in code
-/// (written as its plain words). A sentence telling the person that a read
-/// or service of ours is failing becomes [`STILL_UPDATING`], once. A reply to a person who asked
+/// (written as its plain words). In a turn where a call of ours did not
+/// succeed (`reads.failed`), a sentence telling the person that a read or
+/// service of ours is failing becomes [`STILL_UPDATING`], once; in any other
+/// turn such a sentence states their own systems and stays. A reply to a person who asked
 /// for the detail keeps its headings, labels and bold; an id the person
 /// asked about stays. Code blocks are never touched, and every other word
 /// is kept as written.
-pub fn rewrite(question: &str, text: &str) -> String {
+pub fn rewrite(question: &str, text: &str, reads: TurnReads) -> String {
     let keeps_structure = budget(question).is_none();
     let mut out: Vec<String> = Vec::new();
     let mut in_fence = false;
@@ -511,8 +534,9 @@ pub fn rewrite(question: &str, text: &str) -> String {
                 continue;
             }
             // Our own fault never reaches the person: the answer is still
-            // updating, said once, whatever the fault was.
-            if is_platform_fault(sentence) {
+            // updating, said once, whatever the fault was. Only a turn whose
+            // own call failed can be reporting one.
+            if reads.failed && is_platform_fault(sentence) {
                 if !said_updating {
                     said_updating = true;
                     let trailing = &sentence[sentence.trim_end().len()..];
