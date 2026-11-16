@@ -1,5 +1,5 @@
 {
-  "generated_at": 1794728811,
+  "generated_at": 1794814698,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -996,7 +996,7 @@
       ],
       "cost": {
         "input": 0.25,
-        "output": 30
+        "output": 1.5
       },
       "verification": {
         "state": "catalog",
@@ -3536,7 +3536,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.038,
+        "input": 0.036,
         "output": 0.5,
         "cache_read": 0.01
       },
@@ -5004,12 +5004,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32000,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.571,
-        "output": 2.286
+        "input": 0.5,
+        "output": 2.15,
+        "cache_read": 0.35
       },
       "verification": {
         "state": "catalog",
@@ -5228,9 +5229,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0507,
-        "output": 0.2028,
-        "cache_read": 0.001014
+        "input": 0.14,
+        "output": 0.42,
+        "cache_read": 0.0042
       },
       "verification": {
         "state": "catalog",
@@ -5253,9 +5254,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 0.6,
-        "cache_read": 0.003
+        "input": 0.3,
+        "output": 1.2,
+        "cache_read": 0.006
       },
       "verification": {
         "state": "catalog",
@@ -6111,9 +6112,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0675,
-        "output": 0.225,
-        "cache_read": 0.0375
+        "input": 0.09,
+        "output": 0.3,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -6279,7 +6280,7 @@
       },
       "cost": {
         "input": 0.06,
-        "output": 0.25,
+        "output": 0.15,
         "cache_read": 0.015
       },
       "verification": {
@@ -7058,13 +7059,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 198000,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.27,
-        "output": 0.95,
-        "cache_read": 0.03
+        "input": 0.295,
+        "output": 1.2,
+        "cache_read": 0.06
       },
       "verification": {
         "state": "catalog",
@@ -7873,8 +7873,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.2375,
-        "output": 8.4114,
+        "input": 0.2403,
+        "output": 8.4023,
         "cache_read": 0.2
       },
       "verification": {
@@ -8257,7 +8257,7 @@
       },
       "cost": {
         "input": 0.15,
-        "output": 0.47,
+        "output": 0.5,
         "cache_read": 0.02
       },
       "verification": {
@@ -9220,10 +9220,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 4.4,
-        "output": 22,
-        "cache_read": 0.44,
-        "cache_write": 5.5
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.4,
+        "cache_write": 5
       },
       "verification": {
         "state": "catalog",
@@ -9678,12 +9678,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
+        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.03,
-        "output": 0.13,
-        "cache_read": 0.03
+        "input": 0.075,
+        "output": 0.3,
+        "cache_read": 0.0375
       },
       "verification": {
         "state": "catalog",
@@ -10587,29 +10588,6 @@
       }
     },
     {
-      "id": "qwen/qwen3-vl-30b-a3b-thinking",
-      "name": "Qwen: Qwen3 VL 30B A3B Thinking",
-      "provider": "openrouter",
-      "description": "Qwen3-VL-30B-A3B-Thinking is a multimodal model that unifies strong text generation with visual understanding for…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.29,
-        "output": 1
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "qwen/qwen3-vl-8b-instruct",
       "name": "Qwen: Qwen3 VL 8B Instruct",
       "provider": "openrouter",
@@ -10718,13 +10696,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 64000,
+        "output_tokens": 81920,
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 3.6,
-        "cache_read": 0.12
+        "input": 0.45,
+        "output": 3,
+        "cache_read": 0.22
       },
       "verification": {
         "state": "catalog",
@@ -10747,9 +10725,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.118,
-        "output": 0.174,
-        "cache_read": 0.107
+        "input": 0.051,
+        "output": 0.075,
+        "cache_read": 0.046
       },
       "status": "deprecated",
       "verification": {
@@ -11156,6 +11134,32 @@
       }
     },
     {
+      "id": "qwen/qwen4-max",
+      "name": "Qwen: Qwen4 Max",
+      "provider": "openrouter",
+      "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 393216,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.5,
+        "output": 4.5,
+        "cache_read": 0.075,
+        "cache_write": 1.875
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "recursive/flint-v1.0:free",
       "name": "Recursive: Flint (free)",
       "provider": "openrouter",
@@ -11516,30 +11520,6 @@
       }
     },
     {
-      "id": "stepfun/step-3.5-flash",
-      "name": "StepFun: Step 3.5 Flash",
-      "provider": "openrouter",
-      "description": "Step 3.5 Flash is StepFun's most capable open-source foundation model. Built on a sparse Mixture of Experts (MoE)…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 65536,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.1,
-        "output": 0.3
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "stepfun/step-3.7-flash",
       "name": "StepFun: Step 3.7 Flash",
       "provider": "openrouter",
@@ -11582,29 +11562,6 @@
         "input": 1,
         "output": 2.7,
         "cache_read": 0.1
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "tencent/hunyuan-a13b-instruct",
-      "name": "Tencent: Hunyuan A13B Instruct",
-      "provider": "openrouter",
-      "description": "Hunyuan-A13B is a 13B active parameter Mixture-of-Experts (MoE) language model developed by Tencent, with a total…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.14,
-        "output": 0.57
       },
       "verification": {
         "state": "catalog",
@@ -12480,9 +12437,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.2,
-        "output": 1.1,
-        "cache_read": 0.03
+        "input": 0.13,
+        "output": 0.85,
+        "cache_read": 0.025
       },
       "verification": {
         "state": "catalog",
@@ -12729,9 +12686,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.084,
-        "output": 3.6,
-        "cache_read": 0.079
+        "input": 0.0699,
+        "output": 1.4,
+        "cache_read": 0.0689
       },
       "verification": {
         "state": "catalog",
