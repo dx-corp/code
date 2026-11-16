@@ -263,7 +263,7 @@ const ONE_ASKS: [&str; 11] = [
 ];
 
 /// How a reply moves on to things nobody asked about.
-const FURTHER_ITEMS: [&str; 13] = [
+const FURTHER_ITEMS: [&str; 16] = [
     "next highest",
     "next priorit",
     "other priorit",
@@ -276,6 +276,9 @@ const FURTHER_ITEMS: [&str; 13] = [
     "second priority",
     "if you finish",
     "if you have more time",
+    "if you have time left",
+    "with any time left",
+    "then address",
     "address these",
 ];
 
@@ -319,6 +322,52 @@ const FAULTS: [&str; 14] = [
 /// What a reply says in place of our own fault: the answer may be
 /// incomplete, and nothing about why.
 pub const STILL_UPDATING: &str = "Part of this is still updating.";
+
+/// Whether `question` asks for one thing.
+fn asks_for_one(question: &str) -> bool {
+    let asked = question.to_lowercase().replace('’', "'");
+    ONE_ASKS.iter().any(|ask| asked.contains(ask))
+}
+
+/// Whether `sentence` moves on to things the person did not ask about.
+fn moves_on(sentence: &str) -> bool {
+    let lower = sentence.to_lowercase().replace('’', "'");
+    FURTHER_ITEMS.iter().any(|phrase| lower.contains(phrase))
+}
+
+/// `text` with the time its facts were read, when it rests on records that
+/// carry one and does not say it already: "As of Nov 15, 19:10 UTC." from
+/// the oldest of `as_of` (RFC 3339), so the reply never reads fresher than
+/// its stalest fact. It goes before a closing question, which stays last.
+/// Every claim cites its as-of time: this is that rule in code, not a
+/// request in the prompt.
+pub fn with_as_of(text: &str, as_of: &[String]) -> String {
+    if text.to_lowercase().contains("as of ") {
+        return text.to_owned();
+    }
+    let Some(oldest) = as_of
+        .iter()
+        .filter_map(|stamp| crate::human_text::as_of(stamp).map(|human| (stamp, human)))
+        .min_by(|a, b| a.0.cmp(b.0))
+        .map(|(_, human)| human)
+    else {
+        return text.to_owned();
+    };
+    let line = format!("As of {oldest}.");
+    let body = text.trim_end();
+    match body.rsplit_once("\n\n") {
+        Some((before, last)) if last.contains('?') => format!("{before}\n\n{line}\n\n{last}"),
+        None if body.contains('?') => match body.rfind(['.', '!']) {
+            // One paragraph ending on its question: the time goes before it.
+            Some(end) if end + 1 < body.len() => {
+                let (said, asked) = body.split_at(end + 1);
+                format!("{said} {line}{asked}")
+            }
+            _ => format!("{line} {body}"),
+        },
+        _ => format!("{body}\n\n{line}"),
+    }
+}
 
 /// What the turn's own tool calls say about our side. Wording cannot tell
 /// our fault from the person's facts: "3 endpoints are not responding" and
@@ -399,9 +448,7 @@ pub fn check(question: &str, text: &str) -> Vec<Defect> {
     {
         found.push(Defect::GenericRationale);
     }
-    if ONE_ASKS.iter().any(|ask| asked.contains(ask))
-        && FURTHER_ITEMS.iter().any(|phrase| prose.contains(phrase))
-    {
+    if asks_for_one(question) && FURTHER_ITEMS.iter().any(|phrase| prose.contains(phrase)) {
         found.push(Defect::BeyondTheAsk);
     }
     if lines
@@ -514,6 +561,11 @@ pub fn rewrite(question: &str, text: &str, reads: TurnReads) -> String {
     let mut in_fence = false;
     let mut changed = false;
     let mut said_updating = false;
+
+    // Asked for one thing, a sentence that moves on to more goes, with the
+    // list it introduces: the person asked for one and got it.
+    let one_asked = asks_for_one(question);
+    let mut trimming = false;
     for line in text.split('\n') {
         if line.trim_start().starts_with("```") {
             in_fence = !in_fence;
@@ -524,6 +576,16 @@ pub fn rewrite(question: &str, text: &str, reads: TurnReads) -> String {
             out.push(line.to_owned());
             continue;
         }
+        if trimming && is_item(line) {
+            changed = true;
+            continue;
+        }
+        // A blank line keeps the paragraph break; doubled ones are tidied.
+        if trimming && line.trim().is_empty() {
+            out.push(line.to_owned());
+            continue;
+        }
+        trimming = false;
         if !keeps_structure && (is_heading(line, 2) || is_rule(line)) {
             changed = true;
             continue;
@@ -546,6 +608,11 @@ pub fn rewrite(question: &str, text: &str, reads: TurnReads) -> String {
                 continue;
             }
             let sentence = &plain_names(question, sentence);
+
+            if one_asked && moves_on(sentence) {
+                trimming = true;
+                continue;
+            }
             if let Some(sentence) = without_ids(question, sentence) {
                 rebuilt.push_str(&sentence);
             }

@@ -229,7 +229,7 @@ const MONTHS: [&str; 12] = [
 
 /// "Nov 11, 15:06 UTC" from an RFC 3339 timestamp, in UTC. `None` when a
 /// field is out of range, so a malformed value is left as written.
-fn as_of(stamp: &str) -> Option<String> {
+pub fn as_of(stamp: &str) -> Option<String> {
     let num = |range: std::ops::Range<usize>| stamp.get(range)?.parse::<i64>().ok();
     let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
     let (hour, minute) = (num(11..13)?, num(14..16)?);
