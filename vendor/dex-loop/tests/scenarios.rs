@@ -2374,19 +2374,23 @@ async fn compaction_usage_is_durable_and_stops_an_exhausted_turn_before_dispatch
             })
             .expect("budget exhausted");
         assert!(usage_index < error_index);
-        if commit {
-            let compact_index = events
-                .iter()
-                .position(|event| matches!(event, Event::Compaction { .. }))
-                .expect("summary");
-            assert!(usage_index < compact_index);
-        } else {
-            assert!(
-                events
-                    .iter()
-                    .all(|event| !matches!(event, Event::Compaction { .. }))
-            );
-        }
+        // A declined model summary falls back to the deterministic recap of
+        // the same entries, so either way the history is compacted after the
+        // summary's usage is recorded; only the model's own text differs.
+        let (compact_index, summary) = events
+            .iter()
+            .enumerate()
+            .find_map(|(index, event)| match event {
+                Event::Compaction { summary, .. } => Some((index, summary)),
+                _ => None,
+            })
+            .expect("summary or recap");
+        assert!(usage_index < compact_index);
+        assert_eq!(
+            summary.contains("Recap of earlier turns"),
+            !commit,
+            "{summary}"
+        );
         assert_eq!(ctx, log.rehydrate());
     }
 }
@@ -2902,5 +2906,7 @@ async fn failed_attempt_rows_precede_the_commit_and_never_change_history() {
 mod capacity_controls;
 #[path = "scenarios/compaction_fallback.rs"]
 mod compaction_fallback;
+#[path = "scenarios/final_check.rs"]
+mod final_check;
 #[path = "scenarios/tool_exposure.rs"]
 mod tool_exposure;

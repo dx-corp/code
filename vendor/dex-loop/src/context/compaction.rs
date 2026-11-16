@@ -195,27 +195,73 @@ impl<S: Summarize> Threshold<S> {
             return CompactionPlan::default();
         }
         let summary = self.summarizer.summarize(ctx, &entries).await;
+        if let Some(text) = summary.text {
+            return CompactionPlan {
+                declined: false,
+                compaction: Some(Compaction {
+                    covers_to: history[cut - 1].cursor,
+                    summary: text,
+                }),
+                usage: summary.usage,
+            };
+        }
         // A declined model summary never ends the turn: the deterministic
-        // recap of the same entries replaces them instead (`recap::fallback`).
-        let text = summary.text.or_else(|| {
-            let recap = crate::recap::fallback(ctx, &entries);
-            if recap.is_some() {
-                tracing::warn!(
-                    event = "dex_compaction_recap_fallback",
-                    history_entries = entries.len(),
-                    "model summary declined; the deterministic recap replaces the covered history"
-                );
-            }
-            recap
-        });
+        // recap replaces the covered history instead (`recap::fallback`).
+        let compaction = self.recap_fallback(ctx, cut, &entries);
+        if compaction.is_some() {
+            tracing::warn!(
+                event = "dex_compaction_recap_fallback",
+                history_entries = entries.len(),
+                "model summary declined; the deterministic recap replaces the covered history"
+            );
+        }
         CompactionPlan {
-            declined: text.is_none(),
-            compaction: text.map(|summary| Compaction {
-                covers_to: history[cut - 1].cursor,
-                summary,
-            }),
+            declined: compaction.is_none(),
+            compaction,
             usage: summary.usage,
         }
+    }
+
+    /// The recap that stands in for a declined model summary of
+    /// `history[..cut]` (`entries` is that prefix without the running turn's
+    /// own input). The running turn's steps and results stay exactly as they
+    /// are whenever the turn fits in half the limit beside a recap of the
+    /// turns before it and that recap is smaller than what it replaces. Only
+    /// a turn too large for that is recapped too, with its inline results
+    /// kept as returned within the recap's own bound.
+    fn recap_fallback(&self, ctx: &Context, cut: usize, entries: &[Entry]) -> Option<Compaction> {
+        let history = ctx.history();
+        let current_from = ctx
+            .turn_running()
+            .then(|| {
+                history[..cut].iter().position(|entry| {
+                    matches!(&entry.message, Message::User { turn, .. } if Some(turn) == ctx.turn())
+                })
+            })
+            .flatten()
+            .filter(|from| *from < entries.len());
+        let Some(from) = current_from else {
+            return Some(Compaction {
+                covers_to: history[cut - 1].cursor,
+                summary: crate::recap::fallback(ctx, entries)?,
+            });
+        };
+        let size =
+            |entries: &[Entry]| -> usize { entries.iter().map(|entry| entry.message.size()).sum() };
+        if valid_cut(history, from)
+            && let Some(recap) = crate::recap::fallback(ctx, &history[..from])
+            && recap.len() < size(&history[..from])
+            && size(&history[from..]).saturating_add(recap.len()) <= self.limit(ctx) / 2
+        {
+            return Some(Compaction {
+                covers_to: history[from - 1].cursor,
+                summary: recap,
+            });
+        }
+        Some(Compaction {
+            covers_to: history[cut - 1].cursor,
+            summary: crate::recap::fallback_mid_turn(ctx, entries, from)?,
+        })
     }
 }
 
@@ -502,14 +548,7 @@ mod tests {
                         timing: None,
                     },
                 ),
-                (
-                    Cursor(3),
-                    Event::Final {
-                        text: String::new(),
-                        claims: Vec::new(),
-                        rich: None,
-                    },
-                ),
+                (Cursor(3), Event::final_text("")),
             ];
             let ctx = rehydrate(thread(), &events);
             let compactor = Threshold::for_turns(50_000, Fake);
@@ -555,14 +594,7 @@ mod tests {
                     timing: None,
                 },
             ),
-            (
-                Cursor(3),
-                Event::Final {
-                    text: String::new(),
-                    claims: Vec::new(),
-                    rich: None,
-                },
-            ),
+            (Cursor(3), Event::final_text("")),
         ];
         let ctx = rehydrate(thread(), &events);
         let legacy = Threshold::for_turns(50_000, Fake);
@@ -585,14 +617,7 @@ mod tests {
     fn repeated_compaction_retains_current_input_steers_and_suffix_replay() {
         let mut events = vec![];
         append(&mut events, user("old", "old constraint"));
-        append(
-            &mut events,
-            Event::Final {
-                text: "old done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        append(&mut events, Event::final_text("old done"));
         append(&mut events, user("current", "do not publish"));
         append(
             &mut events,
@@ -625,14 +650,7 @@ mod tests {
             warm = rehydrate(thread(), &events);
         }
         append(&mut events, user("next", "new task"));
-        append(
-            &mut events,
-            Event::Final {
-                text: "current done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        append(&mut events, Event::final_text("current done"));
         let mut next = rehydrate(thread(), &events);
         assert_eq!(next.turn(), Some(&TurnId::new("next")));
         let covers = events[events.len() - 3].0;
@@ -672,11 +690,7 @@ mod tests {
             });
             push(user("queued-one", "first queued request"));
             push(user("queued-two", "second queued request"));
-            push(Event::Final {
-                text: "current done".into(),
-                claims: Vec::new(),
-                rich: None,
-            });
+            push(Event::final_text("current done"));
             push(Event::Compaction {
                 covers_to_cursor: Cursor(2),
                 summary: "earlier inputs and work".into(),
@@ -688,11 +702,7 @@ mod tests {
         // The retired suffix starts at covers=2 and omits the current
         // UserMessage. Its Final then wrongly terminates queued-one.
         assert_ne!(warm, rehydrate(thread(), &events[1..]));
-        let finish = Event::Final {
-            text: "first queued done".into(),
-            claims: Vec::new(),
-            rich: None,
-        };
+        let finish = Event::final_text("first queued done");
         append(&mut events, finish.clone());
         warm.observe(events.last().expect("event").0, &finish);
         assert_eq!(warm.turn(), Some(&TurnId::new("queued-two")));
@@ -779,14 +789,7 @@ mod tests {
         let mut events = vec![];
         append(&mut events, user("finished", "exact completed request"));
         completed(&mut events, "one", 1);
-        append(
-            &mut events,
-            Event::Final {
-                text: "done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        append(&mut events, Event::final_text("done"));
         let mut ctx = rehydrate(thread(), &events);
         let size = ctx
             .history()
@@ -1056,11 +1059,7 @@ mod cut_tests {
     fn two_turns(rounds: u32, open: bool) -> Context {
         let mut events = vec![user("t1")];
         events.extend(step(1, None));
-        events.push(Event::Final {
-            text: "done".into(),
-            claims: Vec::new(),
-            rich: None,
-        });
+        events.push(Event::final_text("done"));
         events.push(user("t2"));
         for round in 1..=rounds {
             let call = format!("c{round}");

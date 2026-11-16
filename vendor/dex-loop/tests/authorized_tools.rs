@@ -64,14 +64,7 @@ fn authority_replays_with_the_original_principal_and_does_not_leak_to_the_queue(
     }
     assert_eq!(replay.authorized_principal(), live.authorized_principal());
     assert_eq!(replay.authorized_tools(), live.authorized_tools());
-    replay.observe(
-        Cursor(5),
-        &Event::Final {
-            text: "done".into(),
-            claims: Vec::new(),
-            rich: None,
-        },
-    );
+    replay.observe(Cursor(5), &Event::final_text("done"));
     assert_eq!(replay.turn(), Some(&TurnId::new("second")));
     assert_eq!(
         replay.authorized_principal(),

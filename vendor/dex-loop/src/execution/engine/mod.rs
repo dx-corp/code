@@ -347,13 +347,15 @@ pub struct Engine<L, M, T, E, S, C = NoCompaction> {
     final_check: Option<Arc<dyn FinalCheck>>,
 }
 
-/// A last deterministic stage over the reply, given what the turn's tools
-/// returned. It returns the reply to record; it runs no model and cannot fail
-/// the turn.
+/// A last deterministic stage over the reply, given what the person asked
+/// this turn (`asked`: their message and any steer, in their words) and what
+/// the turn's tools returned. It returns the reply to record; it runs no
+/// model and cannot fail the turn.
 pub trait FinalCheck: Send + Sync {
     fn check<'a>(
         &'a self,
         thread: &'a crate::ThreadId,
+        asked: &'a str,
         reply: String,
         outputs: &'a [crate::TurnOutput],
         held: &'a [crate::ToolName],
@@ -441,9 +443,11 @@ where
     async fn checked_final(&self, ctx: &Context, reply: String) -> Event {
         let FinalReply { text, claims, rich } = match &self.final_check {
             Some(check) => {
+                let asked = ctx.asked_this_turn();
                 check
                     .check(
                         ctx.thread(),
+                        &asked,
                         reply,
                         ctx.turn_outputs(),
                         ctx.authorized_tools(),
