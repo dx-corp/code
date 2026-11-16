@@ -8,15 +8,16 @@
 //! asked for the detail), it has no headings, bold-label sections or bold
 //! for emphasis, it shows no internal identifier, when Dex cannot do
 //! something it says what it can do instead, and it ends on the answer, a
-//! commitment or a question, never on an offer left open.
+//! commitment or a question, never on an offer left open. Its reasons are
+//! about this person's records, and asked for one thing it gives one.
 //!
 //! [`check`] reports each defect once, in [`Defect`] order. [`rewrite`]
 //! repairs what it can without losing a fact or inventing a word: an
 //! identifier in brackets goes, a sentence that only states one goes, a
 //! heading line goes, a bold label or phrase loses its bold, and a sentence
 //! that is only a disclaimer or a nameless offer goes. Length, a buried
-//! answer, a bare refusal and an open offer need the writer, so they are
-//! reported.
+//! answer, a bare refusal, an open offer, general rationale and more than
+//! was asked need the writer, so they are reported.
 //!
 //! The recorded cases in `evals/dex-voice/chat_cases.toml` are replies Dex
 //! posted to the founder's Slack DM and the messages the style aims for.
@@ -46,10 +47,18 @@ pub enum Defect {
     /// next."): neither a commitment ("I'll ...") nor a question the person
     /// can answer with yes ("Want me to ...?").
     OpenOffer,
+    /// Rationale that would be true of any company ("Auditors scrutinize
+    /// ...", "introduces an immediate risk of ..."). The why is one
+    /// sentence about this person's records.
+    GenericRationale,
+    /// The person asked for one thing ("the one thing I should fix first")
+    /// and the reply goes on to others ("the next highest priority items
+    /// are ...").
+    BeyondTheAsk,
 }
 
 /// Every defect, in order.
-pub const ALL: [Defect; 7] = [
+pub const ALL: [Defect; 9] = [
     Defect::BuriedLead,
     Defect::SectionLabel,
     Defect::InternalId,
@@ -57,6 +66,8 @@ pub const ALL: [Defect; 7] = [
     Defect::BareRefusal,
     Defect::BoldEmphasis,
     Defect::OpenOffer,
+    Defect::GenericRationale,
+    Defect::BeyondTheAsk,
 ];
 
 impl Defect {
@@ -70,6 +81,8 @@ impl Defect {
             Defect::BareRefusal => "bare_refusal",
             Defect::BoldEmphasis => "bold_emphasis",
             Defect::OpenOffer => "open_offer",
+            Defect::GenericRationale => "generic_rationale",
+            Defect::BeyondTheAsk => "beyond_the_ask",
         }
     }
 }
@@ -206,6 +219,47 @@ const OPEN_OFFERS: [&str; 9] = [
     "if helpful",
 ];
 
+/// Rationale that holds for any company and says nothing of this one.
+const GENERIC_RATIONALE: [&str; 11] = [
+    "auditors scrutinize",
+    "auditors strictly",
+    "auditors look for",
+    "introduces an immediate risk",
+    "introduces severe",
+    "principle of least privilege",
+    "best practice",
+    "why it matters",
+    "attack surface",
+    "blast radius",
+    "it is important to",
+];
+
+/// How a person asks for one thing.
+const ONE_ASKS: [&str; 8] = [
+    "one thing",
+    "single most",
+    "single thing",
+    "most important",
+    "most urgent",
+    "top priority",
+    "fix first",
+    "do first",
+];
+
+/// How a reply moves on to things nobody asked about.
+const FURTHER_ITEMS: [&str; 10] = [
+    "next highest",
+    "next priorit",
+    "other priorit",
+    "additional high",
+    "additional priorit",
+    "additional item",
+    "to address next",
+    "beyond that",
+    "you should also",
+    "second priority",
+];
+
 /// How a person asks what Dex is able to do. "I can ..." answers that.
 const CAPABILITY_ASKS: [&str; 6] = [
     "can you",
@@ -252,6 +306,23 @@ pub fn check(question: &str, text: &str) -> Vec<Defect> {
     }
     if ends_on_open_offer(question, text, &lines) {
         found.push(Defect::OpenOffer);
+    }
+    let asked = question.to_lowercase().replace('’', "'");
+    let (_, prose) = split_links(&lines.join("\n"));
+    let prose = prose.to_lowercase().replace('’', "'");
+    // A person who asked why, or for the detail, is owed the reasoning.
+    let wants_reasons = budget(question).is_none() || asked.contains("why");
+    if !wants_reasons
+        && GENERIC_RATIONALE
+            .iter()
+            .any(|phrase| prose.contains(phrase))
+    {
+        found.push(Defect::GenericRationale);
+    }
+    if ONE_ASKS.iter().any(|ask| asked.contains(ask))
+        && FURTHER_ITEMS.iter().any(|phrase| prose.contains(phrase))
+    {
+        found.push(Defect::BeyondTheAsk);
     }
     found
 }
