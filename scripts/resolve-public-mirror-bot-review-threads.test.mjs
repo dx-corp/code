@@ -21,6 +21,12 @@ const ROOT_SYNC_WORKFLOW = fileURLToPath(
 		import.meta.url,
 	),
 );
+const SWEEP_WORKFLOW = fileURLToPath(
+	new URL(
+		"../../../.github/workflows/maestro-public-sync-bot-thread-sweep.yml",
+		import.meta.url,
+	),
+);
 
 function thread({
 	id,
@@ -267,6 +273,67 @@ test("summary comment still posts when no bot threads need resolving", () => {
 			triageUrl: "https://example.test/triage/9100",
 		}),
 	);
+});
+
+test("a sweep with nothing to resolve posts no comment", () => {
+	const fake = makeGhJson([
+		page([
+			thread({ id: "PRRT_human", login: "alice" }),
+			thread({ id: "PRRT_done", login: "cursor[bot]", isResolved: true }),
+		]),
+	]);
+	const result = resolvePublicMirrorBotReviewThreads({
+		commentWhenNoneResolved: false,
+		ghJson: fake.ghJson,
+		number: 1122,
+		owner: "evalops",
+		postComment: fake.postComment,
+		repo: "maestro",
+	});
+	assert.deepEqual(result.resolvedIds, []);
+	assert.deepEqual(fake.resolvedIds, []);
+	assert.equal(result.humanCount, 1);
+	assert.equal(fake.comments.length, 0);
+});
+
+test("a sweep that resolves a late bot thread still reports it and leaves human threads", () => {
+	const fake = makeGhJson([
+		page([
+			thread({ id: "PRRT_human", login: "alice" }),
+			thread({ id: "PRRT_late_bot", login: "chatgpt-codex-connector" }),
+		]),
+	]);
+	const result = resolvePublicMirrorBotReviewThreads({
+		commentWhenNoneResolved: false,
+		ghJson: fake.ghJson,
+		number: 1122,
+		owner: "evalops",
+		postComment: fake.postComment,
+		repo: "maestro",
+	});
+	assert.deepEqual(fake.resolvedIds, ["PRRT_late_bot"]);
+	assert.equal(fake.comments.length, 1);
+	assert.match(fake.comments[0], /Left 1 human-started thread\(s\) unresolved/);
+});
+
+test("scheduled sweep resolves late bot threads apart from the publisher", (t) => {
+	if (!existsSync(SWEEP_WORKFLOW) || !existsSync(ROOT_SYNC_WORKFLOW)) {
+		t.skip("mono-root workflows are not in this checkout");
+		return;
+	}
+	const sweep = readFileSync(SWEEP_WORKFLOW, "utf8");
+	assert.match(sweep, /\n  schedule:\n    - cron: "[^"]+"/);
+	assert.match(sweep, /permission-pull-requests: write/);
+	assert.doesNotMatch(sweep, /permission-contents: write/);
+	assert.match(sweep, /SYNC_BRANCH: sync\/public-release-mirror/);
+	assert.match(sweep, /index\("sync-hold"\)/);
+	assert.match(sweep, /resolve-public-mirror-bot-review-threads\.mjs/);
+	assert.match(sweep, /--comment-only-when-resolved/);
+	assert.match(sweep, /\/issues\/9100\b/);
+	assert.doesNotMatch(sweep, /continue-on-error/);
+	// The publisher keeps push and dispatch only, so sweep runs never enter its watchdog failure streak.
+	const publisher = readFileSync(ROOT_SYNC_WORKFLOW, "utf8");
+	assert.doesNotMatch(publisher, /\n  schedule:/);
 });
 
 test("sync workflow resolves bot threads after opening the PR and before auto-merge", (t) => {

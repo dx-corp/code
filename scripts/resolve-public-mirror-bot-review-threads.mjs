@@ -37,6 +37,7 @@ const RESOLVE_REVIEW_THREAD_MUTATION = `mutation($threadId:ID!){
 
 function parseArgs(argv) {
 	const args = {
+		commentWhenNoneResolved: true,
 		pr: 0,
 		repo: DEFAULT_REPO,
 		triageUrl: "",
@@ -53,6 +54,9 @@ function parseArgs(argv) {
 				break;
 			case "--triage-url":
 				args.triageUrl = argv[++index] ?? "";
+				break;
+			case "--comment-only-when-resolved":
+				args.commentWhenNoneResolved = false;
 				break;
 			default:
 				throw new Error(`Unknown argument: ${arg}`);
@@ -213,6 +217,7 @@ export function resolvePublicMirrorBotReviewThreads({
 	repo,
 	number,
 	triageUrl = "",
+	commentWhenNoneResolved = true,
 	ghJson: queryGh,
 	postComment,
 }) {
@@ -240,6 +245,11 @@ export function resolvePublicMirrorBotReviewThreads({
 	for (const thread of toResolve) {
 		resolveReviewThread(queryGh, thread.id);
 		resolvedIds.push(thread.id);
+	}
+
+	// A repeated sweep with nothing to resolve stays silent instead of restating the PR's state.
+	if (!resolvedIds.length && !commentWhenNoneResolved) {
+		return { commentBody: "", humanCount, resolvedIds };
 	}
 
 	const commentBody = formatSummaryComment({
@@ -280,6 +290,7 @@ function main() {
 	const args = parseArgs(process.argv.slice(2));
 	const [owner, repoName] = args.repo.split("/");
 	const result = resolvePublicMirrorBotReviewThreads({
+		commentWhenNoneResolved: args.commentWhenNoneResolved,
 		ghJson,
 		number: args.pr,
 		owner,
