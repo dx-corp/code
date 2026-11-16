@@ -128,22 +128,44 @@ jobs:
             echo "Found ${active_count} active release workflow run(s) for ${RELEASE_TAG}; not dispatching another."
           fi
 
-      # Fail only when the version is already tagged at another commit, package
-      # inputs changed, the version is not on npm, and no release run is still
-      # in flight (queued/waiting/in_progress). A release waiting on the
-      # npm-release environment approval must not red every subsequent main push.
-      - name: Require version bump for existing release tag
+      # Mono freezes each public release at its reviewed version commit, and the
+      # release workflow builds that tag, never HEAD. Public main moving past an
+      # unpublished frozen tag is therefore a release still in progress: failing
+      # here would red every later main push and stop dispatch-public-release
+      # from finishing it. Fail when the tagged version is not that frozen
+      # source: the tag is outside protected main and releases/<tag> history, or
+      # it carries a different package version.
+      - id: frozen-release
+        name: Require a frozen release source for the existing tag
         if: ${{ github.repository == 'dx-corp/code' && steps.release.outputs.tag_exists == 'true' && steps.release.outputs.tag_matches_head != 'true' && steps.release.outputs.package_changed_since_tag == 'true' && steps.registry-release.outputs.published != 'true' && (steps.active-release.outputs.active_count == '0' || steps.active-release.outputs.active_count == '') }}
         env:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
           TAG_TARGET: ${{ steps.release.outputs.tag_target }}
         run: |
-          echo "::error title=Package version already tagged::package.json version ${RELEASE_VERSION} already has a semver tag at another commit."
-          echo "package.json version ${RELEASE_VERSION} already has a semver tag at another commit." >&2
-          echo "${RELEASE_TAG} points at ${TAG_TARGET}; current HEAD is ${GITHUB_SHA}." >&2
-          echo "Bump package.json before tagging another main commit for this package version." >&2
-          exit 1
+          set -euo pipefail
+          refuse() {
+            echo "::error title=Release tag is not a frozen release source::$1"
+            echo "${RELEASE_TAG} points at ${TAG_TARGET}; current HEAD is ${GITHUB_SHA}." >&2
+            echo "Publish the next reviewed version from Mono; never move or reuse ${RELEASE_TAG}." >&2
+            exit 1
+          }
+          [[ "$TAG_TARGET" =~ ^[0-9a-f]{40}$ ]] || refuse "${RELEASE_TAG} does not resolve to a commit."
+          release_branch="refs/remotes/origin/releases/${RELEASE_TAG}"
+          if git merge-base --is-ancestor "$TAG_TARGET" HEAD; then
+            frozen_in="main"
+          elif git rev-parse --verify --quiet "${release_branch}^{commit}" >/dev/null &&
+            git merge-base --is-ancestor "$TAG_TARGET" "$release_branch"; then
+            frozen_in="releases/${RELEASE_TAG}"
+          else
+            refuse "${RELEASE_TAG} is not in main or releases/${RELEASE_TAG} history."
+          fi
+          tag_version="$(git show "${TAG_TARGET}:package.json" | jq -r .version)"
+          if [[ "$tag_version" != "$RELEASE_VERSION" ]]; then
+            refuse "${RELEASE_TAG} contains package version ${tag_version}, not ${RELEASE_VERSION}."
+          fi
+          echo "frozen=true" >> "$GITHUB_OUTPUT"
+          echo "${RELEASE_TAG} is frozen at ${TAG_TARGET} in ${frozen_in} and is not on npm yet; later main changes ship with the next version."
 
       - name: Summarize tag status
         env:
@@ -166,7 +188,7 @@ jobs:
             echo "Release workflow for ${RELEASE_TAG} is still in flight (${ACTIVE_RELEASE_COUNT} active run(s)); not failing main for an in-progress publish."
           elif [[ "$TAG_EXISTS" == "true" && "$PACKAGE_CHANGED_SINCE_TAG" == "true" ]]; then
             echo "Semver tag ${RELEASE_TAG} already exists at another commit."
-            echo "Package-impacting source inputs changed since the existing tag."
+            echo "Package-impacting source inputs changed since the existing tag; its release is still unpublished."
           elif [[ "$TAG_EXISTS" == "true" ]]; then
             echo "Semver tag ${RELEASE_TAG} already exists."
             echo "No package-impacting source inputs changed since the existing tag."

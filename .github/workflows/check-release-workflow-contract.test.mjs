@@ -3,6 +3,7 @@ import "./release-branch-admission.test.mjs";
 import "./source-provenance-link.test.mjs";
 import "./check-release-identity.test.mjs";
 import "./release-propagation.test.mjs";
+import "./tag-release-frozen-source.test.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
