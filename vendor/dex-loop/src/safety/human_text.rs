@@ -165,7 +165,7 @@ fn trim_word(word: &str) -> (&str, &str, &str) {
 /// by underscores (`waiting_since`, `review_path`), two to four of them.
 /// Anything with a digit, a capital, a dot, a slash, a colon or an `@` is a
 /// name, version, path, URL, email address or emoji shortcode, and is kept.
-fn is_field_name(core: &str) -> bool {
+pub(crate) fn is_field_name(core: &str) -> bool {
     let parts: Vec<&str> = core.split('_').collect();
     (2..=4).contains(&parts.len())
         && parts
