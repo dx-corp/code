@@ -327,6 +327,17 @@ pub fn args_digest(args: &serde_json::Value) -> String {
 /// verified: the record the reply named, what it said about it, and which
 /// results say so. Built only by a host final check from tool results; a
 /// statement no result supports never becomes a claim.
+/// Rich content one surface shows with a turn's answer, built by the host's
+/// final check from the turn's own tool results: for Slack, Block Kit
+/// `blocks` and the notification `text` those blocks say. A surface that
+/// does not know `surface` shows the answer text alone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RichBlocks {
+    pub surface: String,
+    pub text: String,
+    pub blocks: serde_json::Value,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnswerClaim {
     /// Stable within the turn (`c1`, `c2`, ...), for follow-ups by reference.
@@ -979,6 +990,11 @@ pub enum Event {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         claims: Vec<AnswerClaim>,
+        /// Content a surface shows with `text`, such as a page rendered from
+        /// this turn's own reads, written by the host's final check and never
+        /// by the model. Older rows and older readers omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rich: Option<RichBlocks>,
     },
     Error {
         code: ErrorCode,
@@ -1019,6 +1035,7 @@ impl Event {
         Self::Final {
             text: text.into(),
             claims: Vec::new(),
+            rich: None,
         }
     }
 

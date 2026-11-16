@@ -52,6 +52,8 @@ pub mod human_text;
 mod page;
 #[path = "contracts/ports.rs"]
 mod ports;
+#[path = "context/recap.rs"]
+mod recap;
 #[path = "context/rehydrate.rs"]
 mod rehydrate;
 #[path = "safety/sanitize.rs"]
@@ -90,8 +92,8 @@ pub use event::{
     AUTO_APPROVER, ActionConfirmation, AnswerClaim, ApprovalId, ApprovalMode, ArtifactRef,
     AttemptNext, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass,
     ErrorCode, Event, HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output,
-    OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, ServedBy, StepTiming,
-    ThreadContextProfile, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
+    OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, RichBlocks, ServedBy,
+    StepTiming, ThreadContextProfile, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
 };
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use page::{
@@ -101,6 +103,7 @@ pub use ports::{
     ActOperation, Claim, Effects, ExecutorKind, Fenced, GovernanceClass, Log, Model, ModelChunk,
     ModelError, RequestSize, ToolSpec, ToolWrapper, Tools, Verdict, WrapperRoute, model_tool_name,
 };
+pub use recap::{RECAP_HISTORY_BYTES, RECAP_REPLY_BYTES, recap_after_turn};
 pub use rehydrate::rehydrate;
 pub use sanitize::{DeltaFilter, Lexicon, LexiconFilter, Sanitizer};
 pub use summary::ModelSummarizer;

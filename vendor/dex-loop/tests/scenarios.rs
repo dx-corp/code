@@ -2392,66 +2392,6 @@ async fn compaction_usage_is_durable_and_stops_an_exhausted_turn_before_dispatch
 }
 
 #[tokio::test]
-async fn declined_compaction_preserves_history_and_a_later_turn_can_recover() {
-    struct Decline;
-    impl dex_loop::Summarize for Decline {
-        async fn summarize(
-            &self,
-            _: &dex_loop::Context,
-            _: &[dex_loop::Entry],
-        ) -> dex_loop::Summary {
-            dex_loop::Summary::default()
-        }
-    }
-    let log = FakeLog::default();
-    log.start_turn("old", "Never publish without approval. Budget is $10.");
-    log.host_append(Event::final_text("analysis unfinished"));
-    let mut ctx = log.start_turn("current", "continue investigating");
-    let original = ctx.history().to_vec();
-    let model = FakeModel::new(vec![vec![text("recovered answer")]]);
-    let tools = FakeTools::new(vec![]);
-    let failing = support::engine(&log, &model, &tools, budget())
-        .with_compactor(Threshold::new(1, 1, Decline));
-    assert_eq!(
-        failing.run(&mut ctx, &CancellationToken::new()).await,
-        Ok(Exit::Failed)
-    );
-    assert_eq!(
-        model.calls(),
-        0,
-        "do not dispatch unchanged oversized context"
-    );
-    assert_eq!(ctx.history(), original);
-    assert_eq!(ctx, log.rehydrate());
-    assert!(matches!(
-        log.events().last(),
-        Some(Event::Error {
-            class: Some(dex_loop::ErrorClass::ContextCapacity),
-            code: dex_loop::ErrorCode::ModelFailed,
-            ..
-        })
-    ));
-    let mut resumed = log.start_turn("next", "continue after recovery");
-    let recovery = support::engine(&log, &model, &tools, budget()).with_compactor(Threshold::new(
-        1,
-        1,
-        FakeSummarizer,
-    ));
-    assert_eq!(
-        recovery.run(&mut resumed, &CancellationToken::new()).await,
-        Ok(Exit::Done)
-    );
-    assert_eq!(model.calls(), 1);
-    assert!(
-        model.seen()[0]
-            .iter()
-            .any(|message| matches!(message, dex_loop::Message::Summary { .. }))
-    );
-    assert!(log.events().iter().any(|event| matches!(event, Event::UserMessage { text, .. } if text == "Never publish without approval. Budget is $10.")));
-    assert_eq!(resumed, log.rehydrate());
-}
-
-#[tokio::test]
 async fn capacity_recovery_does_not_retry_nonreducing_or_uncompactable_history() {
     struct Expanding;
     impl dex_loop::Summarize for Expanding {
@@ -2960,5 +2900,7 @@ async fn failed_attempt_rows_precede_the_commit_and_never_change_history() {
 
 #[path = "scenarios/capacity_controls.rs"]
 mod capacity_controls;
+#[path = "scenarios/compaction_fallback.rs"]
+mod compaction_fallback;
 #[path = "scenarios/tool_exposure.rs"]
 mod tool_exposure;

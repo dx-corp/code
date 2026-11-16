@@ -366,6 +366,8 @@ pub trait FinalCheck: Send + Sync {
 pub struct FinalReply {
     pub text: String,
     pub claims: Vec<crate::AnswerClaim>,
+    /// What a surface shows with the text, from this turn's own results.
+    pub rich: Option<crate::RichBlocks>,
 }
 
 impl From<String> for FinalReply {
@@ -373,6 +375,7 @@ impl From<String> for FinalReply {
         Self {
             text,
             claims: Vec::new(),
+            rich: None,
         }
     }
 }
@@ -436,7 +439,7 @@ where
     }
 
     async fn checked_final(&self, ctx: &Context, reply: String) -> Event {
-        let FinalReply { text, claims } = match &self.final_check {
+        let FinalReply { text, claims, rich } = match &self.final_check {
             Some(check) => {
                 check
                     .check(
@@ -450,7 +453,7 @@ where
             None => reply.into(),
         };
         self.grade_voice(ctx, &text);
-        Event::Final { text, claims }
+        Event::Final { text, claims, rich }
     }
 
     /// Every reply, for every host and surface, is graded against Dex's
@@ -598,6 +601,7 @@ where
                         vec![Event::Final {
                             text,
                             claims: Vec::new(),
+                            rich: None,
                         }],
                     )
                     .await?;
@@ -806,7 +810,7 @@ where
                         class: Some(crate::ErrorClass::ContextCapacity),
                         code: ErrorCode::ModelFailed,
                         message: recovery_error.map_or_else(
-                            || "Conversation context could not be reduced safely. History is preserved; start a new conversation with the relevant details if recovery keeps failing.".into(),
+                            || "Conversation context could not be reduced safely. History is preserved; the next turn continues from a summary of it, and a long request may need shortening.".into(),
                             |error| error.message,
                         ),
                     }],
@@ -919,24 +923,12 @@ where
         let mut served = None;
         let mut timing = None;
         let answer_continuation = ctx.answer_continuation_started();
-        // The step budget is spent, or the stall guard already refused the
-        // identical call: this call offers no tools and must answer.
         let stalled = ctx.stalled_call_refused();
-        let tools_withheld = self.budget.answer_only(step.saturating_sub(1)) || stalled;
+        let tools_withheld = self.tools_withheld(ctx, step);
         {
-            // The answer-only call offers nothing, not even `tools.search`.
             let answer_only = answer_continuation || tools_withheld;
-            let owned = if answer_only {
-                Vec::new()
-            } else {
-                self.offered(ctx)
-            };
+            let (model_ctx, owned) = self.step_request(ctx, step, started.elapsed());
             let offered: Vec<&ToolSpec> = owned.iter().collect();
-            let model_ctx = ctx.for_model(self.budget.remaining(
-                step.saturating_sub(1),
-                ctx.usage(),
-                started.elapsed(),
-            ));
             let mut stream = pin!(self.model.stream(&model_ctx, &offered));
             // Dropping the stream on cancel is safe: a model call has no
             // effects to wait for. A stream that never yields another chunk
@@ -2317,6 +2309,54 @@ where
         events.push(Event::Interrupted);
         prefetch.reads.drive(self.emit(ctx, events)).await?;
         Ok(Exit::Interrupted)
+    }
+
+    /// The step budget is spent, or the stall guard already refused the
+    /// identical call: step `step` offers no tools and must answer.
+    fn tools_withheld(&self, ctx: &Context, step: u32) -> bool {
+        self.budget.answer_only(step.saturating_sub(1)) || ctx.stalled_call_refused()
+    }
+
+    /// What step `step` sends the model: the context as the model sees it
+    /// and the tools it declares. The answer-only call offers nothing, not
+    /// even `tools.search`.
+    fn step_request(
+        &self,
+        ctx: &Context,
+        step: u32,
+        elapsed: Duration,
+    ) -> (Context, Vec<ToolSpec>) {
+        let answer_only = ctx.answer_continuation_started() || self.tools_withheld(ctx, step);
+        let owned = if answer_only {
+            Vec::new()
+        } else {
+            self.offered(ctx)
+        };
+        let model_ctx = ctx.for_model(self.budget.remaining(
+            step.saturating_sub(1),
+            ctx.usage(),
+            elapsed,
+        ));
+        (model_ctx, owned)
+    }
+
+    /// What the next model step of this turn would send, computed as the
+    /// step computes it, without calling the model or writing to the log:
+    /// the model's view of `ctx` once the step has started, and the tools
+    /// it declares. For an eval that must send exactly what production
+    /// sends (`evals/dex-voice`).
+    pub fn next_model_request(&self, ctx: &Context) -> (Context, Vec<ToolSpec>) {
+        let step = ctx.step().saturating_add(1);
+        let mut started = ctx.clone();
+        let next = Cursor(ctx.cursor().0.saturating_add(1));
+        started.observe(
+            next,
+            &Event::StepStarted {
+                step,
+                control_through: ctx.control_cursor(),
+            },
+        );
+        self.step_request(&started, step, Duration::ZERO)
     }
 
     /// The specs the model sees this step: `tools.search`, `codemode`,
