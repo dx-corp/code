@@ -55,10 +55,19 @@ pub enum Defect {
     /// and the reply goes on to others ("the next highest priority items
     /// are ...").
     BeyondTheAsk,
+    /// A name from our side in code, a read, field or enum the person never
+    /// sees (`employment_facts`, `state: UNKNOWN`, `PERMISSION_DENIED`).
+    /// Rewritten into its plain words.
+    InternalName,
+    /// Our own fault told to the person: a read, lookup or service of ours
+    /// that is unavailable, failing or timed out ("personnel directory reads
+    /// are currently unavailable"). Outages never reach customers: the
+    /// rewrite says the answer is still updating instead.
+    PlatformFault,
 }
 
 /// Every defect, in order.
-pub const ALL: [Defect; 9] = [
+pub const ALL: [Defect; 11] = [
     Defect::BuriedLead,
     Defect::SectionLabel,
     Defect::InternalId,
@@ -68,6 +77,8 @@ pub const ALL: [Defect; 9] = [
     Defect::OpenOffer,
     Defect::GenericRationale,
     Defect::BeyondTheAsk,
+    Defect::InternalName,
+    Defect::PlatformFault,
 ];
 
 impl Defect {
@@ -83,6 +94,8 @@ impl Defect {
             Defect::OpenOffer => "open_offer",
             Defect::GenericRationale => "generic_rationale",
             Defect::BeyondTheAsk => "beyond_the_ask",
+            Defect::InternalName => "internal_name",
+            Defect::PlatformFault => "platform_fault",
         }
     }
 }
@@ -260,6 +273,47 @@ const FURTHER_ITEMS: [&str; 10] = [
     "second priority",
 ];
 
+/// What our side is called when a sentence reports it failing: a read, a
+/// lookup, a service. A person's own connection ("the Okta connection
+/// failed to sync") is theirs to fix and is not one of these.
+const OUR_SIDE: [&str; 12] = [
+    " read ",
+    " reads ",
+    " reads,",
+    "read is ",
+    "read was ",
+    "lookup",
+    "backend",
+    "our side",
+    "on our end",
+    "internal service",
+    "our service",
+    "endpoint",
+];
+
+/// How a sentence says a read or service of ours is failing. "Failing"
+/// alone describes a person's tests, so it is not one of these.
+const FAULTS: [&str; 14] = [
+    "unavailable",
+    "read failed",
+    "reads failed",
+    "lookup failed",
+    "could not be read",
+    "couldn't be read",
+    "erroring",
+    "returned an error",
+    "timed out",
+    "timing out",
+    " is down",
+    " are down",
+    "outage",
+    "not responding",
+];
+
+/// What a reply says in place of our own fault: the answer may be
+/// incomplete, and nothing about why.
+pub const STILL_UPDATING: &str = "Part of this is still updating.";
+
 /// How a person asks what Dex is able to do. "I can ..." answers that.
 const CAPABILITY_ASKS: [&str; 6] = [
     "can you",
@@ -324,14 +378,104 @@ pub fn check(question: &str, text: &str) -> Vec<Defect> {
     {
         found.push(Defect::BeyondTheAsk);
     }
+    if lines
+        .iter()
+        .any(|line| plain_names(question, line) != *line)
+    {
+        found.push(Defect::InternalName);
+    }
+    if lines
+        .iter()
+        .flat_map(|line| line_sentences(line))
+        .any(is_platform_fault)
+    {
+        found.push(Defect::PlatformFault);
+    }
     found
+}
+
+/// Whether `sentence` tells the person that a read, lookup or service of
+/// ours is unavailable or failing.
+fn is_platform_fault(sentence: &str) -> bool {
+    let lower = format!(" {} ", sentence.to_lowercase().replace('`', " "));
+    OUR_SIDE.iter().any(|side| lower.contains(side)) && FAULTS.iter().any(|f| lower.contains(f))
+}
+
+/// Whether the content of a code span is a name from our side: a snake_case
+/// read or field (`employment_facts`), a SCREAMING_CASE enum
+/// (`PERMISSION_DENIED`) or a field with its enum value (`state: UNKNOWN`).
+fn is_internal_name(code: &str) -> bool {
+    let screaming = || {
+        let parts: Vec<&str> = code.split('_').collect();
+        parts.len() >= 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            })
+            && code.bytes().next().is_some_and(|b| b.is_ascii_uppercase())
+    };
+    let field = || {
+        code.split_once(": ").is_some_and(|(name, value)| {
+            !name.is_empty()
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                && value.len() >= 2
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b == b'_' || b.is_ascii_digit())
+        })
+    };
+    crate::human_text::is_field_name(code) || screaming() || field()
+}
+
+/// Whether the person asked in our terms: code, a field, an API, or this
+/// very name.
+fn name_was_asked_for(question: &str, code: &str) -> bool {
+    let asked = question.to_lowercase();
+    question.contains('`')
+        || asked.contains(&code.to_lowercase())
+        || asked
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| {
+                matches!(
+                    word,
+                    "field" | "fields" | "column" | "api" | "json" | "schema" | "enum"
+                )
+            })
+}
+
+/// `line` with each internal name in a code span written as its plain
+/// words: `employment_facts` -> employment facts, `state: UNKNOWN` ->
+/// state unknown. Every other code span, and a name the person asked
+/// about, stays as written.
+fn plain_names(question: &str, line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('`') {
+        let Some(len) = rest[open + 1..].find('`') else {
+            break;
+        };
+        let code = &rest[open + 1..open + 1 + len];
+        out.push_str(&rest[..open]);
+        if is_internal_name(code) && !name_was_asked_for(question, code) {
+            out.push_str(&code.replace(": ", " ").replace('_', " ").to_lowercase());
+        } else {
+            out.push_str(&rest[open..open + len + 2]);
+        }
+        rest = &rest[open + len + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `text`, in the Markdown Dex wrote it in, with the defects a rewrite can
 /// remove without losing a fact: an internal id in brackets, a sentence
 /// whose only fact is an internal id, a heading line and the rule under
-/// it, the bold on a label or a phrase, and a sentence that is only a
-/// disclaimer or an offer that names nothing. A reply to a person who asked
+/// it, the bold on a label or a phrase, a sentence that is only a
+/// disclaimer or an offer that names nothing, and an internal name in code
+/// (written as its plain words). A sentence telling the person that a read
+/// or service of ours is failing becomes [`STILL_UPDATING`], once. A reply to a person who asked
 /// for the detail keeps its headings, labels and bold; an id the person
 /// asked about stays. Code blocks are never touched, and every other word
 /// is kept as written.
@@ -340,6 +484,7 @@ pub fn rewrite(question: &str, text: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut in_fence = false;
     let mut changed = false;
+    let mut said_updating = false;
     for line in text.split('\n') {
         if line.trim_start().starts_with("```") {
             in_fence = !in_fence;
@@ -359,6 +504,18 @@ pub fn rewrite(question: &str, text: &str) -> String {
             if is_filler(sentence) {
                 continue;
             }
+            // Our own fault never reaches the person: the answer is still
+            // updating, said once, whatever the fault was.
+            if is_platform_fault(sentence) {
+                if !said_updating {
+                    said_updating = true;
+                    let trailing = &sentence[sentence.trim_end().len()..];
+                    rebuilt.push_str(STILL_UPDATING);
+                    rebuilt.push_str(trailing);
+                }
+                continue;
+            }
+            let sentence = &plain_names(question, sentence);
             if let Some(sentence) = without_ids(question, sentence) {
                 rebuilt.push_str(&sentence);
             }
