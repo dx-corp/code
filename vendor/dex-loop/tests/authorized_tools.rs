@@ -69,6 +69,7 @@ fn authority_replays_with_the_original_principal_and_does_not_leak_to_the_queue(
         &Event::Final {
             text: "done".into(),
             claims: Vec::new(),
+            rich: None,
         },
     );
     assert_eq!(replay.turn(), Some(&TurnId::new("second")));

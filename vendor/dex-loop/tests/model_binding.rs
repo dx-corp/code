@@ -73,6 +73,7 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
             &Event::Final {
                 text: "done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         assert_eq!(context.turn(), Some(&TurnId::new("second")));
@@ -83,6 +84,7 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
             &Event::Final {
                 text: "done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         assert_eq!(context.turn(), Some(&TurnId::new("third")));
@@ -185,6 +187,7 @@ fn completed_route_survives_compaction_and_replay_but_resets_for_a_queued_turn()
             &Event::Final {
                 text: "done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         assert_eq!(context.turn(), Some(&TurnId::new("queued")));

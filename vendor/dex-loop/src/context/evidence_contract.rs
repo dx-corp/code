@@ -71,6 +71,7 @@ fn typed_owner_evidence_is_bounded_and_survives_compaction_and_full_replay() {
         Event::Final {
             text: String::new(),
             claims: Vec::new(),
+            rich: None,
         },
     );
     let covers_to = Cursor(events.len() as i64);

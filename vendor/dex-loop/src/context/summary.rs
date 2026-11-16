@@ -435,7 +435,7 @@ impl<M: Model> ModelSummarizer<M> {
 }
 
 /// The stored summary: exact coverage and references beside the model text.
-fn envelope(from: i64, to: i64, references: &[String], summary: &str) -> String {
+pub(crate) fn envelope(from: i64, to: i64, references: &[String], summary: &str) -> String {
     json!({
         "kind": KIND,
         "authority": "untrusted historical summary; original owner events determine authorization and outcomes",
@@ -573,7 +573,7 @@ fn image_output_cursor(entry: &Entry, evidence: &[crate::ToolEvidence]) -> Optio
         .map(|record| record.cursor().0)
 }
 
-fn material_with_evidence(
+pub(crate) fn material_with_evidence(
     entries: &[Entry],
     evidence: &[crate::ToolEvidence],
 ) -> Option<(String, Vec<String>, i64, i64)> {
@@ -851,6 +851,7 @@ mod tests {
             Event::Final {
                 text: "Read results recorded.".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         ));
         let current_event = Event::UserMessage {
@@ -1842,6 +1843,7 @@ mod tests {
                 Event::Final {
                     text: "Results recorded.".into(),
                     claims: Vec::new(),
+                    rich: None,
                 },
             ),
             (

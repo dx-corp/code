@@ -248,7 +248,7 @@ const GENERIC_RATIONALE: [&str; 11] = [
 ];
 
 /// How a person asks for one thing.
-const ONE_ASKS: [&str; 8] = [
+const ONE_ASKS: [&str; 11] = [
     "one thing",
     "single most",
     "single thing",
@@ -257,10 +257,13 @@ const ONE_ASKS: [&str; 8] = [
     "top priority",
     "fix first",
     "do first",
+    "only have",
+    "only one",
+    "just one",
 ];
 
 /// How a reply moves on to things nobody asked about.
-const FURTHER_ITEMS: [&str; 10] = [
+const FURTHER_ITEMS: [&str; 13] = [
     "next highest",
     "next priorit",
     "other priorit",
@@ -271,6 +274,9 @@ const FURTHER_ITEMS: [&str; 10] = [
     "beyond that",
     "you should also",
     "second priority",
+    "if you finish",
+    "if you have more time",
+    "address these",
 ];
 
 /// What our side is called when a sentence reports it failing: a read, a

@@ -195,9 +195,22 @@ impl<S: Summarize> Threshold<S> {
             return CompactionPlan::default();
         }
         let summary = self.summarizer.summarize(ctx, &entries).await;
+        // A declined model summary never ends the turn: the deterministic
+        // recap of the same entries replaces them instead (`recap::fallback`).
+        let text = summary.text.or_else(|| {
+            let recap = crate::recap::fallback(ctx, &entries);
+            if recap.is_some() {
+                tracing::warn!(
+                    event = "dex_compaction_recap_fallback",
+                    history_entries = entries.len(),
+                    "model summary declined; the deterministic recap replaces the covered history"
+                );
+            }
+            recap
+        });
         CompactionPlan {
-            declined: summary.text.is_none(),
-            compaction: summary.text.map(|summary| Compaction {
+            declined: text.is_none(),
+            compaction: text.map(|summary| Compaction {
                 covers_to: history[cut - 1].cursor,
                 summary,
             }),
@@ -321,7 +334,7 @@ fn plan_cut(ctx: &Context, max_bytes: usize) -> Option<Cut<'_>> {
 /// last covered entry is a finished step (a tool result, or an assistant
 /// message that made no calls), the first kept entry is not a tool result,
 /// and the cut falls between two cursors.
-fn valid_cut(history: &[Entry], cut: usize) -> bool {
+pub(crate) fn valid_cut(history: &[Entry], cut: usize) -> bool {
     if cut == 0 || cut > history.len() {
         return false;
     }
@@ -494,6 +507,7 @@ mod tests {
                     Event::Final {
                         text: String::new(),
                         claims: Vec::new(),
+                        rich: None,
                     },
                 ),
             ];
@@ -546,6 +560,7 @@ mod tests {
                 Event::Final {
                     text: String::new(),
                     claims: Vec::new(),
+                    rich: None,
                 },
             ),
         ];
@@ -575,6 +590,7 @@ mod tests {
             Event::Final {
                 text: "old done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         append(&mut events, user("current", "do not publish"));
@@ -614,6 +630,7 @@ mod tests {
             Event::Final {
                 text: "current done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         let mut next = rehydrate(thread(), &events);
@@ -658,6 +675,7 @@ mod tests {
             push(Event::Final {
                 text: "current done".into(),
                 claims: Vec::new(),
+                rich: None,
             });
             push(Event::Compaction {
                 covers_to_cursor: Cursor(2),
@@ -673,6 +691,7 @@ mod tests {
         let finish = Event::Final {
             text: "first queued done".into(),
             claims: Vec::new(),
+            rich: None,
         };
         append(&mut events, finish.clone());
         warm.observe(events.last().expect("event").0, &finish);
@@ -765,6 +784,7 @@ mod tests {
             Event::Final {
                 text: "done".into(),
                 claims: Vec::new(),
+                rich: None,
             },
         );
         let mut ctx = rehydrate(thread(), &events);
@@ -813,7 +833,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn declined_summary_preserves_history_and_reports_consumed_usage() {
+    async fn a_declined_summary_falls_back_to_the_recap_and_reports_consumed_usage() {
         struct DeclinedSummary;
         impl Summarize for DeclinedSummary {
             async fn summarize(&self, _ctx: &Context, _entries: &[Entry]) -> Summary {
@@ -834,11 +854,19 @@ mod tests {
         let ctx = rehydrate(thread(), &events);
         let before = ctx.clone();
         let plan = Threshold::for_turns(1, DeclinedSummary).plan(&ctx).await;
-        assert!(plan.declined);
-        assert!(plan.compaction.is_none());
+        assert!(!plan.declined, "the deterministic recap replaces it");
+        let compaction = plan.compaction.expect("a recap");
+        let envelope: serde_json::Value =
+            serde_json::from_str(&compaction.summary).expect("envelope");
+        assert_eq!(envelope["kind"], "dex_history_compaction_v1");
+        assert!(
+            envelope["summary"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("Recap of earlier turns"))
+        );
         assert_eq!(plan.usage.input_tokens, 11);
         assert_eq!(plan.usage.cost_micros, 7);
-        assert_eq!(ctx, before);
+        assert_eq!(ctx, before, "planning never mutates history");
         assert!(!NoCompaction.plan(&ctx).await.declined);
     }
 
@@ -1031,6 +1059,7 @@ mod cut_tests {
         events.push(Event::Final {
             text: "done".into(),
             claims: Vec::new(),
+            rich: None,
         });
         events.push(user("t2"));
         for round in 1..=rounds {

@@ -147,6 +147,7 @@ fn queued_implement_turn_and_steer_cannot_grant_tools_to_running_discuss() {
         &Event::Final {
             text: "Discussed".into(),
             claims: Vec::new(),
+            rich: None,
         },
     );
     assert_eq!(ctx.interaction_mode(), InteractionMode::Implement);
