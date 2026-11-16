@@ -846,14 +846,7 @@ mod tests {
                 },
             ));
         }
-        events.push((
-            Cursor(10),
-            Event::Final {
-                text: "Read results recorded.".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        ));
+        events.push((Cursor(10), Event::final_text("Read results recorded.")));
         let current_event = Event::UserMessage {
             interaction_mode: crate::InteractionMode::Unspecified,
             turn: TurnId::new("current"),
@@ -1838,14 +1831,7 @@ mod tests {
                     summary: None,
                 },
             ),
-            (
-                Cursor(5),
-                Event::Final {
-                    text: "Results recorded.".into(),
-                    claims: Vec::new(),
-                    rich: None,
-                },
-            ),
+            (Cursor(5), Event::final_text("Results recorded.")),
             (
                 Cursor(6),
                 user(

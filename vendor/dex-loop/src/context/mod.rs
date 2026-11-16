@@ -535,6 +535,23 @@ impl Context {
         &self.turn_outputs
     }
 
+    /// What the person said in the running turn: its message and any steer
+    /// applied since, in their words, one per line. A compaction keeps these
+    /// exact, so this is the turn's request however long the turn ran.
+    pub(crate) fn asked_this_turn(&self) -> String {
+        let Some(current) = self.turn.as_ref() else {
+            return String::new();
+        };
+        self.history
+            .iter()
+            .filter_map(|entry| match &entry.message {
+                Message::User { turn, text, .. } if turn == current => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Final replaces the visible answer on web and channel replay; a resumed
     /// suffix must therefore include the already committed prefix.
     pub(crate) fn final_answer(&self, suffix: &str) -> String {

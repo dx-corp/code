@@ -986,6 +986,7 @@ pub enum Event {
     /// statements of `text` that this turn's tool results verified, written
     /// by the host's final check ([`crate::FinalCheck`]) and never by the
     /// model. Older rows and older readers omit them.
+    // test-fixture: Event::Final -- build with Event::final_text(text) or Event::final_with_claims(text, claims)
     Final {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1027,10 +1028,9 @@ impl Event {
     /// JSON text inside a string. This key is outside the event vocabulary.
     pub const STORED_JSON_V1_KEY: &'static str = "_dex_event_json_v1";
 
-    /// Intentionally unsupported by ordinary `Event` deserialization: an
-    /// older reader must refuse an encoded row instead of executing its
-    /// non-authoritative, sanitized projection.
-    /// A `Final` with no claims: a reply no final check has verified.
+    /// A `Final` with no claims: a reply no final check has verified. Tests
+    /// build a `Final` with this, so a field added to the variant is set here
+    /// once and not in every test.
     pub fn final_text(text: impl Into<String>) -> Self {
         Self::Final {
             text: text.into(),
@@ -1039,6 +1039,19 @@ impl Event {
         }
     }
 
+    /// A `Final` whose statements a final check verified, for tests of what
+    /// reads the claims.
+    pub fn final_with_claims(text: impl Into<String>, claims: Vec<AnswerClaim>) -> Self {
+        Self::Final {
+            text: text.into(),
+            claims,
+            rich: None,
+        }
+    }
+
+    /// Intentionally unsupported by ordinary `Event` deserialization: an
+    /// older reader must refuse an encoded row instead of executing its
+    /// non-authoritative, sanitized projection.
     pub const STORED_JSON_V1_TYPE: &'static str = "_dex_event_json_v1";
 
     /// Explicit turn authority requires a reader that understands this mode.

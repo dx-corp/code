@@ -68,25 +68,11 @@ fn queued_and_replayed_turns_keep_their_own_binding_and_legacy_turn_resets_it() 
     assert_eq!(replay.model_binding(), live.model_binding());
     assert_eq!(replay.context_window_tokens(), live.context_window_tokens());
     for context in [&mut live, &mut replay] {
-        context.observe(
-            Cursor(5),
-            &Event::Final {
-                text: "done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        context.observe(Cursor(5), &Event::final_text("done"));
         assert_eq!(context.turn(), Some(&TurnId::new("second")));
         assert_eq!(context.model_binding(), Some(&second));
         assert_eq!(context.context_window_tokens(), Some(200_000));
-        context.observe(
-            Cursor(6),
-            &Event::Final {
-                text: "done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        context.observe(Cursor(6), &Event::final_text("done"));
         assert_eq!(context.turn(), Some(&TurnId::new("third")));
         assert_eq!(context.model_binding(), None);
         assert_eq!(context.context_window_tokens(), None);
@@ -182,14 +168,7 @@ fn completed_route_survives_compaction_and_replay_but_resets_for_a_queued_turn()
                 .iter()
                 .any(|entry| matches!(entry.message, dex_loop::Message::Assistant { .. }))
         );
-        context.observe(
-            Cursor(5),
-            &Event::Final {
-                text: "done".into(),
-                claims: Vec::new(),
-                rich: None,
-            },
-        );
+        context.observe(Cursor(5), &Event::final_text("done"));
         assert_eq!(context.turn(), Some(&TurnId::new("queued")));
         assert_eq!(context.last_served(), None);
     }
