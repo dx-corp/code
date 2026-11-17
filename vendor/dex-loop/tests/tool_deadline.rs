@@ -533,11 +533,7 @@ async fn compaction_time_consumes_the_tool_calls_remaining_wall_budget() {
     }
     let log = FakeLog::default();
     log.start_turn("old", "old history to summarize");
-    log.host_append(dex_loop::Event::Final {
-        text: "old done".into(),
-        claims: Vec::new(),
-        rich: None,
-    });
+    log.host_append(dex_loop::Event::final_text("old done"));
     let mut ctx = log.start_turn("current", "read");
     let model = FakeModel::new(vec![
         vec![call("search", json!({"key": "slow"}))],
