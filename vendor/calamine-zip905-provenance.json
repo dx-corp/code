@@ -1,7 +1,7 @@
 [
   {
     "added_files_sha256": {
-      "BUILD.bazel": "8fdc65923a86bdd2f1fd7f01df87509b0ce49696c886312045b0593ab5c59de8"
+      "BUILD.bazel": "ca704781038b2ca57c3dfb1be60000603b76cb2f599c0e439cb7a627cac29f2b"
     },
     "archive_files_sha256": {
       ".cargo_vcs_info.json": "749dd0ec4c5b0917ba9b01ad13ae879ce4eb3efff63a3095e0b0d0bd2e57ab0b",
@@ -59,7 +59,7 @@
       "Cargo.lock"
     ],
     "patch": "calamine-0.36.0.patch",
-    "patch_sha256": "32da2e43c976c42c57e92528aa85ccb821b42a40f3a50a378558f5ecf148246c",
+    "patch_sha256": "d4ff38a9a3822c8ccff305e770d8afc60807d93603f7ea9839678252b7ea0ba0",
     "path": "calamine-0.36.0",
     "upstream_reference": "https://github.com/tafia/calamine/pull/741",
     "version": "0.36.0",

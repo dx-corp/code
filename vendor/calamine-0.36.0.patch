@@ -130,7 +130,7 @@ diff --git a/BUILD.bazel b/BUILD.bazel
 +        "@crates__log-0.4.33//:log",
 +        "@crates__quick-xml-0.41.0//:quick_xml",
 +        "@crates__serde-1.0.228//:serde",
-+        "@crates__zip-9.0.3//:zip",
++        "@crates__zip-9.0.5//:zip",
 +    ],
 +    compile_data = glob(
 +        allow_empty = True,
