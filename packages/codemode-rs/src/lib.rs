@@ -98,10 +98,36 @@ pub struct Report {
     pub error: Option<String>,
     pub store_writes: StoreWrites,
     pub calls: Vec<CallSummary>,
+    /// One note per discovery helper that found nothing in the admitted
+    /// catalog, so a host can name its own way to widen that catalog.
+    pub discovery_misses: Vec<String>,
 }
+
+/// What a successful script that selected nothing returns in place of an
+/// empty result. An empty result reads as "nothing happened", and a model
+/// reruns the script (Dex production 2026-11-18: 39 such calls in one turn).
+pub const NO_OUTPUT: &str = "The script completed and selected no output, so there is no result to read. Call text(value) or return a value to select output.";
+
 impl Report {
     pub fn content(&self) -> String {
         let mut output = self.output.join("\n");
+        if self.error.is_none() {
+            let images = self
+                .blocks
+                .iter()
+                .any(|block| matches!(block, OutputBlock::Image { .. }));
+            if output.trim().is_empty() && !images {
+                output = NO_OUTPUT.to_owned();
+            }
+            // A miss is guidance, never a reason to exceed the output limit.
+            for miss in &self.discovery_misses {
+                if output.len() + 1 + miss.len() <= 65_536 {
+                    output.push('\n');
+                    output.push_str(miss);
+                }
+            }
+            return output;
+        }
         if let Some(error) = &self.error {
             let mut diagnostic = format!("Script failed: {error}");
             shorten(&mut diagnostic, 4096, "\n[Diagnostic shortened]");

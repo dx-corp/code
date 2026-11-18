@@ -11,7 +11,10 @@ JavaScript function. Admitted reads settle individually after their owner
 controls. A fast result can feed another read while unrelated reads remain
 pending, and `Promise.race` can finish without waiting for its losing reads.
 Only selected `text()`/`image()` output and the returned value enter the
-model's tool-result context.
+model's tool-result context. A script that selects none of them returns a
+notice saying so instead of an empty result, and a `searchTools` or
+`describeTool` that finds nothing adds a note that it inspected only the
+admitted catalog.
 
 ```javascript
 text(searchTools("search documents", {limit: 4}));

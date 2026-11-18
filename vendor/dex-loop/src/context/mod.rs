@@ -17,8 +17,10 @@ use crate::event::{
 const NOT_RUN_NEW_TURN: &str = "not run: a new turn started first";
 const UNKNOWN_NEW_TURN: &str = "outcome unknown: a new turn started before the result was recorded";
 const MAX_ACTION_RECORDS: usize = 128;
-/// Consecutive identical failures after which the stall guard refuses the
-/// call and the model is told to change approach or report the blocker.
+/// Consecutive identical calls without progress after which the stall guard
+/// refuses the call and the model is told to change approach or report the
+/// blocker. A call makes no progress when it fails, or when it succeeds with
+/// the output the identical call returned just before it.
 const STALL_FAILURES: u32 = 3;
 // A public question permits 4096 characters, each at most four UTF-8 bytes.
 const MAX_ACTION_ARGUMENT_BYTES: usize = 16 * 1024;
@@ -144,12 +146,19 @@ pub(crate) struct OpenStep {
     pub(crate) states: Vec<CallState>,
 }
 
-/// The most recent consecutive failed operation, derived from tool events.
+/// The most recent operation and how many consecutive times it ran without
+/// progress, derived from tool events. Named for the failures it first
+/// counted; it also counts identical successes that return the same output
+/// (production 2026-11-18, turn operating_turn_b8642fdf: 39 succeeded script
+/// calls that fetched nothing ran to the step cap).
 #[derive(Clone, Debug, PartialEq)]
 struct FailedCall {
     principal: PrincipalId,
     tool: ToolName,
     args: serde_json::Value,
+    /// The digest of the output when the streak is of successes; `None` for
+    /// a streak of failures, which repeat whatever each failure said.
+    same_output: Option<String>,
     count: u32,
     /// The model step whose result made this the third consecutive failure;
     /// every later model call carries the recovery guidance.
@@ -567,7 +576,22 @@ impl Context {
             return Some("The preceding assistant answer was interrupted by a transient stream failure. Its visible text is already committed. Continue exactly after its last visible words, without repeating the prefix or restarting the answer. This is the single answer-only continuation: use only established results and do not call tools. Proposed calls from the interrupted step were not accepted; do not claim they ran, and do not repeat any earlier completed or uncertain operation.".into());
         }
         self.failed_call.as_ref().filter(|failure| failure.count >= STALL_FAILURES).map(|failure| {
-            format!("The same call to {} failed {} consecutive times without progress. Do not repeat the identical call. Inspect the failure, change the inputs or approach, use another available capability, or report the concrete blocker. A successful intervening call or new user input resets this guard. Never retry a mutation with an unknown outcome.", failure.tool, failure.count)
+            if failure.same_output.is_some() {
+                format!("The same call to {} returned the same result {} consecutive times without progress. Do not repeat the identical call: it will return the same result. Read what it returned, change the inputs or approach, use another available capability, or report plainly what could not be found. A different call or new user input resets this guard.", failure.tool, failure.count)
+            } else {
+                format!("The same call to {} failed {} consecutive times without progress. Do not repeat the identical call. Inspect the failure, change the inputs or approach, use another available capability, or report the concrete blocker. A successful intervening call or new user input resets this guard. Never retry a mutation with an unknown outcome.", failure.tool, failure.count)
+            }
+        })
+    }
+
+    /// The result a stalled call gets instead of running, when `call` is the
+    /// stalled one.
+    pub(crate) fn stalled_call_refusal(&self, call: &ProposedCall) -> Option<&'static str> {
+        let failure = self.failed_call.as_ref()?;
+        self.has_stalled_call(call).then_some(if failure.same_output.is_some() {
+            "not executed: the identical call returned the same result three times without progress; change the inputs or approach, or report what could not be found"
+        } else {
+            "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker"
         })
     }
 
@@ -1217,11 +1241,25 @@ impl Context {
                     && (proposal.tool.as_str() != agent_codemode::TOOL_NAME
                         || !self.nested_calls.iter().any(|nested| nested.id.as_str().starts_with(&format!("{}:codemode:", call.as_str()))))
                 {
-                    if *outcome == Outcome::Failed {
+                    // formal: begin dex_stall_guard/StallGuard.Fold
+                    // A success repeats when the identical call just returned
+                    // the same output. A failure repeats a failure, and also
+                    // continues a streak the guard already refused: that
+                    // refusal is itself a failed result of the same call.
+                    let same_output = (*outcome == Outcome::Succeeded)
+                        .then(|| serde_json::to_value(output).ok())
+                        .flatten()
+                        .map(|output| crate::args_digest(&output));
+                    if *outcome == Outcome::Failed || same_output.is_some() {
                         let previous = self.failed_call.as_ref().filter(|failure| {
                             failure.principal == proposal.principal
                                 && failure.tool == proposal.tool
                                 && failure.args == proposal.args
+                                && if *outcome == Outcome::Failed {
+                                    failure.same_output.is_none() || failure.count >= STALL_FAILURES
+                                } else {
+                                    failure.same_output == same_output
+                                }
                         });
                         let count = previous.map_or(1, |failure| failure.count.saturating_add(1));
                         let stalled_at = previous
@@ -1236,6 +1274,11 @@ impl Context {
                             principal: proposal.principal.clone(),
                             tool: proposal.tool.clone(),
                             args: proposal.args.clone(),
+                            // A refusal continuing a streak of successes
+                            // keeps it one, so the guidance stays accurate.
+                            same_output: same_output.or_else(|| {
+                                previous.and_then(|failure| failure.same_output.clone())
+                            }),
                             count,
                             stalled_at,
                             repeated_after_guidance,
@@ -1243,6 +1286,7 @@ impl Context {
                     } else {
                         self.failed_call = None;
                     }
+                    // formal: end dex_stall_guard/StallGuard.Fold
                 }
                 if let Some(state) = self.state_mut(call) {
                     *state = CallState::Done(ToolResult {

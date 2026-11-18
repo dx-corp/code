@@ -101,7 +101,7 @@ where
 
     /// The name the model finds tools with: the wrapper routing to
     /// `tools.search`, or `tools.search` itself.
-    fn searcher(&self) -> &str {
+    pub(super) fn searcher(&self) -> &str {
         self.tools
             .wrappers()
             .iter()
