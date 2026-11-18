@@ -51,6 +51,41 @@ versioning when releases are cut.
   and keep scheduled public runs inert so public publishing stays downstream of
   the internal source-of-truth release.
 
+## [0.10.115] - 2026-11-18
+
+### Added
+
+- New program opens on the plan setup already chose (#23521). <!-- maestro-release-note:35758ce521ea -->
+- Calm sidebar with Inbox, time groups and account (#23435). <!-- maestro-release-note:019d8cf9b518 -->
+
+### Changed
+
+- Refresh bundled model catalog (#23930). <!-- maestro-release-note:52a63cb6292d -->
+- Refresh bundled model catalog (#23648). <!-- maestro-release-note:bb4fe38ec527 -->
+- Sweep late review-bot threads on the public sync PR (#23559). <!-- maestro-release-note:6b1b6a2a5b85 -->
+- Retire bootstrap routes for the excluded runtime (#23509). <!-- maestro-release-note:eecf0448051c -->
+- Bump node-forge in /products/maestro/desktop (#22156). <!-- maestro-release-note:b7bd2150c37d -->
+- Bump @hono/node-server in /products/maestro/desktop (#23175). <!-- maestro-release-note:a4d9286129f8 -->
+- Bump react and react-dom to 19.3.1 in maestro desktop (#23344). <!-- maestro-release-note:7771dfb2e704 -->
+- Correct product onboarding and runtime reference claims (#23382). <!-- maestro-release-note:3e44e1397f33 -->
+- Bump hono in /products/maestro/desktop (#22807). <!-- maestro-release-note:c183d16c56cb -->
+- Bump @hono/node-server in /products/maestro/desktop (#22771). <!-- maestro-release-note:9a8da6c9c176 -->
+
+### Fixed
+
+- Copy the vendored zip-9.0.5 crate in the Docker build (#23920). <!-- maestro-release-note:573c0423ea84 -->
+- Bound Chrono maintenance acceptance pending migration (#23897). <!-- maestro-release-note:3f7c4ae91aa0 -->
+- Keep public build guidance inside the release mirror (#23552). <!-- maestro-release-note:41d9f3a90a2d -->
+- Restore files #23521 reverted by mistake (#23525). <!-- maestro-release-note:ab26ac45de7d -->
+- Isolate drain fixture auth environment (#23488). <!-- maestro-release-note:58926e8037a4 -->
+- Align presets and fallback with the model catalog (#23481). <!-- maestro-release-note:b26397b89999 -->
+- Repair stale workflow and release contracts (#23462). <!-- maestro-release-note:bd0fc7051ea5 -->
+- Refresh the model catalog and match what providers now publish (#23408). <!-- maestro-release-note:2e6d177dcab7 -->
+- Read mono's required checks from effective branch rules (#23399). <!-- maestro-release-note:f7f2c76bd879 -->
+- Restore maestro-desktop's vendored remote harness README to its pin (#23397). <!-- maestro-release-note:f836380e1ded -->
+- Preserve qualified Code native work during recovery (#23131). <!-- maestro-release-note:33055cb77410 -->
+- Patch Quinn advisories across Rust lockfiles (#23044). <!-- maestro-release-note:4676d52d3b8b -->
+
 ## [0.10.114] - 2026-11-13
 
 ### Changed
