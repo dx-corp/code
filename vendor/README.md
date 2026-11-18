@@ -128,11 +128,11 @@ structurally malformed archives fail. Typed entry-name errors remain propagated.
 This is a source compatibility repair, not an audit exemption or approval of
 unmodified upstream releases.
 
-`zip-9.0.3` keeps its published implementation and licenses. Its recorded local
+`zip-9.0.5` adopts the published security fixes and keeps its licenses. Its recorded local
 manifest patch changes only the optional Zstandard requirement to `^0.13.3`,
 which preserves the repository's reviewed codec repairs and existing ZIP
-compression features. This dependency adjustment is locally maintained; neither
-ZIP 9.0.3 nor 9.0.4 publishes that requirement. The Rust and Maestro workspaces
+compression features. This dependency adjustment is locally maintained; upstream ZIP 9.0.5
+requires Zstandard 0.14. The Rust and Maestro workspaces
 apply the patch; standalone consumers using only Deflate can retain the
 unmodified ZIP 9 registry source. The compatibility suite exercises ZIP Zstandard
 write/read with the reviewed codec as well as spreadsheet parsing.
@@ -198,3 +198,8 @@ the patch digest. Cargo consumes the directory through `[patch.crates-io]` in
 through the `ts-rs-macros` annotation in `MODULE.bazel`. Upstream fix: pending
 (prepared in `docs/solutions/bazel/pipelining-needs-deterministic-proc-macros.md`).
 Drop this repair when an upstream release contains the fix.
+
+The current `zip-9-0-5-provenance.json` and `calamine-zip905-provenance.json`
+pin the security upgrade and regenerated Bazel metadata. Historical profile
+declarations and Zip 9.0.3 fixture source remain available for migration tests;
+current consumers use Zip 9.0.5.
