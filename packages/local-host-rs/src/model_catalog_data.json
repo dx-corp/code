@@ -1,5 +1,5 @@
 {
-  "generated_at": 1794728811,
+  "generated_at": 1794986723,
   "source": "https://models.dev/api.json+https://openrouter.ai/api/v1/models",
   "vendor_corrections": [
     {
@@ -996,7 +996,7 @@
       ],
       "cost": {
         "input": 0.25,
-        "output": 30
+        "output": 1.5
       },
       "verification": {
         "state": "catalog",
@@ -3207,6 +3207,120 @@
       }
     },
     {
+      "id": "gpt-6.2-astra",
+      "name": "GPT-6.2 Astra",
+      "provider": "openai",
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "cost": {
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.4,
+        "cache_write": 10,
+        "above_200k": {
+          "input": 16,
+          "output": 60,
+          "cache_read": 0.8,
+          "cache_write": 20
+        }
+      },
+      "request_modes": {
+        "fast": {
+          "input": 16,
+          "output": 80,
+          "cache_read": 0.8,
+          "cache_write": 20,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "name": "GPT-6.2 Sol",
+      "provider": "openai",
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "input_modalities": [
+        "text",
+        "image",
+        "pdf"
+      ],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "above_200k": {
+          "input": 4,
+          "output": 15,
+          "cache_read": 0.2,
+          "cache_write": 5
+        }
+      },
+      "request_modes": {
+        "fast": {
+          "input": 4,
+          "output": 20,
+          "cache_read": 0.2,
+          "cache_write": 5,
+          "trigger": {
+            "body": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "models.dev"
+      }
+    },
+    {
       "id": "gpt-daybreak-blue-latest",
       "name": "Daybreak Blue",
       "provider": "openai",
@@ -3536,7 +3650,7 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.038,
+        "input": 0.036,
         "output": 0.5,
         "cache_read": 0.01
       },
@@ -3684,10 +3798,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 10,
-        "output": 50,
-        "cache_read": 1,
-        "cache_write": 12.5
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.4,
+        "cache_write": 10
       },
       "verification": {
         "state": "catalog",
@@ -5004,12 +5118,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 163840,
-        "output_tokens": 32000,
+        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.571,
-        "output": 2.286
+        "input": 0.5,
+        "output": 2.15,
+        "cache_read": 0.35
       },
       "verification": {
         "state": "catalog",
@@ -5224,13 +5339,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.0507,
-        "output": 0.2028,
-        "cache_read": 0.001014
+        "input": 0.051,
+        "output": 0.567,
+        "cache_read": 0.018
       },
       "verification": {
         "state": "catalog",
@@ -5249,13 +5363,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 1048576,
-        "output_tokens": 393216,
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 0.6,
-        "cache_read": 0.003
+        "input": 0.036,
+        "output": 0.5,
+        "cache_read": 0.01
       },
       "verification": {
         "state": "catalog",
@@ -6063,7 +6176,7 @@
       },
       "cost": {
         "input": 0.08,
-        "output": 0.35,
+        "output": 0.45,
         "cache_read": 0.04
       },
       "verification": {
@@ -6111,9 +6224,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.0675,
-        "output": 0.225,
-        "cache_read": 0.0375
+        "input": 0.09,
+        "output": 0.3,
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -6279,7 +6392,7 @@
       },
       "cost": {
         "input": 0.06,
-        "output": 0.25,
+        "output": 0.15,
         "cache_read": 0.015
       },
       "verification": {
@@ -6837,12 +6950,11 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 131072,
-        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.3,
-        "output": 1.2,
+        "input": 0.35,
+        "output": 1.5,
         "cache_read": 0.04
       },
       "verification": {
@@ -7058,13 +7170,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 198000,
-        "output_tokens": 32768,
         "temperature": true
       },
       "cost": {
-        "input": 0.27,
-        "output": 0.95,
-        "cache_read": 0.03
+        "input": 0.295,
+        "output": 1.2,
+        "cache_read": 0.06
       },
       "verification": {
         "state": "catalog",
@@ -7386,9 +7497,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.4,
-        "output": 2,
-        "cache_read": 0.04
+        "input": 0.44,
+        "output": 2.2,
+        "cache_read": 0.044
       },
       "verification": {
         "state": "catalog",
@@ -7435,9 +7546,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.4,
-        "output": 2,
-        "cache_read": 0.04
+        "input": 0.44,
+        "output": 2.2,
+        "cache_read": 0.044
       },
       "verification": {
         "state": "catalog",
@@ -7578,13 +7689,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 256000,
-        "output_tokens": 26214,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.1,
-        "output": 0.3,
-        "cache_read": 0.01
+        "input": 0.075,
+        "output": 0.2
       },
       "verification": {
         "state": "catalog",
@@ -7825,9 +7935,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 3.5,
-        "cache_read": 0.16
+        "input": 0.7,
+        "output": 3.75,
+        "cache_read": 0.17
       },
       "verification": {
         "state": "catalog",
@@ -7873,8 +7983,8 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.2375,
-        "output": 8.4114,
+        "input": 0.2403,
+        "output": 8.4023,
         "cache_read": 0.2
       },
       "verification": {
@@ -8134,12 +8244,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
+        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 2.4,
-        "cache_read": 0.12
+        "input": 0.5,
+        "output": 2.2,
+        "cache_read": 0.1
       },
       "verification": {
         "state": "catalog",
@@ -8204,7 +8315,7 @@
         "vision": false,
         "reasoning": true,
         "streaming": true,
-        "context_tokens": 262144,
+        "context_tokens": 1048576,
         "temperature": true
       },
       "cost": {
@@ -8257,7 +8368,7 @@
       },
       "cost": {
         "input": 0.15,
-        "output": 0.47,
+        "output": 0.5,
         "cache_read": 0.02
       },
       "verification": {
@@ -9220,10 +9331,10 @@
         "temperature": false
       },
       "cost": {
-        "input": 4.4,
-        "output": 22,
-        "cache_read": 0.44,
-        "cache_write": 5.5
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.4,
+        "cache_write": 5
       },
       "verification": {
         "state": "catalog",
@@ -9569,6 +9680,110 @@
       }
     },
     {
+      "id": "openai/gpt-6.2-astra",
+      "name": "OpenAI: GPT-6.2 Astra",
+      "provider": "openrouter",
+      "description": "GPT-6.2 Astra is the flagship model in the GPT-6.2 series from OpenAI, built for the hardest projects. It is suited…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.4,
+        "cache_write": 10
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-astra-pro",
+      "name": "OpenAI: GPT-6.2 Astra Pro",
+      "provider": "openrouter",
+      "description": "GPT-6.2 Astra Pro is the same underlying model as [GPT-6.2 Astra](https://openrouter.ai/openai/gpt-6.2-astra), served…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 8,
+        "output": 40,
+        "cache_read": 0.4,
+        "cache_write": 10
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "name": "OpenAI: GPT-6.2 Sol",
+      "provider": "openrouter",
+      "description": "GPT-6.2 Sol is an upgrade to GPT-6.1 Sol from OpenAI, positioned below the flagship GPT-6.2 Astra in the GPT-6.2…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "openai/gpt-6.2-sol-pro",
+      "name": "OpenAI: GPT-6.2 Sol Pro",
+      "provider": "openrouter",
+      "description": "GPT-6.2 Sol Pro is the same underlying model as [GPT-6.2 Sol](https://openrouter.ai/openai/gpt-6.2-sol), served with…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1050000,
+        "output_tokens": 128000,
+        "temperature": false
+      },
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
       "id": "openai/gpt-audio",
       "name": "OpenAI: GPT Audio",
       "provider": "openrouter",
@@ -9681,9 +9896,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.03,
-        "output": 0.13,
-        "cache_read": 0.03
+        "input": 0.018,
+        "output": 0.09,
+        "cache_read": 0.009
       },
       "verification": {
         "state": "catalog",
@@ -10525,12 +10740,12 @@
         "reasoning": false,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 16384,
         "temperature": true
       },
       "cost": {
-        "input": 0.09,
-        "output": 1.1
+        "input": 0.1,
+        "output": 1.1,
+        "cache_read": 0.07
       },
       "verification": {
         "state": "catalog",
@@ -10580,29 +10795,6 @@
       "cost": {
         "input": 0.15,
         "output": 0.6
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "qwen/qwen3-vl-30b-a3b-thinking",
-      "name": "Qwen: Qwen3 VL 30B A3B Thinking",
-      "provider": "openrouter",
-      "description": "Qwen3-VL-30B-A3B-Thinking is a multimodal model that unifies strong text generation with visual understanding for…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": true,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.29,
-        "output": 1
       },
       "verification": {
         "state": "catalog",
@@ -10669,12 +10861,12 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 81920,
+        "output_tokens": 65536,
         "temperature": true
       },
       "cost": {
-        "input": 0.26,
-        "output": 2.6
+        "input": 0.3,
+        "output": 2.4
       },
       "verification": {
         "state": "catalog",
@@ -10718,13 +10910,13 @@
         "reasoning": true,
         "streaming": true,
         "context_tokens": 262144,
-        "output_tokens": 64000,
+        "output_tokens": 81920,
         "temperature": true
       },
       "cost": {
-        "input": 0.6,
-        "output": 3.6,
-        "cache_read": 0.12
+        "input": 0.45,
+        "output": 3,
+        "cache_read": 0.22
       },
       "verification": {
         "state": "catalog",
@@ -10747,9 +10939,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.118,
-        "output": 0.174,
-        "cache_read": 0.107
+        "input": 0.154,
+        "output": 0.226,
+        "cache_read": 0.138
       },
       "status": "deprecated",
       "verification": {
@@ -11046,9 +11238,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.15,
-        "output": 1.875,
-        "cache_read": 0.0375
+        "input": 0.06,
+        "output": 2.2,
+        "cache_read": 0.059
       },
       "verification": {
         "state": "catalog",
@@ -11149,6 +11341,32 @@
         "input": 0.15,
         "output": 0.47,
         "cache_read": 0.016
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "qwen/qwen4-max",
+      "name": "Qwen: Qwen4 Max",
+      "provider": "openrouter",
+      "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text,…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1000000,
+        "output_tokens": 131072,
+        "temperature": true
+      },
+      "cost": {
+        "input": 1.425,
+        "output": 4.275,
+        "cache_read": 0.07125,
+        "cache_write": 1.78125
       },
       "verification": {
         "state": "catalog",
@@ -11516,30 +11734,6 @@
       }
     },
     {
-      "id": "stepfun/step-3.5-flash",
-      "name": "StepFun: Step 3.5 Flash",
-      "provider": "openrouter",
-      "description": "Step 3.5 Flash is StepFun's most capable open-source foundation model. Built on a sparse Mixture of Experts (MoE)…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": true,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 262144,
-        "output_tokens": 65536,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.1,
-        "output": 0.3
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
       "id": "stepfun/step-3.7-flash",
       "name": "StepFun: Step 3.7 Flash",
       "provider": "openrouter",
@@ -11582,29 +11776,6 @@
         "input": 1,
         "output": 2.7,
         "cache_read": 0.1
-      },
-      "verification": {
-        "state": "catalog",
-        "source": "openrouter"
-      }
-    },
-    {
-      "id": "tencent/hunyuan-a13b-instruct",
-      "name": "Tencent: Hunyuan A13B Instruct",
-      "provider": "openrouter",
-      "description": "Hunyuan-A13B is a 13B active parameter Mixture-of-Experts (MoE) language model developed by Tencent, with a total…",
-      "capabilities": {
-        "protocol": "openai-chat",
-        "tools": false,
-        "vision": false,
-        "reasoning": true,
-        "streaming": true,
-        "context_tokens": 131072,
-        "temperature": true
-      },
-      "cost": {
-        "input": 0.14,
-        "output": 0.57
       },
       "verification": {
         "state": "catalog",
@@ -11751,6 +11922,31 @@
         "input": 0.417,
         "output": 1.2505,
         "cache_read": 0.021
+      },
+      "verification": {
+        "state": "catalog",
+        "source": "openrouter"
+      }
+    },
+    {
+      "id": "tencent/hy4-flash",
+      "name": "Tencent: Hy4 flash",
+      "provider": "openrouter",
+      "description": "Hy4 flash is a cost-efficient variant of [Hy4](https://openrouter.ai/tencent/hy4) from Tencent, served with roughly a…",
+      "capabilities": {
+        "protocol": "openai-chat",
+        "tools": true,
+        "vision": true,
+        "reasoning": true,
+        "streaming": true,
+        "context_tokens": 1048576,
+        "output_tokens": 65536,
+        "temperature": true
+      },
+      "cost": {
+        "input": 0.035,
+        "output": 0.1405,
+        "cache_read": 0.0015
       },
       "verification": {
         "state": "catalog",
@@ -12480,9 +12676,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.2,
-        "output": 1.1,
-        "cache_read": 0.03
+        "input": 0.13,
+        "output": 0.85,
+        "cache_read": 0.025
       },
       "verification": {
         "state": "catalog",
@@ -12557,7 +12753,7 @@
       "cost": {
         "input": 0.3,
         "output": 0.9,
-        "cache_read": 0.055
+        "cache_read": 0.05
       },
       "verification": {
         "state": "catalog",
@@ -12729,9 +12925,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 0.084,
-        "output": 3.6,
-        "cache_read": 0.079
+        "input": 0.0699,
+        "output": 1.4,
+        "cache_read": 0.0689
       },
       "verification": {
         "state": "catalog",
@@ -12829,9 +13025,9 @@
         "temperature": true
       },
       "cost": {
-        "input": 2.8,
-        "output": 8.8,
-        "cache_read": 0.56
+        "input": 1.68,
+        "output": 5.28,
+        "cache_read": 0.336
       },
       "verification": {
         "state": "catalog",

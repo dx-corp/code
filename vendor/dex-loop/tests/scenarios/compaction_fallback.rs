@@ -120,3 +120,76 @@ async fn a_dm_at_the_context_limit_with_a_failed_model_summary_still_answers() {
     )));
     assert_eq!(ctx, log.rehydrate());
 }
+
+/// A turn reads the vendor register, then the model reports the context is
+/// full and the model summary declines. The recap replaces the turns before
+/// this one; what this turn just read is still in front of the model, so the
+/// answer is made from the read and not from "read vendors (ok)".
+#[tokio::test]
+async fn a_mid_turn_fallback_keeps_what_the_turn_just_read() {
+    struct Decline;
+    impl dex_loop::Summarize for Decline {
+        async fn summarize(
+            &self,
+            _: &dex_loop::Context,
+            _: &[dex_loop::Entry],
+        ) -> dex_loop::Summary {
+            dex_loop::Summary::default()
+        }
+    }
+    const READ: &str = "Globex SOC 2 report expires 2026-12-01";
+    let log = FakeLog::default();
+    log.start_turn("old", "Never publish without approval.");
+    log.host_append(Event::ModelStepCompleted {
+        interruption: None,
+        step: 1,
+        text: "A long earlier answer about vendors and their reviews. ".repeat(160),
+        calls: vec![],
+        reasoning: None,
+        served: None,
+        timing: None,
+    });
+    log.host_append(Event::final_text("A long earlier answer."));
+    let mut ctx = log.start_turn("current", "is Globex's SOC 2 report expired?");
+    let model = FakeModel::new(vec![
+        vec![call("vendors", json!({}))],
+        vec![Err(ModelError {
+            class: dex_loop::ErrorClass::ContextCapacity,
+            message: "context_length_exceeded".into(),
+        })],
+        vec![text("No. Globex's report expires on 2026-12-01.")],
+    ]);
+    let tools = FakeTools::new(vec![read_tool("vendors")]).inline_result("vendors", READ);
+    let engine = support::engine(&log, &model, &tools, budget())
+        .with_compactor(Threshold::for_turns(48 * 1024, Decline));
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert!(
+        log.events()
+            .iter()
+            .any(|event| matches!(event, Event::Compaction { .. }))
+    );
+    let seen = model.seen();
+    let last = seen.last().expect("the answering request");
+    let holds_the_read = last.iter().any(|message| match message {
+        dex_loop::Message::Tool {
+            output: Output::Text(text),
+            ..
+        } => text.contains(READ),
+        dex_loop::Message::Summary { text } => text.contains(READ),
+        _ => false,
+    });
+    assert!(
+        holds_the_read,
+        "the answering request no longer holds what this turn read: {:?}",
+        view(last)
+    );
+    // The earlier turn's instruction is still there in the person's words.
+    assert!(last.iter().any(|message| matches!(
+        message,
+        dex_loop::Message::Summary { text } if text.contains("Never publish without approval.")
+    )));
+    assert_eq!(ctx, log.rehydrate());
+}

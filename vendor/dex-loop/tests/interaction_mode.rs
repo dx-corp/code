@@ -142,14 +142,7 @@ fn queued_implement_turn_and_steer_cannot_grant_tools_to_running_discuss() {
         },
     );
     assert_eq!(ctx.interaction_mode(), InteractionMode::Discuss);
-    ctx.observe(
-        Cursor(4),
-        &Event::Final {
-            text: "Discussed".into(),
-            claims: Vec::new(),
-            rich: None,
-        },
-    );
+    ctx.observe(Cursor(4), &Event::final_text("Discussed"));
     assert_eq!(ctx.interaction_mode(), InteractionMode::Implement);
     assert_eq!(ctx.turn(), Some(&dex_loop::TurnId::new("t2")));
 }
