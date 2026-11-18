@@ -85,7 +85,7 @@ const NOT_RUN_WALL: &str = "not executed: the time limit was reached before this
 const UNKNOWN_NO_RETRY: &str = "outcome unknown: this call already started; do not retry it without first checking whether it took effect";
 const UNCERTAIN_REPEAT: &str = "not run: the same operation has an unknown outcome in this turn; check whether it took effect before trying again";
 const APPROVER_DECLINED: &str = "denied: the approver declined this call";
-const STALLED_ANSWER_ONLY: &str = "tool calls withheld: the identical call failed three times and was refused, and the answer-only step proposed another tool call instead of reporting the blocker";
+const STALLED_ANSWER_ONLY: &str = "tool calls withheld: the identical call made no progress three times and was refused, and the answer-only step proposed another tool call instead of reporting the blocker";
 const APPROVAL_MISMATCH: &str = "denied: the approval does not match this call's arguments";
 const MISSING_QUESTION: &str = "invalid call: args.question must be a non-empty string";
 const MISSING_QUERY: &str = "invalid call: args.query must be a non-empty string";
@@ -1594,11 +1594,9 @@ where
             }
             // A historical Started mutation must settle through the ledger
             // above. This guard applies only before a fresh call can run.
-            if !already_started && ctx.has_stalled_call(call) {
+            if !already_started && let Some(refusal) = ctx.stalled_call_refusal(call) {
                 prefetch.reads.discard(index);
-                self.finish(ctx, call, ToolResult::error(
-                    "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
-                )).await?;
+                self.finish(ctx, call, ToolResult::error(refusal)).await?;
                 continue;
             }
             if call.tool.as_str() == TOOLS_SEARCH {

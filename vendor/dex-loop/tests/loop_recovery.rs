@@ -329,3 +329,204 @@ async fn recovery_never_discards_results_of_reads_that_already_started() {
     ));
     assert_eq!(ctx, log.rehydrate());
 }
+
+/// Calls `run` with a script on every step until no tools are offered, then
+/// answers. `code` receives the model call's number, from 1.
+#[derive(Clone)]
+struct ScriptingModel {
+    seen: Arc<Mutex<Vec<ModelObservation>>>,
+    code: fn(usize) -> String,
+}
+impl ScriptingModel {
+    fn new(code: fn(usize) -> String) -> Self {
+        Self {
+            seen: Arc::default(),
+            code,
+        }
+    }
+}
+impl Model for ScriptingModel {
+    fn stream<'a>(
+        &'a self,
+        ctx: &'a Context,
+        _: &'a [&'a ToolSpec],
+    ) -> impl Stream<Item = Result<ModelChunk, ModelError>> + Send + 'a {
+        let remaining = ctx
+            .remaining_budget()
+            .expect("every engine attempt has fresh capacity");
+        let mut seen = self.seen.lock().expect("seen");
+        seen.push((remaining, ctx.recovery_guidance()));
+        let chunk = if remaining.answer_only {
+            ModelChunk::Text("I could not find a record of that investor.".into())
+        } else {
+            ModelChunk::ToolCall {
+                name: ToolName::new(dex_loop::CODEMODE),
+                args: json!({"code": (self.code)(seen.len())}),
+            }
+        };
+        stream::iter([Ok(chunk)])
+    }
+}
+
+/// Every finished call's outcome and model-facing text, in log order.
+fn finished(log: &FakeLog) -> Vec<(dex_loop::Outcome, String)> {
+    log.events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ToolFinished {
+                outcome,
+                output: dex_loop::Output::Text(text),
+                ..
+            } => Some((outcome, text)),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn run_scripts(
+    code: fn(usize) -> String,
+    steps: u32,
+) -> (Exit, Vec<ModelObservation>, FakeLog) {
+    let log = FakeLog::default();
+    let model = ScriptingModel::new(code);
+    let engine = Engine::new(
+        log.clone(),
+        model.clone(),
+        support::FakeTools::new(vec![read_tool("read")]),
+        FakeEffects::default(),
+        Lexicon::default(),
+        budget(steps),
+    );
+    let mut ctx = log.start_turn("t1", "I am meeting an investor. What should I focus on?");
+    let exit = engine
+        .run(&mut ctx, &CancellationToken::new())
+        .await
+        .expect("not fenced");
+    assert_eq!(ctx, log.rehydrate());
+    let seen = model.seen.lock().expect("seen").clone();
+    (exit, seen, log)
+}
+
+#[tokio::test]
+async fn scripts_that_succeed_without_fetching_anything_stall_and_answer() {
+    // Production shape (2026-11-18, turn operating_turn_b8642fdf): 39 scripts
+    // ran only in-script discovery, called no tool and all "succeeded", so
+    // the failure-only guard never saw them and the turn ran to its 40-step
+    // cap in 92 s. An empty search and a search whose empty result is
+    // printed both end on the call after the first refusal.
+    for code in [
+        (|_| "searchTools('investor crm');".to_owned()) as fn(usize) -> String,
+        |_| "text(searchTools('investor crm'));".to_owned(),
+        |_| "const unused = 1;".to_owned(),
+    ] {
+        let (exit, seen, log) = run_scripts(code, 40).await;
+        assert_eq!(exit, Exit::Done);
+        assert_eq!(seen.len(), 5, "three scripts, one refusal, one answer");
+        assert!(seen[..3].iter().all(|(_, recovery)| recovery.is_none()));
+        assert!(
+            seen[3]
+                .1
+                .as_ref()
+                .is_some_and(|text| text.contains("returned the same result 3 consecutive times")),
+            "{:?}",
+            seen[3].1
+        );
+        assert!(
+            seen[..4]
+                .iter()
+                .all(|(remaining, _)| !remaining.answer_only)
+        );
+        assert!(seen[4].0.answer_only);
+        let results = finished(&log);
+        assert_eq!(results.len(), 4);
+        assert!(results[..3].iter().all(|(outcome, text)| *outcome
+            == dex_loop::Outcome::Succeeded
+            && *text == results[0].1));
+        assert_eq!(results[3].0, dex_loop::Outcome::Failed);
+        assert!(
+            results[3]
+                .1
+                .contains("returned the same result three times"),
+            "{}",
+            results[3].1
+        );
+        assert!(matches!(log.events().last(), Some(Event::Final { .. })));
+    }
+}
+
+#[tokio::test]
+async fn a_script_result_says_when_nothing_was_selected_or_found() {
+    let (_, _, log) = run_scripts(|_| "const unused = 1;".to_owned(), 1).await;
+    assert_eq!(finished(&log)[0].1, agent_codemode::NO_OUTPUT);
+
+    let (_, _, log) = run_scripts(|_| "text(searchTools('investor crm'));".to_owned(), 1).await;
+    assert_eq!(
+        finished(&log)[0].1,
+        "[]\nsearchTools(\"investor crm\") found nothing. It inspects only the tools admitted to this script, not every tool the host can reach.\nTo find tools beyond the admitted ones, call tools_search directly, not from a script. A later script can call what it finds."
+    );
+
+    let (_, _, log) = run_scripts(
+        |_| "searchTools('investor crm'); describeTool('crm.read');".to_owned(),
+        1,
+    )
+    .await;
+    let text = &finished(&log)[0].1;
+    assert!(text.starts_with(agent_codemode::NO_OUTPUT), "{text}");
+    assert!(text.contains("describeTool(\"crm.read\") found nothing."));
+    assert!(text.ends_with("A later script can call what it finds."));
+
+    // A search that matches says nothing extra.
+    let (_, _, log) = run_scripts(|_| "text(searchTools('read').length);".to_owned(), 1).await;
+    assert_eq!(finished(&log)[0].1, "1");
+}
+
+#[tokio::test]
+async fn scripts_that_keep_returning_new_data_run_to_the_step_cap() {
+    // New output every time is progress, whether the script changes or the
+    // identical script returns something new. Neither is cut short, and the
+    // step cap still ends both: 40 tool steps, then the answer-only call.
+    let cap = 40;
+    let tool_steps = cap as usize;
+    for code in [
+        (|step| format!("text('page {step}');")) as fn(usize) -> String,
+        |_| "const n = (load('n') ?? 0) + 1; store('n', n); text(n);".to_owned(),
+    ] {
+        let (exit, seen, log) = run_scripts(code, cap).await;
+        assert_eq!(exit, Exit::Done);
+        assert_eq!(seen.len(), tool_steps + 1);
+        assert!(seen.iter().all(|(_, recovery)| recovery.is_none()));
+        assert!(
+            seen[..tool_steps]
+                .iter()
+                .all(|(remaining, _)| !remaining.answer_only)
+        );
+        assert!(seen[tool_steps].0.answer_only);
+        let results = finished(&log);
+        assert_eq!(results.len(), tool_steps);
+        assert!(
+            results
+                .iter()
+                .all(|(outcome, _)| *outcome == dex_loop::Outcome::Succeeded)
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_different_call_or_a_new_result_resets_the_stall_guard() {
+    // Two identical results, then a different one: the count starts over,
+    // so two more identical results do not stall the call.
+    let (exit, seen, _) = run_scripts(
+        |step| {
+            if step == 3 {
+                "store('seen', true);".to_owned()
+            } else {
+                "text(load('seen') ?? 'nothing yet');".to_owned()
+            }
+        },
+        5,
+    )
+    .await;
+    assert_eq!(exit, Exit::Done);
+    assert_eq!(seen.len(), 6);
+    assert!(seen.iter().all(|(_, recovery)| recovery.is_none()));
+}

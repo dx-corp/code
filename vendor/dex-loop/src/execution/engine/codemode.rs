@@ -172,6 +172,20 @@ where
                     } else {
                         Outcome::Succeeded
                     };
+                    // The shared VM says a discovery helper found nothing in
+                    // the admitted catalog; only this host knows what widens
+                    // it. Without the name a model searches the same catalog
+                    // again (production 2026-11-18, turn
+                    // operating_turn_b8642fdf: 39 scripts, no tool called).
+                    if outcome == Outcome::Succeeded && !report.discovery_misses.is_empty() {
+                        let widen = format!(
+                            "\nTo find tools beyond the admitted ones, call {} directly, not from a script. A later script can call what it finds.",
+                            model_tool_name(self.searcher())
+                        );
+                        if content.len() + widen.len() <= 64 * 1024 {
+                            content.push_str(&widen);
+                        }
+                    }
                     if outcome == Outcome::Unknown {
                         content = format!(
                             "Outcome unknown: a nested tool may have taken effect; completed effects are not undone. Reconcile it before retrying.\n{content}"
@@ -351,10 +365,8 @@ where
                             ))
                         } else if let Err(reason) = validate_args(&entry, &call.args) {
                             Some(ToolResult::error(reason))
-                        } else if ctx.has_stalled_call(call) {
-                            Some(ToolResult::error(
-                                "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
-                            ))
+                        } else if let Some(refusal) = ctx.stalled_call_refusal(call) {
+                            Some(ToolResult::error(refusal))
                         } else if (!entry.read_only || model_operation)
                             && ctx.has_uncertain_call(call)
                         {
