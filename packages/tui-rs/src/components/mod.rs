@@ -118,6 +118,7 @@
 
 pub mod activity;
 mod approval;
+pub(crate) mod auto_chart;
 mod command_palette;
 mod config_selector;
 mod context_indicator;

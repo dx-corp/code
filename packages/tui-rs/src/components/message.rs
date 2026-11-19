@@ -114,6 +114,7 @@
 //! - Timestamps
 //! - Collapsible thinking blocks
 
+mod tool_results;
 pub mod transcript_images;
 
 use ratatui::{
@@ -124,6 +125,8 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
+#[cfg(test)]
+use crate::components::auto_chart::AutoChart;
 use crate::components::textarea::TextArea;
 use crate::effects::shimmer_spans;
 use crate::runtime_badges::{RuntimeBadgeParams, build_runtime_badges};
@@ -132,19 +135,18 @@ use crate::shimmer::{DEIXIC_ACCENT, DEIXIC_BORDER, DEIXIC_MUTED, DEIXIC_TEXT};
 use crate::state::{
     ApprovalMode, InteractionMode, Message, MessageKind, MessageRole, QueueMode, ToolCallStatus,
 };
-use crate::tool_output::{clamp_tool_output, format_tool_output_truncation, tool_output_limits};
 use crate::tool_summary::summarize_tool_use;
 use crate::wrapping::{RtOptions, word_wrap_lines};
 #[cfg(test)]
 use maestro_presentation::components::tool_result::preview_lines as tool_preview_lines;
-use maestro_presentation::components::{
-    composer::Composer,
-    tool_result::{ToolPhase, ToolResult},
-};
+use maestro_presentation::components::{composer::Composer, tool_result::ToolResult};
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
+#[cfg(test)]
+use tool_results::get_tool_args_preview;
+use tool_results::{latest_chart_call, tool_phase, tool_result_lines, visible_script_child};
 use unicode_width::UnicodeWidthStr;
 
 fn conversation_theme() -> maestro_ui::UiTheme {
@@ -202,72 +204,6 @@ fn format_timestamp(time: SystemTime) -> String {
     let hours = (secs / 3600) % 24;
     let minutes = (secs / 60) % 60;
     format!("{hours:02}:{minutes:02}")
-}
-
-fn tool_phase(status: ToolCallStatus) -> ToolPhase {
-    match status {
-        ToolCallStatus::Pending => ToolPhase::Pending,
-        ToolCallStatus::Running => ToolPhase::Running,
-        ToolCallStatus::Completed => ToolPhase::Completed,
-        ToolCallStatus::Failed => ToolPhase::Failed,
-        ToolCallStatus::Cancelled => ToolPhase::Cancelled,
-        ToolCallStatus::Blocked => ToolPhase::Blocked,
-    }
-}
-
-fn visible_script_child(
-    call: &crate::state::ToolCallState,
-    expanded: Option<&HashSet<String>>,
-) -> bool {
-    call.parent_call_id
-        .as_ref()
-        .is_none_or(|parent| expanded.is_some_and(|set| set.contains(parent)))
-        || matches!(
-            call.status,
-            ToolCallStatus::Pending
-                | ToolCallStatus::Failed
-                | ToolCallStatus::Blocked
-                | ToolCallStatus::Cancelled
-        )
-}
-
-fn tool_result_lines(
-    tc: &crate::state::ToolCallState,
-    expanded: bool,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let summary = if tc.tool == "codemode" {
-        "Script".to_owned()
-    } else if tc.status == ToolCallStatus::Completed {
-        summarize_tool_use(&tc.tool, &tc.args)
-    } else {
-        crate::tool_summary::summarize_tool_intent(&tc.tool, &tc.args)
-    };
-    let arguments = if tc.tool == "codemode" && !expanded {
-        String::new()
-    } else {
-        get_tool_args_preview(&tc.tool, &tc.args, width.saturating_sub(20) as usize)
-    };
-    let clamp = clamp_tool_output(&tc.output, tool_output_limits());
-    let banner = format_tool_output_truncation(&clamp);
-    ToolResult {
-        phase: tool_phase(tc.status),
-        summary: &summary,
-        arguments: &arguments,
-        output: &clamp.text,
-        expanded,
-        detail: &format!(
-            "· {} #{}{}",
-            tc.tool,
-            tc.call_id,
-            tc.duration_ms
-                .map(|ms| format!(" · {ms} ms"))
-                .unwrap_or_default()
-        ),
-        truncation: banner.as_deref(),
-        theme: conversation_theme(),
-    }
-    .lines(width)
 }
 
 fn focus_turn_is_collapsed(
@@ -403,6 +339,7 @@ pub fn calculate_message_height(
     compact_tool_outputs: bool,
     focus_view: bool,
     expanded_focus_turns: &HashSet<String>,
+    auto_charts: bool,
 ) -> u16 {
     if !should_render_message(message) {
         return 0;
@@ -450,6 +387,7 @@ pub fn calculate_message_height(
         return height + 1;
     }
 
+    let chart_call = latest_chart_call(message, Some(expanded_tools), auto_charts, width);
     // Tool calls
     for (tool_index, tc) in message.tool_calls.iter().enumerate() {
         if !visible_script_child(tc, Some(expanded_tools)) {
@@ -463,6 +401,9 @@ pub fn calculate_message_height(
         height += tool_result_lines(tc, expanded, width)
             .len()
             .min(u16::MAX as usize) as u16;
+        if let Some((_, chart)) = chart_call.filter(|(id, _)| !expanded && *id == tc.call_id) {
+            height += chart.height();
+        }
 
         // Separate tools, but let the next message supply the turn spacing.
         if tool_index + 1 < message.tool_calls.len() {
@@ -500,6 +441,7 @@ pub struct MessageWidget<'a> {
     message: &'a Message,
     expanded_tools: Option<&'a HashSet<String>>,
     compact_tool_outputs: bool,
+    auto_charts: bool,
     focus_view: bool,
     expanded_focus_turns: Option<&'a HashSet<String>>,
     selected_focus_turn: Option<&'a str>,
@@ -514,6 +456,7 @@ impl<'a> MessageWidget<'a> {
             message,
             expanded_tools: None,
             compact_tool_outputs: false,
+            auto_charts: false,
             focus_view: false,
             expanded_focus_turns: None,
             selected_focus_turn: None,
@@ -543,6 +486,12 @@ impl<'a> MessageWidget<'a> {
     #[must_use]
     pub fn with_compact_tool_outputs(mut self, compact: bool) -> Self {
         self.compact_tool_outputs = compact;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_auto_charts(mut self, enabled: bool) -> Self {
+        self.auto_charts = enabled;
         self
     }
 
@@ -822,7 +771,12 @@ impl Widget for MessageWidget<'_> {
             return;
         }
 
-        // Render tool calls in Codex style
+        let chart_call = latest_chart_call(
+            self.message,
+            self.expanded_tools,
+            self.auto_charts,
+            area.width,
+        );
         for (tool_index, tool_call) in self.message.tool_calls.iter().enumerate() {
             if !visible_script_child(tool_call, self.expanded_tools) {
                 continue;
@@ -840,7 +794,13 @@ impl Widget for MessageWidget<'_> {
                 !expanded
             };
 
-            let lines = tool_result_lines(tool_call, expanded, area.width);
+            let mut lines = tool_result_lines(tool_call, expanded, area.width);
+            if let Some((_, chart)) =
+                chart_call.filter(|(id, _)| !expanded && *id == tool_call.call_id)
+            {
+                let chart_lines = chart.lines(area.width, &crate::themes::current_theme());
+                lines.splice(1..1, chart_lines);
+            }
             let height = (lines.len().min(u16::MAX as usize) as u16).min(max_y - y);
             Paragraph::new(lines).render(Rect { y, height, ..area }, buf);
             y += height;
@@ -851,81 +811,6 @@ impl Widget for MessageWidget<'_> {
             }
         }
     }
-}
-
-/// Get a preview of tool arguments based on tool type
-fn get_tool_args_preview(tool: &str, args: &serde_json::Value, max_len: usize) -> String {
-    let preview = match tool.to_lowercase().as_str() {
-        "bash" => args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "read" => args
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "write" => args
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "edit" => args
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "glob" => args
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "grep" => args
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "task" => args
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "webfetch" | "websearch" => args
-            .get("url")
-            .or_else(|| args.get("query"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        _ => {
-            // Generic: show first string value
-            args.as_object()
-                .and_then(|obj| {
-                    obj.values()
-                        .find_map(|v| v.as_str())
-                        .map(std::string::ToString::to_string)
-                })
-                .unwrap_or_default()
-        }
-    };
-
-    if preview.width() <= max_len {
-        return preview;
-    }
-    let suffix = ".".repeat(max_len.min(3));
-    let budget = max_len.saturating_sub(suffix.len());
-    let mut clipped = String::new();
-    let mut width = 0;
-    let span = Span::raw(preview);
-    for grapheme in span.styled_graphemes(Style::default()) {
-        let next = grapheme.symbol.width();
-        if width + next > budget {
-            break;
-        }
-        clipped.push_str(grapheme.symbol);
-        width += next;
-    }
-    clipped + &suffix
 }
 
 /// A stateless widget for rendering a single tool call.
@@ -2581,7 +2466,8 @@ fn continues_turn(previous: Option<&&Message>, message: &Message) -> bool {
 
 impl ChatView<'_> {
     fn message_layout_settings_key(&self) -> u64 {
-        let mut key = u64::from(self.state.compact_tool_outputs);
+        let mut key = u64::from(self.state.compact_tool_outputs)
+            | u64::from(self.state.auto_charts).rotate_left(5);
         for call_id in &self.state.expanded_tool_calls {
             let mut hasher = DefaultHasher::new();
             call_id.hash(&mut hasher);
@@ -2722,6 +2608,7 @@ impl ChatView<'_> {
                     self.state.compact_tool_outputs,
                     self.state.focus_view,
                     &self.state.expanded_focus_turns,
+                    self.state.auto_charts,
                 ))
                 .saturating_add(usize::from(
                     self.image_height(renderable_messages[index], content_area.width),
@@ -2775,6 +2662,7 @@ impl ChatView<'_> {
                 .with_timestamps(self.timestamps)
                 .with_expanded_tools(&self.state.expanded_tool_calls)
                 .with_compact_tool_outputs(self.state.compact_tool_outputs)
+                .with_auto_charts(self.state.auto_charts)
                 .with_focus_view(self.state.focus_view, &self.state.expanded_focus_turns)
                 .with_selected_focus_turn(self.state.focus_selected_turn.as_deref());
             widget.render(msg_area, &mut message_buffer);
@@ -2946,6 +2834,7 @@ mod tests {
         );
         let mut message = polish_message("tool", "Done.");
         message.tool_calls.push(crate::state::ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "read-1".into(),
@@ -3041,6 +2930,7 @@ mod tests {
             message.thinking = "界".repeat(60);
             message.thinking_expanded = expanded;
             message.tool_calls.push(crate::state::ToolCallState {
+                auto_chart: None,
                 parent_call_id: None,
                 duration_ms: None,
                 call_id: "read-1".into(),
@@ -3056,6 +2946,7 @@ mod tests {
                 true,
                 false,
                 &HashSet::new(),
+                false,
             );
             let area = Rect::new(0, 0, 40, height + 3);
             let mut buf = Buffer::empty(area);
@@ -3157,6 +3048,7 @@ mod tests {
     fn tool_identifiers_and_timestamps_are_details_only() {
         let mut message = polish_message("tool", "");
         message.tool_calls.push(crate::state::ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "read-private-id".into(),
@@ -3626,6 +3518,7 @@ mod tests {
             thinking: String::new(),
             streaming: false,
             tool_calls: vec![crate::state::ToolCallState {
+                auto_chart: None,
                 parent_call_id: None,
                 duration_ms: None,
                 call_id: "call-12345678".to_string(),
@@ -3651,6 +3544,7 @@ mod tests {
                 compact,
                 false,
                 &HashSet::new(),
+                false,
             );
             let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
             MessageWidget::new(&message)
@@ -3677,6 +3571,7 @@ mod tests {
             streaming: true,
             tool_calls: vec![
                 crate::state::ToolCallState {
+                    auto_chart: None,
                     parent_call_id: None,
                     duration_ms: None,
                     call_id: "call-complete".to_string(),
@@ -3686,6 +3581,7 @@ mod tests {
                     output: "finished".to_string(),
                 },
                 crate::state::ToolCallState {
+                    auto_chart: None,
                     parent_call_id: None,
                     duration_ms: None,
                     call_id: "call-failed".to_string(),
@@ -3695,6 +3591,7 @@ mod tests {
                     output: "not found".to_string(),
                 },
                 crate::state::ToolCallState {
+                    auto_chart: None,
                     parent_call_id: None,
                     duration_ms: None,
                     call_id: "call-running".to_string(),
@@ -3722,6 +3619,7 @@ mod tests {
             true,
             true,
             &expanded_turns,
+            false,
         );
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
 
@@ -3740,6 +3638,70 @@ mod tests {
     }
 
     #[test]
+    fn auto_chart_measures_and_renders_only_the_latest_chartable_call() {
+        let mut message = polish_message("chart", "Done.");
+        for (id, metric, status) in [
+            ("a", "earlier_metric", ToolCallStatus::Completed),
+            ("b", "latest_metric", ToolCallStatus::Completed),
+            ("c", "failed_metric", ToolCallStatus::Failed),
+        ] {
+            let output = serde_json::json!({
+                "columns": ["day", metric],
+                "results": [["2026-11-08", 3], ["2026-11-18", 4]],
+            })
+            .to_string();
+            let auto_chart = AutoChart::from_result(&output, None).map(std::sync::Arc::new);
+            message.tool_calls.push(crate::state::ToolCallState {
+                auto_chart,
+                parent_call_id: None,
+                duration_ms: None,
+                call_id: id.into(),
+                tool: "bash".into(),
+                args: serde_json::json!({"command": format!("query {id}")}),
+                status,
+                output,
+            });
+        }
+        let width = 80;
+        let expanded = HashSet::new();
+        let height = |width, enabled| {
+            calculate_message_height(
+                &message,
+                width,
+                &expanded,
+                true,
+                false,
+                &HashSet::new(),
+                enabled,
+            )
+        };
+        let chart_height = message.tool_calls[1].auto_chart.as_ref().unwrap().height();
+        assert_eq!(height(width, true), height(width, false) + chart_height);
+        assert_eq!(height(40, true), height(40, false));
+        let area = Rect::new(0, 0, width, height(width, true));
+        let mut buffer = Buffer::empty(area);
+        MessageWidget::new(&message)
+            .with_compact_tool_outputs(true)
+            .with_auto_charts(true)
+            .render(area, &mut buffer);
+        let rows: Vec<String> = (0..area.height)
+            .map(|y| {
+                (0..width)
+                    .filter_map(|x| buffer.cell((x, y)))
+                    .map(|cell| cell.symbol())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rows.iter().filter(|row| row.contains("Auto chart")).count(),
+            1
+        );
+        assert!(rows.iter().any(|row| row.contains("latest_metric")));
+        assert!(rows.iter().all(|row| !row.contains("earlier_metric")));
+        assert!(rows.iter().any(|row| row.contains("Failed")));
+    }
+
+    #[test]
     fn expanding_a_focus_turn_restores_existing_tool_rendering() {
         let message = focus_view_message();
         let expanded_turns = HashSet::from([message.id.clone()]);
@@ -3751,6 +3713,7 @@ mod tests {
             true,
             true,
             &expanded_turns,
+            false,
         );
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
 
@@ -3790,6 +3753,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            false,
         );
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
 

@@ -301,12 +301,13 @@ pub(super) fn restore_visible_session_messages(state: &mut AppState, session: &P
                 content,
                 is_error,
                 receipt,
+                details,
                 ..
             } = message
             {
                 Some((
                     tool_call_id.as_str(),
-                    (content, *is_error, receipt.as_ref()),
+                    (content, *is_error, receipt.as_ref(), details.as_ref()),
                 ))
             } else {
                 None
@@ -330,7 +331,7 @@ pub(super) fn restore_visible_session_messages(state: &mut AppState, session: &P
                     };
                     let result = tool_results.get(id.as_str());
                     let receipt = result
-                        .and_then(|(_, _, receipt)| *receipt)
+                        .and_then(|(_, _, receipt, _)| *receipt)
                         .filter(|receipt| receipt.call_id == *id && receipt.tool_name == *name);
                     let status = if matches!(
                         receipt.map(|receipt| &receipt.status),
@@ -352,12 +353,19 @@ pub(super) fn restore_visible_session_messages(state: &mut AppState, session: &P
                         crate::state::ToolCallStatus::Failed
                     } else {
                         match result {
-                            Some((_, true, _)) => crate::state::ToolCallStatus::Failed,
-                            Some((_, false, _)) => crate::state::ToolCallStatus::Completed,
+                            Some((_, true, _, _)) => crate::state::ToolCallStatus::Failed,
+                            Some((_, false, _, _)) => crate::state::ToolCallStatus::Completed,
                             None => crate::state::ToolCallStatus::Pending,
                         }
                     };
+                    let auto_chart = result
+                        .filter(|_| status == crate::state::ToolCallStatus::Completed)
+                        .and_then(|(content, _, _, details)| {
+                            crate::components::auto_chart::AutoChart::from_result(content, *details)
+                        })
+                        .map(std::sync::Arc::new);
                     Some(crate::state::ToolCallState {
+                        auto_chart,
                         call_id: id.clone(),
                         parent_call_id: None,
                         duration_ms: receipt.and_then(|receipt| receipt.duration_ms),
@@ -365,7 +373,7 @@ pub(super) fn restore_visible_session_messages(state: &mut AppState, session: &P
                         args: args.clone(),
                         status,
                         output: result
-                            .map_or_else(String::new, |(content, _, _)| (*content).clone()),
+                            .map_or_else(String::new, |(content, _, _, _)| (*content).clone()),
                     })
                 })
                 .collect(),

@@ -143,6 +143,7 @@ mod tests {
         let mut state = AppState::new();
         state.add_user_message("Check the code".into());
         state.messages[0].tool_calls.push(ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "call-1".into(),
@@ -166,6 +167,7 @@ mod tests {
         let mut state = AppState::new();
         state.add_user_message("All tests passed".into());
         state.messages[0].tool_calls.push(ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "call-1".into(),

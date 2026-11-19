@@ -162,6 +162,7 @@ mod tests {
             .unwrap()
             .tool_calls
             .push(ToolCallState {
+                auto_chart: None,
                 parent_call_id: None,
                 duration_ms: None,
                 call_id: "edit-1".into(),

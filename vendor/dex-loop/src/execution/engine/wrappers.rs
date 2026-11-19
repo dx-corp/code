@@ -116,7 +116,7 @@ where
 
     /// `tools.call`, naming the tool the model finds tools with.
     pub(super) fn call_spec(&self) -> ToolSpec {
-        call_spec(self.searcher())
+        call_spec(self.searcher(), self.tools.act())
     }
 
     pub(super) fn unknown_tool(&self, name: &ToolName) -> ToolResult {
@@ -124,5 +124,72 @@ where
             "unknown tool: {name}; use {} to find tools",
             model_tool_name(self.searcher()),
         ))
+    }
+}
+
+/// What the model is told `tools.call` does.
+///
+/// The description says what the engine refuses, so the model does not learn
+/// it one refused step at a time (production, 7 days to 2026-11-18: 312
+/// calls stayed named `tools.call`, every one refused before running). A
+/// call that names a catalog tool is recorded as that tool, so the ones
+/// still named `tools.call` are exactly the refusals: a name no catalog tool
+/// has (a declared wrapper, or a script's `tools.<name>` form), arguments
+/// that are not an object, or, with `act` on, a change.
+pub(super) fn call_description(searcher: &str, act: bool) -> String {
+    let run = model_tool_name(CODEMODE);
+    let changes = if act {
+        format!(
+            " A tool that changes something is refused here: preview it with {ACT}, then \
+             submit the plan."
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Call a tool that {search} found and that is not one of your declared tools; \
+                 request a declared tool directly. name: the tool's name exactly as the search \
+                 result lists it, with no tools. prefix (tools.<name> exists only inside a {run} \
+                 script); arguments: an object matching that tool's input_schema from the search \
+                 result, {{}} when it takes none. The call runs as that tool, with its own \
+                 authorization and receipt.{changes} An argument that does not fit the schema is \
+                 returned with the field and the reason; correct it and call again.",
+        search = model_tool_name(searcher),
+    )
+}
+
+#[cfg(test)]
+mod call_description_tests {
+    use super::*;
+
+    /// The call of a found tool says, beside the call, each thing the engine
+    /// refuses in it: a declared tool's name, the script-only `tools.<name>`
+    /// form, missing arguments and, where `act` is on, a change.
+    #[test]
+    fn the_found_tool_call_names_what_it_refuses() {
+        let plain = call_description("search", false);
+        for rule in [
+            "Call a tool that search found and that is not one of your declared tools",
+            "request a declared tool directly",
+            "with no tools. prefix (tools.<name> exists only inside a run script)",
+            "{} when it takes none",
+        ] {
+            assert!(plain.contains(rule), "lost {rule:?}: {plain}");
+        }
+        assert!(!plain.contains("preview it with"), "{plain}");
+        let with_act = call_description(TOOLS_SEARCH, true);
+        assert!(
+            with_act.starts_with("Call a tool that tools_search found"),
+            "{with_act}"
+        );
+        assert!(
+            with_act.contains(
+                "A tool that changes something is refused here: preview it with act, then submit \
+                 the plan."
+            ),
+            "{with_act}"
+        );
+        // Sent on every step: keep the whole description small.
+        assert!(with_act.len() / 4 <= 190, "{} bytes", with_act.len());
     }
 }

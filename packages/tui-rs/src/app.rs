@@ -1752,7 +1752,7 @@ impl App {
             }
         };
 
-        state.set_output_detail(ui_prefs.output_detail());
+        state.apply_output_preferences(&ui_prefs);
         let configured_animations = app_config
             .tui
             .as_ref()

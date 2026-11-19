@@ -408,50 +408,128 @@ async fn run_scripts(
 }
 
 #[tokio::test]
-async fn scripts_that_succeed_without_fetching_anything_stall_and_answer() {
+async fn scripts_that_call_no_tool_stall_after_two_and_answer() {
     // Production shape (2026-11-18, turn operating_turn_b8642fdf): 39 scripts
     // ran only in-script discovery, called no tool and all "succeeded", so
-    // the failure-only guard never saw them and the turn ran to its 40-step
-    // cap in 92 s. An empty search and a search whose empty result is
-    // printed both end on the call after the first refusal.
+    // the turn ran to its 40-step cap in 92 s. The scripts differed, so no
+    // identical-call count would have seen them. Whatever a script selects,
+    // the second in a row that calls no tool ends tool use.
     for code in [
         (|_| "searchTools('investor crm');".to_owned()) as fn(usize) -> String,
-        |_| "text(searchTools('investor crm'));".to_owned(),
+        |step| format!("text(searchTools('investor crm {step}'));"),
+        |step| format!("text(describeTool('crm.read_{step}'));"),
         |_| "const unused = 1;".to_owned(),
     ] {
         let (exit, seen, log) = run_scripts(code, 40).await;
         assert_eq!(exit, Exit::Done);
-        assert_eq!(seen.len(), 5, "three scripts, one refusal, one answer");
-        assert!(seen[..3].iter().all(|(_, recovery)| recovery.is_none()));
+        assert_eq!(seen.len(), 3, "two scripts, one answer");
         assert!(
-            seen[3]
+            seen[..2]
+                .iter()
+                .all(|(remaining, recovery)| { !remaining.answer_only && recovery.is_none() })
+        );
+        assert!(seen[2].0.answer_only);
+        assert_eq!(seen[2].0.tool_steps, 0);
+        assert!(
+            seen[2]
                 .1
                 .as_ref()
-                .is_some_and(|text| text.contains("returned the same result 3 consecutive times")),
+                .is_some_and(|text| text.contains("The last 2 scripts called no tool")),
             "{:?}",
-            seen[3].1
+            seen[2].1
         );
-        assert!(
-            seen[..4]
-                .iter()
-                .all(|(remaining, _)| !remaining.answer_only)
-        );
-        assert!(seen[4].0.answer_only);
         let results = finished(&log);
-        assert_eq!(results.len(), 4);
-        assert!(results[..3].iter().all(|(outcome, text)| *outcome
-            == dex_loop::Outcome::Succeeded
-            && *text == results[0].1));
-        assert_eq!(results[3].0, dex_loop::Outcome::Failed);
+        assert_eq!(results.len(), 2);
         assert!(
-            results[3]
-                .1
-                .contains("returned the same result three times"),
-            "{}",
-            results[3].1
+            results
+                .iter()
+                .all(|(outcome, _)| *outcome == dex_loop::Outcome::Succeeded)
         );
+        // The first result is what the script selected; the second keeps
+        // what it selected and ends with the fixed notice.
+        assert!(!results[0].1.contains(dex_loop::IDLE_SCRIPTS_NOTICE));
+        assert!(
+            results[1].1.ends_with(dex_loop::IDLE_SCRIPTS_NOTICE),
+            "{}",
+            results[1].1
+        );
+        assert!(results[1].1.len() > dex_loop::IDLE_SCRIPTS_NOTICE.len());
         assert!(matches!(log.events().last(), Some(Event::Final { .. })));
     }
+}
+
+/// Always succeeds with the same inline text.
+#[derive(Clone)]
+struct SameResultTools {
+    spec: Vec<ToolSpec>,
+    calls: Arc<Mutex<usize>>,
+}
+impl Tools for SameResultTools {
+    fn catalog(&self) -> &[ToolSpec] {
+        &self.spec
+    }
+    async fn search(&self, _: &PrincipalId, _: &str) -> Vec<ToolName> {
+        vec![]
+    }
+    async fn policy(&self, _: &Context, _: &ProposedCall) -> Verdict {
+        Verdict::Allow
+    }
+    async fn run(&self, _: &ThreadId, _: &ProposedCall, _: &CancellationToken) -> ToolResult {
+        *self.calls.lock().expect("calls") += 1;
+        ToolResult {
+            outcome: dex_loop::Outcome::Succeeded,
+            output: dex_loop::Output::Text("no rows".into()),
+            receipt: None,
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_identical_call_returning_the_same_result_stalls_like_a_failing_one() {
+    let log = FakeLog::default();
+    let model = ObservingModel {
+        ignores_recovery: true,
+        ..Default::default()
+    };
+    let tools = SameResultTools {
+        spec: vec![read_tool("read")],
+        calls: Arc::default(),
+    };
+    let engine = Engine::new(
+        log.clone(),
+        model.clone(),
+        tools.clone(),
+        FakeEffects::default(),
+        Lexicon::default(),
+        budget(30),
+    );
+    let mut ctx = log.start_turn("t1", "find the investor record");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+    assert_eq!(*tools.calls.lock().expect("calls"), 3);
+    let seen = model.seen.lock().expect("seen");
+    assert_eq!(seen.len(), 5, "three reads, one refusal, one answer");
+    assert!(
+        seen[3]
+            .1
+            .as_ref()
+            .is_some_and(|text| text.contains("returned the same result 3 consecutive times")),
+        "{:?}",
+        seen[3].1
+    );
+    assert!(seen[4].0.answer_only);
+    let results = finished(&log);
+    assert_eq!(results[3].0, dex_loop::Outcome::Failed);
+    assert!(
+        results[3]
+            .1
+            .contains("returned the same result three times"),
+        "{}",
+        results[3].1
+    );
+    assert_eq!(ctx, log.rehydrate());
 }
 
 #[tokio::test]
@@ -481,15 +559,16 @@ async fn a_script_result_says_when_nothing_was_selected_or_found() {
 }
 
 #[tokio::test]
-async fn scripts_that_keep_returning_new_data_run_to_the_step_cap() {
-    // New output every time is progress, whether the script changes or the
-    // identical script returns something new. Neither is cut short, and the
-    // step cap still ends both: 40 tool steps, then the answer-only call.
+async fn scripts_that_call_tools_run_to_the_step_cap() {
+    // A script that calls a tool is doing what scripts are for, whether the
+    // script changes or the identical script reads something new each time.
+    // Neither is cut short, and the step cap still ends both: every tool
+    // step, then the answer-only call.
     let cap = 40;
     let tool_steps = cap as usize;
     for code in [
-        (|step| format!("text('page {step}');")) as fn(usize) -> String,
-        |_| "const n = (load('n') ?? 0) + 1; store('n', n); text(n);".to_owned(),
+        (|step| format!("text(await tools.read({{key: 'page {step}'}}));")) as fn(usize) -> String,
+        |_| "text(await tools.read({key: 'next'}));".to_owned(),
     ] {
         let (exit, seen, log) = run_scripts(code, cap).await;
         assert_eq!(exit, Exit::Done);
@@ -501,26 +580,39 @@ async fn scripts_that_keep_returning_new_data_run_to_the_step_cap() {
                 .all(|(remaining, _)| !remaining.answer_only)
         );
         assert!(seen[tool_steps].0.answer_only);
-        let results = finished(&log);
-        assert_eq!(results.len(), tool_steps);
-        assert!(
-            results
-                .iter()
-                .all(|(outcome, _)| *outcome == dex_loop::Outcome::Succeeded)
-        );
+        let scripts: Vec<_> = log
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::ToolFinished {
+                    call,
+                    outcome,
+                    output,
+                    ..
+                } if !call.as_str().contains(":codemode:") => {
+                    Some((outcome, format!("{output:?}")))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(scripts.len(), tool_steps);
+        assert!(scripts.iter().all(|(outcome, output)| {
+            *outcome == dex_loop::Outcome::Succeeded
+                && !output.contains(dex_loop::IDLE_SCRIPTS_NOTICE)
+        }));
     }
 }
 
 #[tokio::test]
-async fn a_different_call_or_a_new_result_resets_the_stall_guard() {
-    // Two identical results, then a different one: the count starts over,
-    // so two more identical results do not stall the call.
-    let (exit, seen, _) = run_scripts(
+async fn a_script_that_calls_a_tool_starts_the_count_of_idle_scripts_over() {
+    // Idle, working, idle, working, idle: never two idle scripts in a row,
+    // so tools stay offered until the step budget ends the turn.
+    let (exit, seen, log) = run_scripts(
         |step| {
-            if step == 3 {
-                "store('seen', true);".to_owned()
+            if step % 2 == 1 {
+                "text(load('page') ?? 'nothing stored');".to_owned()
             } else {
-                "text(load('seen') ?? 'nothing yet');".to_owned()
+                "text(await tools.read({key: 'next'}));".to_owned()
             }
         },
         5,
@@ -529,4 +621,14 @@ async fn a_different_call_or_a_new_result_resets_the_stall_guard() {
     assert_eq!(exit, Exit::Done);
     assert_eq!(seen.len(), 6);
     assert!(seen.iter().all(|(_, recovery)| recovery.is_none()));
+    assert!(
+        seen[..5]
+            .iter()
+            .all(|(remaining, _)| !remaining.answer_only)
+    );
+    assert!(
+        finished(&log)
+            .iter()
+            .all(|(_, text)| !text.contains(dex_loop::IDLE_SCRIPTS_NOTICE))
+    );
 }

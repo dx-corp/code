@@ -22,6 +22,13 @@ const MAX_ACTION_RECORDS: usize = 128;
 /// blocker. A call makes no progress when it fails, or when it succeeds with
 /// the output the identical call returned just before it.
 const STALL_FAILURES: u32 = 3;
+/// Consecutive scripts that succeeded without calling a tool after which the
+/// next model call offers no tools. A script composes tool calls; one that
+/// calls none only inspects what the turn already has, and a second in a
+/// row has found nothing to call (production 2026-11-18, turn
+/// operating_turn_b8642fdf: 39 such scripts, each different, so the
+/// identical-call guard never counted them).
+const STALL_IDLE_SCRIPTS: u32 = 2;
 // A public question permits 4096 characters, each at most four UTF-8 bytes.
 const MAX_ACTION_ARGUMENT_BYTES: usize = 16 * 1024;
 
@@ -291,6 +298,10 @@ pub struct Context {
     /// Derived from tool events, outside compactable history. This tracks a
     /// consecutive failure, not a permanent blacklist or an automatic retry.
     failed_call: Option<FailedCall>,
+    /// Scripts in a row that succeeded without proposing a nested call. Any
+    /// other succeeded call, a script that calls a tool, or new user input
+    /// starts the count over.
+    idle_scripts: u32,
     /// Set only on the model-attempt copy, never on durable thread context.
     remaining_budget: Option<crate::RemainingBudget>,
     scratch: crate::codemode_state::Scratch,
@@ -371,6 +382,7 @@ impl Context {
             pre_started: Vec::new(),
             last_compaction: None,
             failed_call: None,
+            idle_scripts: 0,
             remaining_budget: None,
             scratch: Default::default(),
             model_usage_unresolved: false,
@@ -521,10 +533,27 @@ impl Context {
     /// the step or wall budget runs out (production 2026-11-15, turn
     /// operating_turn_3af07df2: 27 refused `dex.describe` calls, no answer
     /// in 50 s). A successful call or new user input resets the guard.
+    ///
+    /// Two scripts in a row that called no tool withhold tools the same way:
+    /// see [`STALL_IDLE_SCRIPTS`].
     pub(crate) fn stalled_call_refused(&self) -> bool {
-        self.failed_call
-            .as_ref()
-            .is_some_and(|failure| failure.repeated_after_guidance)
+        self.idle_scripts_stalled()
+            || self
+                .failed_call
+                .as_ref()
+                .is_some_and(|failure| failure.repeated_after_guidance)
+    }
+
+    /// Whether the scripts of this turn stopped calling tools: the next
+    /// model call is answer-only.
+    pub(crate) fn idle_scripts_stalled(&self) -> bool {
+        self.idle_scripts >= STALL_IDLE_SCRIPTS
+    }
+
+    /// Whether a script that calls no tool would be the one that stalls the
+    /// turn, so the engine can say so in that script's result.
+    pub(crate) fn next_idle_script_stalls(&self) -> bool {
+        self.idle_scripts.saturating_add(1) >= STALL_IDLE_SCRIPTS
     }
 
     pub(crate) fn interrupted_answer(&self) -> Option<&str> {
@@ -574,6 +603,12 @@ impl Context {
     pub fn recovery_guidance(&self) -> Option<String> {
         if self.answer_continuation_started {
             return Some("The preceding assistant answer was interrupted by a transient stream failure. Its visible text is already committed. Continue exactly after its last visible words, without repeating the prefix or restarting the answer. This is the single answer-only continuation: use only established results and do not call tools. Proposed calls from the interrupted step were not accepted; do not claim they ran, and do not repeat any earlier completed or uncertain operation.".into());
+        }
+        if self.idle_scripts_stalled() {
+            return Some(format!(
+                "The last {} scripts called no tool, so no tools are offered now. Answer from what is established and say plainly what could not be found or confirmed.",
+                self.idle_scripts
+            ));
         }
         self.failed_call.as_ref().filter(|failure| failure.count >= STALL_FAILURES).map(|failure| {
             if failure.same_output.is_some() {
@@ -1234,6 +1269,29 @@ impl Context {
                 {
                     self.uncertain_calls.push(proposal);
                 }
+                // formal: begin dex_stall_guard/StallGuard.Idle
+                if let Some(script) = self
+                    .proposed_call(call)
+                    .map(|proposal| proposal.tool.as_str() == agent_codemode::TOOL_NAME)
+                {
+                    let called_a_tool = script
+                        && self.nested_calls.iter().any(|nested| {
+                            nested
+                                .id
+                                .as_str()
+                                .starts_with(&format!("{}:codemode:", call.as_str()))
+                        });
+                    if script && !called_a_tool {
+                        // A failed script has the failure guard; only a
+                        // script that ran to its end and called nothing counts.
+                        if *outcome == Outcome::Succeeded {
+                            self.idle_scripts = self.idle_scripts.saturating_add(1);
+                        }
+                    } else if called_a_tool || *outcome == Outcome::Succeeded {
+                        self.idle_scripts = 0;
+                    }
+                }
+                // formal: end dex_stall_guard/StallGuard.Idle
                 if let Some(proposal) = self.proposed_call(call).cloned()
                     // A wrapper's projected summary is not progress on a failed
                     // owner operation. Actual child completions update this
@@ -1500,6 +1558,7 @@ impl Context {
                 .any(|evidence| evidence.call.id == proposal.id)
         });
         self.failed_call = None;
+        self.idle_scripts = 0;
         self.pre_started.clear();
         self.client_tools = client_tools;
         self.authorized_tools = authorized_tools;
@@ -1601,6 +1660,7 @@ impl Context {
             .clone()
             .unwrap_or_else(|| TurnId::new(String::new()));
         self.failed_call = None;
+        self.idle_scripts = 0;
         for (_, principal, text) in ready {
             self.acting = Some(principal.clone());
             self.push(
