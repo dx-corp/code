@@ -90,19 +90,20 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -euo pipefail
-          release_json="$RUNNER_TEMP/staged-release.json"
-          release_error="$RUNNER_TEMP/staged-release.stderr"
-          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "$release_json" 2> "$release_error"; then
-            ready="$(jq 'any(.assets[]; .name == "MONO_SHA256SUMS.cosign.bundle")' "$release_json")"
-          elif grep -q 'HTTP 404' "$release_error"; then
-            ready=false
-          else
-            cat "$release_error" >&2
-            exit 1
-          fi
+          # Mono stages the signed artifacts on a draft release. GitHub's
+          # release-by-tag endpoint returns published releases only, so read
+          # the release list, which includes drafts for a token with push
+          # access. Any API failure stops the job; it never reads as "not staged".
+          releases_json="$RUNNER_TEMP/staged-releases.json"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$releases_json"
+          ready="$(jq --slurp --arg tag "$RELEASE_TAG" '
+            [.[][] | select(.tag_name == $tag)]
+            | any(.[]; any(.assets[]; .name == "MONO_SHA256SUMS.cosign.bundle"))
+          ' "$releases_json")"
+          [[ "$ready" == true || "$ready" == false ]]
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
           if [[ "$ready" != true ]]; then
-            echo "Tag ${RELEASE_TAG} is ready; awaiting signed Mono artifacts." >> "$GITHUB_STEP_SUMMARY"
+            echo "Tag ${RELEASE_TAG} is awaiting signed Mono artifacts." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - id: active-release
