@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: public-source-provenance-${{ github.event.pull_request.number }}
@@ -24,6 +23,9 @@ jobs:
   require-internal-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Check mirrored-source provenance
         env:
@@ -139,3 +141,227 @@ jobs:
 
           echo "::error::Public PRs that touch mirrored source must link the matching dx-corp/mono source PR."
           exit 1
+
+  report-fork-status:
+    name: Report unvalidated fork PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Publish blocking not-validated status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+
+          DESCRIPTION = "not validated: fork code is not run on trusted runners"
+          SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+          REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+          MAX_MERGEABILITY_READS = 3
+          API_TIMEOUT_SECONDS = 10
+
+          def fail(message):
+              raise RuntimeError(message)
+
+          def valid_repository(value):
+              return isinstance(value, str) and REPOSITORY_PATTERN.fullmatch(value) is not None
+
+          def valid_sha(value):
+              return isinstance(value, str) and SHA_PATTERN.fullmatch(value) is not None
+
+          def api(arguments):
+              try:
+                  response = subprocess.run(
+                      ["gh", *arguments],
+                      check=False,
+                      capture_output=True,
+                      text=True,
+                      timeout=API_TIMEOUT_SECONDS,
+                  )
+              except (OSError, subprocess.TimeoutExpired):
+                  fail("GitHub API request failed or timed out")
+              if response.returncode != 0:
+                  fail("GitHub API request failed")
+              try:
+                  return json.loads(response.stdout)
+              except json.JSONDecodeError:
+                  fail("GitHub API returned malformed JSON")
+
+          def load_pull_request(repository, number):
+              pull_request = api(["api", f"repos/{repository}/pulls/{number}"])
+              if not isinstance(pull_request, dict):
+                  fail("GitHub returned malformed pull-request metadata")
+              if type(pull_request.get("number")) is not int or pull_request["number"] != number:
+                  fail("GitHub returned a different pull request")
+              if pull_request.get("state") not in {"open", "closed"}:
+                  fail("GitHub returned malformed pull-request state")
+
+              base = pull_request.get("base")
+              base_repository = base.get("repo") if isinstance(base, dict) else None
+              if not isinstance(base_repository, dict) or base_repository.get("full_name") != repository:
+                  fail("GitHub returned pull-request metadata for a different repository")
+
+              head = pull_request.get("head")
+              if not isinstance(head, dict) or not valid_sha(head.get("sha")):
+                  fail("GitHub returned malformed pull-request head metadata")
+              if "repo" not in head:
+                  fail("GitHub returned malformed pull-request head repository metadata")
+              head_repository = head["repo"]
+              if head_repository is None:
+                  head_repository_name = None
+              elif isinstance(head_repository, dict) and valid_repository(head_repository.get("full_name")):
+                  head_repository_name = head_repository["full_name"]
+              else:
+                  fail("GitHub returned malformed pull-request head repository metadata")
+
+              mergeable = pull_request.get("mergeable")
+              if mergeable is not None and type(mergeable) is not bool:
+                  fail("GitHub returned malformed mergeability metadata")
+              return pull_request, head_repository_name
+
+          def publish_failure(repository, sha):
+              if not valid_sha(sha):
+                  fail("Refusing to publish a status for an invalid SHA")
+              status = api(
+                  [
+                      "api",
+                      "--method",
+                      "POST",
+                      f"repos/{repository}/statuses/{sha}",
+                      "-f",
+                      "state=failure",
+                      "-f",
+                      "context=maestro-ci",
+                      "-f",
+                      f"description={DESCRIPTION}",
+                  ]
+              )
+              if (
+                  not isinstance(status, dict)
+                  or status.get("state") != "failure"
+                  or status.get("context") != "maestro-ci"
+                  or status.get("description") != DESCRIPTION
+              ):
+                  fail("GitHub did not confirm the blocking not-validated status")
+
+          def main():
+              repository = os.environ.get("GITHUB_REPOSITORY", "")
+              if not valid_repository(repository):
+                  fail("Invalid base repository")
+
+              try:
+                  with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
+                      event = json.load(event_file)
+              except (OSError, KeyError, json.JSONDecodeError):
+                  fail("GitHub event payload is unavailable or malformed")
+              if not isinstance(event, dict):
+                  fail("GitHub event payload is malformed")
+
+              event_repository = event.get("repository")
+              event_pull_request = event.get("pull_request")
+              if not isinstance(event_repository, dict) or event_repository.get("full_name") != repository:
+                  fail("Event repository does not match the workflow repository")
+              if not isinstance(event_pull_request, dict):
+                  fail("Event does not contain pull-request metadata")
+              event_number = event.get("number")
+              pull_request_number = event_pull_request.get("number")
+              if (
+                  type(event_number) is not int
+                  or event_number <= 0
+                  or type(pull_request_number) is not int
+                  or pull_request_number != event_number
+              ):
+                  fail("Event pull-request number is invalid")
+
+              event_base = event_pull_request.get("base")
+              event_base_repository = event_base.get("repo") if isinstance(event_base, dict) else None
+              if not isinstance(event_base_repository, dict) or event_base_repository.get("full_name") != repository:
+                  fail("Event pull request targets a different repository")
+
+              event_head = event_pull_request.get("head")
+              if not isinstance(event_head, dict) or not valid_sha(event_head.get("sha")):
+                  fail("Event pull-request head SHA is invalid")
+              event_sha = event_head["sha"]
+              if "repo" not in event_head:
+                  fail("Event pull-request head repository metadata is missing")
+              event_head_repository = event_head["repo"]
+              if event_head_repository is None:
+                  event_head_repository_name = None
+              elif isinstance(event_head_repository, dict) and valid_repository(event_head_repository.get("full_name")):
+                  event_head_repository_name = event_head_repository["full_name"]
+              else:
+                  fail("Event pull-request head repository metadata is malformed")
+
+              current, current_head_repository = load_pull_request(repository, event_number)
+              current_sha = current["head"]["sha"]
+              if current_sha != event_sha:
+                  print("Stale pull-request event; no status was written.")
+                  return
+              if (
+                  event_head_repository_name is not None
+                  and current_head_repository is not None
+                  and event_head_repository_name != current_head_repository
+              ):
+                  print("Stale pull-request repository event; no status was written.")
+                  return
+              if current["state"] != "open":
+                  print("Pull request is no longer open; no status was written.")
+                  return
+              if current_head_repository == repository:
+                  print("Same-repository pull request; no status was written.")
+                  return
+
+              publish_failure(repository, current_sha)
+              print("Published the blocking not-validated status on the current fork head.")
+
+              if current["mergeable"] is False:
+                  print("Pull request is not mergeable; the head status remains blocking.")
+                  return
+
+              latest = current
+              latest_head_repository = current_head_repository
+              for attempt in range(MAX_MERGEABILITY_READS):
+                  if latest["mergeable"] is None:
+                      time.sleep(0.25)
+                  latest, latest_head_repository = load_pull_request(repository, event_number)
+                  if (
+                      latest["head"]["sha"] != event_sha
+                      or latest["state"] != "open"
+                      or latest_head_repository == repository
+                      or (
+                          event_head_repository_name is not None
+                          and latest_head_repository is not None
+                          and event_head_repository_name != latest_head_repository
+                      )
+                  ):
+                      print("Pull request changed; the head status remains blocking.")
+                      return
+                  if latest["mergeable"] is not None:
+                      break
+
+              if latest["mergeable"] is not True:
+                  if latest["mergeable"] is False:
+                      print("Pull request is no longer mergeable; the head status remains blocking.")
+                      return
+                  fail("Mergeability remained unknown after bounded reads")
+
+              merge_sha = latest.get("merge_commit_sha")
+              if not valid_sha(merge_sha):
+                  fail("GitHub returned an invalid current test merge SHA")
+              publish_failure(repository, merge_sha)
+              print("Published the blocking not-validated status on the current test merge commit.")
+
+          try:
+              main()
+          except RuntimeError as error:
+              print(str(error), file=sys.stderr)
+              sys.exit(1)
+          PY
