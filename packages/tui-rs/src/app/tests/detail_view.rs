@@ -73,3 +73,24 @@ async fn test_detail_view_esc_restores_transcript_view() {
     assert_eq!(app.active_modal, ActiveModal::None);
     assert!(app.detail_view.is_none());
 }
+
+#[tokio::test]
+async fn test_detail_view_includes_structured_chart_readings() {
+    let mut app = new_test_app();
+    app.state.messages.clear();
+    push_tool_call_message(&mut app, String::new());
+    let details = serde_json::json!({"structuredContent": {
+        "columns": ["day", "turns"],
+        "results": [["2026-11-08", 6], ["2026-11-09", 60]],
+    }});
+    let chart = crate::components::auto_chart::AutoChart::from_result("", Some(&details))
+        .expect("structured rows chart");
+    let readings = chart.structured_readings().expect("structured readings");
+    app.state.messages[0].tool_calls[0].auto_chart = Some(std::sync::Arc::new(chart));
+
+    app.open_detail_view();
+
+    let detail = app.detail_view.as_ref().expect("detail view open");
+    assert_eq!(detail.title(), "Tool: bash");
+    assert!(detail.content().contains(&readings), "{}", detail.content());
+}

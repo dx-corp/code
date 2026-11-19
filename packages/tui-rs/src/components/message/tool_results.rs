@@ -90,7 +90,20 @@ pub(super) fn tool_result_lines(
     } else {
         get_tool_args_preview(&tc.tool, &tc.args, width.saturating_sub(20) as usize)
     };
-    let clamp = clamp_tool_output(&tc.output, tool_output_limits());
+    // An expanded call replaces its chart, so readings that exist only in
+    // structured details stay inspectable through the output.
+    let output = match tc
+        .auto_chart
+        .as_deref()
+        .filter(|_| expanded)
+        .and_then(AutoChart::structured_readings)
+    {
+        Some(readings) => std::borrow::Cow::Owned(
+            crate::components::auto_chart::chart_readings_output(&tc.output, &readings),
+        ),
+        None => std::borrow::Cow::Borrowed(tc.output.as_str()),
+    };
+    let clamp = clamp_tool_output(&output, tool_output_limits());
     let banner = format_tool_output_truncation(&clamp);
     ToolResult {
         phase: tool_phase(tc.status),

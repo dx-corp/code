@@ -254,6 +254,11 @@ pub trait NativeExecutionHost: Send + Sync {
 
     // Immutable registry/metadata surface.
     fn tool_definitions(&self) -> Vec<ToolDefinition>;
+    /// Discover tools from trusted local MCP connections using the host's
+    /// existing network, authentication, and workspace policy.
+    fn mcp_tool_definitions(&self) -> NativeHostFuture<'_, Result<Vec<ToolDefinition>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     /// Return an optional stable resource effect for provider-context
     /// projection. Hosts remain opaque by default.
     fn tool_context_effect(&self, _name: &str, _args: &Value) -> Option<NativeContextEffect> {
@@ -557,6 +562,12 @@ impl NativeExecutionHostHandle {
     #[must_use]
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.0.tool_definitions()
+    }
+
+    pub fn mcp_tool_definitions(
+        &self,
+    ) -> NativeHostFuture<'_, Result<Vec<ToolDefinition>, String>> {
+        self.0.mcp_tool_definitions()
     }
 
     #[must_use]

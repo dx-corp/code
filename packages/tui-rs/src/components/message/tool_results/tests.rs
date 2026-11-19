@@ -90,3 +90,75 @@ fn auto_chart_surfaces_posthog_query_from_a_collapsed_script() {
     });
     assert_eq!(labels.filter(|row| row.contains("daily_turns")).count(), 1);
 }
+
+#[test]
+fn expanding_a_structured_chart_shows_its_readings() {
+    let mut message = Message {
+        id: "chart".into(),
+        role: crate::state::MessageRole::Assistant,
+        kind: crate::state::MessageKind::Regular,
+        content: "Done.".into(),
+        thinking: String::new(),
+        streaming: false,
+        tool_calls: vec![],
+        usage: None,
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        thinking_expanded: false,
+    };
+    let details = serde_json::json!({"structuredContent": {
+        "columns": ["day", "latest_metric"],
+        "results": [["2026-11-08", 3], ["2026-11-18", 4]],
+    }});
+    message.tool_calls.push(crate::state::ToolCallState {
+        auto_chart: AutoChart::from_result("Query complete", Some(&details))
+            .map(std::sync::Arc::new),
+        parent_call_id: None,
+        duration_ms: None,
+        call_id: "structured".into(),
+        tool: "bash".into(),
+        args: serde_json::json!({"command": "query"}),
+        status: ToolCallStatus::Completed,
+        output: "Query complete".into(),
+    });
+    let width = 80;
+    let render = |expanded: &HashSet<String>| {
+        let height = calculate_message_height(
+            &message,
+            width,
+            expanded,
+            true,
+            false,
+            &HashSet::new(),
+            true,
+        );
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        MessageWidget::new(&message)
+            .with_expanded_tools(expanded)
+            .with_compact_tool_outputs(true)
+            .with_auto_charts(true)
+            .render(area, &mut buffer);
+        (0..area.height)
+            .map(|y| {
+                (0..width)
+                    .filter_map(|x| buffer.cell((x, y)))
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let readings = maestro_ui::localization::tr("Chart readings");
+    let collapsed = render(&HashSet::new());
+    assert!(collapsed.iter().any(|row| row.contains("Auto chart")));
+    assert!(collapsed.iter().all(|row| !row.contains(readings)));
+
+    let expanded = render(&HashSet::from(["structured".to_owned()]));
+    assert!(expanded.iter().all(|row| !row.contains("Auto chart")));
+    assert!(expanded.iter().any(|row| row.contains(readings)));
+    assert!(
+        expanded
+            .iter()
+            .any(|row| row.contains("time | latest_metric"))
+    );
+    assert!(expanded.iter().any(|row| row.contains("2026-11-18 | 4")));
+}
