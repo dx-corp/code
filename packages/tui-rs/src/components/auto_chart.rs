@@ -82,10 +82,11 @@ impl AutoChart {
             .strip_prefix("```json")
             .and_then(|body| body.strip_suffix("```"))
             .map_or(text, str::trim);
-        if json.starts_with(['[', '{'])
-            && let Ok(value) = serde_json::from_str(json)
-        {
-            return Self::from_value(&value, depth);
+        // This crate is edition 2021, which has no let chains.
+        if json.starts_with(['[', '{']) {
+            if let Ok(value) = serde_json::from_str(json) {
+                return Self::from_value(&value, depth);
+            }
         }
 
         if mcp::is_trends_text(text) || mcp::has_partial_bucket_note(text) {
@@ -137,14 +138,13 @@ impl AutoChart {
             if cells.len() != columns.len() || rows.len() + open_buckets.len() == MAX_ROWS {
                 return None;
             }
-            if trend_table
-                && has_partial_bucket
-                && let Some(time) = cells[0].strip_suffix(" (partial)")
-            {
-                if !open_buckets.insert(parse_time(time)?.0) {
-                    return None;
+            if trend_table && has_partial_bucket {
+                if let Some(time) = cells[0].strip_suffix(" (partial)") {
+                    if !open_buckets.insert(parse_time(time)?.0) {
+                        return None;
+                    }
+                    continue;
                 }
-                continue;
             }
             let row = cells
                 .into_iter()
@@ -179,9 +179,12 @@ impl AutoChart {
         if mcp::is_unavailable_result(value) {
             return None;
         }
-        if depth > 0
-            && let Some(text) = value.get("content").and_then(mcp::content_text)
-            && (mcp::is_trends_text(&text) || mcp::has_partial_bucket_note(&text))
+        if let Some(text) = value
+            .get("content")
+            .and_then(mcp::content_text)
+            .filter(|text| {
+                depth > 0 && (mcp::is_trends_text(text) || mcp::has_partial_bucket_note(text))
+            })
         {
             return Self::from_trends_text(&text, value.get("structuredContent"), depth - 1);
         }
@@ -431,11 +434,33 @@ impl PipeChart {
 
     fn reconciled_series(&self, precise: &AutoChart) -> Option<Vec<Series>> {
         let chart = &self.chart;
-        if chart.series.len() != precise.series.len()
-            || chart.omitted_series != precise.omitted_series
-            || precise.axis.iter().any(|time| {
-                chart.axis.binary_search(time).is_err() && !self.open_buckets.contains(time)
-            })
+        if precise.axis.iter().any(|time| {
+            chart.axis.binary_search(time).is_err() && !self.open_buckets.contains(time)
+        }) {
+            return None;
+        }
+        // The table leaves out a metric with fewer than two completed readings,
+        // while the precise series may still count its open bucket. Such a
+        // metric is absent from the table for that reason alone; any other
+        // missing metric is a disagreement.
+        let mut left_out = 0usize;
+        for full in &precise.series {
+            if chart.series.iter().any(|visible| visible.name == full.name) {
+                continue;
+            }
+            let completed = full
+                .values
+                .iter()
+                .zip(&precise.axis)
+                .filter(|(value, time)| value.is_some() && chart.axis.binary_search(time).is_ok())
+                .count();
+            if completed >= 2 {
+                return None;
+            }
+            left_out += 1;
+        }
+        if chart.series.len() + chart.omitted_series + left_out
+            != precise.series.len() + precise.omitted_series
         {
             return None;
         }
@@ -474,7 +499,7 @@ impl PipeChart {
 
 fn same_displayed_value(visible: f64, precise: f64) -> bool {
     // PostHog's Trends formatter rounds fractional cells to five decimal places.
-    let tolerance = 0.000005 + f64::EPSILON * visible.abs().max(precise.abs());
+    let tolerance = 0.000_005 + f64::EPSILON * visible.abs().max(precise.abs());
     (visible - precise).abs() <= tolerance
 }
 
@@ -798,7 +823,7 @@ mod tests {
                     2026-11-18 (partial)|2\n\n\
                     Note: rows marked \"(partial)\" cover an interval that is still in progress. Timezone: UTC.";
         let data = json!({"results": [{
-            "label": "turns", "days": ["2026-11-15", "2026-11-17", "2026-11-18"], "data": [5.12345678, 11, 2]
+            "label": "turns", "days": ["2026-11-15", "2026-11-17", "2026-11-18"], "data": [5.123_456_78, 11, 2]
         }]});
         let envelope = |text: &str, structured: Value| json!({"structuredContent": structured, "content": [{"type":"text", "text": text}]});
         let details = envelope(text, data.clone());
@@ -808,7 +833,10 @@ mod tests {
             AutoChart::from_result(text, Some(&json!({"structuredContent": data}))),
         ] {
             let chart = chart.unwrap();
-            assert_eq!(chart.series[0].values, [Some(5.12345678), None, Some(11.0)]);
+            assert_eq!(
+                chart.series[0].values,
+                [Some(5.123_456_78), None, Some(11.0)]
+            );
             let lines = chart.lines(80, &crate::themes::dark_theme());
             assert!(lines[0].to_string().contains("Open buckets omitted (1)"));
             assert!(lines[1].to_string().contains("Last 11"));
@@ -830,12 +858,40 @@ mod tests {
     }
 
     #[test]
+    fn auto_chart_keeps_completed_metrics_when_another_has_one_completed_reading() {
+        let text = "Date|turns|errors\n2026-11-16|4|(null)\n2026-11-17|11|3\n\
+                    2026-11-18 (partial)|2|1\n\n\
+                    Note: rows marked \"(partial)\" cover an interval that is still in progress. Timezone: UTC.";
+        let data = json!({"results": [
+            {"label": "turns", "days": ["2026-11-16", "2026-11-17", "2026-11-18"], "data": [4, 11, 2]},
+            {"label": "errors", "days": ["2026-11-16", "2026-11-17", "2026-11-18"], "data": [null, 3, 1]}
+        ]});
+        let chart =
+            AutoChart::from_result(text, Some(&json!({"structuredContent": data}))).unwrap();
+        assert_eq!(chart.series.len(), 1);
+        assert_eq!(chart.series[0].name, "turns");
+        assert_eq!(chart.series[0].values, [Some(4.0), Some(11.0)]);
+
+        // A metric the table drops although it has two completed readings
+        // is still a disagreement.
+        let mut conflicting = data.clone();
+        conflicting["results"][1]["data"] = json!([7, 3, 1]);
+        assert!(
+            AutoChart::from_result(text, Some(&json!({"structuredContent": conflicting})))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn auto_chart_reconciles_posthog_named_points_with_a_visible_table() {
         let text = "Date|turns\n2026-11-15|5.12346\n2026-11-16|N/A\n2026-11-17|11\n\n\
                     Chart data: the JSON below repeats the values above as named series, so the client can draw them.\n\
                     {\"series\":[{\"name\":\"turns\",\"data\":[[\"2026-11-15\",5.12345678],[\"2026-11-17\",11]]}]}";
         let chart = AutoChart::from_result(text, None).unwrap();
-        assert_eq!(chart.series[0].values, [Some(5.12345678), None, Some(11.0)]);
+        assert_eq!(
+            chart.series[0].values,
+            [Some(5.123_456_78), None, Some(11.0)]
+        );
         let conflicting = text.replace("5.12345678", "5.9");
         assert!(AutoChart::from_result(&conflicting, None).is_none());
     }
