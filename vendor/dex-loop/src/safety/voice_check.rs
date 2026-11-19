@@ -138,10 +138,12 @@ const QUESTION_STARTERS: &[&str] = &[
     "has", "had", "may", "might", "must",
 ];
 
+/// Counts question asks in `text`, saturated at two.
+///
 /// Counts unquoted question sentences and clear interrogative clauses joined
 /// by `and` or `also`. This intentionally does not infer compound asks from
 /// shared-clause wording such as "Which workspace and account should I use?".
-fn question_has_multiple_asks(text: &str) -> bool {
+pub fn question_ask_count(text: &str) -> usize {
     let (_, prose) = split_links(text);
     let prose = strip_question_emphasis(&strip_quoted_examples(&strip_non_slack_urls(&prose)));
     let questions: Vec<String> = sentences(&prose)
@@ -149,10 +151,15 @@ fn question_has_multiple_asks(text: &str) -> bool {
         .filter(|sentence| sentence.ends_with('?'))
         .take(2)
         .collect();
-    questions.len() > 1
+    if questions.len() > 1
         || questions
             .first()
             .is_some_and(|sentence| has_interrogative_joiner(sentence))
+    {
+        2
+    } else {
+        questions.len()
+    }
 }
 
 fn strip_question_emphasis(text: &str) -> String {
@@ -414,7 +421,7 @@ pub fn standard_for_turn(
 }
 
 fn standard_for(occasion: Occasion, text: &str, mut found: Vec<Defect>) -> Vec<Defect> {
-    if occasion == Occasion::Question && question_has_multiple_asks(text) {
+    if occasion == Occasion::Question && question_ask_count(text) > 1 {
         found.push(Defect::MultipleAsks);
         found.sort();
         found.dedup();
@@ -941,30 +948,34 @@ fn completion_claims(text: &str) -> Vec<CompletionClaim> {
             let Some(action) = action else {
                 continue;
             };
-            let mut prefix = index;
-            while prefix > 0 && is_completion_prefix(&words[prefix - 1].0) {
-                prefix -= 1;
+            let mut action_prefix = index;
+            while action_prefix > 0 && is_completion_prefix(&words[action_prefix - 1].0) {
+                action_prefix -= 1;
             }
-            let previous = prefix.checked_sub(1).map(|at| words[at].0.as_str());
+            let previous = action_prefix.checked_sub(1).map(|at| words[at].0.as_str());
             let explicit = previous == Some("i")
-                || (previous == Some("ve") && prefix >= 2 && words[prefix - 2].0 == "i");
+                || (previous == Some("ve")
+                    && action_prefix >= 2
+                    && words[action_prefix - 2].0 == "i");
             let coordinated = first_person
                 && (matches!(previous, Some("and" | "but" | "then" | "also"))
-                    || prefix > 0 && sentence[words[prefix - 1].2..words[prefix].1].contains(','));
+                    || action_prefix > 0
+                        && sentence[words[action_prefix - 1].2..words[action_prefix].1]
+                            .contains(','));
             let claimed = (explicit || coordinated) && !negated_completion(sentence, &words, index);
-            actions.push((index, action, claimed));
+            actions.push((index, action_prefix, action, claimed));
             if explicit || coordinated {
                 first_person = true;
             }
         }
-        for (at, (word_index, action, claimed)) in actions.iter().enumerate() {
+        for (at, (word_index, _, action, claimed)) in actions.iter().enumerate() {
             if !*claimed {
                 continue;
             }
             let start = words[*word_index].2;
             let end = actions
                 .get(at + 1)
-                .map(|(next_index, _, _)| words[*next_index].1)
+                .map(|(_, next_prefix, _, _)| words[*next_prefix].1)
                 .unwrap_or(sentence.len());
             claims.push(CompletionClaim {
                 action: *action,
@@ -1011,7 +1022,12 @@ fn negated_completion(
     let preceding = word_spans(&prefix[boundary..]);
     let scope_start = preceding
         .iter()
-        .rposition(|(word, _, _)| matches!(word.as_str(), "but" | "however" | "instead"))
+        .rposition(|(word, _, _)| {
+            matches!(
+                word.as_str(),
+                "and" | "also" | "but" | "however" | "instead" | "then"
+            )
+        })
         .map_or(0, |at| at + 1);
     preceding[scope_start..]
         .iter()
@@ -1701,16 +1717,64 @@ mod completion_claim_tests {
     }
 
     #[test]
+    fn negation_in_a_prior_target_does_not_hide_a_coordinated_claim() {
+        let claim = "I filed the no-MFA incident and sent the queue-lag alert.";
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("no-MFA incident", "no-MFA", "Investigate it."),
+            Some("receipt-no-mfa"),
+        );
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-queue-lag"),
+        );
+
+        assert!(
+            check_turn(claim, std::slice::from_ref(&filed))
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(!check_turn(claim, &[filed, sent]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn later_action_prefix_is_not_part_of_the_previous_target() {
+        let claim = "I filed the billing outage incident and recently sent the queue-lag alert.";
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-billing"),
+        );
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-queue-lag"),
+        );
+
+        assert!(
+            check_turn(claim, std::slice::from_ref(&filed))
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(!check_turn(claim, &[filed, sent]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
     fn negated_claims_are_not_completion_claims() {
-        for text in [
-            "I have not filed the billing outage incident.",
-            "I never sent the queue-lag alert.",
-            "I fixed no incident.",
+        for (text, action) in [
+            ("I have not filed the billing outage incident.", "filed"),
+            ("I never sent the queue-lag alert.", "sent"),
+            ("I fixed no incident.", "fixed"),
         ] {
             assert!(
                 !check_turn(text, &[]).contains(&Defect::UnreceiptedCompletionClaim),
                 "{text}"
             );
+            let words = word_spans(text);
+            let action_index = words
+                .iter()
+                .position(|(word, _, _)| word == action)
+                .expect("completion action");
+            assert!(negated_completion(text, &words, action_index), "{text}");
         }
     }
 }
