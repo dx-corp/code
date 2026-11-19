@@ -6,7 +6,7 @@ use std::{
 };
 
 use super::{
-    AutoChart, MAX_COLUMNS, MAX_LABEL_BYTES, MAX_ROWS, MAX_TEXT_BYTES, Series, chart_number,
+    ChartSeries, MAX_COLUMNS, MAX_LABEL_BYTES, MAX_ROWS, MAX_TEXT_BYTES, ToolChart, chart_number,
     parse_time,
 };
 use serde_json::Value;
@@ -119,7 +119,7 @@ fn parse_chart_section(section: &str) -> Option<Value> {
 }
 
 /// Accept the explicit named-point payload and PostHog's Trends result arrays.
-pub(super) fn from_series(value: &Value) -> Option<AutoChart> {
+pub(super) fn from_series(value: &Value) -> Option<ToolChart> {
     let (items, named_points) = if let Some(series) = value.get("series") {
         (series.as_array()?, true)
     } else {
@@ -183,7 +183,7 @@ pub(super) fn from_series(value: &Value) -> Option<AutoChart> {
                 .iter()
                 .map(|time| points.get(time).copied().flatten())
                 .collect();
-            Series::from_values(&name, values)
+            ChartSeries::from_values(&name, values)
         })
         .collect();
     if series
@@ -195,7 +195,7 @@ pub(super) fn from_series(value: &Value) -> Option<AutoChart> {
     {
         return None;
     }
-    AutoChart::from_ordered_series(axis, utc_axis, series)
+    ToolChart::from_ordered_series(axis, utc_axis, series)
 }
 
 fn series_name(value: &Value, named_points: bool) -> Option<String> {
