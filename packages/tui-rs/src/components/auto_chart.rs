@@ -25,9 +25,11 @@ const F64_EXACT_INTEGER_LIMIT: f64 = (1_u64 << 53) as f64;
 pub(crate) struct AutoChart {
     axis: Vec<DateTime<Utc>>,
     utc_axis: bool,
+    /// Every charted column, including those beyond the plotted `MAX_SERIES`.
     series: Vec<Series>,
-    omitted_series: usize,
     omitted_open_buckets: usize,
+    /// Rows came only from structured details, so the text output may not show them.
+    structured: bool,
 }
 
 #[derive(Debug)]
@@ -56,13 +58,54 @@ impl AutoChart {
                     max: series.max,
                 })
                 .collect(),
-            omitted_series: chart.omitted_series,
             omitted_open_buckets: chart.omitted_open_buckets,
+            structured: chart.structured,
         })
     }
 
+    fn plotted(&self) -> &[Series] {
+        &self.series[..self.series.len().min(MAX_SERIES)]
+    }
+
+    fn omitted_series(&self) -> usize {
+        self.series.len() - self.plotted().len()
+    }
+
+    /// Every reading as a `|` table, when the tool's text output does not already show them.
+    pub(crate) fn structured_readings(&self) -> Option<String> {
+        self.structured.then(|| self.readings())
+    }
+
+    /// Every timestamp and every series value, including series beyond the plot.
+    pub(crate) fn readings(&self) -> String {
+        let midnight = chrono::NaiveTime::MIN;
+        let date_only = self.axis.iter().all(|time| time.time() == midnight);
+        let mut table = std::iter::once("time")
+            .chain(self.series.iter().map(|series| series.name.as_str()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        for (row, time) in self.axis.iter().enumerate() {
+            table.push('\n');
+            // Print the time as precisely as the source gave it.
+            table.push_str(&if date_only {
+                time.format("%Y-%m-%d").to_string()
+            } else if self.utc_axis {
+                time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            } else {
+                time.format("%Y-%m-%d %H:%M:%S%.f").to_string()
+            });
+            for series in &self.series {
+                table.push_str(" | ");
+                table.push_str(&series.values[row].map_or_else(|| "(null)".to_owned(), reading));
+            }
+        }
+        table
+    }
+
     pub(crate) fn height(&self) -> u16 {
-        1 + self.series.len() as u16 * (1 + PLOT_HEIGHT) + 1 + u16::from(self.omitted_series > 0)
+        1 + self.plotted().len() as u16 * (1 + PLOT_HEIGHT)
+            + 1
+            + u16::from(self.omitted_series() > 0)
     }
 
     pub(crate) fn lines(&self, width: u16, active_theme: &Theme) -> Vec<Line<'static>> {
@@ -90,7 +133,7 @@ impl AutoChart {
         let duration = seconds(last, first);
 
         let mut lines = vec![self.title(usize::from(width), theme)];
-        for (series, color) in self.series.iter().zip(colors) {
+        for (series, color) in self.plotted().iter().zip(colors) {
             lines.push(series.summary(usize::from(width), theme, color));
             lines.extend(series.plot(&offsets, duration, plot_width, color, theme.border));
         }
@@ -123,13 +166,13 @@ impl AutoChart {
             format!("{}{start}{}{end}", " ".repeat(indent), " ".repeat(gap)),
             muted,
         )));
-        if self.omitted_series > 0 {
+        if self.omitted_series() > 0 {
             lines.push(Line::from(Span::styled(
                 format!(
                     "    {}",
                     maestro_ui::localization::format(
                         "{0} more series in tool output",
-                        &[self.omitted_series.to_string()],
+                        &[self.omitted_series().to_string()],
                     ),
                 ),
                 muted,
@@ -149,7 +192,7 @@ impl AutoChart {
             " · {}",
             localization::format("{0} timestamps", &[self.axis.len().to_string()])
         );
-        let scales = if self.series.len() > 1 {
+        let scales = if self.plotted().len() > 1 {
             format!(" · {}", localization::tr("independent scales"))
         } else {
             String::new()
@@ -314,6 +357,25 @@ impl Series {
     }
 }
 
+/// A reading as returned: Display prints the shortest exact form. Integers past
+/// f64's exact range may already be rounded, so they are marked approximate.
+fn reading(number: f64) -> String {
+    if number.abs() >= F64_EXACT_INTEGER_LIMIT {
+        format!("≈{number}")
+    } else {
+        number.to_string()
+    }
+}
+
+/// Tool output followed by the chart's readings under a labelled heading.
+pub(crate) fn chart_readings_output(output: &str, readings: &str) -> String {
+    let heading = localization::tr("Chart readings");
+    match output.trim_end() {
+        "" => format!("{heading}:\n{readings}"),
+        output => format!("{output}\n\n{heading}:\n{readings}"),
+    }
+}
+
 fn series_colors(colors: impl Iterator<Item = Color>, fallback: Color) -> [Color; MAX_SERIES] {
     let mut palette = [fallback; MAX_SERIES];
     let mut used = 0;
@@ -365,6 +427,52 @@ fn format_change(number: f64) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn structured_readings_list_every_series_including_unplotted_ones() {
+        let names = ["day", "s1", "s2", "s3", "s4", "s5", "s6"];
+        let details = json!({"structuredContent": {
+            "columns": names,
+            "results": [
+                ["2026-11-08", 1, 2, 3, 4, 5, 6.5],
+                ["2026-11-09", 7, null, 9, 10, 11, 12],
+                ["2026-11-10", 13, 14, 15, 16, 17, 18]
+            ]
+        }});
+        let chart = AutoChart::from_result("Query complete", Some(&details)).unwrap();
+        assert_eq!(chart.omitted_series(), 1);
+        let lines = chart.lines(80, &crate::themes::dark_theme());
+        assert_eq!(lines.len(), usize::from(chart.height()));
+        assert!(lines.iter().all(|line| !line.to_string().contains("s6")));
+        assert_eq!(
+            chart.structured_readings().as_deref(),
+            Some(
+                "time | s1 | s2 | s3 | s4 | s5 | s6\n\
+                 2026-11-08 | 1 | 2 | 3 | 4 | 5 | 6.5\n\
+                 2026-11-09 | 7 | (null) | 9 | 10 | 11 | 12\n\
+                 2026-11-10 | 13 | 14 | 15 | 16 | 17 | 18"
+            )
+        );
+        let large = json!({"structuredContent": {
+            "columns": ["day", "total"],
+            "results": [["2026-11-08", 9_007_199_254_740_993_u64], ["2026-11-09", 12]]
+        }});
+        let large = AutoChart::from_result("", Some(&large)).unwrap();
+        assert!(
+            large
+                .structured_readings()
+                .unwrap()
+                .contains("2026-11-08 | ≈9007199254740992\n")
+        );
+        // Rows parsed from the text output are already visible there.
+        let output = details["structuredContent"].to_string();
+        assert!(
+            AutoChart::from_result(&output, None)
+                .unwrap()
+                .structured_readings()
+                .is_none()
+        );
+    }
 
     #[test]
     fn auto_chart_reads_sql_rows_and_mcp_structured_results() {

@@ -218,13 +218,18 @@ pub(crate) fn client_tool_spec(definition: &ToolDefinition) -> ToolSpec {
     }
 }
 
-fn tools_for_mode(
+async fn tools_for_mode(
     host: NativeExecutionHostHandle,
     approval: ApprovalMode,
     client_tools: &[ToolDefinition],
     interaction_mode: crate::chat::InteractionMode,
+    local_desktop: bool,
 ) -> HostTools {
-    let tools = HostTools::new(host, approval);
+    let tools = if local_desktop && interaction_mode == crate::chat::InteractionMode::Implement {
+        HostTools::with_local_mcp(host, approval).await
+    } else {
+        HostTools::new(host, approval)
+    };
     if interaction_mode == crate::chat::InteractionMode::Discuss {
         // The policy port denies even unsolicited model calls because they
         // are absent from this catalog. No executable tool is delegated.
@@ -776,7 +781,9 @@ async fn drive<W: ChatEventWriter>(
             mode,
             &turn.client_tools,
             turn.interaction_mode,
+            native_owner.is_some() && !state.config.native_code_hosted,
         )
+        .await
     };
     let request = host_turn(
         turn.session_id.as_deref().unwrap_or("chat"),
@@ -1265,7 +1272,9 @@ mod tests {
             ApprovalMode::Yolo,
             &client_tools,
             crate::chat::InteractionMode::Discuss,
-        );
+            true,
+        )
+        .await;
         assert!(tools.catalog().is_empty());
         let context = rehydrate(local_thread("discuss"), &[]);
         for name in ["bash", "write", "client_write", "user.ask"] {

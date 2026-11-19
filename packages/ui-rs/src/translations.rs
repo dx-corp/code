@@ -6013,6 +6013,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Chart readings",
+        [
+            "Lecturas del gráfico",
+            "Valeurs du graphique",
+            "Diagrammwerte",
+            "グラフの値",
+            "차트 값",
+            "图表读数",
+        ],
+    ),
+    (
         "ChatGPT sign-in: missing",
         [
             "ChatGPT inscrito: desaparecido",

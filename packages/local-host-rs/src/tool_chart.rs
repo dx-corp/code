@@ -16,9 +16,11 @@ const MAX_LABEL_BYTES: usize = 256;
 pub struct ToolChart {
     pub axis: Vec<DateTime<Utc>>,
     pub utc_axis: bool,
+    /// Every charted column, including those beyond the plotted `MAX_SERIES`.
     pub series: Vec<ChartSeries>,
-    pub omitted_series: usize,
     pub omitted_open_buckets: usize,
+    /// Rows came only from structured details, so the text output may not show them.
+    pub structured: bool,
 }
 
 #[derive(Debug)]
@@ -51,6 +53,10 @@ impl ToolChart {
         }
         structured
             .and_then(|value| Self::from_value(value, 2))
+            .map(|chart| Self {
+                structured: true,
+                ..chart
+            })
             .or_else(|| Self::from_text(content.as_deref()?, 2))
             .or_else(|| Self::from_text(output, 3))
     }
@@ -278,17 +284,25 @@ impl ToolChart {
     fn from_ordered_series(
         axis: Vec<DateTime<Utc>>,
         utc_axis: bool,
-        mut series: Vec<ChartSeries>,
+        series: Vec<ChartSeries>,
     ) -> Option<Self> {
-        let omitted_series = series.len().saturating_sub(MAX_SERIES);
-        series.truncate(MAX_SERIES);
         (!series.is_empty()).then_some(Self {
             axis,
             utc_axis,
             series,
-            omitted_series,
             omitted_open_buckets: 0,
+            structured: false,
         })
+    }
+
+    /// The series a chart draws: the first `MAX_SERIES`.
+    pub fn plotted(&self) -> &[ChartSeries] {
+        &self.series[..self.series.len().min(MAX_SERIES)]
+    }
+
+    /// Series kept in `series` but not drawn.
+    pub fn omitted_series(&self) -> usize {
+        self.series.len() - self.plotted().len()
     }
 }
 
@@ -327,9 +341,8 @@ impl PipeChart {
             }
             left_out += 1;
         }
-        if chart.series.len() + chart.omitted_series + left_out
-            != precise.series.len() + precise.omitted_series
-        {
+        // Both charts keep every series, plotted or not.
+        if chart.series.len() + left_out != precise.series.len() {
             return None;
         }
         let positions: Vec<_> = chart

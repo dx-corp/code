@@ -54,7 +54,7 @@ fn project_text(call_id: &str, code_mode: bool, args: Option<&Value>, raw: &str)
         })
         .collect();
     let series: Vec<_> = chart
-        .series
+        .plotted()
         .iter()
         .map(|series| json!({ "name": series.name, "values": series.values }))
         .collect();
@@ -66,7 +66,7 @@ fn project_text(call_id: &str, code_mode: bool, args: Option<&Value>, raw: &str)
         "utcAxis": chart.utc_axis,
         "series": series,
         "omittedOpenBuckets": chart.omitted_open_buckets,
-        "omittedSeries": chart.omitted_series,
+        "omittedSeries": chart.omitted_series(),
         "args": args,
         "raw": raw,
     });
