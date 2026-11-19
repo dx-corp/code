@@ -8,9 +8,9 @@
 //! cutoff"); a boilerplate disclaimer; a generic offer, or any question when
 //! the note says nothing needs the person; a pending question that asks for
 //! more than one answer; a link labelled with its own URL;
-//! two times stacked on one fact; "I closed out" followed by a failure; an
-//! exclamation mark; a deadline with no date; a catalog test id or a record's
-//! numeric id.
+//! two times stacked on one fact; "I closed out" followed by a failure; a
+//! completion claim without its matching receipt; an exclamation mark; a
+//! deadline with no date; a catalog test id or a record's numeric id.
 //!
 //! The checks live in the loop because every message Dex writes leaves
 //! through it, whatever surface delivers it: [`standard`] is what the shared
@@ -24,6 +24,7 @@
 //! grade recorded messages with them.
 
 use crate::human_text::{MachineTerm, machine_terms};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One kind of defect a person can see without judgment.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -68,6 +69,8 @@ pub enum Defect {
     /// A URL shown as itself: a link with no label, or a URL left in the
     /// prose, instead of the record's name with the link on it.
     BareUrl,
+    /// A first-person completion claim without its own matching owner receipt.
+    UnreceiptedCompletionClaim,
 }
 
 impl Defect {
@@ -92,6 +95,7 @@ impl Defect {
             Defect::ManyAtOnce => "many_at_once",
             Defect::LongAlert => "long_alert",
             Defect::BareUrl => "bare_url",
+            Defect::UnreceiptedCompletionClaim => "unreceipted_completion_claim",
         }
     }
 }
@@ -115,7 +119,7 @@ pub enum Occasion {
 /// The defects that are a defect in any message, asked for or not. A
 /// machine timestamp is one: a person who asks when something happened is
 /// answered with a date and time, never `2026-11-11T15:06:46.833055Z`.
-const NEVER_RIGHT: [Defect; 9] = [
+const NEVER_RIGHT: [Defect; 10] = [
     Defect::RawTimestamp,
     Defect::Machinery,
     Defect::Disclaimer,
@@ -125,6 +129,7 @@ const NEVER_RIGHT: [Defect; 9] = [
     Defect::BrokenClosedOut,
     Defect::Exclamation,
     Defect::DeadlineWithoutDate,
+    Defect::UnreceiptedCompletionClaim,
 ];
 
 const QUESTION_STARTERS: &[&str] = &[
@@ -331,7 +336,22 @@ fn starts_interrogative_clause(clause: &str) -> bool {
 /// deterministic sentence and interrogative-clause heuristic rather than
 /// semantic language understanding.
 pub fn standard(occasion: Occasion, text: &str) -> Vec<Defect> {
-    let mut found = check(text);
+    standard_for(occasion, text, check(text))
+}
+
+/// The voice standard for a turn, including whether each first-person
+/// completion claim has a matching successful receipt. Matching is a
+/// conservative heuristic over operation names and selected JSON fields, not
+/// typed proof; unrecognized operations or targets fail closed.
+pub fn standard_for_turn(
+    occasion: Occasion,
+    text: &str,
+    outputs: &[crate::TurnOutput],
+) -> Vec<Defect> {
+    standard_for(occasion, text, check_turn(text, outputs))
+}
+
+fn standard_for(occasion: Occasion, text: &str, mut found: Vec<Defect>) -> Vec<Defect> {
     if occasion == Occasion::Question && question_has_multiple_asks(text) {
         found.push(Defect::MultipleAsks);
         found.sort();
@@ -348,6 +368,19 @@ pub fn standard(occasion: Occasion, text: &str) -> Vec<Defect> {
             .filter(|defect| NEVER_RIGHT.contains(defect) || *defect == Defect::MultipleAsks)
             .collect(),
     }
+}
+
+/// Every ordinary defect in `text`, plus a defect when any individual
+/// first-person completion claim lacks its own matching successful receipt.
+fn check_turn(text: &str, outputs: &[crate::TurnOutput]) -> Vec<Defect> {
+    let mut found = check(text);
+    let claims = completion_claims(text);
+    if !claims.is_empty() && !all_claims_have_receipts(&claims, outputs) {
+        found.push(Defect::UnreceiptedCompletionClaim);
+        found.sort();
+        found.dedup();
+    }
+    found
 }
 
 /// `text` with the defects a rewrite can remove without changing what it
@@ -779,4 +812,843 @@ fn has_broken_closed_out(lower: &str) -> bool {
             .iter()
             .any(|failure| sentence.contains(failure))
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum CompletionAction {
+    Filed,
+    Fixed,
+    Sent,
+}
+
+impl CompletionAction {
+    fn matches_tool(self, tool: &str) -> bool {
+        let words = word_spans(tool);
+        let Some((operation, _, _)) = words.last() else {
+            return false;
+        };
+        let Some(resource_type) = acted_on_resource_type(tool) else {
+            return false;
+        };
+        match self {
+            Self::Filed => matches!(operation.as_str(), "create" | "file" | "submit"),
+            Self::Fixed => matches!(
+                operation.as_str(),
+                "fix" | "repair" | "resolve" | "remediate"
+            ),
+            Self::Sent => {
+                matches!(operation.as_str(), "send" | "reply" | "deliver")
+                    || operation == "post" && matches!(resource_type, "email" | "message")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct CompletionTarget {
+    resource_type: Option<String>,
+    subject: BTreeSet<String>,
+    ids: BTreeSet<String>,
+    recipient: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct CompletionClaim {
+    action: CompletionAction,
+    target: CompletionTarget,
+}
+
+fn completion_claims(text: &str) -> Vec<CompletionClaim> {
+    let mut claims = Vec::new();
+    for sentence in text.lines().flat_map(line_sentences) {
+        let sentence = sentence.trim();
+        let words = word_spans(sentence);
+        let mut first_person = false;
+        let mut actions = Vec::new();
+        for index in 0..words.len() {
+            if words[index].0 == "i" {
+                first_person = true;
+                continue;
+            }
+            let action = match words[index].0.as_str() {
+                "filed" => Some(CompletionAction::Filed),
+                "fixed" => Some(CompletionAction::Fixed),
+                "sent" => Some(CompletionAction::Sent),
+                _ => None,
+            };
+            let Some(action) = action else {
+                continue;
+            };
+            let mut prefix = index;
+            while prefix > 0 && is_completion_prefix(&words[prefix - 1].0) {
+                prefix -= 1;
+            }
+            let previous = prefix.checked_sub(1).map(|at| words[at].0.as_str());
+            let explicit = previous == Some("i")
+                || (previous == Some("ve") && prefix >= 2 && words[prefix - 2].0 == "i");
+            let coordinated = first_person
+                && (matches!(previous, Some("and" | "but" | "then" | "also"))
+                    || prefix > 0 && sentence[words[prefix - 1].2..words[prefix].1].contains(','));
+            let claimed = (explicit || coordinated) && !negated_completion(sentence, &words, index);
+            actions.push((index, action, claimed));
+            if explicit || coordinated {
+                first_person = true;
+            }
+        }
+        for (at, (word_index, action, claimed)) in actions.iter().enumerate() {
+            if !*claimed {
+                continue;
+            }
+            let start = words[*word_index].2;
+            let end = actions
+                .get(at + 1)
+                .map(|(next_index, _, _)| words[*next_index].1)
+                .unwrap_or(sentence.len());
+            claims.push(CompletionClaim {
+                action: *action,
+                target: completion_target(&sentence[start..end]),
+            });
+        }
+    }
+    claims
+}
+
+fn is_completion_prefix(word: &str) -> bool {
+    matches!(
+        word,
+        "already"
+            | "also"
+            | "actually"
+            | "been"
+            | "finally"
+            | "had"
+            | "has"
+            | "have"
+            | "indeed"
+            | "just"
+            | "now"
+            | "personally"
+            | "recently"
+            | "successfully"
+            | "ve"
+    )
+}
+
+fn negated_completion(
+    sentence: &str,
+    words: &[(String, usize, usize)],
+    action_index: usize,
+) -> bool {
+    const NEGATIONS: &[&str] = &[
+        "not", "never", "no", "none", "nothing", "nobody", "nowhere", "don", "didn", "haven",
+        "hasn", "isn", "wasn", "won",
+    ];
+    let action_start = words[action_index].1;
+    let prefix = &sentence[..action_start];
+    let boundary = prefix.rfind([',', ';', ':']).map_or(0, |at| at + 1);
+    let preceding = word_spans(&prefix[boundary..]);
+    let scope_start = preceding
+        .iter()
+        .rposition(|(word, _, _)| matches!(word.as_str(), "but" | "however" | "instead"))
+        .map_or(0, |at| at + 1);
+    preceding[scope_start..]
+        .iter()
+        .any(|(word, _, _)| NEGATIONS.contains(&word.as_str()))
+        || words.get(action_index + 1).is_some_and(|(word, _, _)| {
+            matches!(
+                word.as_str(),
+                "no" | "none" | "nothing" | "nobody" | "never" | "not"
+            )
+        })
+}
+
+fn word_spans(text: &str) -> Vec<(String, usize, usize)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (at, character) in text.char_indices() {
+        if character.is_alphanumeric() {
+            start.get_or_insert(at);
+        } else if let Some(start) = start.take() {
+            words.push((text[start..at].to_lowercase(), start, at));
+        }
+    }
+    if let Some(start) = start {
+        words.push((text[start..].to_lowercase(), start, text.len()));
+    }
+    words
+}
+
+fn is_target_filler(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "about"
+            | "already"
+            | "also"
+            | "an"
+            | "and"
+            | "as"
+            | "at"
+            | "be"
+            | "been"
+            | "being"
+            | "but"
+            | "by"
+            | "did"
+            | "do"
+            | "does"
+            | "done"
+            | "for"
+            | "from"
+            | "had"
+            | "has"
+            | "have"
+            | "i"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "its"
+            | "just"
+            | "me"
+            | "my"
+            | "now"
+            | "of"
+            | "on"
+            | "one"
+            | "our"
+            | "out"
+            | "please"
+            | "successfully"
+            | "the"
+            | "them"
+            | "then"
+            | "these"
+            | "this"
+            | "those"
+            | "to"
+            | "up"
+            | "us"
+            | "ve"
+            | "was"
+            | "we"
+            | "were"
+            | "with"
+            | "you"
+            | "your"
+    )
+}
+
+fn target_terms(text: &str) -> BTreeSet<String> {
+    word_spans(text)
+        .into_iter()
+        .map(|(word, _, _)| word)
+        .filter(|word| !is_target_filler(word))
+        .collect()
+}
+
+fn completion_target(text: &str) -> CompletionTarget {
+    let words = word_spans(text);
+    let recipient_span = words
+        .iter()
+        .find(|(word, _, _)| word == "to")
+        .map(|(_, start, end)| (*start, *end));
+    let (subject_text, recipient_text) =
+        recipient_span.map_or((text, ""), |(start, end)| (&text[..start], &text[end..]));
+    let resource_word = resource_type_word(subject_text);
+    let resource_type = resource_word
+        .as_deref()
+        .and_then(canonical_resource_type)
+        .map(str::to_owned);
+    let mut subject = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    for word in target_terms(subject_text) {
+        if resource_word.as_ref() == Some(&word) {
+            continue;
+        }
+        if word.chars().any(|character| character.is_ascii_digit()) {
+            ids.insert(word);
+        } else {
+            subject.insert(word);
+        }
+    }
+    CompletionTarget {
+        resource_type,
+        subject,
+        ids,
+        recipient: target_terms(recipient_text),
+    }
+}
+
+fn resource_type_word(text: &str) -> Option<String> {
+    let candidate = word_spans(text)
+        .into_iter()
+        .map(|(word, _, _)| word)
+        .filter(|word| !is_target_filler(word))
+        .rev()
+        .find(|word| !word.chars().any(|character| character.is_ascii_digit()))?;
+    canonical_resource_type(&candidate).map(|_| candidate)
+}
+
+fn canonical_resource_type(word: &str) -> Option<&'static str> {
+    match word {
+        "ticket" | "tickets" | "issue" | "issues" => Some("issue"),
+        "document" | "documents" => Some("document"),
+        "email" | "emails" | "mail" | "gmail" | "outlook" => Some("email"),
+        "message" | "messages" => Some("message"),
+        "incident" | "incidents" => Some("incident"),
+        "report" | "reports" => Some("report"),
+        "request" | "requests" => Some("request"),
+        "task" | "tasks" => Some("task"),
+        "file" | "files" => Some("file"),
+        "comment" | "comments" => Some("comment"),
+        "record" | "records" => Some("record"),
+        "feedback" => Some("feedback"),
+        _ => None,
+    }
+}
+
+fn acted_on_resource_type(tool: &str) -> Option<&'static str> {
+    word_spans(tool)
+        .into_iter()
+        .rev()
+        .find_map(|(word, _, _)| canonical_resource_type(&word))
+}
+
+fn acted_on_resource_object<'a>(
+    tool: &str,
+    args: &'a serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    let (word, _, _) = word_spans(tool)
+        .into_iter()
+        .rev()
+        .find(|(word, _, _)| canonical_resource_type(word).is_some())?;
+    let kind = canonical_resource_type(&word)?;
+    args.get(word.as_str())
+        .or_else(|| args.get(kind))
+        .filter(|value| value.is_object())
+}
+
+fn collect_direct_named_values(value: &serde_json::Value, keys: &[&str], values: &mut Vec<String>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        if keys.contains(&key.as_str()) {
+            if let Some(value) = value.as_str() {
+                values.push(value.to_owned());
+            } else if value.is_number() {
+                values.push(value.to_string());
+            }
+        }
+    }
+}
+
+fn collect_action_values(
+    tool: &str,
+    args: &serde_json::Value,
+    keys: &[&str],
+    values: &mut Vec<String>,
+) {
+    collect_direct_named_values(args, keys, values);
+    if let Some(resource) = acted_on_resource_object(tool, args) {
+        collect_direct_named_values(resource, keys, values);
+    }
+}
+
+fn receipt_matches_claim(claim: &CompletionClaim, output: &crate::TurnOutput) -> bool {
+    if output.receipt.is_none()
+        || (claim.target.subject.is_empty()
+            && claim.target.ids.is_empty()
+            && claim.target.recipient.is_empty())
+    {
+        return false;
+    }
+    let Some(tool) = &output.tool else {
+        return false;
+    };
+    let Some(args) = output.args.as_ref() else {
+        return false;
+    };
+    if !claim.action.matches_tool(tool.as_str()) {
+        return false;
+    }
+    let Some(resource_type) = acted_on_resource_type(tool.as_str()) else {
+        return false;
+    };
+    if claim
+        .target
+        .resource_type
+        .as_deref()
+        .is_some_and(|claimed| claimed != resource_type)
+    {
+        return false;
+    }
+
+    const SUBJECT_FIELDS: &[&str] = &[
+        "title",
+        "summary",
+        "name",
+        "subject",
+        "incident_key",
+        "issue_key",
+        "ticket_key",
+    ];
+    const ID_FIELDS: &[&str] = &[
+        "resource_id",
+        "incident_id",
+        "issue_id",
+        "ticket_id",
+        "document_id",
+        "message_id",
+        "incident_key",
+        "issue_key",
+        "ticket_key",
+    ];
+    const RECIPIENT_FIELDS: &[&str] = &[
+        "to",
+        "recipient",
+        "recipient_email",
+        "to_email",
+        "email_address",
+        "channel_id",
+        "team_id",
+        "conversation_id",
+        "thread_id",
+    ];
+
+    let mut subject_fields = SUBJECT_FIELDS.to_vec();
+    if claim.action == CompletionAction::Sent {
+        subject_fields.extend(["content", "text", "body"]);
+    }
+    let mut subjects = Vec::new();
+    let mut ids = Vec::new();
+    let mut recipients = Vec::new();
+    collect_action_values(tool.as_str(), args, &subject_fields, &mut subjects);
+    collect_action_values(tool.as_str(), args, ID_FIELDS, &mut ids);
+    collect_action_values(tool.as_str(), args, RECIPIENT_FIELDS, &mut recipients);
+    if let Some(resource) = acted_on_resource_object(tool.as_str(), args) {
+        collect_direct_named_values(resource, &["id", "key"], &mut ids);
+    }
+
+    terms_match_one_value(&claim.target.subject, &subjects)
+        && terms_match_one_value(&claim.target.ids, &ids)
+        && terms_match_one_value(&claim.target.recipient, &recipients)
+}
+
+fn all_claims_have_receipts(claims: &[CompletionClaim], outputs: &[crate::TurnOutput]) -> bool {
+    let claims: Vec<_> = claims.iter().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut receipts: BTreeMap<String, Option<&crate::TurnOutput>> = BTreeMap::new();
+    for output in outputs {
+        let Some(receipt) = &output.receipt else {
+            continue;
+        };
+        let entry = receipts
+            .entry(receipt.as_str().to_owned())
+            .or_insert(Some(output));
+        if let Some(previous) = *entry
+            && (previous.tool != output.tool || previous.args != output.args)
+        {
+            *entry = None;
+        }
+    }
+    let outputs: Vec<_> = receipts.into_values().flatten().collect();
+    if claims.len() > outputs.len() {
+        return false;
+    }
+    let mut assigned = vec![None; outputs.len()];
+    for claim_index in 0..claims.len() {
+        let mut seen = vec![false; outputs.len()];
+        if !assign_receipt(claim_index, &claims, &outputs, &mut assigned, &mut seen) {
+            return false;
+        }
+    }
+    true
+}
+
+fn assign_receipt(
+    claim_index: usize,
+    claims: &[&CompletionClaim],
+    outputs: &[&crate::TurnOutput],
+    assigned: &mut [Option<usize>],
+    seen: &mut [bool],
+) -> bool {
+    for output_index in 0..outputs.len() {
+        if seen[output_index] || !receipt_matches_claim(claims[claim_index], outputs[output_index])
+        {
+            continue;
+        }
+        seen[output_index] = true;
+        let available = match assigned[output_index] {
+            Some(prior) => assign_receipt(prior, claims, outputs, assigned, seen),
+            None => true,
+        };
+        if available {
+            assigned[output_index] = Some(claim_index);
+            return true;
+        }
+    }
+    false
+}
+
+fn terms_match_one_value(terms: &BTreeSet<String>, values: &[String]) -> bool {
+    terms.is_empty()
+        || values
+            .iter()
+            .any(|value| terms.is_subset(&target_terms(value)))
+}
+
+#[cfg(test)]
+mod completion_claim_tests {
+    use super::*;
+    use crate::{
+        ApprovalMode, CallId, Cursor, Event, Outcome, PrincipalId, ProposedCall, ThreadId, TurnId,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_CALL_ID: AtomicUsize = AtomicUsize::new(0);
+
+    fn output(tool: &str, args: serde_json::Value, receipt: Option<&str>) -> crate::TurnOutput {
+        crate::TurnOutput {
+            call: CallId::new(format!(
+                "call-{}",
+                NEXT_CALL_ID.fetch_add(1, Ordering::Relaxed)
+            )),
+            tool: Some(crate::ToolName::new(tool)),
+            args: Some(args),
+            output: crate::Output::Text("operation completed".into()),
+            receipt: receipt.map(crate::ReceiptId::new),
+        }
+    }
+
+    fn pagerduty_create_args(title: &str, incident_key: &str, details: &str) -> serde_json::Value {
+        serde_json::json!({
+            "from": "operator@example.test",
+            "incident": {
+                "type": "incident",
+                "title": title,
+                "service": {"type": "service_reference", "id": "PSVC123"},
+                "urgency": "high",
+                "incident_key": incident_key,
+                "body": {"type": "incident_body", "details": details},
+            },
+        })
+    }
+
+    fn pagerduty_resolve_args(incident_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "from": "operator@example.test",
+            "incident": {"type": "incident_reference", "status": "resolved"},
+            "incident_id": incident_id,
+        })
+    }
+
+    fn teams_send_args(content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "team_id": "TEAM123",
+            "channel_id": "CHANNEL456",
+            "content": content,
+        })
+    }
+
+    #[test]
+    fn completion_claim_needs_a_successful_output_with_a_receipt() {
+        let claim = "I filed the billing outage incident.";
+        let no_receipt = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            None,
+        );
+        assert!(check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim));
+        assert!(check_turn(claim, &[no_receipt]).contains(&Defect::UnreceiptedCompletionClaim));
+        assert!(
+            standard_for_turn(Occasion::Reply, claim, &[])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+    }
+
+    #[test]
+    fn failed_receipt_does_not_enter_the_turn_success_outputs() {
+        let call = ProposedCall::new(
+            CallId::new("call-file"),
+            crate::ToolName::new("pagerduty.incident.create"),
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            PrincipalId::new("alice"),
+        );
+        let events = vec![
+            (
+                Cursor(1),
+                Event::UserMessage {
+                    interaction_mode: crate::InteractionMode::Unspecified,
+                    turn: TurnId::new("turn-1"),
+                    message_id: None,
+                    principal: PrincipalId::new("alice"),
+                    text: "File a billing outage incident".into(),
+                    attachments: vec![],
+                    client_tools: vec![],
+                    authorized_tools: vec![],
+                    model_binding: None,
+                    context_window_tokens: None,
+                    voice: None,
+                    approval_mode: ApprovalMode::Interactive,
+                    page: None,
+                    asker: None,
+                },
+            ),
+            (
+                Cursor(2),
+                Event::ModelStepCompleted {
+                    interruption: None,
+                    step: 1,
+                    text: String::new(),
+                    calls: vec![call.clone()],
+                    reasoning: None,
+                    served: None,
+                    timing: None,
+                },
+            ),
+            (
+                Cursor(3),
+                Event::ToolFinished {
+                    call: call.id,
+                    outcome: Outcome::Failed,
+                    output: crate::Output::Text("not filed".into()),
+                    receipt: Some(crate::ReceiptId::new("failed-receipt")),
+                    summary: None,
+                },
+            ),
+        ];
+        let context = crate::rehydrate(
+            ThreadId {
+                org: "org".into(),
+                workspace: "workspace".into(),
+                thread: "thread".into(),
+            },
+            &events,
+        );
+        assert!(context.turn_outputs().is_empty());
+        assert!(
+            check_turn(
+                "I filed the billing outage incident.",
+                context.turn_outputs()
+            )
+            .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+    }
+
+    #[test]
+    fn subject_resource_type_and_action_must_match_the_receipt() {
+        let unrelated_subject = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("security review", "security-review", "Unrelated."),
+            Some("receipt-security"),
+        );
+        assert!(
+            check_turn(
+                "I filed the billing outage incident.",
+                std::slice::from_ref(&unrelated_subject),
+            )
+            .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let wrong_resource = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-incident"),
+        );
+        assert!(
+            check_turn("I filed the billing outage ticket.", &[wrong_resource])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let unidentified_target = output(
+            "pagerduty.incident.resolve",
+            pagerduty_resolve_args("PINC123"),
+            Some("receipt-unidentified-target"),
+        );
+        assert!(
+            check_turn("I fixed the incident.", &[unidentified_target])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let document = output(
+            "dex.make",
+            serde_json::json!({
+                "kind": "document",
+                "title": "billing outage",
+                "content": {"blocks": [{"id": "b1", "kind": "PARAGRAPH", "body": "billing outage"}]},
+            }),
+            Some("receipt-document"),
+        );
+        assert!(
+            check_turn("I filed the billing outage ticket.", &[document])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let title_update = output(
+            "atlassian.jira.issue.summary.update",
+            serde_json::json!({"issue_id": "10042", "summary": "login flow"}),
+            Some("receipt-update"),
+        );
+        assert!(
+            check_turn("I fixed the login flow issue 10042.", &[title_update])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let mut untyped_text = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("security review", "security-review", "billing outage"),
+            Some("receipt-unrelated-text"),
+        );
+        untyped_text.output = crate::Output::Text("billing outage incident filed".into());
+        assert!(
+            check_turn("I filed the billing outage incident.", &[untyped_text])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+    }
+
+    #[test]
+    fn nested_incident_fields_cannot_impersonate_the_acting_resource() {
+        let mut args = pagerduty_resolve_args("PINC123");
+        args["incident"]["service"] = serde_json::json!({
+            "id": "PSVC123",
+            "title": "billing outage",
+            "type": "document",
+        });
+        let receipt = output(
+            "pagerduty.incident.resolve",
+            args,
+            Some("receipt-pagerduty-incident"),
+        );
+
+        for claim in [
+            "I fixed incident PSVC123.",
+            "I fixed the billing outage incident.",
+            "I fixed document PINC123.",
+        ] {
+            assert!(
+                check_turn(claim, std::slice::from_ref(&receipt))
+                    .contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
+    }
+
+    #[test]
+    fn realistic_matching_receipts_cover_filed_fixed_and_sent_claims() {
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-billing"),
+        );
+        let fixed = output(
+            "pagerduty.incident.resolve",
+            pagerduty_resolve_args("PINC123"),
+            Some("receipt-resolved"),
+        );
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-sent"),
+        );
+        assert!(
+            !check_turn("I have filed the billing outage incident.", &[filed])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(
+            !check_turn("I fixed incident PINC123.", &[fixed])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(
+            !check_turn("I successfully sent the queue-lag alert.", &[sent])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+    }
+
+    #[test]
+    fn mixed_claims_need_corresponding_receipts_for_each_target() {
+        let claim = "I filed the billing outage incident, fixed incident PINC123, and sent the queue-lag alert.";
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-filed"),
+        );
+        let fixed = output(
+            "pagerduty.incident.resolve",
+            pagerduty_resolve_args("PINC123"),
+            Some("receipt-fixed"),
+        );
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-sent"),
+        );
+        assert!(
+            check_turn(claim, std::slice::from_ref(&filed))
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(
+            check_turn(claim, &[filed.clone(), fixed.clone()])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+        assert!(
+            !check_turn(claim, &[filed, fixed, sent]).contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let repeated = "I filed the billing outage incident. I filed the billing outage incident.";
+        let one_receipt = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-one"),
+        );
+        assert!(
+            !check_turn(repeated, std::slice::from_ref(&one_receipt))
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let two_targets =
+            "I filed the billing outage incident and filed the security review incident.";
+        let billing = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-shared"),
+        );
+        let security = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("security review", "security-review", "Investigate it."),
+            Some("receipt-shared"),
+        );
+        assert!(
+            check_turn(two_targets, &[billing, security])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+
+        let billing = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-one"),
+        );
+        let security = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("security review", "security-review", "Investigate it."),
+            Some("receipt-two"),
+        );
+        assert!(
+            !check_turn(two_targets, &[billing, security])
+                .contains(&Defect::UnreceiptedCompletionClaim)
+        );
+    }
+
+    #[test]
+    fn negated_claims_are_not_completion_claims() {
+        for text in [
+            "I have not filed the billing outage incident.",
+            "I never sent the queue-lag alert.",
+            "I fixed no incident.",
+        ] {
+            assert!(
+                !check_turn(text, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{text}"
+            );
+        }
+    }
 }
