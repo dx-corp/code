@@ -84,6 +84,8 @@ fn kind_str(event: &Event) -> &'static str {
         Event::Question { .. } => "question",
         Event::ClientToolRequested { .. } => "client_tool_requested",
         Event::Compaction { .. } => "compaction",
+        Event::CompactionAttempted => "compaction_attempted",
+        Event::CompactionEvidenceComplete { .. } => "compaction_evidence_complete",
         Event::Final { .. } => "final",
         Event::Error { .. } => "error",
         Event::Interrupted => "interrupted",
