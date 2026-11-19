@@ -6,7 +6,8 @@
 //! checked here instead: a field name, a raw timestamp, a code span or an HTTP
 //! status in prose; words about Dex's own machinery ("the read data", "your
 //! cutoff"); a boilerplate disclaimer; a generic offer, or any question when
-//! the note says nothing needs the person; a link labelled with its own URL;
+//! the note says nothing needs the person; a pending question that asks for
+//! more than one answer; a link labelled with its own URL;
 //! two times stacked on one fact; "I closed out" followed by a failure; an
 //! exclamation mark; a deadline with no date; a catalog test id or a record's
 //! numeric id.
@@ -43,6 +44,8 @@ pub enum Defect {
     GenericOffer,
     /// A question in a note that says nothing needs the person.
     QuestionWithNothingToDo,
+    /// A pending question that asks the person for more than one answer.
+    MultipleAsks,
     /// `<url|url>`: the link's label is its URL.
     UrlLabel,
     /// "since 13:11 UTC (Nov 12, 14:37 UTC)": a second time on one fact.
@@ -79,6 +82,7 @@ impl Defect {
             Defect::Disclaimer => "disclaimer",
             Defect::GenericOffer => "generic_offer",
             Defect::QuestionWithNothingToDo => "question_with_nothing_to_do",
+            Defect::MultipleAsks => "multiple_asks",
             Defect::UrlLabel => "url_label",
             Defect::StackedTimes => "stacked_times",
             Defect::BrokenClosedOut => "broken_closed_out",
@@ -103,6 +107,9 @@ pub enum Occasion {
     /// defect; a disclaimer, an offer that names nothing and the like
     /// still are.
     Reply,
+    /// Dex is asking the person to answer a pending question. The question
+    /// may name a field, but it should ask for only one answer.
+    Question,
 }
 
 /// The defects that are a defect in any message, asked for or not. A
@@ -120,15 +127,225 @@ const NEVER_RIGHT: [Defect; 9] = [
     Defect::DeadlineWithoutDate,
 ];
 
+const QUESTION_STARTERS: &[&str] = &[
+    "who", "whom", "whose", "what", "which", "when", "where", "why", "how", "am", "is", "are",
+    "was", "were", "do", "does", "did", "can", "could", "will", "would", "shall", "should", "have",
+    "has", "had", "may", "might", "must",
+];
+
+/// Counts unquoted question sentences and clear interrogative clauses joined
+/// by `and` or `also`. This intentionally does not infer compound asks from
+/// shared-clause wording such as "Which workspace and account should I use?".
+fn question_has_multiple_asks(text: &str) -> bool {
+    let (_, prose) = split_links(text);
+    let prose = strip_quoted_examples(&strip_non_slack_urls(&prose));
+    let questions: Vec<String> = sentences(&prose)
+        .into_iter()
+        .filter(|sentence| sentence.ends_with('?'))
+        .take(2)
+        .collect();
+    questions.len() > 1
+        || questions
+            .first()
+            .is_some_and(|sentence| has_interrogative_joiner(sentence))
+}
+
+fn strip_non_slack_urls(text: &str) -> String {
+    let original: Vec<char> = text.chars().collect();
+    let mut prose = original.clone();
+    let mut at = 0;
+    while at < original.len() {
+        if original[at] == ']' && original.get(at + 1) == Some(&'(') {
+            let start = at + 2;
+            if url_scheme_len(&original, start).is_some()
+                && let Some(end) = markdown_url_end(&original, start)
+            {
+                mask_url(&original, &mut prose, start, end);
+                at = end + 1;
+                continue;
+            }
+        }
+        if let Some(length) = url_scheme_len(&original, at)
+            && (at == 0 || !is_word_character(original[at - 1]))
+        {
+            let start = at;
+            let mut end = at + length;
+            let mut parentheses = 0;
+            while end < original.len() {
+                match original[end] {
+                    '(' => parentheses += 1,
+                    ')' if parentheses > 0 => parentheses -= 1,
+                    ')' | '<' | '>' => break,
+                    character if character.is_whitespace() => break,
+                    _ => {}
+                }
+                end += 1;
+            }
+            while end > start && is_url_trailing_punctuation(original[end - 1]) {
+                end -= 1;
+            }
+            mask_url(&original, &mut prose, start, end);
+            at = end.max(start + length);
+            continue;
+        }
+        at += 1;
+    }
+    prose.into_iter().collect()
+}
+
+fn url_scheme_len(text: &[char], at: usize) -> Option<usize> {
+    ["https://", "http://", "www."].iter().find_map(|prefix| {
+        let end = at.checked_add(prefix.len())?;
+        let candidate = text.get(at..end)?;
+        candidate
+            .iter()
+            .zip(prefix.chars())
+            .all(|(actual, expected)| actual.eq_ignore_ascii_case(&expected))
+            .then_some(prefix.len())
+    })
+}
+
+fn markdown_url_end(text: &[char], start: usize) -> Option<usize> {
+    let mut parentheses = 0;
+    for (at, character) in text.iter().enumerate().skip(start) {
+        match character {
+            '(' => parentheses += 1,
+            ')' if parentheses == 0 => return Some(at),
+            ')' => parentheses -= 1,
+            '\n' | '\r' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn mask_url(original: &[char], prose: &mut [char], start: usize, end: usize) {
+    for (index, character) in original.iter().enumerate().take(end).skip(start) {
+        if !matches!(character, '\n' | '\r') {
+            prose[index] = ' ';
+        }
+    }
+}
+
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+fn is_url_trailing_punctuation(character: char) -> bool {
+    matches!(character, '.' | ',' | ';' | ':' | '!' | '?')
+}
+
+fn strip_quoted_examples(text: &str) -> String {
+    let original: Vec<char> = text.chars().collect();
+    let mut prose = original.clone();
+    let mut at = 0;
+    while at < original.len() {
+        let closing = match original[at] {
+            '"' => Some('"'),
+            '“' => Some('”'),
+            '‘' => Some('’'),
+            '\'' if !is_apostrophe(&original, at) => Some('\''),
+            _ => None,
+        };
+        let Some(closing) = closing else {
+            at += 1;
+            continue;
+        };
+        let Some(end) = quoted_example_end(&original, at, closing) else {
+            at += 1;
+            continue;
+        };
+        for (index, character) in original.iter().enumerate().take(end + 1).skip(at) {
+            if !matches!(character, '\n' | '\r') {
+                prose[index] = ' ';
+            }
+        }
+        at = end + 1;
+    }
+    prose.into_iter().collect()
+}
+
+fn quoted_example_end(text: &[char], start: usize, closing: char) -> Option<usize> {
+    let mut escaped = false;
+    for (at, character) in text.iter().enumerate().skip(start + 1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if *character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if *character == closing && !is_apostrophe(text, at) {
+            return Some(at);
+        }
+    }
+    None
+}
+
+fn is_apostrophe(text: &[char], at: usize) -> bool {
+    matches!(text.get(at), Some('\'' | '’'))
+        && at > 0
+        && at + 1 < text.len()
+        && text[at - 1].is_alphanumeric()
+        && text[at + 1].is_alphanumeric()
+}
+
+fn has_interrogative_joiner(sentence: &str) -> bool {
+    let lower = sentence.to_ascii_lowercase();
+    ["and", "also"].iter().any(|joiner| {
+        lower.match_indices(joiner).any(|(start, _)| {
+            let end = start + joiner.len();
+            let bytes = lower.as_bytes();
+            let word_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+            (start == 0 || !word_byte(bytes[start - 1]))
+                && (end == bytes.len() || !word_byte(bytes[end]))
+                && starts_interrogative_clause(&sentence[..start])
+                && starts_interrogative_clause(&sentence[end..])
+        })
+    })
+}
+
+fn starts_interrogative_clause(clause: &str) -> bool {
+    let clause = clause.trim_start_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                ',' | ';' | ':' | '(' | '[' | '{' | '"' | '“' | '‘'
+            )
+    });
+    let lower = clause.to_ascii_lowercase();
+    let mut words = lower
+        .split_whitespace()
+        .map(|word| word.trim_matches(|character: char| !character.is_ascii_alphanumeric()));
+    let mut first = words.next().unwrap_or("");
+    if first == "also" {
+        first = words.next().unwrap_or("");
+    }
+    QUESTION_STARTERS.contains(&first)
+}
+
 /// The voice standard for one message: every defect of [`check`] when Dex
-/// started it, and only those no question excuses when it is a reply.
+/// started it, and only those no question excuses when it is a reply. A
+/// pending question also must not ask for more than one answer, using a
+/// deterministic sentence and interrogative-clause heuristic rather than
+/// semantic language understanding.
 pub fn standard(occasion: Occasion, text: &str) -> Vec<Defect> {
-    let found = check(text);
+    let mut found = check(text);
+    if occasion == Occasion::Question && question_has_multiple_asks(text) {
+        found.push(Defect::MultipleAsks);
+        found.sort();
+        found.dedup();
+    }
     match occasion {
         Occasion::DexStarted => found,
         Occasion::Reply => found
             .into_iter()
             .filter(|defect| NEVER_RIGHT.contains(defect))
+            .collect(),
+        Occasion::Question => found
+            .into_iter()
+            .filter(|defect| NEVER_RIGHT.contains(defect) || *defect == Defect::MultipleAsks)
             .collect(),
     }
 }

@@ -25,6 +25,9 @@ const release = read(".github/workflows/release.yml");
 const ghcr = read(".github/workflows/ghcr-publish.yml");
 const mirrorPath = new URL("../.github/workflows/public-release-mirror.yml", import.meta.url);
 const mirror = existsSync(mirrorPath) ? read(".github/workflows/public-release-mirror.yml") : "";
+// Mono's image publisher; the public mirror publishes through ghcr-publish.yml.
+const maestroPublishPath = new URL("../../../.github/workflows/maestro-publish.yml", import.meta.url);
+const maestroPublish = existsSync(maestroPublishPath) ? readFileSync(maestroPublishPath, "utf8") : "";
 const runtimeConformance = read("scripts/run-runtime-conformance.mjs");
 const passport = read("scripts/generate-runtime-passport.mjs");
 
@@ -110,12 +113,25 @@ test("release and container entrypoints select optimized release", async () => {
 	);
 	const nativeStage = dockerfile.match(/^FROM chef AS native\n([\s\S]*?)(?=^FROM )/m)?.[1];
 	assert.ok(nativeStage, "native Docker stage must exist");
-	const jobsLimitIndex = nativeStage.search(/^ENV CARGO_BUILD_JOBS=1$/m);
+	// One job is the default, so a build that passes no argument stays inside a
+	// small runner; the ENV line applies the same count to the cook and the build.
+	const jobsLimitIndex = nativeStage.search(
+		/^ARG CARGO_BUILD_JOBS=1\nENV CARGO_BUILD_JOBS=\$\{CARGO_BUILD_JOBS\}$/m,
+	);
 	const cookIndex = nativeStage.indexOf("RUN cargo chef cook");
 	assert.ok(
 		jobsLimitIndex >= 0 && jobsLimitIndex < cookIndex,
 		"dependency cooking and final release compilation must share the small-runner Cargo job limit",
 	);
+	if (maestroPublish) {
+		// The cache export re-runs the build; a different job count would miss
+		// every compiled layer and compile the image a second time.
+		const jobArguments = maestroPublish.match(/^ {12}CARGO_BUILD_JOBS=\d+$/gm) ?? [];
+		assert.deepEqual(jobArguments.map((line) => line.trim()), [
+			"CARGO_BUILD_JOBS=4",
+			"CARGO_BUILD_JOBS=4",
+		]);
+	}
 	const installerCopy = "COPY " + embeddedInstallerPath + " ./" + embeddedInstallerPath;
 	const buildCommand = "RUN cargo build --release --locked -p maestro";
 	const installerCopyIndex = nativeStage.indexOf(installerCopy);
