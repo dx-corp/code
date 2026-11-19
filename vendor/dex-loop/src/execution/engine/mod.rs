@@ -465,11 +465,16 @@ where
     /// voice standard here, where it becomes the turn's `Final`. The loop
     /// does not know who asked, so it holds the reply to what no question
     /// excuses ([`crate::voice_check::Occasion::Reply`]) and reports the
-    /// defects by code; the text is recorded as written. A surface that
-    /// knows Dex started the turn applies the stricter standard and its
-    /// rewrite when it delivers.
+    /// defects by code, including completion claims unsupported by this
+    /// turn's successful owner receipts; the text is recorded as written. A
+    /// surface that knows Dex started the turn applies the stricter standard
+    /// and its rewrite when it delivers.
     fn grade_voice(&self, ctx: &Context, text: &str) {
-        let defects = crate::voice_check::standard(crate::voice_check::Occasion::Reply, text);
+        let defects = crate::voice_check::standard_for_turn(
+            crate::voice_check::Occasion::Reply,
+            text,
+            ctx.turn_outputs(),
+        );
         if defects.is_empty() {
             return;
         }

@@ -2,10 +2,12 @@
 use crate::support;
 use dex_loop::{
     ActionConfirmation, ApprovalMode, Budget, CallId, CancellationToken, ConfirmationDecision,
-    Context, Cursor, Engine, Event, Exit, Lexicon, Outcome, Output, PrincipalId, ProposedCall,
-    ThreadId, ToolName, ToolResult, ToolSpec, Tools, TurnId, Verdict, args_digest, rehydrate,
+    Context, Cursor, Engine, Event, Exit, FinalCheck, FinalReply, GovernanceClass, Lexicon,
+    Outcome, Output, PrincipalId, ProposedCall, ReceiptId, ThreadId, ToolName, ToolResult,
+    ToolSpec, Tools, TurnId, TurnOutput, Verdict, args_digest, rehydrate,
 };
 use serde_json::json;
+use std::sync::Arc;
 
 fn thread() -> ThreadId {
     ThreadId {
@@ -13,6 +15,177 @@ fn thread() -> ThreadId {
         workspace: "ws".into(),
         thread: "thread".into(),
     }
+}
+
+#[derive(Clone)]
+struct ReceiptedTools(support::FakeTools);
+
+impl Tools for ReceiptedTools {
+    fn catalog(&self) -> &[ToolSpec] {
+        self.0.catalog()
+    }
+
+    fn act(&self) -> bool {
+        self.0.act()
+    }
+
+    fn act_operations(&self) -> &[dex_loop::ActOperation] {
+        self.0.act_operations()
+    }
+
+    async fn search(&self, principal: &PrincipalId, query: &str) -> Vec<ToolName> {
+        self.0.search(principal, query).await
+    }
+
+    async fn policy(&self, ctx: &Context, call: &ProposedCall) -> Verdict {
+        self.0.policy(ctx, call).await
+    }
+
+    async fn run(
+        &self,
+        thread: &ThreadId,
+        call: &ProposedCall,
+        cancel: &CancellationToken,
+    ) -> ToolResult {
+        let mut result = self.0.run(thread, call, cancel).await;
+        if result.outcome == Outcome::Succeeded {
+            result.receipt = Some(ReceiptId::new("receipt-pagerduty-1"));
+        }
+        result
+    }
+}
+
+struct CompletionFinalCheck {
+    args: serde_json::Value,
+}
+
+impl FinalCheck for CompletionFinalCheck {
+    fn check<'a>(
+        &'a self,
+        _thread: &'a ThreadId,
+        _asked: &'a str,
+        reply: String,
+        outputs: &'a [TurnOutput],
+        _held: &'a [ToolName],
+    ) -> futures_util::future::BoxFuture<'a, FinalReply> {
+        let output = outputs
+            .iter()
+            .find(|output| {
+                output
+                    .tool
+                    .as_ref()
+                    .is_some_and(|tool| tool.as_str() == "pagerduty.incident.resolve")
+            })
+            .expect("the act/call wrapper records its catalog operation");
+        assert_eq!(output.args.as_ref(), Some(&self.args));
+        assert_eq!(
+            output.receipt.as_ref().map(ReceiptId::as_str),
+            Some("receipt-pagerduty-1")
+        );
+        assert!(
+            !dex_loop::voice_check::standard_for_turn(
+                dex_loop::voice_check::Occasion::Reply,
+                &reply,
+                outputs,
+            )
+            .contains(&dex_loop::voice_check::Defect::UnreceiptedCompletionClaim)
+        );
+        Box::pin(async move { FinalReply::from(reply) })
+    }
+}
+
+async fn verify_wrapped_resolution(through_act: bool) {
+    const OPERATION: &str = "pagerduty.incident.resolve";
+    let args = json!({
+        "from": "operator@example.test",
+        "incident": {"type": "incident_reference", "status": "resolved"},
+        "incident_id": "PINC123",
+    });
+    let search = vec![support::call(
+        "tools.search",
+        json!({"query": "resolve incident"}),
+    )];
+    let steps = if through_act {
+        let digest = dex_loop::plan_digest(&ToolName::new(OPERATION), &args);
+        vec![
+            search,
+            vec![support::call(
+                "act",
+                json!({"phase": "preview", "op": OPERATION, "args": args.clone()}),
+            )],
+            vec![support::call(
+                "act",
+                json!({
+                    "phase": "submit",
+                    "op": OPERATION,
+                    "args": args.clone(),
+                    "plan_digest": digest,
+                }),
+            )],
+            vec![support::text("I fixed incident PINC123.")],
+        ]
+    } else {
+        vec![
+            search,
+            vec![support::call(
+                "tools.call",
+                json!({"name": OPERATION, "arguments": args.clone()}),
+            )],
+            vec![support::text("I fixed incident PINC123.")],
+        ]
+    };
+    let model = support::FakeModel::new(steps);
+    let mut operation = support::write_tool(OPERATION);
+    operation.core = false;
+    operation.governance = GovernanceClass::Approval;
+    operation.schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "incident", "incident_id"],
+        "properties": {
+            "from": {"type": "string"},
+            "incident": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "status"],
+                "properties": {
+                    "type": {"const": "incident_reference"},
+                    "status": {"const": "resolved"}
+                }
+            },
+            "incident_id": {"type": "string"}
+        }
+    });
+    let mut inner =
+        support::FakeTools::new(vec![operation]).search_result("resolve incident", &[OPERATION]);
+    if through_act {
+        inner = inner.with_act();
+    }
+    let log = support::FakeLog::default();
+    let engine = Engine::new(
+        log.clone(),
+        model,
+        ReceiptedTools(inner),
+        support::FakeEffects::default(),
+        Lexicon::default(),
+        Budget::default(),
+    )
+    .with_final_check(Arc::new(CompletionFinalCheck { args }));
+    let mut ctx = log.start_turn("completion-wrapper", "Resolve incident PINC123");
+    assert_eq!(
+        engine.run(&mut ctx, &CancellationToken::new()).await,
+        Ok(Exit::Done)
+    );
+}
+
+#[tokio::test]
+async fn act_submit_records_the_underlying_governed_operation_and_receipt() {
+    verify_wrapped_resolution(true).await;
+}
+
+#[tokio::test]
+async fn tools_call_records_the_underlying_catalog_operation_and_receipt() {
+    verify_wrapped_resolution(false).await;
 }
 
 #[derive(Clone)]
