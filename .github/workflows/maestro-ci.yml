@@ -30,8 +30,13 @@ on:
 permissions:
   contents: read
 
+# Grouped by the PR's source repository and head branch, not its number: the
+# release mirror bot opens a new PR on the same branch for each sync, and runs
+# for the closed ones otherwise sat queued on the two owned runners ahead of
+# the live PR. The source repository keeps a fork's same-named branch out of
+# this repository's group.
 concurrency:
-  group: maestro-ci-${{ github.event.pull_request.number || github.ref }}
+  group: maestro-ci-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -74,6 +79,32 @@ jobs:
           npm run check:session-transfer
           npm run check:hosted-orb-delegation
           npm run check:macos-signature
+
+  select-changes:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
+    timeout-minutes: 10
+    outputs:
+      selection_valid: ${{ steps.select.outputs.selection_valid }}
+      rust_tests: ${{ steps.select.outputs.rust_tests }}
+      rust_tests_reason: ${{ steps.select.outputs.rust_tests_reason }}
+      native_release: ${{ steps.select.outputs.native_release }}
+      native_release_reason: ${{ steps.select.outputs.native_release_reason }}
+      jetbrains_plugin: ${{ steps.select.outputs.jetbrains_plugin }}
+      jetbrains_plugin_reason: ${{ steps.select.outputs.jetbrains_plugin_reason }}
+    steps:
+      - name: Reset runner workspace
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - id: select
+        name: Select Maestro target jobs
+        run: node scripts/select-maestro-ci-changes.mjs
 
   lint:
     needs: protocol-contracts
@@ -118,8 +149,18 @@ jobs:
           node scripts/check-advisory-expiry.mjs
 
   rust-tests:
-    needs: protocol-contracts
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs:
+      - protocol-contracts
+      - select-changes
+    if: >-
+      !cancelled() &&
+      needs.protocol-contracts.result == 'success' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request' ||
+       needs.select-changes.result != 'success' ||
+       needs.select-changes.outputs.selection_valid != 'true' ||
+       needs.select-changes.outputs.rust_tests != 'false' ||
+       needs.select-changes.outputs.rust_tests_reason != 'no_relevant_paths')
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     strategy:
@@ -173,8 +214,18 @@ jobs:
           npm run smoke:tui
 
   native-release:
-    needs: protocol-contracts
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs:
+      - protocol-contracts
+      - select-changes
+    if: >-
+      !cancelled() &&
+      needs.protocol-contracts.result == 'success' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request' ||
+       needs.select-changes.result != 'success' ||
+       needs.select-changes.outputs.selection_valid != 'true' ||
+       needs.select-changes.outputs.native_release != 'false' ||
+       needs.select-changes.outputs.native_release_reason != 'no_relevant_paths')
     runs-on: ${{ vars.MAESTRO_CI_HEAVY_RUNNER || 'evalops-internal-arc' }}
     timeout-minutes: 90
     steps:
@@ -304,6 +355,8 @@ jobs:
           timeout --signal=TERM --kill-after=10s 5m npm ci --ignore-scripts
           test ! -d src/hooks
           node --test scripts/check-ci-concurrency.test.mjs
+          node --test .github/workflows/check-maestro-ci-path-selection-contract.test.mjs
+          node --test .github/workflows/fork-status-reporter.test.mjs .github/workflows/source-provenance-link.test.mjs
           node scripts/check-rust-only-runtime.mjs
           node scripts/check-hook-dispatch-coverage.mjs
           if [[ -f scripts/workflow-contracts.test.mjs ]]; then
@@ -373,8 +426,18 @@ jobs:
         run: bash scripts/run-ci-supply-chain.sh
 
   jetbrains-plugin:
-    needs: protocol-contracts
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs:
+      - protocol-contracts
+      - select-changes
+    if: >-
+      !cancelled() &&
+      needs.protocol-contracts.result == 'success' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request' ||
+       needs.select-changes.result != 'success' ||
+       needs.select-changes.outputs.selection_valid != 'true' ||
+       needs.select-changes.outputs.jetbrains_plugin != 'false' ||
+       needs.select-changes.outputs.jetbrains_plugin_reason != 'no_relevant_paths')
     runs-on: ${{ vars.MAESTRO_CI_LIGHT_RUNNER || 'evalops-internal-arc-light' }}
     timeout-minutes: 45
     steps:
@@ -501,10 +564,11 @@ jobs:
           npm run smoke:hosted-orb-delegation
 
   maestro-ci:
-    name: maestro-ci
+    name: ${{ github.event_name != 'pull_request' && 'maestro-ci' || (github.event.pull_request.head.repo.full_name == github.repository && 'maestro-ci' || 'maestro-ci-not-validated') }}
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     needs:
       - protocol-contracts
+      - select-changes
       - lint
       - rust-tests
       - native-release
@@ -524,6 +588,7 @@ jobs:
       - name: Require every needed maestro-ci job
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
@@ -534,14 +599,95 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS_JSON"])
           sha = os.environ["HEAD_SHA"]
+          event_name = os.environ["EVENT_NAME"]
+          expected_jobs = {
+              "protocol-contracts",
+              "select-changes",
+              "lint",
+              "rust-tests",
+              "native-release",
+              "integration",
+              "scenario-replay",
+              "ci-contracts",
+              "workflow-tooling",
+              "supply-chain",
+              "jetbrains-plugin",
+              "linux-check",
+              "coverage",
+              "perf-baseline",
+              "hosted-orb-delegation-live",
+          }
+          target_outputs = {
+              "rust-tests": "rust_tests",
+              "native-release": "native_release",
+              "jetbrains-plugin": "jetbrains_plugin",
+          }
+          advisory_jobs = {"coverage", "perf-baseline", "hosted-orb-delegation-live"}
+          fallback_reasons = {
+              "fallback_event_input",
+              "fallback_invalid_sha",
+              "fallback_missing_object",
+              "fallback_git_error",
+              "fallback_malformed_input",
+              "fallback_empty_paths",
+              "fallback_unknown_path",
+              "fallback_workspace_manifest",
+              "fallback_ambiguous_merge_base",
+          }
           bad = []
           skipped = []
+
+          if set(needs) != expected_jobs:
+              missing = sorted(expected_jobs - set(needs))
+              extra = sorted(set(needs) - expected_jobs)
+              bad.append(f"needs-set=missing:{','.join(missing)} extra:{','.join(extra)}")
+
+          selector = needs.get("select-changes") or {}
+          selector_result = selector.get("result")
+          outputs = selector.get("outputs") or {}
+          decisions_valid = selector_result == "success" and outputs.get("selection_valid") == "true"
+          values = [outputs.get(output) for output in target_outputs.values()]
+          reasons = [outputs.get(f"{output}_reason") for output in target_outputs.values()]
+          fallback_decision = (
+              all(value == "true" for value in values)
+              and len(set(reasons)) == 1
+              and reasons[0] in fallback_reasons
+          )
+          non_pr_decision = (
+              event_name != "pull_request"
+              and all(value == "true" for value in values)
+              and all(reason == "non_pr" for reason in reasons)
+          )
+          pr_decision = event_name == "pull_request" and all(
+              (value == "true" and reason == "matched_path")
+              or (value == "false" and reason == "no_relevant_paths")
+              for value, reason in zip(values, reasons)
+          )
+          decisions_valid = decisions_valid and (fallback_decision or non_pr_decision or pr_decision)
+          if not decisions_valid:
+              bad.append(f"select-changes={selector_result or '<missing>'}/invalid-outputs")
+          if selector_result != "success":
+              bad.append(f"select-changes={selector_result or '<missing>'}")
+
           for name, body in sorted(needs.items()):
+              if name == "select-changes":
+                  continue
               result = (body or {}).get("result")
               if result == "success":
                   continue
               if result == "skipped":
-                  skipped.append(name)
+                  if (
+                      name in target_outputs
+                      and event_name == "pull_request"
+                      and decisions_valid
+                      and outputs.get(target_outputs[name]) == "false"
+                      and outputs.get(f"{target_outputs[name]}_reason") == "no_relevant_paths"
+                  ):
+                      skipped.append(name)
+                  elif name in advisory_jobs and event_name not in {"schedule", "workflow_dispatch"}:
+                      skipped.append(name)
+                  else:
+                      bad.append(f"{name}=skipped")
                   continue
               bad.append(f"{name}={result or '<missing>'}")
           if bad:
