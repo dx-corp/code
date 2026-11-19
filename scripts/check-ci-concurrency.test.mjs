@@ -85,7 +85,7 @@ if (args[1] === 'nextest' && args.includes('--ignore-run-fail') && args.includes
 test("maestro-ci concurrency is per ref and cancels in-progress PR runs", () => {
 	assert.match(
 		workflow,
-		/group: maestro-ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/,
+		/group: maestro-ci-\$\{\{ github\.head_ref \|\| github\.ref \}\}/,
 	);
 	assert.match(
 		workflow,

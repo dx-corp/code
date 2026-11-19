@@ -30,8 +30,11 @@ on:
 permissions:
   contents: read
 
+# Grouped by the PR's head branch, not its number: the release mirror bot
+# opens a new PR on the same branch for each sync, and runs for the closed
+# ones otherwise sat queued on the two owned runners ahead of the live PR.
 concurrency:
-  group: maestro-ci-${{ github.event.pull_request.number || github.ref }}
+  group: maestro-ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
