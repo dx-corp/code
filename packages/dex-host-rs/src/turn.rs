@@ -307,6 +307,7 @@ mod tests {
             Event::Question {
                 call: question_call.clone(),
                 text: "Send the message?".into(),
+                purpose: None,
                 confirmation: Some(ActionConfirmation {
                     proposal_call_id: action.id.clone(),
                     tool: action.tool.clone(),

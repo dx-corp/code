@@ -693,6 +693,19 @@ impl InteractionMode {
     }
 }
 
+pub const CONNECT_POSTHOG_TOOL: &str = "dex.connect_posthog";
+pub const POSTHOG_SETUP_COMPLETE: &str = "The personal PostHog connection is ready.";
+
+pub fn posthog_setup_event_id(call: &str) -> String {
+    format!("posthog-setup:{call}")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionPurpose {
+    PosthogConnection,
+}
+
 /// One row in a thread's log. Hosts append the ingress events (`UserMessage`,
 /// `Steer`, `Interrupt`, `ApprovalDecided`, `Answer`, and optionally
 /// `ToolProgress`); the engine appends everything else.
@@ -947,6 +960,8 @@ pub enum Event {
         text: String,
         #[serde(default)]
         confirmation: Option<ActionConfirmation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        purpose: Option<QuestionPurpose>,
     },
     /// The turn is parked until a `ClientToolResult` for this call arrives.
     /// The only event that carries tool arguments to a surface; the host

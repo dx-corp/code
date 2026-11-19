@@ -402,6 +402,7 @@ fn events(decision: ConfirmationDecision, principal: &str) -> Vec<(Cursor, Event
         Event::Question {
             call: CallId::new("question-1"),
             text: "Confirm sending the exact message?".into(),
+            purpose: None,
             confirmation: Some(ActionConfirmation {
                 proposal_call_id: p.id,
                 tool: p.tool,
@@ -466,6 +467,7 @@ fn action_record_capacity_expires_old_references_without_summary_authority() {
             Event::Question {
                 call: question.clone(),
                 text: "Exact action".into(),
+                purpose: None,
                 confirmation: Some(ActionConfirmation {
                     proposal_call_id: call.id.clone(),
                     tool: call.tool.clone(),

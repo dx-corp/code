@@ -1771,6 +1771,19 @@ where
                 {
                     break;
                 }
+                if spec.name.as_str() == crate::CONNECT_POSTHOG_TOOL {
+                    self.emit(
+                        ctx,
+                        vec![Event::Question {
+                            call: call.id.clone(),
+                            text: "Connect your PostHog account to continue this request.".into(),
+                            confirmation: None,
+                            purpose: Some(crate::QuestionPurpose::PosthogConnection),
+                        }],
+                    )
+                    .await?;
+                    return Ok(Some(Exit::Asked(call.id.clone())));
+                }
                 let Some(question) = non_empty_str(call, "question") else {
                     self.finish(ctx, call, ToolResult::error(MISSING_QUESTION))
                         .await?;
@@ -1797,6 +1810,7 @@ where
                                 })
                             })
                             .unwrap_or_else(|| question.to_owned()),
+                        purpose: None,
                         confirmation: call
                             .args
                             .get("confirmation")
