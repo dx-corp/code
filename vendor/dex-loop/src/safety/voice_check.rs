@@ -1000,6 +1000,7 @@ fn is_completion_prefix(word: &str) -> bool {
             | "indeed"
             | "just"
             | "now"
+            | "not"
             | "personally"
             | "recently"
             | "successfully"
@@ -1012,32 +1013,88 @@ fn negated_completion(
     words: &[(String, usize, usize)],
     action_index: usize,
 ) -> bool {
-    const NEGATIONS: &[&str] = &[
-        "not", "never", "no", "none", "nothing", "nobody", "nowhere", "don", "didn", "haven",
-        "hasn", "isn", "wasn", "won",
-    ];
     let action_start = words[action_index].1;
     let prefix = &sentence[..action_start];
     let boundary = prefix.rfind([',', ';', ':']).map_or(0, |at| at + 1);
     let preceding = word_spans(&prefix[boundary..]);
-    let scope_start = preceding
+    let subject_start = preceding
         .iter()
-        .rposition(|(word, _, _)| {
-            matches!(
-                word.as_str(),
-                "and" | "also" | "but" | "however" | "instead" | "then"
-            )
-        })
+        .rposition(|(word, _, _)| word == "i")
         .map_or(0, |at| at + 1);
-    preceding[scope_start..]
+    let clause_start = preceding
         .iter()
-        .any(|(word, _, _)| NEGATIONS.contains(&word.as_str()))
+        .enumerate()
+        .rev()
+        .find(|(at, (word, _, _))| {
+            *at >= subject_start && matches!(word.as_str(), "but" | "however" | "instead")
+        })
+        .map_or(subject_start, |(at, _)| at + 1);
+    let previous_action = preceding
+        .iter()
+        .enumerate()
+        .skip(clause_start)
+        .find(|(_, (word, _, _))| matches!(word.as_str(), "filed" | "fixed" | "sent"))
+        .map(|(at, _)| at);
+    let inherited_end = previous_action.unwrap_or(preceding.len());
+    let inherited_negation = has_negation_in_verb_prefix(&preceding[clause_start..inherited_end]);
+    let local_start = previous_action.map_or(clause_start, |at| at + 1);
+    let local_coordination = preceding
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(at, (word, _, _))| {
+            *at >= local_start && matches!(word.as_str(), "and" | "also" | "then")
+        })
+        .map(|(at, _)| at);
+    let local_start = local_coordination.map_or(local_start, |at| at + 1);
+    let local_negation = has_negation_in_verb_prefix(&preceding[local_start..]);
+    inherited_negation
+        || local_negation
         || words.get(action_index + 1).is_some_and(|(word, _, _)| {
             matches!(
                 word.as_str(),
                 "no" | "none" | "nothing" | "nobody" | "never" | "not"
             )
         })
+}
+
+fn has_negation_in_verb_prefix(words: &[(String, usize, usize)]) -> bool {
+    const NEGATIONS: &[&str] = &[
+        "not", "never", "none", "nothing", "nobody", "nowhere", "don", "didn", "haven", "hasn",
+        "isn", "wasn", "won",
+    ];
+    for (word, _, _) in words {
+        if NEGATIONS.contains(&word.as_str()) {
+            return true;
+        }
+        if is_completion_prefix(word)
+            || matches!(
+                word.as_str(),
+                "am" | "are"
+                    | "be"
+                    | "being"
+                    | "can"
+                    | "could"
+                    | "did"
+                    | "do"
+                    | "does"
+                    | "is"
+                    | "may"
+                    | "might"
+                    | "must"
+                    | "shall"
+                    | "should"
+                    | "was"
+                    | "were"
+                    | "will"
+                    | "would"
+            )
+        {
+            continue;
+        }
+        break;
+    }
+    false
 }
 
 fn word_spans(text: &str) -> Vec<(String, usize, usize)> {
@@ -1756,6 +1813,75 @@ mod completion_claim_tests {
                 .contains(&Defect::UnreceiptedCompletionClaim)
         );
         assert!(!check_turn(claim, &[filed, sent]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn shared_negation_applies_across_an_unrecognized_coordinated_verb() {
+        let claim = "I have not yet signed and sent the contract.";
+        let words = word_spans(claim);
+        let action_index = words
+            .iter()
+            .position(|(word, _, _)| word == "sent")
+            .expect("completion action");
+
+        assert!(negated_completion(claim, &words, action_index));
+        assert!(!check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn negation_after_a_contrast_is_scoped_to_the_new_clause() {
+        let claim = "I have not yet signed but have not sent the contract.";
+        let words = word_spans(claim);
+        let action_index = words
+            .iter()
+            .position(|(word, _, _)| word == "sent")
+            .expect("completion action");
+
+        assert!(negated_completion(claim, &words, action_index));
+        assert!(!check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn local_negation_after_a_completed_action_does_not_require_its_receipt() {
+        let claim = "I filed the billing incident and have not sent the queue-lag alert.";
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing incident", "billing-incident", "Investigate it."),
+            Some("receipt-billing"),
+        );
+        let words = word_spans(claim);
+        let action_index = words
+            .iter()
+            .position(|(word, _, _)| word == "sent")
+            .expect("completion action");
+
+        assert!(negated_completion(claim, &words, action_index));
+        assert!(check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim));
+        assert!(!check_turn(claim, &[filed]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn an_explicit_positive_clause_after_negation_keeps_its_receipt_check() {
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-queue-lag"),
+        );
+
+        for claim in [
+            "I have not yet signed the contract, I sent the queue-lag alert.",
+            "I have not yet signed the contract but I sent the queue-lag alert.",
+        ] {
+            assert!(
+                check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+            assert!(
+                !check_turn(claim, std::slice::from_ref(&sent))
+                    .contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
     }
 
     #[test]
