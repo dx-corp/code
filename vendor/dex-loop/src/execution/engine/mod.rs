@@ -1771,14 +1771,14 @@ where
                 {
                     break;
                 }
-                if spec.name.as_str() == crate::CONNECT_POSTHOG_TOOL {
+                if let Some(purpose) = crate::QuestionPurpose::for_tool(spec.name.as_str()) {
                     self.emit(
                         ctx,
                         vec![Event::Question {
                             call: call.id.clone(),
-                            text: "Connect your PostHog account to continue this request.".into(),
+                            text: purpose.question().into(),
                             confirmation: None,
-                            purpose: Some(crate::QuestionPurpose::PosthogConnection),
+                            purpose: Some(purpose),
                         }],
                     )
                     .await?;
