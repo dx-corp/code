@@ -3505,78 +3505,8 @@ async fn loop_command_start_and_stop_via_handler() {
     assert!(app.loop_schedule.is_none());
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Detail View Tests (Ctrl+E)
-// ─────────────────────────────────────────────────────────────────────────
-
-fn push_tool_call_message(app: &mut App, output: String) {
-    app.state.messages.push(Message {
-        id: "m-detail".to_string(),
-        role: MessageRole::Assistant,
-        kind: MessageKind::Regular,
-        content: String::new(),
-        thinking: String::new(),
-        streaming: false,
-        tool_calls: vec![crate::state::ToolCallState {
-            parent_call_id: None,
-            duration_ms: None,
-            call_id: "call-detail".to_string(),
-            tool: "bash".to_string(),
-            args: serde_json::json!({"command": "seq 1 120"}),
-            status: crate::state::ToolCallStatus::Completed,
-            output,
-        }],
-        usage: None,
-        timestamp: SystemTime::now(),
-        thinking_expanded: false,
-    });
-}
-
-#[tokio::test]
-async fn test_detail_view_opens_with_full_untruncated_tool_output() {
-    let mut app = new_test_app();
-    // The inline transcript caps tool output at 50 lines even when expanded;
-    // the detail view must show every line.
-    let output = (1..=120)
-        .map(|i| format!("line {i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    push_tool_call_message(&mut app, output);
-
-    app.handle_key(KeyCode::Char('e'), CrosstermModifiers::CONTROL)
-        .await
-        .expect("open detail view");
-
-    assert_eq!(app.active_modal, ActiveModal::DetailView);
-    let detail = app.detail_view.as_ref().expect("detail view open");
-    assert_eq!(detail.title(), "Tool: bash");
-    assert!(
-        detail
-            .content()
-            .starts_with("Session evidence:\nLatest recorded checkpoint:")
-    );
-    assert!(detail.content().contains("tests not recorded"));
-    assert!(detail.content().contains("\"command\": \"seq 1 120\""));
-    assert!(detail.content().contains("line 1\n"));
-    assert!(detail.content().contains("line 120"));
-}
-
-#[tokio::test]
-async fn test_detail_view_esc_restores_transcript_view() {
-    let mut app = new_test_app();
-    push_tool_call_message(&mut app, "full output".to_string());
-
-    app.handle_key(KeyCode::Char('e'), CrosstermModifiers::CONTROL)
-        .await
-        .expect("open detail view");
-    assert_eq!(app.active_modal, ActiveModal::DetailView);
-
-    app.handle_key(KeyCode::Esc, CrosstermModifiers::NONE)
-        .await
-        .expect("close detail view");
-    assert_eq!(app.active_modal, ActiveModal::None);
-    assert!(app.detail_view.is_none());
-}
+mod detail_view;
+use detail_view::push_tool_call_message;
 
 #[tokio::test]
 async fn test_detail_view_scrolls_with_paging_keys() {
@@ -5375,6 +5305,7 @@ async fn dex_suggestion_acceptance_only_fills_composer_and_respects_dismissal() 
         .unwrap()
         .tool_calls
         .push(crate::state::ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "edit-1".into(),

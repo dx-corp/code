@@ -44,6 +44,46 @@ impl App {
         ));
     }
 
+    pub(super) fn toggle_zen_mode(&mut self) {
+        self.state.zen_mode = !self.state.zen_mode;
+        self.state.status = Some(
+            self.state
+                .locale
+                .translate(if self.state.zen_mode {
+                    "Zen mode enabled"
+                } else {
+                    "Zen mode disabled"
+                })
+                .into(),
+        );
+    }
+
+    pub(super) fn apply_auto_charts(&mut self, enabled: bool) {
+        let mut prefs = crate::ui_prefs::UiPrefs::load_default();
+        prefs.auto_charts = Some(enabled);
+        if let Err(error) = prefs.save_default() {
+            self.state.error = Some(
+                self.state
+                    .locale
+                    .format("Could not save Auto charts: {0}", &[error.to_string()]),
+            );
+            return;
+        }
+        self.state.auto_charts = enabled;
+        self.ui_prefs = prefs;
+        self.state.error = None;
+        self.state.status = Some(
+            self.state.locale.format(
+                "Auto charts: {0}",
+                &[self
+                    .state
+                    .locale
+                    .translate(if enabled { "On" } else { "Off" })
+                    .to_owned()],
+            ),
+        );
+    }
+
     pub(super) fn show_control_panel(&mut self, panel: ControlPanel) {
         let mut rows = Vec::new();
         let mut add = |command: &str, label: &str, description: String| {
@@ -237,6 +277,21 @@ impl App {
                             .translate(self.state.output_detail().as_str())
                             .to_string()],
                     ),
+                );
+                add(
+                    if self.state.auto_charts {
+                        "autochart off"
+                    } else {
+                        "autochart on"
+                    },
+                    locale.translate("Auto charts"),
+                    locale
+                        .translate(if self.state.auto_charts {
+                            "On · turn off"
+                        } else {
+                            "Off · turn on"
+                        })
+                        .into(),
                 );
                 add(
                     "theme",

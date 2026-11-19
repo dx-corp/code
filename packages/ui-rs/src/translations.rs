@@ -5209,6 +5209,39 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Auto chart",
+        [
+            "Gráfico automático",
+            "Graphique automatique",
+            "Automatisches Diagramm",
+            "自動グラフ",
+            "자동 차트",
+            "自动图表",
+        ],
+    ),
+    (
+        "Auto charts",
+        [
+            "Gráficos automáticos",
+            "Graphiques automatiques",
+            "Automatische Diagramme",
+            "自動グラフ",
+            "자동 차트",
+            "自动图表",
+        ],
+    ),
+    (
+        "Auto charts: {0}",
+        [
+            "Gráficos automáticos: {0}",
+            "Graphiques automatiques : {0}",
+            "Automatische Diagramme: {0}",
+            "自動グラフ：{0}",
+            "자동 차트: {0}",
+            "自动图表：{0}",
+        ],
+    ),
+    (
         "Auto mode allowed {0}. Security finding: {1}",
         [
             "Modo automático permitido {0}. Determinación de la seguridad: {1}",
@@ -5878,6 +5911,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "カタログ: {0}",
             "카탈로그: {0}",
             "目录：{0}",
+        ],
+    ),
+    (
+        "Change",
+        [
+            "Variación",
+            "Variation",
+            "Änderung",
+            "変化量",
+            "변화량",
+            "变化量",
         ],
     ),
     (
@@ -7384,6 +7428,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "〜/.maestroを解決できませんでした",
             "~/.maestro를 해결하지 않을 수 있었습니다",
             "无法解析~/.maestro",
+        ],
+    ),
+    (
+        "Could not save Auto charts: {0}",
+        [
+            "No se pudo guardar la preferencia de gráficos automáticos: {0}",
+            "Impossible d’enregistrer la préférence des graphiques automatiques : {0}",
+            "Die Einstellung für automatische Diagramme konnte nicht gespeichert werden: {0}",
+            "自動グラフの設定を保存できませんでした：{0}",
+            "자동 차트 설정을 저장할 수 없습니다: {0}",
+            "无法保存自动图表设置：{0}",
         ],
     ),
     (
@@ -12386,6 +12441,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Last",
+        [
+            "Último",
+            "Dernière valeur",
+            "Zuletzt",
+            "最新値",
+            "최신값",
+            "最新值",
+        ],
+    ),
+    (
         "Last control",
         [
             "Último control",
@@ -14799,7 +14865,29 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         "Off",
         ["Desactivado", "Désactivé", "Aus", "オフ", "끔", "关闭"],
     ),
+    (
+        "Off · turn on",
+        [
+            "Desactivado · activar",
+            "Désactivé · activer",
+            "Aus · einschalten",
+            "オフ · オンにする",
+            "꺼짐 · 켜기",
+            "已关闭 · 开启",
+        ],
+    ),
     ("On", ["Activado", "Activé", "Ein", "オン", "켬", "开启"]),
+    (
+        "On · turn off",
+        [
+            "Activado · desactivar",
+            "Activé · désactiver",
+            "Ein · ausschalten",
+            "オン · オフにする",
+            "켜짐 · 끄기",
+            "已开启 · 关闭",
+        ],
+    ),
     (
         "One key, many models",
         [
@@ -14842,6 +14930,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "現在のトランスクリプトでは{0}ターンのみ使用可能",
             "만 {0} 회전은 현재 성적에서 사용할 수 있습니다.",
             "现有记录中只有{0}个转弯",
+        ],
+    ),
+    (
+        "Open buckets omitted ({0})",
+        [
+            "Intervalos en curso omitidos ({0})",
+            "Intervalles en cours ignorés ({0})",
+            "Offene Intervalle ausgelassen ({0})",
+            "集計中の区間を除外 ({0})",
+            "진행 중인 구간 제외 ({0})",
+            "已省略进行中的区间（{0}）",
         ],
     ),
     (
@@ -16267,6 +16366,10 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "도구 호출 {0}회 실행 완료",
             "已执行 {0} 次工具调用",
         ],
+    ),
+    (
+        "Range",
+        ["Intervalo", "Plage", "Wertebereich", "範囲", "범위", "范围"],
     ),
     (
         "Rate Limits",
@@ -19290,6 +19393,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "Show charts for time-series tool results",
+        [
+            "Mostrar gráficos de series temporales en los resultados de las herramientas",
+            "Afficher les séries temporelles des résultats d’outils sous forme de graphiques",
+            "Zeitreihen aus Werkzeugergebnissen als Diagramme anzeigen",
+            "ツール結果の時系列データをグラフで表示",
+            "도구 결과의 시계열 데이터를 차트로 표시",
+            "以图表显示工具结果中的时间序列",
+        ],
+    ),
+    (
         "Show combined status and usage summary",
         [
             "Mostrar el estado combinado y el resumen de uso",
@@ -22170,6 +22284,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "使用方法: /attach remove <1-based-index>",
             "제품 정보: /attach remove <1-based-index>",
             "使用量: /attach remove <1-based-index>",
+        ],
+    ),
+    (
+        "Usage: /autochart <on|off>",
+        [
+            "Uso: /autochart <on|off>",
+            "Utilisation : /autochart <on|off>",
+            "Verwendung: /autochart <on|off>",
+            "使い方：/autochart <on|off>",
+            "사용법: /autochart <on|off>",
+            "用法：/autochart <on|off>",
         ],
     ),
     (
@@ -25688,6 +25813,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "independent scales",
+        [
+            "escalas independientes",
+            "échelles indépendantes",
+            "eigene Skalen",
+            "系列ごとに個別の目盛り",
+            "계열별 눈금",
+            "独立刻度",
+        ],
+    ),
+    (
         "initializing",
         [
             "Inicializando",
@@ -28097,6 +28233,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
         ],
     ),
     (
+        "{0} more series in tool output",
+        [
+            "{0} series más en la salida de la herramienta",
+            "{0} séries supplémentaires dans la sortie de l’outil",
+            "{0} weitere Reihen in der Werkzeugausgabe",
+            "ツール出力に他 {0} 系列",
+            "도구 출력에 시계열 {0}개 더 있음",
+            "工具输出中还有 {0} 个序列",
+        ],
+    ),
+    (
         "{0} must be a non-empty string",
         [
             "{0} debe ser una cadena no vacía",
@@ -28336,6 +28483,17 @@ pub(crate) const MESSAGES: &[(&str, [&str; 6])] = &[
             "{0}は{1}秒後にタイムアウトしました",
             "{0}는 {1} 초 후에 밖으로 중단했습니다",
             "{1}秒后超时{0}秒",
+        ],
+    ),
+    (
+        "{0} timestamps",
+        [
+            "{0} marcas de tiempo",
+            "{0} horodatages",
+            "{0} Zeitstempel",
+            "時刻 {0} 件",
+            "타임스탬프 {0}개",
+            "{0} 个时间点",
         ],
     ),
     (

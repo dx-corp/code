@@ -2162,6 +2162,60 @@ fn pty_rewind_preserves_source_and_continues_from_saved_prefix() {
     assert!(!branch.contains("PTY_ABANDONED_TURN"));
 }
 
+#[test]
+fn pty_auto_chart_shows_tool_data_and_saves_the_display_preference() {
+    let _serial = PTY_TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mock = MockOpenAiServer::start(vec![
+        tool_call_turn("bash", &serde_json::json!({"command": "cat chart.txt"})),
+        text_turn("CHART_TURN_COMPLETE"),
+    ]);
+    let workdir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workdir.path().join("chart.txt"),
+        "day|daily_turns\n2026-11-10|720\n2026-11-12|480\n",
+    )
+    .unwrap();
+
+    let mut session = PtySession::spawn(&mock, workdir.path(), "Read the chart fixture");
+    session.wait_for_text("CHART_TURN_COMPLETE", TURN_TIMEOUT);
+    session.wait_for_text("Last 480", TURN_TIMEOUT);
+    session.wait_for_text("2 timestamps", TURN_TIMEOUT);
+    session.wait_for_text("Change −240", TURN_TIMEOUT);
+    save_continuity_frame(&session, "autochart");
+
+    send_continuity_bytes_until(&mut session, b"\x15/autochart off", "> /autochart off");
+    session.send_bytes(b"\r");
+    let preferences_path = workdir.path().join("maestro-home/ui.json");
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    loop {
+        let preferences: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&preferences_path).unwrap()).unwrap();
+        if preferences["autoCharts"] == false {
+            let frame = session
+                .output
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .completed_current_text();
+            if frame.is_some_and(|frame| {
+                frame.contains("CHART_TURN_COMPLETE") && !frame.contains("Last 480")
+            }) {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Auto charts preference or transcript did not update: {}",
+            session.screen_text()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    submit_continuity_prompt(&mut session, "/output expanded", "2026-11-10|720");
+    session.shutdown();
+}
+
 /// tool call → approval modal appears (selective mode) → approve → result
 /// renders after the follow-up turn.
 #[test]

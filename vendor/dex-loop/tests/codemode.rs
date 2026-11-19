@@ -828,3 +828,29 @@ async fn context_pocket_is_conversational_even_after_compaction() {
         );
     }
 }
+
+#[test]
+fn the_declared_script_tool_says_what_scripts_are_for_and_not_how_to_inspect_the_catalog() {
+    // The shared description spends most of its words on catalog inspection
+    // helpers, and a model read that as the tool's purpose. Dex declares a
+    // short one on every step and keeps the rest behind a lookup by name.
+    let log = FakeLog::default();
+    let model = FakeModel::new(vec![]);
+    let tools = FakeTools::new(vec![read_tool("read")]);
+    let ctx = log.start_turn("t1", "what should I focus on?");
+    let (_, offered) = engine(&log, &model, &tools, Budget::default()).next_model_request(&ctx);
+    let run = offered
+        .iter()
+        .find(|spec| spec.name.as_str() == dex_loop::CODEMODE)
+        .expect("the script tool is declared");
+    for helper in ["searchTools", "describeTool", "getToolSchema", "ALL_TOOLS"] {
+        assert!(!run.description.contains(helper), "{helper}");
+        assert!(dex_loop::RUN_REFERENCE.contains(helper), "{helper}");
+    }
+    assert!(
+        run.description
+            .contains("A script that calls no tool does nothing useful")
+    );
+    assert!(run.description.contains("use tools_search for that"));
+    assert!(run.description.len() < dex_loop::RUN_REFERENCE.len() / 2);
+}
