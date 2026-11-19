@@ -143,7 +143,7 @@ const QUESTION_STARTERS: &[&str] = &[
 /// shared-clause wording such as "Which workspace and account should I use?".
 fn question_has_multiple_asks(text: &str) -> bool {
     let (_, prose) = split_links(text);
-    let prose = strip_quoted_examples(&strip_non_slack_urls(&prose));
+    let prose = strip_question_emphasis(&strip_quoted_examples(&strip_non_slack_urls(&prose)));
     let questions: Vec<String> = sentences(&prose)
         .into_iter()
         .filter(|sentence| sentence.ends_with('?'))
@@ -153,6 +153,68 @@ fn question_has_multiple_asks(text: &str) -> bool {
         || questions
             .first()
             .is_some_and(|sentence| has_interrogative_joiner(sentence))
+}
+
+fn strip_question_emphasis(text: &str) -> String {
+    let original: Vec<char> = text.chars().collect();
+    let mut prose = original.clone();
+    let mut at = 0;
+    while at < original.len() {
+        let marker = original[at];
+        if !matches!(marker, '*' | '_') {
+            at += 1;
+            continue;
+        }
+        let width = emphasis_marker_width(&original, at, marker);
+        if width > 2
+            || (at > 0 && is_word_character(original[at - 1]))
+            || original
+                .get(at + width)
+                .is_none_or(|character| character.is_whitespace())
+        {
+            at += width;
+            continue;
+        }
+        let Some(end) = question_emphasis_end(&original, at + width, marker, width) else {
+            at += width;
+            continue;
+        };
+        prose[at..at + width].fill(' ');
+        prose[end..end + width].fill(' ');
+        at += width;
+    }
+    prose.into_iter().collect()
+}
+
+fn question_emphasis_end(text: &[char], start: usize, marker: char, width: usize) -> Option<usize> {
+    let mut at = start;
+    while at < text.len() {
+        if matches!(text[at], '\n' | '\r') {
+            return None;
+        }
+        if text[at] == marker {
+            let run = emphasis_marker_width(text, at, marker);
+            if run == width
+                && at > start
+                && !text[at - 1].is_whitespace()
+                && (at + run == text.len() || !is_word_character(text[at + run]))
+            {
+                return Some(at);
+            }
+            at += run;
+        } else {
+            at += 1;
+        }
+    }
+    None
+}
+
+fn emphasis_marker_width(text: &[char], start: usize, marker: char) -> usize {
+    let mut end = start + 1;
+    while text.get(end) == Some(&marker) {
+        end += 1;
+    }
+    end - start
 }
 
 fn strip_non_slack_urls(text: &str) -> String {
