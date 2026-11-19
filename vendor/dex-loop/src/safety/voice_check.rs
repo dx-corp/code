@@ -963,6 +963,9 @@ fn completion_claims(text: &str) -> Vec<CompletionClaim> {
                     && words[action_prefix - 2].0 == "i");
             let coordinated = first_person
                 && (matches!(previous, Some("and" | "but" | "then" | "also"))
+                    || matches!(previous, Some("afterwards" | "later"))
+                        && action_prefix >= 2
+                        && words[action_prefix - 2].0 == "and"
                     || action_prefix > 0
                         && sentence[words[action_prefix - 1].2..words[action_prefix].1]
                             .contains(','));
@@ -1033,41 +1036,39 @@ fn negated_completion(
             *at >= subject_start && matches!(word.as_str(), "but" | "however" | "instead")
         })
         .map_or(subject_start, |(at, _)| at + 1);
-    let previous_action = preceding
-        .iter()
-        .enumerate()
-        .skip(clause_start)
-        .find(|(_, (word, _, _))| matches!(word.as_str(), "filed" | "fixed" | "sent"))
-        .map(|(at, _)| at);
-    let inherited_end = previous_action.unwrap_or(preceding.len());
-    let local_start = previous_action.map_or(clause_start, |at| at + 1);
-    // "did not sign and send it" shares one negation, but "and then" (or
-    // "and also", "and afterwards", "and later") after the negation starts a
-    // new action: in "did not file it and then sent it" the second verb is a
-    // positive claim of its own and still needs its receipt.
+    // Walk the clause's verb groups left to right. "did not sign and send it"
+    // shares one negation across bare coordinated verbs, but a coordinator
+    // followed by its own auxiliary ("and have sent", "and then have not
+    // signed") opens a new scope carrying only that auxiliary's negation. A
+    // sequencing coordinator ("and then", "and also", "and afterwards",
+    // "and later") before a bare verb starts a new, positive action: in "did
+    // not file it and then sent it" the second verb still needs its receipt.
     let clause = &preceding[clause_start..];
-    let negated_at = (0..clause.len()).find(|&at| has_negation_in_verb_prefix(&clause[at..=at]));
-    let sequenced = negated_at.is_some_and(|negated| {
-        clause.windows(2).enumerate().any(|(at, pair)| {
-            at > negated
-                && pair[0].0 == "and"
-                && matches!(pair[1].0.as_str(), "then" | "also" | "afterwards" | "later")
-        })
-    });
-    let inherited_negation =
-        !sequenced && has_negation_in_verb_prefix(&preceding[clause_start..inherited_end]);
-    let local_coordination = preceding
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(at, (word, _, _))| {
-            *at >= local_start && matches!(word.as_str(), "and" | "also" | "then")
-        })
-        .map(|(at, _)| at);
-    let local_start = local_coordination.map_or(local_start, |at| at + 1);
-    let local_negation = has_negation_in_verb_prefix(&preceding[local_start..]);
-    inherited_negation
-        || local_negation
+    let mut negated = has_negation_in_verb_prefix(clause);
+    let mut at = 0;
+    while at < clause.len() {
+        if !matches!(clause[at].0.as_str(), "and" | "also" | "then") {
+            at += 1;
+            continue;
+        }
+        let run_start = at;
+        while at < clause.len() && is_coordinator_word(&clause[at].0) {
+            at += 1;
+        }
+        let sequencing = clause[run_start..at]
+            .iter()
+            .any(|(word, _, _)| word != "and");
+        let rest = &clause[at..];
+        negated = if rest
+            .first()
+            .is_some_and(|(word, _, _)| is_verb_prefix_word(word))
+        {
+            has_negation_in_verb_prefix(rest)
+        } else {
+            negated && !sequencing
+        };
+    }
+    negated
         || words.get(action_index + 1).is_some_and(|(word, _, _)| {
             matches!(
                 word.as_str(),
@@ -1076,43 +1077,50 @@ fn negated_completion(
         })
 }
 
+const VERB_NEGATIONS: &[&str] = &[
+    "not", "never", "none", "nothing", "nobody", "nowhere", "don", "didn", "haven", "hasn", "isn",
+    "wasn", "won",
+];
+
 fn has_negation_in_verb_prefix(words: &[(String, usize, usize)]) -> bool {
-    const NEGATIONS: &[&str] = &[
-        "not", "never", "none", "nothing", "nobody", "nowhere", "don", "didn", "haven", "hasn",
-        "isn", "wasn", "won",
-    ];
-    for (word, _, _) in words {
-        if NEGATIONS.contains(&word.as_str()) {
-            return true;
-        }
-        if is_completion_prefix(word)
-            || matches!(
-                word.as_str(),
-                "am" | "are"
-                    | "be"
-                    | "being"
-                    | "can"
-                    | "could"
-                    | "did"
-                    | "do"
-                    | "does"
-                    | "is"
-                    | "may"
-                    | "might"
-                    | "must"
-                    | "shall"
-                    | "should"
-                    | "was"
-                    | "were"
-                    | "will"
-                    | "would"
-            )
-        {
-            continue;
-        }
-        break;
-    }
-    false
+    words
+        .iter()
+        .take_while(|(word, _, _)| is_verb_prefix_word(word))
+        .any(|(word, _, _)| VERB_NEGATIONS.contains(&word.as_str()))
+}
+
+/// A word that can sit between a subject or coordinator and the verb it
+/// governs: an auxiliary, a completion adverb or a negation.
+fn is_verb_prefix_word(word: &str) -> bool {
+    VERB_NEGATIONS.contains(&word)
+        || is_completion_prefix(word)
+        || matches!(
+            word,
+            "am" | "are"
+                | "be"
+                | "being"
+                | "can"
+                | "could"
+                | "did"
+                | "do"
+                | "does"
+                | "is"
+                | "may"
+                | "might"
+                | "must"
+                | "shall"
+                | "should"
+                | "was"
+                | "were"
+                | "will"
+                | "would"
+        )
+}
+
+/// Words that join one completion action to the next. "afterwards" and
+/// "later" only coordinate after "and" ("and afterwards sent").
+fn is_coordinator_word(word: &str) -> bool {
+    matches!(word, "and" | "also" | "then" | "afterwards" | "later")
 }
 
 fn word_spans(text: &str) -> Vec<(String, usize, usize)> {
@@ -1881,6 +1889,78 @@ mod completion_claim_tests {
                 .position(|(word, _, _)| word == "sent")
                 .expect("completion action");
             assert!(!negated_completion(claim, &words, action_index), "{claim}");
+            assert!(
+                check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
+    }
+
+    fn sent_is_negated(claim: &str) -> bool {
+        let words = word_spans(claim);
+        let action_index = words
+            .iter()
+            .rposition(|(word, _, _)| word == "sent")
+            .expect("completion action");
+        negated_completion(claim, &words, action_index)
+    }
+
+    #[test]
+    fn a_new_affirmative_auxiliary_ends_a_shared_negation() {
+        // Devin review on #24086: "and have sent" repeats the auxiliary
+        // without its negation, so "sent" is a positive claim of its own.
+        for claim in [
+            "I have not filed the incident and have sent the alert.",
+            "I have not filed the incident and have filed the report and sent the update.",
+        ] {
+            assert!(!sent_is_negated(claim), "{claim}");
+            assert!(
+                check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
+        let claim = "I have not filed the incident and have filed the report and sent the update.";
+        let words = word_spans(claim);
+        let second_filed = words
+            .iter()
+            .rposition(|(word, _, _)| word == "filed")
+            .expect("completion action");
+        assert!(!negated_completion(claim, &words, second_filed));
+        assert_eq!(completion_claims(claim).len(), 2);
+    }
+
+    #[test]
+    fn a_new_negation_after_a_sequencing_coordinator_is_shared() {
+        // Devin review on #24092: the second "have not" governs both
+        // "signed" and "sent", even after "and then" ended the first scope.
+        for claim in [
+            "I have not filed it and then have not signed and sent the contract.",
+            "I have not filed it and then have not filed the report and sent the update.",
+            "I filed it and then did not sign and sent nothing else.",
+        ] {
+            assert!(sent_is_negated(claim), "{claim}");
+        }
+        for claim in [
+            "I have not filed it and then have not signed and sent the contract.",
+            "I have not filed it and then have not filed the report and sent the update.",
+        ] {
+            assert!(
+                !check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
+    }
+
+    #[test]
+    fn afterwards_and_later_coordinate_a_positive_claim() {
+        // Devin review on #24092: "and afterwards sent" and "and later sent"
+        // are positive claims and still need their receipts.
+        for claim in [
+            "I did not file the incident and afterwards sent the alert.",
+            "I did not file the incident and later sent the alert.",
+        ] {
+            assert!(!sent_is_negated(claim), "{claim}");
+            assert_eq!(completion_claims(claim).len(), 1, "{claim}");
             assert!(
                 check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
                 "{claim}"
