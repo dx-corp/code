@@ -706,6 +706,25 @@ pub enum QuestionPurpose {
     PosthogConnection,
 }
 
+impl QuestionPurpose {
+    /// The purpose a user-executed tool declares: its call parks the turn on
+    /// this fixed question instead of one the model writes. The engine reads
+    /// it generically; a tool joins by adding a purpose here.
+    pub fn for_tool(tool: &str) -> Option<Self> {
+        match tool {
+            CONNECT_POSTHOG_TOOL => Some(Self::PosthogConnection),
+            _ => None,
+        }
+    }
+
+    /// The question the person sees while the turn waits.
+    pub fn question(self) -> &'static str {
+        match self {
+            Self::PosthogConnection => "Connect your PostHog account to continue this request.",
+        }
+    }
+}
+
 /// One row in a thread's log. Hosts append the ingress events (`UserMessage`,
 /// `Steer`, `Interrupt`, `ApprovalDecided`, `Answer`, and optionally
 /// `ToolProgress`); the engine appends everything else.

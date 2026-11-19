@@ -295,6 +295,7 @@ async fn engine_confirmation(compact: bool) {
                     call,
                     text,
                     confirmation,
+                    ..
                 } => Some((call, text, confirmation)),
                 _ => None,
             })
@@ -588,4 +589,51 @@ fn starting_a_dispatch_consumes_consent_even_when_the_effect_fails_or_is_unknown
             "{outcome:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_declared_question_purpose_parks_the_turn_on_its_fixed_question() {
+    let log = support::FakeLog::default();
+    let model = support::FakeModel::new(vec![vec![support::call(
+        dex_loop::CONNECT_POSTHOG_TOOL,
+        json!({"question": "a model-written question is ignored"}),
+    )]]);
+    let inner = support::FakeTools::new(vec![support::ask_tool(dex_loop::CONNECT_POSTHOG_TOOL)]);
+    let engine = Engine::new(
+        log.clone(),
+        model,
+        inner.clone(),
+        support::FakeEffects::default(),
+        Lexicon::default(),
+        Budget::default(),
+    );
+    let mut ctx = log.start_turn("posthog", "Chart signups from PostHog");
+    let exit = engine
+        .run(&mut ctx, &CancellationToken::new())
+        .await
+        .expect("turn parks");
+    let Exit::Asked(asked) = exit else {
+        panic!("the turn waits for the person, got {exit:?}");
+    };
+    let purpose = dex_loop::QuestionPurpose::for_tool(dex_loop::CONNECT_POSTHOG_TOOL)
+        .expect("the connection tool declares its purpose");
+    let question = log
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::Question {
+                call,
+                text,
+                purpose,
+                ..
+            } => Some((call, text, purpose)),
+            _ => None,
+        })
+        .expect("engine question");
+    assert_eq!(
+        question,
+        (asked, purpose.question().to_owned(), Some(purpose))
+    );
+    assert!(inner.runs().is_empty(), "a parked question runs nothing");
+    assert_eq!(dex_loop::QuestionPurpose::for_tool("user.ask"), None);
 }
