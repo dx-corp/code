@@ -35,6 +35,8 @@ type RuntimeBindingValidator = dyn Fn(&McpServerConfig) -> Result<(), String> + 
 pub(crate) struct EvalOpsAccessTokenSource {
     snapshot: Arc<Mutex<SnapshotCache>>,
     loader: Arc<SnapshotLoader>,
+    #[cfg(test)]
+    snapshot_only: bool,
 }
 
 impl Default for EvalOpsAccessTokenSource {
@@ -68,6 +70,8 @@ impl EvalOpsAccessTokenSource {
         Self {
             snapshot: Arc::new(Mutex::new(SnapshotCache::Unloaded)),
             loader: Arc::new(loader),
+            #[cfg(test)]
+            snapshot_only: false,
         }
     }
 
@@ -87,6 +91,10 @@ impl EvalOpsAccessTokenSource {
     /// persisted snapshot is only a read-only fallback and is cached in
     /// process memory; no login or refresh flow is invoked here.
     pub(crate) fn resolve(&self) -> Result<Zeroizing<String>, McpError> {
+        #[cfg(test)]
+        if self.snapshot_only {
+            return self.resolve_snapshot();
+        }
         if let Some(access) = environment_value(ACCESS_TOKEN_ENV) {
             return Ok(Zeroizing::new(access));
         }
@@ -94,6 +102,10 @@ impl EvalOpsAccessTokenSource {
             return Ok(Zeroizing::new(access));
         }
 
+        self.resolve_snapshot()
+    }
+
+    fn resolve_snapshot(&self) -> Result<Zeroizing<String>, McpError> {
         let mut cache = self
             .snapshot
             .lock()
@@ -150,17 +162,18 @@ impl ManagedMcpAuth {
         Self::default()
     }
 
-    /// Build a managed auth context for a local Streamable HTTP fixture. The
-    /// production path always performs the real connection-store binding
-    /// validation; this test-only constructor only substitutes that external
-    /// store lookup so a fixture can use an ephemeral localhost endpoint.
+    /// Supply a localhost fixture with its own binding validator and token.
+    /// Other tests may set process-wide token overrides in parallel.
     #[cfg(test)]
     pub(crate) fn with_loader_for_test<F>(loader: F) -> Self
     where
         F: Fn() -> Result<Option<String>, String> + Send + Sync + 'static,
     {
         Self {
-            access_token: EvalOpsAccessTokenSource::with_loader(loader),
+            access_token: EvalOpsAccessTokenSource {
+                snapshot_only: true,
+                ..EvalOpsAccessTokenSource::with_loader(loader)
+            },
             binding_validator: Some(Arc::new(|_| Ok(()))),
         }
     }
@@ -276,6 +289,12 @@ mod tests {
 
         let source = EvalOpsAccessTokenSource::from_snapshot(Some("snapshot-token"));
         assert_eq!(source.resolve().unwrap().as_str(), "env-token");
+
+        let fixture = ManagedMcpAuth::with_loader_for_test(|| Ok(Some("fixture-token".to_owned())));
+        assert_eq!(
+            fixture.access_token.resolve().unwrap().as_str(),
+            "fixture-token"
+        );
     }
 
     #[test]
