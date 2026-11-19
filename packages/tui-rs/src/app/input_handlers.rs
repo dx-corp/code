@@ -1242,11 +1242,22 @@ impl App {
                 .tool_calls
                 .iter()
                 .rev()
-                .find(|call| !call.output.trim().is_empty())
+                .find(|call| !call.output.trim().is_empty() || call.auto_chart.is_some())
             {
                 let args = serde_json::to_string_pretty(&call.args)
                     .unwrap_or_else(|_| call.args.to_string());
-                let content = format!("Args:\n{args}\n\nOutput:\n{}", call.output);
+                let output = match call
+                    .auto_chart
+                    .as_deref()
+                    .and_then(crate::components::auto_chart::AutoChart::structured_readings)
+                {
+                    Some(readings) => crate::components::auto_chart::chart_readings_output(
+                        &call.output,
+                        &readings,
+                    ),
+                    None => call.output.clone(),
+                };
+                let content = format!("Args:\n{args}\n\nOutput:\n{output}");
                 return Some((format!("Tool: {}", call.tool), content, include_evidence));
             }
             if !message.thinking.trim().is_empty() {

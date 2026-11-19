@@ -214,6 +214,7 @@ pub enum CommandAction {
     OpenPanel(ControlPanel),
     /// Apply one coherent tool output presentation preference.
     SetOutputDetail(crate::state::OutputDetail),
+    SetAutoCharts(bool),
     /// Clear all messages from the chat display
     ClearMessages,
     /// Toggle zen mode (minimal UI)

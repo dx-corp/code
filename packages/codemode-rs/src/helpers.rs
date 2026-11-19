@@ -1,6 +1,23 @@
 //! Synchronous VM helpers inspect only host-admitted metadata and scratch data.
 use super::*;
 
+/// Records that a discovery helper found nothing. Discovery inspects only the
+/// admitted catalog, and an empty array or `undefined` does not say so: a
+/// model reads it as "try another query" and searches the same catalog again.
+/// At most four distinct notes a script.
+fn record_miss(misses: &Mutex<Vec<String>>, helper: &str, input: &str) {
+    let input = serde_json::to_string(discovery::bounded(input, 96)).unwrap_or_default();
+    let note = format!(
+        "{helper}({input}) found nothing. It inspects only the tools admitted to this script, not every tool the host can reach."
+    );
+    let mut misses = misses
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if misses.len() < 4 && !misses.contains(&note) {
+        misses.push(note);
+    }
+}
+
 fn bridge_error(error: impl ToString) -> rquickjs::Error {
     rquickjs::Error::new_from_js_message("script helper", "valid input", error.to_string())
 }
@@ -10,9 +27,11 @@ pub(crate) fn install_helpers(
     output: Arc<Mutex<output::OutputSink>>,
     overflow: Arc<Mutex<Option<String>>>,
     store: Arc<Mutex<Store>>,
+    misses: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), String> {
     let shared = tools.clone();
     let catalog = shared.clone();
+    let search_misses = misses.clone();
     let search = Function::new(
         ctx.clone(),
         move |query: String, options: String| -> rquickjs::Result<String> {
@@ -37,7 +56,11 @@ pub(crate) fn install_helpers(
                 None => Vec::new(),
                 Some(value) => serde_json::from_value(value.clone()).map_err(bridge_error)?,
             };
-            serde_json::to_string(&catalog.search(&query, &names, limit, namespace).into_iter().map(|tool|
+            let found = catalog.search(&query, &names, limit, namespace);
+            if found.is_empty() {
+                record_miss(&search_misses, "searchTools", &query);
+            }
+            serde_json::to_string(&found.into_iter().map(|tool|
                 serde_json::json!({"name":discovery::identifier(&tool.name),"description":discovery::bounded(&tool.description,256),"namespace":crate::namespace(tool)})
             ).collect::<Vec<_>>())
                 .map_err(bridge_error)
@@ -48,7 +71,11 @@ pub(crate) fn install_helpers(
     let describe = Function::new(
         ctx.clone(),
         move |name: String| -> rquickjs::Result<String> {
-            serde_json::to_string(&catalog.lookup(&name).map(describe_tool)).map_err(bridge_error)
+            let found = catalog.lookup(&name);
+            if found.is_none() {
+                record_miss(&misses, "describeTool", &name);
+            }
+            serde_json::to_string(&found.map(describe_tool)).map_err(bridge_error)
         },
     )
     .map_err(|e| e.to_string())?;

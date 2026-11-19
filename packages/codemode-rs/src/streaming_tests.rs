@@ -140,6 +140,7 @@ fn streaming_failure_projection_keeps_bounded_unicode_diagnostics() {
             name: "accepted-effect".into(),
             status: CallStatus::Interrupted,
         }],
+        discovery_misses: vec![],
     };
     let content = report.content();
     assert!(content.len() <= 65_536);

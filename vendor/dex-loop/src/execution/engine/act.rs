@@ -109,6 +109,22 @@ fn governance_note(class: GovernanceClass) -> &'static str {
     }
 }
 
+/// Logs an `act` call whose arguments its own schema or its operation's
+/// schema refused, as every other rejected call is logged, with the rules
+/// that were broken. Production 2026-11-18: each failed `act` call seen
+/// after the failure reason was logged was a first preview of `dex.make` or
+/// `dex.compute` refused by the operation's schema, and nothing said which
+/// rule.
+fn rejected(spec: &ToolSpec, args: &serde_json::Value) {
+    tracing::info!(
+        event = "dex_tool_arguments_rejected",
+        tool = %spec.name,
+        act = true,
+        rules = %broken_rules(spec, args),
+        "tool call arguments rejected by the tool's schema"
+    );
+}
+
 impl<L, M, T, E, S, C> Engine<L, M, T, E, S, C>
 where
     L: Log,
@@ -151,6 +167,7 @@ where
             .find(|spec| spec.name.as_str() == op || model_tool_name(spec.name.as_str()) == op)
     }
 
+    // formal: begin dex_act_protocol/ActProtocol.Unwrap
     /// A submit whose digest matches, as the operation it names.
     pub(super) fn unwrap_act(
         &self,
@@ -172,6 +189,7 @@ where
         (digest == plan_digest(&spec.name, arguments) && previewed(ctx, digest))
             .then(|| (spec.name.clone(), arguments.clone()))
     }
+    // formal: end dex_act_protocol/ActProtocol.Unwrap
 
     /// Whether a `tools.call` to `spec` must go through `act` instead.
     pub(super) fn redirects_to_act(&self, spec: &ToolSpec) -> bool {
@@ -219,8 +237,10 @@ where
         self.finish(ctx, call, result).await
     }
 
+    // formal: begin dex_act_protocol/ActProtocol.ActResult
     fn act_result(&self, ctx: &Context, call: &ProposedCall) -> ToolResult {
         if let Err(reason) = validate_args(&spec(&[]), &call.args) {
+            rejected(&spec(&[]), &call.args);
             return ToolResult::error(reason);
         }
         let op = call.args["op"].as_str().unwrap_or_default();
@@ -238,6 +258,7 @@ where
             return self.unknown_tool(&ToolName::new(op));
         };
         if let Err(reason) = validate_args(&target, args) {
+            rejected(&target, args);
             // An operation reached only through `act` was never declared and
             // no search returned it, so a misfit carries what a search result
             // would: its description and input schema.
@@ -266,6 +287,7 @@ where
         });
         ToolResult::text(plan.to_string())
     }
+    // formal: end dex_act_protocol/ActProtocol.ActResult
 }
 
 #[cfg(test)]
@@ -292,5 +314,67 @@ mod tests {
         // Only the description depends on the operations; the schema the
         // model fills does not.
         assert_eq!(spec(&operations).schema, spec(&[]).schema);
+    }
+
+    /// The rejection log names the schema rules that were broken and repeats
+    /// nothing the model sent.
+    #[test]
+    fn broken_rules_are_schema_locations_and_never_the_arguments() {
+        let make = ToolSpec {
+            name: ToolName::new("dex.make"),
+            schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title", "content"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["document", "presentation"]},
+                    "title": {"type": "string"},
+                    "content": {"type": "object"}
+                }
+            }),
+            ..spec(&[])
+        };
+        for (args, rules) in [
+            (
+                serde_json::json!({"kind": "secret-deck", "title": "t", "content": {}}),
+                "/properties/kind/enum",
+            ),
+            (
+                serde_json::json!({"kind": "document", "title": "t", "content": "secret text"}),
+                "/properties/content/type",
+            ),
+            (
+                serde_json::json!({"kind": "document", "title": "t", "content": {}, "secret_field": 1}),
+                "/additionalProperties",
+            ),
+            (
+                serde_json::json!({"kind": "document", "title": "t"}),
+                "/required:content",
+            ),
+        ] {
+            assert_eq!(broken_rules(&make, &args), rules, "{args}");
+            assert!(validate_args(&make, &args).is_err(), "{args}");
+        }
+        let many = broken_rules(&make, &serde_json::json!({"kind": 7, "extra": "secret"}));
+        assert!(
+            !many.contains("secret") && !many.contains("extra"),
+            "{many}"
+        );
+        assert!(many.contains("/required:title"), "{many}");
+        assert_eq!(
+            broken_rules(
+                &make,
+                &serde_json::json!({"kind": "document", "title": "t", "content": {}})
+            ),
+            ""
+        );
+        // A preview through `act` breaks `act`'s own rules the same way.
+        assert_eq!(
+            broken_rules(
+                &spec(&[]),
+                &serde_json::json!({"op": "dex_make", "args": {}})
+            ),
+            "/required:phase"
+        );
     }
 }

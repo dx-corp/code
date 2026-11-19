@@ -249,6 +249,8 @@ pub struct ToolCallState {
     /// Output from the tool (stdout, file content, error messages).
     /// Appended to as the tool runs (for streaming output).
     pub output: String,
+    /// Derived from the successful result once, on completion or session restore.
+    pub(crate) auto_chart: Option<std::sync::Arc<crate::components::auto_chart::AutoChart>>,
 }
 
 /// Status of a tool call in its lifecycle.
@@ -486,6 +488,7 @@ pub struct AppState {
 
     /// Whether tool outputs should be collapsed by default.
     pub compact_tool_outputs: bool,
+    pub auto_charts: bool,
 
     /// Current approval mode for tool execution.
     /// Controls whether tools run automatically or require approval.
@@ -610,8 +613,9 @@ impl AppState {
             thinking_level: ThinkingLevel::Off,
             boost_status: crate::model_dynamics::BoostStatus::Idle,
             thinking_buffer: String::new(),
-            zen_mode: false,                        // Full UI by default
+            zen_mode: false,            // Full UI by default
             compact_tool_outputs: true, // Short previews; expand individual results on demand
+            auto_charts: true,
             approval_mode: ApprovalMode::default(), // Selective mode
             interaction_mode: InteractionMode::default(),
             steering_mode: QueueMode::default(), // Queue steering by default
@@ -920,6 +924,7 @@ impl AppState {
                                     .then(|| parent.clone())
                             });
                     msg.tool_calls.push(ToolCallState {
+                        auto_chart: None,
                         parent_call_id,
                         duration_ms: None,
                         call_id,
@@ -966,6 +971,10 @@ impl AppState {
                         .borrow_mut()
                         .record_tool_result(&call_id, result);
                 }
+                let cancelled = matches!(
+                    receipt.as_ref().map(|receipt| receipt.status),
+                    Some(ExecutionStatus::Cancelled { .. })
+                );
                 for tool in self
                     .messages
                     .iter_mut()
@@ -973,14 +982,24 @@ impl AppState {
                 {
                     if tool.call_id == call_id {
                         tool.duration_ms = receipt.as_ref().and_then(|receipt| receipt.duration_ms);
+                        tool.auto_chart = (success && !cancelled)
+                            .then(|| {
+                                let (output, details) = result
+                                    .as_ref()
+                                    .map_or((tool.output.as_str(), None), |result| {
+                                        (result.output.as_str(), result.details.as_ref())
+                                    });
+                                crate::components::auto_chart::AutoChart::from_result(
+                                    output, details,
+                                )
+                                .map(std::sync::Arc::new)
+                            })
+                            .flatten();
                     }
                 }
                 self.update_tool_status(
                     &call_id,
-                    if matches!(
-                        receipt.as_ref().map(|receipt| receipt.status),
-                        Some(ExecutionStatus::Cancelled { .. })
-                    ) {
+                    if cancelled {
                         ToolCallStatus::Cancelled
                     } else if success {
                         ToolCallStatus::Completed
@@ -1848,6 +1867,11 @@ impl AppState {
         }
     }
 
+    pub(crate) fn apply_output_preferences(&mut self, prefs: &crate::ui_prefs::UiPrefs) {
+        self.set_output_detail(prefs.output_detail());
+        self.auto_charts = prefs.auto_charts();
+    }
+
     /// Apply an output detail preset, clearing overrides from the previous view.
     /// This changes presentation only; approval and tool execution state are untouched.
     pub fn set_output_detail(&mut self, detail: OutputDetail) {
@@ -2076,6 +2100,7 @@ mod focus_view_tests {
             thinking: String::new(),
             streaming: false,
             tool_calls: vec![ToolCallState {
+                auto_chart: None,
                 parent_call_id: None,
                 duration_ms: None,
                 call_id: format!("call-{id}"),

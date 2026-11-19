@@ -17,6 +17,8 @@
 //! resume with a `ClientToolResult`.
 
 use super::*;
+mod desktop_chart;
+
 use crate::chat::{
     annotate_completed_turn, managed_gateway_receipt_status, record_chat_assistant_message,
     record_chat_error,
@@ -216,13 +218,18 @@ pub(crate) fn client_tool_spec(definition: &ToolDefinition) -> ToolSpec {
     }
 }
 
-fn tools_for_mode(
+async fn tools_for_mode(
     host: NativeExecutionHostHandle,
     approval: ApprovalMode,
     client_tools: &[ToolDefinition],
     interaction_mode: crate::chat::InteractionMode,
+    local_desktop: bool,
 ) -> HostTools {
-    let tools = HostTools::new(host, approval);
+    let tools = if local_desktop && interaction_mode == crate::chat::InteractionMode::Implement {
+        HostTools::with_local_mcp(host, approval).await
+    } else {
+        HostTools::new(host, approval)
+    };
     if interaction_mode == crate::chat::InteractionMode::Discuss {
         // The policy port denies even unsolicited model calls because they
         // are absent from this catalog. No executable tool is delegated.
@@ -251,7 +258,9 @@ pub(crate) struct Transcript {
     pub tools: Vec<Value>,
     pub usage: Option<TokenUsage>,
     pub error: Option<String>,
-    started: HashSet<String>,
+    desktop_chart: Option<Value>,
+    project_desktop_charts: bool,
+    started: HashMap<String, String>,
     calls: HashMap<String, (String, Value)>,
 }
 
@@ -268,9 +277,10 @@ impl Transcript {
     }
 
     fn tool_name(&self, id: &str) -> String {
-        self.calls
+        self.started
             .get(id)
-            .map(|(tool, _)| tool.clone())
+            .cloned()
+            .or_else(|| self.calls.get(id).map(|(tool, _)| tool.clone()))
             .unwrap_or_else(|| "tool".to_owned())
     }
 
@@ -331,7 +341,7 @@ impl Transcript {
                     .unwrap_or_else(|| serde_json::json!({}));
                 record_tool_call_metadata(&mut self.tools, &id, tool.as_str(), args.clone());
                 update_tool_metadata_status(&mut self.tools, &id, "running");
-                self.started.insert(id.clone());
+                self.started.insert(id.clone(), tool.as_str().to_owned());
                 frames.push(serde_json::json!({
                     "type": "tool_execution_start",
                     "toolCallId": id,
@@ -357,20 +367,35 @@ impl Transcript {
                 let id = call.as_str().to_owned();
                 // A preview or denial finishes a call that never started;
                 // the transcript shows only calls that ran.
-                if self.started.remove(&id) {
+                if let Some(name) = self.started.remove(&id) {
                     let success = outcome == Outcome::Succeeded;
                     finish_tool_metadata(&mut self.tools, &id, success);
+                    let chart = if success && self.project_desktop_charts {
+                        desktop_chart::project(
+                            &id,
+                            &name,
+                            self.calls.get(&id).map(|(_, args)| args),
+                            &output,
+                        )
+                    } else {
+                        None
+                    };
                     let text = match output {
                         Output::Text(text) => text,
                         _ => String::new(),
                     };
-                    frames.push(serde_json::json!({
+                    let mut frame = serde_json::json!({
                         "type": "tool_execution_end",
                         "toolCallId": id,
-                        "toolName": self.tool_name(&id),
+                        "toolName": name,
                         "result": { "success": success, "output": text },
                         "isError": !success
-                    }));
+                    });
+                    if let Some(chart) = chart {
+                        frame["autoChart"] = chart.clone();
+                        self.desktop_chart = Some(chart);
+                    }
+                    frames.push(frame);
                 }
             }
             Event::Usage(usage) => {
@@ -756,7 +781,9 @@ async fn drive<W: ChatEventWriter>(
             mode,
             &turn.client_tools,
             turn.interaction_mode,
+            native_owner.is_some() && !state.config.native_code_hosted,
         )
+        .await
     };
     let request = host_turn(
         turn.session_id.as_deref().unwrap_or("chat"),
@@ -785,7 +812,10 @@ async fn drive<W: ChatEventWriter>(
         .await;
     sink.send(serde_json::json!({ "type": "turn_start" })).await;
 
-    let mut transcript = Transcript::default();
+    let mut transcript = Transcript {
+        project_desktop_charts: native_owner.is_some(),
+        ..Transcript::default()
+    };
     // A native-owned turn is stopped by its owner, not by its observers; the
     // kernel keeps driving a started mutation to its exit either way.
     let mut controls = native_owner
@@ -1092,6 +1122,9 @@ async fn drive<W: ChatEventWriter>(
                 transcript.usage.clone(),
                 &transcript.tools,
             );
+            if let Some(chart) = transcript.desktop_chart {
+                message["autoChart"] = chart;
+            }
             finish_chat_snapshot(snapshot, &mut message).await;
             annotate_completed_turn(&mut message);
             record_chat_assistant_message(state, turn.session_id.as_deref(), message.clone()).await;
@@ -1239,7 +1272,9 @@ mod tests {
             ApprovalMode::Yolo,
             &client_tools,
             crate::chat::InteractionMode::Discuss,
-        );
+            true,
+        )
+        .await;
         assert!(tools.catalog().is_empty());
         let context = rehydrate(local_thread("discuss"), &[]);
         for name in ["bash", "write", "client_write", "user.ask"] {

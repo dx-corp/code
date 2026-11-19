@@ -345,7 +345,7 @@ fn to_ai_tools(tools: &[&ToolSpec]) -> Vec<AiTool> {
 /// `StreamEvent` into zero or more `ModelChunk`s.
 #[derive(Default)]
 struct ChunkTranslator {
-    pending_tools: BTreeMap<usize, (String, String)>, // index -> (tool name, json buffer)
+    pending_tools: BTreeMap<usize, PendingToolCall>,
     /// Model-facing tool name -> registry name.
     names: HashMap<String, ToolName>,
     model: String,
@@ -354,6 +354,12 @@ struct ChunkTranslator {
     usage: Option<Usage>,
     cost_micros: u64,
     failed: bool,
+}
+
+struct PendingToolCall {
+    name: String,
+    block_input: serde_json::Value,
+    argument_deltas: String,
 }
 
 impl ChunkTranslator {
@@ -440,17 +446,24 @@ impl ChunkTranslator {
             }
             StreamEvent::ContentBlockStart {
                 index,
-                block: AiContentBlock::ToolUse { name, .. },
+                block: AiContentBlock::ToolUse { name, input, .. },
             } => {
-                self.pending_tools.insert(index, (name, String::new()));
+                self.pending_tools.insert(
+                    index,
+                    PendingToolCall {
+                        name,
+                        block_input: input,
+                        argument_deltas: String::new(),
+                    },
+                );
                 Vec::new()
             }
             StreamEvent::InputJsonDelta {
                 index,
                 partial_json,
             } => {
-                if let Some((_, buffer)) = self.pending_tools.get_mut(&index) {
-                    buffer.push_str(&partial_json);
+                if let Some(call) = self.pending_tools.get_mut(&index) {
+                    call.argument_deltas.push_str(&partial_json);
                 }
                 Vec::new()
             }
@@ -463,13 +476,20 @@ impl ChunkTranslator {
                 {
                     block.1 = Some(signature);
                 }
-                let Some((name, buffer)) = self.pending_tools.remove(&index) else {
+                let Some(PendingToolCall {
+                    name,
+                    block_input,
+                    argument_deltas,
+                }) = self.pending_tools.remove(&index)
+                else {
                     return Vec::new();
                 };
-                let args = if buffer.trim().is_empty() {
-                    serde_json::Value::Object(serde_json::Map::new())
+                // Responses streams can send their deltas before the adapter
+                // declares the completed block. The block then owns the input.
+                let args = if argument_deltas.trim().is_empty() {
+                    block_input
                 } else {
-                    match serde_json::from_str(&buffer) {
+                    match serde_json::from_str(&argument_deltas) {
                         Ok(value) => value,
                         Err(error) => {
                             return vec![Err(ModelError {
@@ -800,6 +820,42 @@ mod tests {
                 if name.as_str() == "fs.read_file" && args["path"] == "a.txt"
         ));
         assert!(matches!(&chunks[2], ModelChunk::Usage(_)));
+    }
+
+    #[test]
+    fn completed_tool_block_preserves_arguments_after_early_deltas() {
+        let input =
+            serde_json::json!({"command":"info execute-sql","context":"Read the SQL schema"});
+        let mut translator = ChunkTranslator::new(&[], "openai-model");
+        assert!(
+            translator
+                .translate(StreamEvent::InputJsonDelta {
+                    index: 1,
+                    partial_json: input.to_string(),
+                })
+                .is_empty()
+        );
+        assert!(
+            translator
+                .translate(StreamEvent::ContentBlockStart {
+                    index: 1,
+                    block: AiContentBlock::ToolUse {
+                        id: "call-1".into(),
+                        name: "mcp__posthog__exec".into(),
+                        input: input.clone(),
+                        gemini_context: None,
+                    },
+                })
+                .is_empty()
+        );
+        assert!(matches!(
+            translator.translate(StreamEvent::ContentBlockStop {
+                index: 1,
+                thinking_signature: None,
+            }).as_slice(),
+            [Ok(ModelChunk::ToolCall { name, args })]
+                if name.as_str() == "mcp__posthog__exec" && args == &input
+        ));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::state::ToolCallState;
 
 fn script_message() -> Message {
     let call = |id: &str, tool: &str, status, parent: Option<&str>, path: &str| ToolCallState {
+        auto_chart: None,
         call_id: id.into(),
         parent_call_id: parent.map(str::to_owned),
         duration_ms: Some(12),

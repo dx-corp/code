@@ -66,6 +66,41 @@ pub fn validate_args(spec: &ToolSpec, args: &serde_json::Value) -> Result<(), St
     Err(format!("invalid arguments: {}", corrections.join("; ")))
 }
 
+/// How much of one schema location a log line repeats.
+const MAX_RULE_CHARS: usize = 96;
+
+/// The rules of the tool's schema that `args` broke, for the rejection log:
+/// each as its location in the schema (`/properties/kind/enum`,
+/// `/additionalProperties`), and for a missing field the field the schema
+/// requires (`/required:action`). Every part comes from the tool's own
+/// schema; nothing the model sent is repeated, so the line stays free of
+/// arguments.
+pub(super) fn broken_rules(spec: &ToolSpec, args: &serde_json::Value) -> String {
+    let Ok(validator) = compiled_validator(&spec.schema) else {
+        return "schema_invalid".into();
+    };
+    validator
+        .iter_errors(args)
+        .take(MAX_ARGUMENT_CORRECTIONS)
+        .map(|error| {
+            let mut rule: String = error
+                .schema_path()
+                .as_str()
+                .chars()
+                .take(MAX_RULE_CHARS)
+                .collect();
+            if let jsonschema::error::ValidationErrorKind::Required { property } = error.kind()
+                && let Some(name) = property.as_str()
+            {
+                rule.push(':');
+                rule.extend(name.chars().take(MAX_RULE_CHARS));
+            }
+            rule
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// The argument layer's refusal of `args` (`crate::arguments`): the nearest
 /// fields or values and a valid call built from the tool's schema, added to
 /// a schema rejection so the model can correct the call in one step.

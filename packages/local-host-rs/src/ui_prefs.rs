@@ -30,6 +30,9 @@ pub struct UiPrefs {
     /// Conversation output detail. Missing values retain compact tool previews.
     #[serde(default)]
     pub output_detail: Option<String>,
+    /// Display inline charts for chartable tool results. On by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_charts: Option<bool>,
     #[serde(default)]
     pub footer_style: Option<String>,
     #[serde(default)]
@@ -72,6 +75,10 @@ impl UiPrefs {
     /// Set output detail without replacing unrelated preferences.
     pub fn set_output_detail(&mut self, detail: OutputDetail) {
         self.output_detail = Some(detail.as_str().to_string());
+    }
+
+    pub fn auto_charts(&self) -> bool {
+        self.auto_charts.unwrap_or(true)
     }
 
     pub fn load_default() -> Self {

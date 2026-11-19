@@ -6,6 +6,7 @@ struct VmState {
     output: Arc<Mutex<output::OutputSink>>,
     store: Arc<Mutex<Store>>,
     summaries: Arc<Mutex<Vec<CallSummary>>>,
+    misses: Arc<Mutex<Vec<String>>>,
 }
 
 pub(crate) fn run(
@@ -19,6 +20,7 @@ pub(crate) fn run(
     let output = Arc::new(Mutex::new(output::OutputSink::default()));
     let current = Arc::new(Mutex::new(initial.clone()));
     let summaries = Arc::new(Mutex::new(Vec::new()));
+    let misses = Arc::new(Mutex::new(Vec::new()));
     let result = validate_store(&initial)
         .and_then(|_| tools.validate_models())
         .and_then(|_| {
@@ -32,6 +34,7 @@ pub(crate) fn run(
                     output: output.clone(),
                     store: current.clone(),
                     summaries: summaries.clone(),
+                    misses: misses.clone(),
                 },
             )
         });
@@ -68,12 +71,17 @@ pub(crate) fn run(
             ref status => status.clone(),
         };
     }
+    let discovery_misses = misses
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     Report {
         output,
         blocks,
         error: result.err(),
         store_writes,
         calls,
+        discovery_misses,
     }
 }
 
@@ -89,6 +97,7 @@ fn execute(
         output,
         store,
         summaries,
+        misses,
     } = state;
     if code.trim().is_empty() || code.len() > 65_536 {
         return Err("script must contain 1 to 65536 bytes".into());
@@ -128,7 +137,7 @@ fn execute(
             }
             Ok(())
         }).map_err(|e| e.to_string())?;
-        install_helpers(&ctx, &tools, output.clone(), overflow.clone(), store)?;
+        install_helpers(&ctx, &tools, output.clone(), overflow.clone(), store, misses)?;
         // The Rust helper retains bounded on-demand guidance. Do not charge
         // the VM heap for copies repeated in every ALL_TOOLS declaration.
         ctx.globals().set("__host_call", bridge).map_err(|e| e.to_string())?;

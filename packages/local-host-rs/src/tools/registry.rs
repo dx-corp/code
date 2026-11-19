@@ -1459,6 +1459,21 @@ impl ToolExecutor {
         self.registry.tools()
     }
 
+    pub(crate) async fn mcp_tool_definitions(
+        &self,
+    ) -> Result<Vec<crate::agent::ToolDefinition>, String> {
+        let client = self.ensure_mcp_client().await?;
+        let mut tools = client.list_all_tools().await;
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(tools
+            .into_iter()
+            .map(|tool| crate::agent::ToolDefinition {
+                tool,
+                requires_approval: true,
+            })
+            .collect())
+    }
+
     /// Look up the inline tool that this exact spelling will execute.
     ///
     /// Used to resolve the real command string (and its source config path)
