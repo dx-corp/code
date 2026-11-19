@@ -373,8 +373,8 @@ fn catalog() -> FakeTools {
 // script catalog helpers, called no tool from any of them, reached the
 // 40-step cap and gave a generic answer.
 
-/// The probe repeated unchanged: the stall guard refuses the fourth and the
-/// turn answers, 35 steps short of the cap.
+/// The probe calls no owner: after two idle scripts, the next model call
+/// answers with no tools, before the identical-call guard needs to refuse one.
 #[tokio::test]
 async fn bag_ventures_repeated_catalog_probe_stalls_and_answers() {
     let turn = Replay::new(BAG_VENTURES, catalog(), |_| {
@@ -383,10 +383,26 @@ async fn bag_ventures_repeated_catalog_probe_stalls_and_answers() {
     .run()
     .await;
 
-    turn.assert_stalled_then_answered(
-        "returned the same result 3 consecutive times",
-        "returned the same result three times",
+    assert_eq!(turn.exit, Exit::Done);
+    assert_eq!(turn.model_calls(), 3);
+    assert_eq!(turn.steps(), 3);
+    let (answer, scripts) = turn.seen.split_last().expect("the turn called the model");
+    assert!(answer.answer_only);
+    assert!(scripts.iter().all(|seen| !seen.answer_only));
+    assert!(
+        answer
+            .recovery
+            .as_ref()
+            .is_some_and(|text| text.contains("The last 2 scripts called no tool"))
     );
+    let calls = turn.model_tool_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls.iter().all(|call| call.outcome == Outcome::Succeeded));
+    assert!(!calls[0].text.is_empty());
+    assert!(!calls[0].text.contains(dex_loop::IDLE_SCRIPTS_NOTICE));
+    assert!(calls[1].text.ends_with(dex_loop::IDLE_SCRIPTS_NOTICE));
+    assert!(calls[1].text.len() > dex_loop::IDLE_SCRIPTS_NOTICE.len());
+    assert_eq!(turn.answer(), ANSWER);
     assert!(turn.model_calls() < PROD_STEP_CAP as usize);
     assert_eq!(turn.owner_runs(), 0, "no script called a tool");
     assert!(

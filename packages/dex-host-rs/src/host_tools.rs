@@ -337,13 +337,15 @@ impl HostTools {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .snapshot();
+        // These calls run through the local host. MCP origin affects approval
+        // classification, but does not move execution outside its firewall.
         loop_policy::firewall_verdict(
             &self.host,
             name,
             args,
             &snapshot,
             self.host.tool_annotations(name).as_ref(),
-            self.host.is_mcp_tool(name),
+            false,
         )
     }
 }
@@ -521,6 +523,10 @@ mod tests {
             .find(|spec| spec.name.as_str() == name)
             .expect("the connected MCP tool is advertised");
         assert_eq!(spec.executor, ExecutorKind::InProcess);
+        assert!(matches!(
+            tools.firewall(name, &json!({})),
+            NativeFirewallVerdict::RequireApproval { .. }
+        ));
 
         let call = ProposedCall::new(
             CallId::new("mcp-test"),

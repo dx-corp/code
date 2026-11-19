@@ -57,8 +57,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS native
 # Release compilation otherwise follows the CPU count and exhausts small CI
-# runners. Apply the same bound to dependency cooking and the final binary.
-ENV CARGO_BUILD_JOBS=1
+# runners, so one job is the default for dependency cooking and the final
+# binary. A builder that knows its host passes --build-arg CARGO_BUILD_JOBS;
+# the job count is also the token pool rustc draws thin-LTO threads from.
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor/dex-loop ./vendor/dex-loop
 COPY vendor/managed-inference-contract ./vendor/managed-inference-contract
