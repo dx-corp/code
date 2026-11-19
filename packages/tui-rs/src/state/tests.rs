@@ -645,6 +645,7 @@ fn test_fail_tool_call() {
         thinking: String::new(),
         streaming: false,
         tool_calls: vec![ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "call-1".to_string(),
@@ -677,6 +678,7 @@ fn test_fail_tool_call_with_existing_output() {
         thinking: String::new(),
         streaming: false,
         tool_calls: vec![ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "call-1".to_string(),
@@ -1183,6 +1185,7 @@ fn test_combining_characters() {
 #[test]
 fn test_tool_call_state_clone() {
     let tc = ToolCallState {
+        auto_chart: None,
         parent_call_id: None,
         duration_ms: None,
         call_id: "call-1".to_string(),

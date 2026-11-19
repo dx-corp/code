@@ -17,6 +17,7 @@
 
 mod act;
 mod codemode;
+pub use codemode::{IDLE_SCRIPTS_NOTICE, RUN_REFERENCE, run_reference};
 mod validation;
 mod wrappers;
 
@@ -24,7 +25,7 @@ pub use act::{ACT, plan_digest};
 pub use validation::validate_args;
 #[cfg(test)]
 use validation::{argument_schema_cache, compiled_validator};
-use validation::{arguments_refusal, with_interpreted};
+use validation::{arguments_refusal, broken_rules, with_interpreted};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -85,7 +86,7 @@ const NOT_RUN_WALL: &str = "not executed: the time limit was reached before this
 const UNKNOWN_NO_RETRY: &str = "outcome unknown: this call already started; do not retry it without first checking whether it took effect";
 const UNCERTAIN_REPEAT: &str = "not run: the same operation has an unknown outcome in this turn; check whether it took effect before trying again";
 const APPROVER_DECLINED: &str = "denied: the approver declined this call";
-const STALLED_ANSWER_ONLY: &str = "tool calls withheld: the identical call failed three times and was refused, and the answer-only step proposed another tool call instead of reporting the blocker";
+const STALLED_ANSWER_ONLY: &str = "tool calls withheld: the turn's calls stopped making progress, and the answer-only step proposed another tool call instead of reporting the blocker";
 const APPROVAL_MISMATCH: &str = "denied: the approval does not match this call's arguments";
 const MISSING_QUESTION: &str = "invalid call: args.question must be a non-empty string";
 const MISSING_QUERY: &str = "invalid call: args.query must be a non-empty string";
@@ -464,11 +465,16 @@ where
     /// voice standard here, where it becomes the turn's `Final`. The loop
     /// does not know who asked, so it holds the reply to what no question
     /// excuses ([`crate::voice_check::Occasion::Reply`]) and reports the
-    /// defects by code; the text is recorded as written. A surface that
-    /// knows Dex started the turn applies the stricter standard and its
-    /// rewrite when it delivers.
+    /// defects by code, including completion claims unsupported by this
+    /// turn's successful owner receipts; the text is recorded as written. A
+    /// surface that knows Dex started the turn applies the stricter standard
+    /// and its rewrite when it delivers.
     fn grade_voice(&self, ctx: &Context, text: &str) {
-        let defects = crate::voice_check::standard(crate::voice_check::Occasion::Reply, text);
+        let defects = crate::voice_check::standard_for_turn(
+            crate::voice_check::Occasion::Reply,
+            text,
+            ctx.turn_outputs(),
+        );
         if defects.is_empty() {
             return;
         }
@@ -1594,11 +1600,9 @@ where
             }
             // A historical Started mutation must settle through the ledger
             // above. This guard applies only before a fresh call can run.
-            if !already_started && ctx.has_stalled_call(call) {
+            if !already_started && let Some(refusal) = ctx.stalled_call_refusal(call) {
                 prefetch.reads.discard(index);
-                self.finish(ctx, call, ToolResult::error(
-                    "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
-                )).await?;
+                self.finish(ctx, call, ToolResult::error(refusal)).await?;
                 continue;
             }
             if call.tool.as_str() == TOOLS_SEARCH {
@@ -1635,6 +1639,7 @@ where
                     event = "dex_tool_arguments_rejected",
                     tool = %call.tool,
                     exposed = !spec.core && !self.routed_by_wrapper(&spec.name),
+                    rules = %broken_rules(&spec, &call.args),
                     "tool call arguments rejected by the tool's schema"
                 );
                 prefetch.reads.discard(index);
@@ -2382,7 +2387,7 @@ where
         let search = (!self.search_wrapped()).then(|| self.search.clone());
         search
             .into_iter()
-            .chain(std::iter::once(codemode::spec()))
+            .chain(std::iter::once(codemode::spec(self.searcher())))
             .chain(std::iter::once(self.call_spec()))
             .chain(self.act_spec())
             .chain(
@@ -2412,7 +2417,7 @@ where
             return None;
         }
         if name.as_str() == agent_codemode::TOOL_NAME {
-            return Some(codemode::spec());
+            return Some(codemode::spec(self.searcher()));
         }
         if name == &self.search.name {
             return Some(self.search.clone());
@@ -2754,16 +2759,9 @@ fn search_spec() -> ToolSpec {
 
 /// `tools.call`: see [`TOOLS_CALL`]. Not read-only: the call it names may
 /// be a mutation, and that call's own spec decides how it runs.
-fn call_spec(searcher: &str) -> ToolSpec {
+fn call_spec(searcher: &str, act: bool) -> ToolSpec {
     ToolSpec {
-        description: format!(
-            "Call a tool that {} found. name: the tool's name exactly as the search result \
-             lists it; arguments: an object matching that tool's input_schema from the search \
-             result. The call runs as that tool, with its own authorization and receipt. An \
-             argument that does not fit the schema is returned with the field and the reason; \
-             correct it and call again.",
-            model_tool_name(searcher)
-        ),
+        description: wrappers::call_description(searcher, act),
         name: ToolName::new(TOOLS_CALL),
         label: "Using a found tool".into(),
         schema: serde_json::json!({

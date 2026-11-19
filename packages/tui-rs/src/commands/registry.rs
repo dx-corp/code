@@ -69,6 +69,7 @@
 //!
 //! See `CommandArgument` in `types.rs` for argument definition details.
 
+mod appearance;
 mod codex_switch;
 mod session_navigation;
 
@@ -1355,31 +1356,7 @@ fn build_builtin_registry() -> CommandRegistry {
         .localized()
         .primary(7),
     );
-    registry.register(
-        Command::new(
-            "output",
-            maestro_ui::localization::tr("Choose summary, compact, or expanded tool output"),
-            CommandCategory::Ui,
-            Box::new(|ctx| {
-                if ctx.raw_args.trim().is_empty() {
-                    return Ok(CommandOutput::Action(CommandAction::OpenPanel(
-                        ControlPanel::Output,
-                    )));
-                }
-                let detail =
-                    crate::state::OutputDetail::parse(ctx.raw_args.trim()).ok_or_else(|| {
-                        CommandError::new(maestro_ui::localization::tr(
-                            "Usage: /output [summary|compact|expanded]",
-                        ))
-                    })?;
-                Ok(CommandOutput::Action(CommandAction::SetOutputDetail(
-                    detail,
-                )))
-            }),
-        )
-        .localized()
-        .usage("/output [summary|compact|expanded]"),
-    );
+    appearance::register_output_commands(&mut registry);
 
     // Help command
     registry.register(

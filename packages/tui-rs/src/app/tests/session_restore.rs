@@ -1,5 +1,79 @@
 use super::*;
 
+#[test]
+fn auto_chart_restores_successful_structured_and_legacy_tool_results() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("auto-chart.jsonl");
+    let timestamp = "2026-11-18T00:00:00Z";
+    let tool = "mcp_query";
+    let ids = ["structured", "legacy", "posthog", "failed"];
+    let calls: Vec<_> = ids
+        .into_iter()
+        .map(|id| serde_json::json!({"type":"toolCall", "id":id, "name":tool, "arguments":{}}))
+        .collect();
+    let mut entries = vec![
+        serde_json::json!({"type":"session","version":2,"id":"chart-replay","timestamp":timestamp,"cwd":"/tmp","model":"gpt-4o","thinkingLevel":"medium"}),
+        serde_json::json!({"type":"message","timestamp":timestamp,"message":{
+            "role":"assistant","timestamp":1,"content":calls
+        }}),
+    ];
+    let rows = serde_json::json!({"columns":["day","turns"],"results":[["2026-11-17",3],["2026-11-18",6]]});
+    for (id, content, details, is_error) in [
+        (
+            "structured",
+            "Query complete",
+            Some(serde_json::json!({"structuredContent":rows})),
+            false,
+        ),
+        (
+            "legacy",
+            "day|turns\n2026-11-17|3\n2026-11-18|6",
+            None,
+            false,
+        ),
+        (
+            "posthog",
+            "Query complete",
+            Some(serde_json::json!({
+                "server":"posthog",
+                "tool":"exec",
+                "content":[{"type":"text","text":"Date|turns\n2026-11-17 08:00|3\n2026-11-17 09:00|6"}],
+            })),
+            false,
+        ),
+        (
+            "failed",
+            "day|turns\n2026-11-17|3\n2026-11-18|6",
+            None,
+            true,
+        ),
+    ] {
+        entries.push(
+            serde_json::json!({"type":"message","timestamp":timestamp,"message":{
+                "role":"toolResult","timestamp":2,"toolCallId":id,"toolName":tool,"content":content,
+                "details":details,"isError":is_error
+            }}),
+        );
+    }
+    let contents = entries
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, contents + "\n").unwrap();
+
+    let session = crate::session::SessionReader::read_file(path).unwrap();
+    let mut state = AppState::new();
+    restore_visible_session_messages(&mut state, &session);
+    let calls = &state.messages[0].tool_calls;
+    assert_eq!(calls.len(), ids.len());
+    assert!(calls[0].auto_chart.is_some());
+    assert_eq!(calls[0].output, "Query complete");
+    assert!(calls[1].auto_chart.is_some());
+    assert!(calls[2].auto_chart.is_some());
+    assert!(calls[3].auto_chart.is_none());
+}
+
 #[tokio::test]
 async fn selective_summary_continue_restores_exact_provider_history() {
     assert_session_restore_provider_history(false).await;

@@ -388,6 +388,89 @@ async fn discovers_only_admitted_tools_with_typed_declarations() {
     assert!(report.output[0].contains("read_rows"));
     assert!(report.output[1].contains("Promise<unknown>"));
     assert_eq!(report.output[2], "undefined");
+    // The unknown name is reported once; the search that matched is not.
+    assert_eq!(report.discovery_misses.len(), 1);
+    assert!(report.content().ends_with(
+        "describeTool(\"unadmitted\") found nothing. It inspects only the tools admitted to this script, not every tool the host can reach."
+    ));
+}
+
+#[tokio::test]
+async fn a_script_that_selects_nothing_says_so_instead_of_returning_an_empty_result() {
+    for code in ["const unused = 1 + 1;", "text('');", "store('k', 1);"] {
+        let mut session = Session::start(
+            code.into(),
+            tools(),
+            &CancellationToken::new(),
+            Duration::from_secs(2),
+        );
+        let report = done(&mut session).await;
+        assert_eq!(report.error, None, "{code}");
+        assert_eq!(report.content(), NO_OUTPUT, "{code}");
+    }
+    // Selected output and failures are unchanged.
+    let mut session = Session::start(
+        "return 0;".into(),
+        tools(),
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    assert_eq!(done(&mut session).await.content(), "0");
+    let mut session = Session::start(
+        "throw new Error('stop');".into(),
+        tools(),
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    let content = done(&mut session).await.content();
+    assert!(content.starts_with("Script failed:"), "{content}");
+    assert!(!content.contains(NO_OUTPUT));
+}
+
+#[tokio::test]
+async fn a_search_that_matches_nothing_says_it_covered_only_the_admitted_catalog() {
+    // Printed or not, repeated or not: one bounded note per distinct miss.
+    let long = "z".repeat(4096);
+    let code = format!(
+        "text(searchTools('investor crm')); searchTools('investor crm'); searchTools('{long}'); for (let i = 0; i < 8; i++) searchTools('other ' + i);"
+    );
+    let mut session = Session::start(
+        code,
+        tools(),
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    let report = done(&mut session).await;
+    assert_eq!(report.error, None);
+    assert_eq!(report.output, ["[]"]);
+    assert_eq!(report.discovery_misses.len(), 4);
+    assert!(report.discovery_misses.iter().all(|miss| miss.len() < 256));
+    assert!(report.content().starts_with(
+        "[]\nsearchTools(\"investor crm\") found nothing. It inspects only the tools admitted to this script, not every tool the host can reach.\n"
+    ));
+
+    // A search that selects nothing else still returns the note, after the
+    // no-output notice.
+    let mut session = Session::start(
+        "searchTools('investor crm');".into(),
+        tools(),
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    let content = done(&mut session).await.content();
+    assert!(content.starts_with(NO_OUTPUT), "{content}");
+    assert!(content.contains("searchTools(\"investor crm\") found nothing."));
+
+    // The note never pushes selected output past the output limit.
+    let mut session = Session::start(
+        "text('x'.repeat(65536)); searchTools('investor crm');".into(),
+        tools(),
+        &CancellationToken::new(),
+        Duration::from_secs(2),
+    );
+    let report = done(&mut session).await;
+    assert_eq!(report.error, None);
+    assert_eq!(report.content().len(), 65_536);
 }
 
 #[tokio::test]

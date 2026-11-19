@@ -93,6 +93,7 @@ mod tests {
         let mut assistant = ui_message(MessageRole::Assistant, assistant_text);
         assistant.thinking = thinking_text.to_string();
         assistant.tool_calls.push(ToolCallState {
+            auto_chart: None,
             parent_call_id: None,
             duration_ms: None,
             call_id: "call-1".to_string(),

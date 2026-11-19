@@ -275,17 +275,11 @@ impl App {
         match action {
             CommandAction::OpenPanel(panel) => self.show_control_panel(panel),
             CommandAction::SetOutputDetail(detail) => self.apply_output_detail(detail),
+            CommandAction::SetAutoCharts(enabled) => self.apply_auto_charts(enabled),
             CommandAction::ClearMessages => {
                 self.start_new_session(self.state.locale.translate("New session started."));
             }
-            CommandAction::ToggleZenMode => {
-                self.state.zen_mode = !self.state.zen_mode;
-                if self.state.zen_mode {
-                    self.state.status = Some(self.state.locale.translate("Zen mode enabled").to_string());
-                } else {
-                    self.state.status = Some(self.state.locale.translate("Zen mode disabled").to_string());
-                }
-            }
+            CommandAction::ToggleZenMode => self.toggle_zen_mode(),
             CommandAction::SetCompactTools(mode) => {
                 let compact = mode.unwrap_or(!self.state.compact_tool_outputs);
                 self.apply_output_detail(if compact {

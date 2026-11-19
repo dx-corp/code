@@ -49,6 +49,9 @@ mod prefetch;
 #[path = "prefetch_authority.rs"]
 mod prefetch_authority;
 
+#[path = "prod_replays.rs"]
+mod prod_replays;
+
 #[path = "read_wave_progress.rs"]
 mod read_wave_progress;
 

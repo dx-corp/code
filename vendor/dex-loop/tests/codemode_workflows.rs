@@ -15,6 +15,13 @@ fn script(code: &str) -> Result<dex_loop::ModelChunk, dex_loop::ModelError> {
     call("codemode", json!({"code": code}))
 }
 
+/// What the second script in a row that calls no tool returns: what it
+/// selected, then why the next model call offers no tools. These scripts only
+/// store and load, so the second one of a turn carries the notice.
+fn stalling(selected: &str) -> String {
+    format!("{selected}\n{}", dex_loop::IDLE_SCRIPTS_NOTICE)
+}
+
 fn outer_result(log: &FakeLog, id: &str) -> (Outcome, String) {
     log.events()
         .into_iter()
@@ -56,7 +63,7 @@ async fn successful_pagination_state_survives_the_next_script_and_rehydrate() {
     );
     assert_eq!(
         outer_result(&log, "t1-2-0"),
-        (Outcome::Succeeded, "page-2\n[\"invoice-1\"]".into())
+        (Outcome::Succeeded, stalling("page-2\n[\"invoice-1\"]"))
     );
     assert_eq!(log.rehydrate(), ctx);
     let history = model.seen();
@@ -89,7 +96,7 @@ async fn failed_script_keeps_the_last_successful_store_value() {
     assert_eq!(outer_result(&log, "t1-2-0").0, Outcome::Failed);
     assert_eq!(
         outer_result(&log, "t1-3-0"),
-        (Outcome::Succeeded, "accepted".into())
+        (Outcome::Succeeded, stalling("accepted"))
     );
     assert_eq!(log.rehydrate(), ctx);
 }
@@ -298,7 +305,7 @@ async fn image_projection_is_typed_and_oversize_never_commits_scratch_state() {
     assert_eq!(outer_result(&log, "images-2-0").0, Outcome::Failed);
     assert_eq!(
         outer_result(&log, "images-3-0"),
-        (Outcome::Succeeded, "missing".into())
+        (Outcome::Succeeded, stalling("missing"))
     );
     assert_eq!(log.rehydrate(), ctx);
 }
@@ -371,7 +378,7 @@ async fn scratch_preparation_cannot_publish_under_a_foreign_principal() {
     );
     assert_eq!(
         outer_result(&log, "t1-2-0"),
-        (Outcome::Succeeded, "missing".into())
+        (Outcome::Succeeded, stalling("missing"))
     );
     assert_eq!(log.rehydrate(), ctx);
 }
@@ -624,7 +631,7 @@ async fn scratch_keys_and_values_are_sanitized_before_durable_preparation() {
         outer_result(&log, "t1-2-0"),
         (
             Outcome::Succeeded,
-            "undefined\n{\"[redacted]\":{\"[redacted]\":\"[redacted]\"}}".into()
+            stalling("undefined\n{\"[redacted]\":{\"[redacted]\":\"[redacted]\"}}")
         )
     );
     assert!(
@@ -674,7 +681,7 @@ async fn sanitized_scratch_key_collisions_fail_without_replacing_accepted_state(
         );
         assert_eq!(
             outer_result(&log, "t1-3-0"),
-            (Outcome::Succeeded, "accepted\noriginal".into())
+            (Outcome::Succeeded, stalling("accepted\noriginal"))
         );
         assert!(
             !serde_json::to_string(&log.events())

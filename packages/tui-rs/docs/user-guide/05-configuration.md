@@ -38,6 +38,16 @@ Override home with `MAESTRO_HOME` where supported.
 
 ---
 
+## Auto charts
+
+The terminal previews successful tool results with one date or timestamp column and numeric measurements. It accepts JSON records, named SQL result columns, and pipe-delimited tables. Each metric label matches its trace color and each trace uses its own scale. Missing values leave gaps.
+
+The chart shows the latest value. On wider terminals it also shows the range and the change from the first timestamp to the last when both timestamps have a measurement. The chart marks very large values with `≈` when number conversion may lose precision.
+
+PostHog MCP queries can produce charts from HogQL tables and Trends results. For formatted Trends comparisons, the chart uses the current period. When PostHog marks an unfinished bucket, the chart ends at the last completed timestamp and reports the number of omitted buckets where space permits. A completed script can show the chart from its latest eligible query while the script is collapsed.
+
+Expand the tool result to see its text output. Change the saved preference under **Settings → Appearance → Auto charts**, or use `/autochart off` and `/autochart on`.
+
 ## Legacy composer paths
 
 Native loaders may still read:

@@ -20,11 +20,41 @@ type PendingCalls<'a> =
 use super::*;
 use crate::{Output, ThreadId};
 
-pub(super) fn spec() -> ToolSpec {
+/// The whole script reference: every helper, scratch state, models, images
+/// and schema paging. Dex declares [`run_summary`] on every step and keeps
+/// this behind a describe lookup of the tool by name, as `dex.read` does.
+pub const RUN_REFERENCE: &str = agent_codemode::DESCRIPTION;
+
+/// What Dex tells the model about the script tool on every step. The shared
+/// description spends most of its words on catalog inspection, and a model
+/// reads that as what the tool is for (production 2026-11-18, turn
+/// operating_turn_b8642fdf: 39 scripts that inspected the catalog and called
+/// nothing). This one says what a script is for, when not to write one, and
+/// where the rest is. `searcher` is the tool the model finds tools with.
+pub(super) fn run_summary(searcher: &str) -> String {
+    let searcher = model_tool_name(searcher);
+    format!(
+        "Run several tool calls you already know in one script: `await Promise.allSettled([tools.a(args), tools.b(args)])`, then `return` only the fields you need. Use it only when you can name at least two calls and their arguments now. Not for finding tools or deciding what to do: use {searcher} for that. A script that calls no tool does nothing useful, and after two in a row no tools are offered. Limits: 64 calls, 60 seconds, 64 KiB output. Changes inside a script are real and are not undone. For scratch state, models, images and exact schemas, look this tool up by name with {searcher} first."
+    )
+}
+
+/// The script tool as a describe lookup by name returns it: the declared
+/// tool with the whole reference in place of the summary.
+pub fn run_reference() -> ToolSpec {
+    ToolSpec {
+        description: RUN_REFERENCE.into(),
+        ..spec(TOOLS_SEARCH)
+    }
+}
+
+/// What the script that stalls the turn is told after its own output.
+pub const IDLE_SCRIPTS_NOTICE: &str = "This is the second script in a row that called no tool, so no tools are offered now. Answer from what is established and say plainly what could not be found or confirmed.";
+
+pub(super) fn spec(searcher: &str) -> ToolSpec {
     ToolSpec {
         name: ToolName::new(agent_codemode::TOOL_NAME),
         label: "Composing tools".into(),
-        description: agent_codemode::DESCRIPTION.into(),
+        description: run_summary(searcher),
         schema: agent_codemode::schema(),
         // Scripts can contain mutations. Never prefetch or rerun a wrapper.
         read_only: false,
@@ -172,6 +202,30 @@ where
                     } else {
                         Outcome::Succeeded
                     };
+                    // The shared VM says a discovery helper found nothing in
+                    // the admitted catalog; only this host knows what widens
+                    // it. Without the name a model searches the same catalog
+                    // again (production 2026-11-18, turn
+                    // operating_turn_b8642fdf: 39 scripts, no tool called).
+                    if outcome == Outcome::Succeeded && !report.discovery_misses.is_empty() {
+                        let widen = format!(
+                            "\nTo find tools beyond the admitted ones, call {} directly, not from a script. A later script can call what it finds.",
+                            model_tool_name(self.searcher())
+                        );
+                        if content.len() + widen.len() <= 64 * 1024 {
+                            content.push_str(&widen);
+                        }
+                    }
+                    // The script that stalls the turn keeps what it selected
+                    // and is told why the next call offers no tools.
+                    if outcome == Outcome::Succeeded
+                        && report.calls.is_empty()
+                        && ctx.next_idle_script_stalls()
+                        && content.len() + 1 + IDLE_SCRIPTS_NOTICE.len() <= 64 * 1024
+                    {
+                        content.push('\n');
+                        content.push_str(IDLE_SCRIPTS_NOTICE);
+                    }
                     if outcome == Outcome::Unknown {
                         content = format!(
                             "Outcome unknown: a nested tool may have taken effect; completed effects are not undone. Reconcile it before retrying.\n{content}"
@@ -351,10 +405,8 @@ where
                             ))
                         } else if let Err(reason) = validate_args(&entry, &call.args) {
                             Some(ToolResult::error(reason))
-                        } else if ctx.has_stalled_call(call) {
-                            Some(ToolResult::error(
-                                "not executed: the identical call failed three times without progress; change the inputs or approach, or report the blocker",
-                            ))
+                        } else if let Some(refusal) = ctx.stalled_call_refusal(call) {
+                            Some(ToolResult::error(refusal))
                         } else if (!entry.read_only || model_operation)
                             && ctx.has_uncertain_call(call)
                         {

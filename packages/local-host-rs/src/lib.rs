@@ -68,6 +68,7 @@ pub mod state;
 pub mod stealth_models;
 pub mod telemetry;
 pub mod terminal_info;
+pub mod tool_chart;
 pub mod tool_output;
 pub mod tools;
 pub mod transcript;

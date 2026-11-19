@@ -24,7 +24,7 @@ use dex_loop::{
 use maestro_runtime::agent::loop_policy;
 use maestro_runtime::agent::native_host::{
     ApprovalMode, NativeExecutionHostHandle, NativeFirewallVerdict, NativeHookResult,
-    NativeToolExecutionOptions,
+    NativeToolExecutionOptions, ToolDefinition,
 };
 use maestro_runtime::agent::workflow_state::{WorkflowStateTracker, apply_workflow_state_hooks};
 use maestro_runtime_contracts::contracts::ToolOutcome;
@@ -219,10 +219,25 @@ impl HostTools {
     /// Offers every tool `host` registers, gated as the native actor gates
     /// them under `mode`.
     pub fn new(host: NativeExecutionHostHandle, mode: ApprovalMode) -> Self {
+        Self::with_host_definitions(host, mode, Vec::new())
+    }
+
+    /// Discover MCP tools before snapshotting a native desktop turn's catalog.
+    pub async fn with_local_mcp(host: NativeExecutionHostHandle, mode: ApprovalMode) -> Self {
+        let mcp = host.mcp_tool_definitions().await.unwrap_or_default();
+        Self::with_host_definitions(host, mode, mcp)
+    }
+
+    fn with_host_definitions(
+        host: NativeExecutionHostHandle,
+        mode: ApprovalMode,
+        mcp: Vec<ToolDefinition>,
+    ) -> Self {
         let mut catalog = Vec::new();
-        for definition in host.tool_definitions() {
+        let mut names = std::collections::HashSet::new();
+        for definition in host.tool_definitions().into_iter().chain(mcp) {
             let name = definition.tool.name.clone();
-            if name == USER_ASK {
+            if name == USER_ASK || !names.insert(name.clone()) {
                 continue;
             }
             let annotations = host.tool_annotations(&name);
@@ -322,6 +337,8 @@ impl HostTools {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .snapshot();
+        // These calls run through the local host. MCP origin affects approval
+        // classification, but does not move execution outside its firewall.
         loop_policy::firewall_verdict(
             &self.host,
             name,
@@ -379,8 +396,14 @@ impl Tools for HostTools {
         if let NativeFirewallVerdict::Block { reason } = &firewall {
             return Verdict::Deny(reason.clone());
         }
-        let required =
-            loop_policy::approval_required(self.mode, false, &firewall, &self.host, name, &args);
+        let required = loop_policy::approval_required(
+            self.mode,
+            self.host.is_mcp_tool(name),
+            &firewall,
+            &self.host,
+            name,
+            &args,
+        );
         if !required {
             return Verdict::Allow;
         }
@@ -459,5 +482,69 @@ impl Tools for HostTools {
             return ToolResult::error(format!("{output}\n\nblocked by hook: {reason}"));
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maestro_local_host::agent::{NativeAgentConfig, dex_loop_execution_host, tool_host};
+    use maestro_runtime::agent::CredentialVault;
+
+    #[tokio::test]
+    async fn discovered_mcp_tools_run_through_native_approval() {
+        let workspace = tempfile::tempdir().unwrap();
+        let config = NativeAgentConfig {
+            cwd: workspace.path().to_string_lossy().into_owned(),
+            ..NativeAgentConfig::default()
+        };
+        let host = dex_loop_execution_host(
+            Arc::new(tool_host::BuiltInToolHost),
+            &config,
+            CredentialVault::new(),
+        )
+        .unwrap();
+        let name = "mcp__posthog__exec";
+        let tool = ToolDefinition {
+            tool: maestro_ai::Tool::new(name, "Run a PostHog query"),
+            requires_approval: true,
+        };
+
+        assert!(
+            HostTools::new(host.clone(), ApprovalMode::Yolo)
+                .catalog()
+                .iter()
+                .all(|spec| spec.name.as_str() != name)
+        );
+        let tools = HostTools::with_host_definitions(host, ApprovalMode::Yolo, vec![tool]);
+        let spec = tools
+            .catalog()
+            .iter()
+            .find(|spec| spec.name.as_str() == name)
+            .expect("the connected MCP tool is advertised");
+        assert_eq!(spec.executor, ExecutorKind::InProcess);
+        assert!(matches!(
+            tools.firewall(name, &json!({})),
+            NativeFirewallVerdict::RequireApproval { .. }
+        ));
+
+        let call = ProposedCall::new(
+            CallId::new("mcp-test"),
+            spec.name.clone(),
+            json!({}),
+            PrincipalId::new("test"),
+        );
+        let context = dex_loop::rehydrate(
+            ThreadId {
+                org: "local".into(),
+                workspace: "local".into(),
+                thread: "test".into(),
+            },
+            &[],
+        );
+        assert!(matches!(
+            tools.policy(&context, &call).await,
+            Verdict::NeedsConfirmation { .. }
+        ));
     }
 }

@@ -300,6 +300,10 @@ impl NativeExecutionHost for LocalNativeExecutionHost {
         self.executor.tool_definitions().cloned().collect()
     }
 
+    fn mcp_tool_definitions(&self) -> NativeHostFuture<'_, Result<Vec<ToolDefinition>, String>> {
+        Box::pin(self.executor.mcp_tool_definitions())
+    }
+
     fn tool_context_effect(&self, name: &str, args: &Value) -> Option<NativeContextEffect> {
         local_file_context_effect(Path::new(self.executor.cwd()), name, args)
     }
