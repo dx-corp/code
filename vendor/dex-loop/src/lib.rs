@@ -89,14 +89,15 @@ pub use engine::{
     FinalReply, IDLE_SCRIPTS_NOTICE, RUN_REFERENCE, TOOLS_CALL, TOOLS_SEARCH, plan_digest,
     run_reference, validate_args,
 };
-pub use event::COMPACTION_EVIDENCE_VERSION;
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, AnswerClaim, ApprovalId, ApprovalMode, ArtifactRef,
-    AttemptNext, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass,
-    ErrorCode, Event, HEADLESS_AUTO_APPROVER, InteractionMode, MessageId, Outcome, Output,
-    OutputRef, PrincipalId, ProposedCall, ProviderReasoning, ReceiptId, RichBlocks, ServedBy,
-    StepTiming, ThreadContextProfile, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
+    AttemptNext, CONNECT_POSTHOG_TOOL, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision,
+    Cursor, ErrorClass, ErrorCode, Event, HEADLESS_AUTO_APPROVER, InteractionMode, MessageId,
+    Outcome, Output, OutputRef, POSTHOG_SETUP_COMPLETE, PrincipalId, ProposedCall,
+    ProviderReasoning, QuestionPurpose, ReceiptId, RichBlocks, ServedBy, StepTiming,
+    ThreadContextProfile, ThreadId, ToolName, ToolResult, TurnId, Usage, args_digest,
 };
+pub use event::{COMPACTION_EVIDENCE_VERSION, posthog_setup_event_id};
 pub use managed_inference_contract::ManagedInferenceProviderBinding;
 pub use page::{
     PageAdmission, PageCollection, PageContext, PageFilter, PageRead, PageRecord, is_record_id,
