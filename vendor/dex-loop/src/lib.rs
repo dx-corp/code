@@ -89,6 +89,7 @@ pub use engine::{
     FinalReply, IDLE_SCRIPTS_NOTICE, RUN_REFERENCE, TOOLS_CALL, TOOLS_SEARCH, plan_digest,
     run_reference, validate_args,
 };
+pub use event::COMPACTION_EVIDENCE_VERSION;
 pub use event::{
     AUTO_APPROVER, ActionConfirmation, AnswerClaim, ApprovalId, ApprovalMode, ArtifactRef,
     AttemptNext, CallId, ClaimSource, ClientToolSpec, ConfirmationDecision, Cursor, ErrorClass,

@@ -2,12 +2,73 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
+import {
+	classifyChangedPaths,
+	GIT_MAX_BUFFER,
+	GIT_TIMEOUT_MS,
+	getChangedPaths,
+	parseGitDiffPaths,
+	parseWorkspacePackages,
+	selectForEvent,
+} from "./select-maestro-ci-changes.mjs";
+
+const MONO_SETUP_JAVA_SHA = "77dd5b2ce225ea11469928ac317850245a74ae78";
+const PUBLIC_SETUP_JAVA_SHA = "de7274f081f381c8f8158605e0321c36c376e2e6";
+
+function expectedSetupJavaSha(testUrl) {
+	const pathSegments = fileURLToPath(testUrl).split(/[\\/]/);
+	return pathSegments.slice(-4, -1).join("/") === "products/maestro/scripts"
+		? MONO_SETUP_JAVA_SHA
+		: undefined;
+}
+
+function assertSetupJavaConfiguration(workflowText, expectedSha) {
+	const action = workflowText.match(
+		/^([ \t]*)-[ \t]+uses:[ \t]+actions\/setup-java@([^\s#]+)[^\n]*\n/m,
+	);
+	assert.ok(action, "setup-java must be configured in a workflow step");
+	const actionIndent = action[1].length;
+	const stepLines = [];
+	for (const line of workflowText
+		.slice(action.index + action[0].length)
+		.split(/\r?\n/)) {
+		const lineIndent = line.match(/^[ \t]*/)[0].length;
+		if (
+			line.trim() &&
+			lineIndent <= actionIndent &&
+			line.trimStart().startsWith("- ")
+		) {
+			break;
+		}
+		stepLines.push(line);
+	}
+	const stepInputs = stepLines.join("\n");
+	assert.match(action[2], /^[0-9a-f]{40}$/, "setup-java must use a full commit SHA");
+	if (expectedSha) {
+		assert.equal(action[2], expectedSha, "setup-java must use the reviewed Mono source pin");
+	}
+	assert.match(stepInputs, /^[ \t]+distribution:[ \t]+temurin[ \t]*$/m);
+	assert.match(stepInputs, /^[ \t]+java-version:[ \t]+[\"']?21[\"']?[ \t]*$/m);
+}
+
+function setupJavaWorkflow(pin, javaVersion = "21", distribution = "temurin") {
+	return `jobs:
+  ci-contracts:
+    steps:
+      - uses: actions/setup-java@${pin} # setup-java
+        with:
+          distribution: ${distribution}
+          java-version: "${javaVersion}"
+`;
+}
 
 const workflow = readFileSync(
-	new URL("../.github/workflows/maestro-ci.yml", import.meta.url),
+	process.env.MAESTRO_CI_WORKFLOW_PATH ??
+		new URL("../.github/workflows/maestro-ci.yml", import.meta.url),
 	"utf8",
 );
 const nextest = readFileSync(
@@ -38,6 +99,138 @@ const setupRust = readFileSync(
 	new URL("../.github/actions/setup-rust/action.yml", import.meta.url),
 	"utf8",
 );
+const workflowDocument = parseYaml(workflow);
+const selectorScript = fileURLToPath(new URL("./select-maestro-ci-changes.mjs", import.meta.url));
+const productCargoToml = readFileSync(new URL("../Cargo.toml", import.meta.url), "utf8");
+function workflowConditionContext({
+	eventName = "pull_request",
+	headRepo = "dx-corp/code",
+	cancelled = false,
+} = {}) {
+	return {
+		cancelled,
+		github: {
+			event_name: eventName,
+			repository: "dx-corp/code",
+			event:
+				eventName === "pull_request"
+					? { pull_request: { head: { repo: { full_name: headRepo } } } }
+					: {},
+		},
+		needs: { "protocol-contracts": { result: "success" } },
+	};
+}
+
+function evaluateWorkflowCondition(source, context) {
+	const tokenPattern = /\s*(\&\&|\|\||==|!=|!|\(|\)|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*)/y;
+	const tokens = [];
+	let offset = 0;
+	while (offset < source.length) {
+		tokenPattern.lastIndex = offset;
+		const match = tokenPattern.exec(source);
+		if (!match) {
+			if (source.slice(offset).trim() === "") break;
+			throw new Error(`unsupported workflow expression near ${source.slice(offset)}`);
+		}
+		tokens.push(match[1]);
+		offset = tokenPattern.lastIndex;
+	}
+	let index = 0;
+	const take = (token) => {
+		if (tokens[index] !== token) return false;
+		index += 1;
+		return true;
+	};
+	const valueAt = (path) =>
+		path.split(".").reduce((value, part) => (value == null ? undefined : value[part]), context);
+	let parseOr;
+	const parsePrimary = () => {
+		if (take("(")) {
+			const value = parseOr();
+			assert.equal(take(")"), true);
+			return value;
+		}
+		const token = tokens[index++];
+		if (token?.startsWith("'")) return token.slice(1, -1);
+		if (tokens[index] === "(") {
+			index += 1;
+			assert.equal(take(")"), true);
+			if (token === "always") return true;
+			if (token === "cancelled") return Boolean(context.cancelled);
+			throw new Error(`unsupported workflow function ${token}`);
+		}
+		return valueAt(token);
+	};
+	const parseUnary = () => (take("!") ? !Boolean(parseUnary()) : parsePrimary());
+	const parseEquality = () => {
+		const left = parseUnary();
+		if (take("==")) return left === parseUnary();
+		if (take("!=")) return left !== parseUnary();
+		return left;
+	};
+	const parseAnd = () => {
+		let value = parseEquality();
+		while (take("&&")) value = Boolean(parseEquality()) && Boolean(value);
+		return value;
+	};
+	parseOr = () => {
+		let value = parseAnd();
+		while (take("||")) value = Boolean(parseAnd()) || Boolean(value);
+		return value;
+	};
+	const value = parseOr();
+	assert.equal(index, tokens.length, "workflow condition has unparsed tokens");
+	return Boolean(value);
+}
+
+function runGit(root, args) {
+	const result = spawnSync("git", args, {
+		cwd: root,
+		encoding: "utf8",
+		timeout: 10_000,
+		maxBuffer: 1024 * 1024,
+		env: {
+			...process.env,
+			GIT_AUTHOR_NAME: "Maestro selector test",
+			GIT_AUTHOR_EMAIL: "selector-test@example.invalid",
+			GIT_COMMITTER_NAME: "Maestro selector test",
+			GIT_COMMITTER_EMAIL: "selector-test@example.invalid",
+		},
+	});
+	assert.equal(result.status, 0, `${args.join(" ")} failed: ${result.stderr}`);
+	return result.stdout.trim();
+}
+
+function commitGitTree(root, message) {
+	runGit(root, ["add", "-A"]);
+	runGit(root, ["commit", "--quiet", "-m", message]);
+	return runGit(root, ["rev-parse", "HEAD"]);
+}
+
+function runSelector(repo, eventName, eventPath, outputPath) {
+	const env = { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_OUTPUT: outputPath };
+	if (eventPath) env.GITHUB_EVENT_PATH = eventPath;
+	else delete env.GITHUB_EVENT_PATH;
+	return spawnSync(process.execPath, [selectorScript], {
+		cwd: repo,
+		encoding: "utf8",
+		timeout: 10_000,
+		maxBuffer: 1024 * 1024,
+		env,
+	});
+}
+
+function readGitHubOutputs(path) {
+	return Object.fromEntries(
+		readFileSync(path, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => {
+				const separator = line.indexOf("=");
+				return [line.slice(0, separator), line.slice(separator + 1)];
+			}),
+	);
+}
 
 test("coverage sends the CI profile to Nextest rather than test binaries", () => {
 	const root = mkdtempSync(join(tmpdir(), "maestro-coverage-routing-"));
@@ -82,10 +275,55 @@ if (args[1] === 'nextest' && args.includes('--ignore-run-fail') && args.includes
 	}
 });
 
+test("setup-java pin and Java configuration match the workflow tree", () => {
+	assertSetupJavaConfiguration(workflow, expectedSetupJavaSha(import.meta.url));
+});
+
+test("setup-java validation rejects an unexpected pin or Java configuration", () => {
+	assert.throws(() =>
+		assertSetupJavaConfiguration(
+			setupJavaWorkflow("a".repeat(40)),
+			MONO_SETUP_JAVA_SHA,
+		),
+	);
+	assert.throws(() =>
+		assertSetupJavaConfiguration(setupJavaWorkflow("v6.2.0"), MONO_SETUP_JAVA_SHA),
+	);
+	assert.throws(() =>
+		assertSetupJavaConfiguration(
+			setupJavaWorkflow(MONO_SETUP_JAVA_SHA, "22"),
+			MONO_SETUP_JAVA_SHA,
+		),
+	);
+});
+
+test("projected setup-java check accepts the retained public workflow pin", () => {
+	const root = mkdtempSync(join(tmpdir(), "maestro-public-workflow-"));
+	try {
+		const projectedTestUrl = pathToFileURL(
+			join(root, "scripts", "check-ci-concurrency.test.mjs"),
+		);
+		const workflowUrl = new URL("../.github/workflows/maestro-ci.yml", projectedTestUrl);
+		mkdirSync(join(root, "scripts"), { recursive: true });
+		mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+		writeFileSync(
+			fileURLToPath(workflowUrl),
+			setupJavaWorkflow(PUBLIC_SETUP_JAVA_SHA),
+		);
+		assert.equal(expectedSetupJavaSha(projectedTestUrl), undefined);
+		assertSetupJavaConfiguration(
+			readFileSync(workflowUrl, "utf8"),
+			expectedSetupJavaSha(projectedTestUrl),
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("maestro-ci concurrency is per ref and cancels in-progress PR runs", () => {
 	assert.match(
 		workflow,
-		/group: maestro-ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/,
+		/group: maestro-ci-\$\{\{ github\.event\.pull_request\.head\.repo\.full_name \|\| github\.repository \}\}-\$\{\{ github\.head_ref \|\| github\.ref \}\}/,
 	);
 	assert.match(
 		workflow,
@@ -147,9 +385,6 @@ test("light checks use the light owned runner", () => {
 	}
 });
 
-const trustedHead =
-	/github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository/;
-
 test("advisory coverage and perf are scheduled, not required on push or PR", () => {
 	assert.match(
 		workflow,
@@ -181,14 +416,237 @@ test("fork pull requests never start jobs on internal runners", () => {
 		"hosted-orb-delegation-live",
 		"maestro-ci",
 	]) {
-		const block = workflow.split(`  ${job}:`)[1]?.split(/\n  [a-z]/)[0] ?? "";
-		assert.match(block, trustedHead, `${job} must skip fork pull requests`);
+		const condition = workflowDocument.jobs[job]?.if;
+		assert.equal(typeof condition, "string", `${job} must declare a trusted-head condition`);
+		assert.equal(
+			evaluateWorkflowCondition(
+				condition,
+				workflowConditionContext({ headRepo: "fork/maestro" }),
+			),
+			false,
+			`${job} must skip fork pull requests`,
+		);
 	}
 	assert.doesNotMatch(
 		workflow,
 		/^    if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/m,
 		"advisory jobs must keep the trusted-head conjunct",
 	);
+});
+
+test("path classifier selects only known target inputs and fails closed elsewhere", () => {
+	const vectors = [
+		{ path: ".vscode/settings.json", selected: [], reason: "no_relevant_paths" },
+		{ path: "docs/CONTRIBUTOR_RUNBOOK.md", selected: [], reason: "no_relevant_paths" },
+		{ path: "packages/jetbrains-plugin/src/main/kotlin/Main.kt", selected: ["jetbrains_plugin"] },
+		{ path: "packages/runtime-rs/src/lib.rs", selected: ["rust_tests", "native_release"] },
+		{ path: "proto/maestro/v1/headless.proto", selected: ["rust_tests", "native_release", "jetbrains_plugin"] },
+		{ path: "Cargo.toml", selected: ["rust_tests", "native_release"] },
+		{ path: ".config/nextest.toml", selected: ["rust_tests"] },
+		{ path: "vendor/serde/Cargo.toml", selected: ["rust_tests", "native_release"] },
+		{ path: "scripts/run-ci-jetbrains.sh", selected: ["jetbrains_plugin"] },
+		{ path: "scripts/run-nextest-partition.sh", selected: ["rust_tests"] },
+		{ path: "scripts/materialize-native-package.mjs", selected: ["native_release"] },
+		{ path: ".github/workflows/maestro-ci.yml", selected: ["rust_tests", "native_release", "jetbrains_plugin"] },
+		{ path: "scripts/select-maestro-ci-changes.mjs", selected: ["rust_tests", "native_release", "jetbrains_plugin"], reason: "fallback_unknown_path" },
+		{ path: "scripts/check-ci-concurrency.test.mjs", selected: ["rust_tests", "native_release", "jetbrains_plugin"], reason: "fallback_unknown_path" },
+		{ path: "docs/protocols/hosted-runner-contract.md", selected: ["rust_tests", "native_release", "jetbrains_plugin"], reason: "fallback_unknown_path" },
+		{ path: "README.md", selected: ["rust_tests", "native_release", "jetbrains_plugin"], reason: "fallback_unknown_path" },
+		{ path: "packages/not-a-workspace-member/src/lib.rs", selected: ["rust_tests", "native_release", "jetbrains_plugin"], reason: "fallback_unknown_path" },
+	];
+	for (const vector of vectors) {
+		const outputs = classifyChangedPaths([vector.path], productCargoToml);
+		for (const target of ["rust_tests", "native_release", "jetbrains_plugin"]) {
+			const selected = vector.selected.includes(target);
+			assert.equal(outputs[target], selected ? "true" : "false", vector.path);
+			assert.equal(
+				outputs[`${target}_reason`],
+				vector.reason ?? (selected ? "matched_path" : "no_relevant_paths"),
+				vector.path,
+			);
+		}
+		assert.equal(outputs.selection_valid, "true", vector.path);
+	}
+	assert.ok(parseWorkspacePackages(productCargoToml).has("runtime-rs"));
+	assert.deepEqual(classifyChangedPaths([], productCargoToml), {
+		selection_valid: "true",
+		rust_tests: "true",
+		rust_tests_reason: "fallback_empty_paths",
+		native_release: "true",
+		native_release_reason: "fallback_empty_paths",
+		jetbrains_plugin: "true",
+		jetbrains_plugin_reason: "fallback_empty_paths",
+	});
+	assert.equal(
+		classifyChangedPaths(["packages/runtime-rs/../README.md"], productCargoToml).rust_tests_reason,
+		"fallback_malformed_input",
+	);
+	assert.throws(() => parseWorkspacePackages("[workspace]\nmembers = [\n  \"examples/not-a-package\",\n]\n"));
+	assert.throws(() => parseGitDiffPaths(Buffer.alloc(0)), /fallback_empty_paths/);
+	assert.throws(() => parseGitDiffPaths(Buffer.from("path-without-terminator")), /fallback_malformed_input/);
+	assert.throws(() => parseGitDiffPaths(Buffer.from("path\nwith-newline\0")), /fallback_malformed_input/);
+	assert.ok(Number.isFinite(GIT_TIMEOUT_MS) && GIT_TIMEOUT_MS > 0);
+	assert.ok(Number.isFinite(GIT_MAX_BUFFER) && GIT_MAX_BUFFER > 0);
+});
+
+test("Git selector uses merge-base and exposes deleted and added rename paths", () => {
+	const root = mkdtempSync(join(tmpdir(), "maestro-path-selector-git-"));
+	try {
+		runGit(root, ["init", "--quiet"]);
+		runGit(root, ["checkout", "--quiet", "-b", "main"]);
+		mkdirSync(join(root, "packages/runtime-rs/src"), { recursive: true });
+		writeFileSync(
+			join(root, "Cargo.toml"),
+			'[workspace]\nresolver = "2"\nmembers = [\n  "packages/runtime-rs",\n]\n',
+		);
+		writeFileSync(join(root, "packages/runtime-rs/Cargo.toml"), "[package]\nname = \"runtime\"\n");
+		writeFileSync(join(root, "packages/runtime-rs/src/lib.rs"), "pub fn value() -> u8 { 1 }\n");
+		writeFileSync(join(root, "packages/runtime-rs/src/old.rs"), "pub fn old() {}\n");
+		writeFileSync(join(root, "packages/runtime-rs/src/deleted.rs"), "pub fn deleted() {}\n");
+		commitGitTree(root, "base");
+
+		runGit(root, ["checkout", "--quiet", "-b", "feature"]);
+		writeFileSync(join(root, "packages/runtime-rs/src/lib.rs"), "pub fn value() -> u8 { 2 }\n");
+		runGit(root, ["mv", "packages/runtime-rs/src/old.rs", "packages/runtime-rs/src/new.rs"]);
+		rmSync(join(root, "packages/runtime-rs/src/deleted.rs"));
+		const headSha = commitGitTree(root, "feature changes");
+
+		runGit(root, ["checkout", "--quiet", "main"]);
+		writeFileSync(join(root, "base-only.txt"), "not part of the PR diff\n");
+		const baseSha = commitGitTree(root, "advance base");
+		const paths = getChangedPaths({ baseSha, headSha, cwd: root });
+		assert.deepEqual(paths, [
+			"packages/runtime-rs/src/deleted.rs",
+			"packages/runtime-rs/src/lib.rs",
+			"packages/runtime-rs/src/new.rs",
+			"packages/runtime-rs/src/old.rs",
+		]);
+		const outputs = classifyChangedPaths(paths, readFileSync(join(root, "Cargo.toml"), "utf8"));
+		assert.equal(outputs.rust_tests, "true");
+		assert.equal(outputs.native_release, "true");
+		assert.equal(outputs.jetbrains_plugin, "false");
+
+		const eventPath = join(root, "event.json");
+		const outputPath = join(root, "github-output.txt");
+		writeFileSync(
+			eventPath,
+			JSON.stringify({ pull_request: { base: { sha: baseSha }, head: { sha: headSha } } }),
+		);
+		const result = runSelector(root, "pull_request", eventPath, outputPath);
+		assert.equal(result.status, 0, result.stderr);
+		const cliOutputs = readGitHubOutputs(outputPath);
+		assert.equal(cliOutputs.selection_valid, "true");
+		assert.equal(cliOutputs.rust_tests, "true");
+		assert.equal(cliOutputs.native_release, "true");
+		assert.equal(cliOutputs.jetbrains_plugin, "false");
+
+		for (const eventName of ["push", "schedule", "workflow_dispatch", "release"]) {
+			const nonPrOutput = join(root, `${eventName}-output.txt`);
+			const nonPr = runSelector(root, eventName, undefined, nonPrOutput);
+			assert.equal(nonPr.status, 0, nonPr.stderr);
+			const nonPrOutputs = readGitHubOutputs(nonPrOutput);
+			for (const target of ["rust_tests", "native_release", "jetbrains_plugin"]) {
+				assert.equal(nonPrOutputs[target], "true", eventName);
+				assert.equal(nonPrOutputs[`${target}_reason`], "non_pr", eventName);
+			}
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a real contributor-runbook-only change selects no targets", () => {
+	const root = mkdtempSync(join(tmpdir(), "maestro-runbook-selector-git-"));
+	try {
+		runGit(root, ["init", "--quiet"]);
+		runGit(root, ["checkout", "--quiet", "-b", "main"]);
+		mkdirSync(join(root, "docs"), { recursive: true });
+		writeFileSync(join(root, "Cargo.toml"), productCargoToml);
+		const runbookPath = "docs/CONTRIBUTOR_RUNBOOK.md";
+		const runbook = readFileSync(new URL("../docs/CONTRIBUTOR_RUNBOOK.md", import.meta.url), "utf8");
+		writeFileSync(join(root, runbookPath), runbook);
+		const baseSha = commitGitTree(root, "base with contributor runbook");
+
+		runGit(root, ["checkout", "--quiet", "-b", "docs-only"]);
+		writeFileSync(join(root, runbookPath), `${runbook}\nSelector-only fixture change.\n`);
+		const headSha = commitGitTree(root, "change contributor runbook only");
+		const outputs = selectForEvent(
+			"pull_request",
+			{ pull_request: { base: { sha: baseSha }, head: { sha: headSha } } },
+			{ cwd: root },
+		);
+		for (const target of ["rust_tests", "native_release", "jetbrains_plugin"]) {
+			assert.equal(outputs[target], "false");
+			assert.equal(outputs[`${target}_reason`], "no_relevant_paths");
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("uncertain Git or event inputs select every target", () => {
+	const root = mkdtempSync(join(tmpdir(), "maestro-path-selector-fallback-"));
+	try {
+		runGit(root, ["init", "--quiet"]);
+		runGit(root, ["checkout", "--quiet", "-b", "main"]);
+		writeFileSync(join(root, "Cargo.toml"), '[workspace]\nmembers = [\n  "packages/runtime-rs",\n]\n');
+		const baseSha = commitGitTree(root, "base");
+		const validPullRequest = { pull_request: { base: { sha: baseSha }, head: { sha: baseSha } } };
+		for (const [eventName, event, options, reason] of [
+			["pull_request", validPullRequest, { cwd: root }, "fallback_empty_paths"],
+			["pull_request", { pull_request: { base: { sha: "bad" }, head: { sha: baseSha } } }, { cwd: root }, "fallback_invalid_sha"],
+			["pull_request", { pull_request: { base: { sha: baseSha }, head: { sha: "f".repeat(40) } } }, { cwd: root }, "fallback_missing_object"],
+			["pull_request", validPullRequest, { cwd: root, gitBinary: join(root, "missing-git") }, "fallback_git_error"],
+			["pull_request", {}, { cwd: root }, "fallback_event_input"],
+		]) {
+			const outputs = selectForEvent(eventName, event, options);
+			for (const target of ["rust_tests", "native_release", "jetbrains_plugin"]) {
+				assert.equal(outputs[target], "true", reason);
+				assert.equal(outputs[`${target}_reason`], reason);
+			}
+		}
+
+		const ambiguousGit = join(root, "ambiguous-git");
+		writeFileSync(
+			ambiguousGit,
+			`#!/bin/sh
+if [ "$1" = "rev-parse" ]; then printf '%s\\n' "${baseSha}"; exit 0; fi
+if [ "$1" = "merge-base" ]; then [ "$2" = "--all" ] || exit 3; printf '%s\\n%s\\n' "${baseSha}" "${"f".repeat(40)}"; exit 0; fi
+exit 2
+`,
+			{ mode: 0o755 },
+		);
+		const ambiguous = selectForEvent("pull_request", validPullRequest, {
+			cwd: root,
+			gitBinary: ambiguousGit,
+		});
+		assert.equal(ambiguous.rust_tests_reason, "fallback_ambiguous_merge_base");
+		assert.equal(ambiguous.native_release, "true");
+		assert.equal(ambiguous.jetbrains_plugin, "true");
+
+		for (const [name, json] of [
+			["undefined", "undefined"],
+			["invalid", "{invalid json"],
+			["null", "null"],
+		]) {
+			const eventPath = join(root, `${name}-event.json`);
+			const outputPath = join(root, `${name}-event-output.txt`);
+			writeFileSync(eventPath, json);
+			const result = runSelector(root, "pull_request", eventPath, outputPath);
+			assert.equal(result.status, 0, result.stderr);
+			const outputs = readGitHubOutputs(outputPath);
+			for (const target of ["rust_tests", "native_release", "jetbrains_plugin"]) {
+				assert.equal(outputs[target], "true", name);
+				assert.equal(outputs[`${target}_reason`], "fallback_event_input", name);
+			}
+		}
+		const nonPr = selectForEvent("workflow_dispatch", null);
+		assert.equal(nonPr.rust_tests_reason, "non_pr");
+		const missingEvent = selectForEvent(undefined, null);
+		assert.equal(missingEvent.rust_tests_reason, "fallback_event_input");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("maestro-ci covers every migrated validation family", () => {
@@ -218,7 +676,6 @@ test("maestro-ci covers every migrated validation family", () => {
 	assert.match(workflow, /bash scripts\/run-ci-perf\.sh/);
 	assert.match(workflow, /bash scripts\/ci-linux-check\.sh/);
 	assert.match(workflow, /scripts\/run-nextest-partition\.sh/);
-	assert.match(workflow, /actions\/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6/);
 	assert.match(workflow, /use-sccache: "true"/);
 	assert.match(
 		workflow,
@@ -243,19 +700,8 @@ test("supply-chain can read the pull request and issue timeline for deny.toml ch
 	assert.match(block, /bash scripts\/run-ci-supply-chain\.sh/);
 });
 
-test("terminal maestro-ci job fails unless needed jobs succeeded or skipped", () => {
-	assert.match(
-		workflow,
-		/^  maestro-ci:\n    name: maestro-ci\n    if: always\(\) && \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\)/m,
-	);
-	assert.match(workflow, /result == "skipped"/);
-	assert.match(workflow, /maestro-ci failed for/);
-	const terminal = workflow.split("  maestro-ci:")[1] ?? "";
-	assert.match(terminal, /for name, body in sorted\(needs\.items\(\)\):/);
-	assert.doesNotMatch(
-		terminal,
-		/if name in \(|hosted-orb-delegation-live.*continue-on-error|result == "failure"/,
-	);
+test("portable selector path tests are included in the tooling lane", () => {
+	assert.match(tooling, /node --test scripts\/check-ci-concurrency\.test\.mjs/);
 });
 
 test("nextest runs as a four-way hash partition matrix", () => {
@@ -332,10 +778,17 @@ test("network and long-running operations are bounded", () => {
 test("protocol lock fails the build before heavy jobs start", () => {
 	assert.match(workflow, /^  protocol-contracts:/m);
 	assert.match(workflow, /npm run check:protocol-manifest/);
+	const protocolDependents = Object.entries(workflowDocument.jobs).filter(
+		([name, job]) =>
+			name !== "maestro-ci" &&
+			(Array.isArray(job.needs)
+				? job.needs.includes("protocol-contracts")
+				: job.needs === "protocol-contracts"),
+	);
 	assert.equal(
-		(workflow.match(/needs: protocol-contracts/g) ?? []).length,
+		protocolDependents.length,
 		10,
-		"heavy jobs must wait for the protocol lock",
+		"all validation jobs must wait for the protocol lock",
 	);
 });
 

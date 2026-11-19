@@ -85,6 +85,9 @@ if [[ -f .github/workflows/check-release-workflow-contract.test.mjs ]]; then
   node --test .github/workflows/check-release-workflow-contract.test.mjs
   node .github/workflows/check-release-workflow-contract.mjs
 fi
+if [[ -f .github/workflows/check-maestro-ci-path-selection-contract.test.mjs ]]; then
+  node --test .github/workflows/check-maestro-ci-path-selection-contract.test.mjs
+fi
 for test_file in \
   scripts/check-required-status-checks.test.mjs \
   scripts/check-integration-required-gate.test.mjs \

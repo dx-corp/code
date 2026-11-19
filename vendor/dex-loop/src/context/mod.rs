@@ -569,7 +569,7 @@ impl Context {
     }
 
     /// What this turn's tools returned, oldest first; failed calls are left out.
-    pub(crate) fn turn_outputs(&self) -> &[TurnOutput] {
+    pub fn turn_outputs(&self) -> &[TurnOutput] {
         &self.turn_outputs
     }
 
@@ -1028,6 +1028,8 @@ impl Context {
             Event::TextDelta { .. }
             | Event::ThinkingDelta { .. }
             | Event::ModelAttemptFailed { .. }
+            | Event::CompactionAttempted
+            | Event::CompactionEvidenceComplete { .. }
             | Event::ToolProgress { .. } => {}
             Event::Usage(usage) => self.usage += *usage,
             Event::ModelStepCompleted {

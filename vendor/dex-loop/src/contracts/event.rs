@@ -377,6 +377,8 @@ pub struct ClaimSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_contract: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<ReceiptId>,
 }
 
@@ -981,6 +983,12 @@ pub enum Event {
         covers_to_cursor: Cursor,
         summary: String,
     },
+    /// A history-compaction summary was about to be dispatched for this turn.
+    CompactionAttempted,
+    /// This runtime finished handling this turn's compaction work.
+    CompactionEvidenceComplete {
+        version: u32,
+    },
 
     /// The turn finished; `text` is the last step's text. `claims` are the
     /// statements of `text` that this turn's tool results verified, written
@@ -1006,6 +1014,8 @@ pub enum Event {
     },
     Interrupted,
 }
+
+pub const COMPACTION_EVIDENCE_VERSION: u32 = 1;
 
 impl Event {
     /// Control events are the ones the engine reads back with

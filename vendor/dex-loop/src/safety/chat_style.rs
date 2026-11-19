@@ -168,6 +168,35 @@ pub fn budget(question: &str) -> Option<Budget> {
     Some(DEFAULT_BUDGET)
 }
 
+/// The visible prose size of a reply and the budget for its question.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Measurement {
+    /// Count of visible prose sentences outside list items.
+    pub sentences: usize,
+    /// Count of visible list items.
+    pub items: usize,
+    /// The existing chat-style budget, absent for requests that ask for detail.
+    pub budget: Option<Budget>,
+}
+
+impl Measurement {
+    /// Whether the reply exceeds its budget, or `None` when the question has no budget.
+    pub fn over_budget(self) -> Option<bool> {
+        self.budget
+            .map(|budget| self.sentences > budget.sentences || self.items > budget.items)
+    }
+}
+
+/// Measure a reply with the same prose and sentence/item rules used by [`check`].
+pub fn measure(question: &str, text: &str) -> Measurement {
+    let (sentences, items) = size(&prose_lines(text));
+    Measurement {
+        sentences,
+        items,
+        budget: budget(question),
+    }
+}
+
 /// Openers that put something before the answer.
 const PREAMBLES: [&str; 16] = [
     "based on ",
@@ -1031,4 +1060,34 @@ fn without_ids(question: &str, sentence: &str) -> Option<String> {
         rebuilt = format!("{}{trailing}", rebuilt.trim_end());
     }
     Some(rebuilt)
+}
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::{Measurement, SHORT_BUDGET, measure};
+
+    #[test]
+    fn measurement_uses_the_native_short_sentence_budget() {
+        let measured = measure("Keep it short.", "First. Second. Third.");
+
+        assert_eq!(
+            measured,
+            Measurement {
+                sentences: 3,
+                items: 0,
+                budget: Some(SHORT_BUDGET),
+            }
+        );
+        assert_eq!(measured.over_budget(), Some(true));
+    }
+
+    #[test]
+    fn detailed_requests_keep_actual_size_without_a_budget() {
+        let measured = measure("List every item.", "One sentence.\n- One item");
+
+        assert_eq!(measured.sentences, 1);
+        assert_eq!(measured.items, 1);
+        assert_eq!(measured.budget, None);
+        assert_eq!(measured.over_budget(), None);
+    }
 }

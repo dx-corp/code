@@ -1,5 +1,4 @@
-# Dependency updates for the release artifacts are managed upstream.
-# This repository manages updates to its own GitHub Actions workflows.
+# GitHub Actions updates are managed by Mono's root Dependabot configuration.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -8,7 +7,7 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     rebase-strategy: "auto"
     labels:
       - "dependencies"

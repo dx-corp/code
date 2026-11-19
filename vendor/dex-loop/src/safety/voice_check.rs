@@ -420,6 +420,11 @@ pub fn standard_for_turn(
     standard_for(occasion, text, check_turn(text, outputs))
 }
 
+/// Number of first-person completion claims without a matching successful receipt.
+pub fn unmatched_completion_claim_count(text: &str, outputs: &[crate::TurnOutput]) -> usize {
+    unmatched_claim_count(&completion_claims(text), outputs)
+}
+
 fn standard_for(occasion: Occasion, text: &str, mut found: Vec<Defect>) -> Vec<Defect> {
     if occasion == Occasion::Question && question_ask_count(text) > 1 {
         found.push(Defect::MultipleAsks);
@@ -443,8 +448,7 @@ fn standard_for(occasion: Occasion, text: &str, mut found: Vec<Defect>) -> Vec<D
 /// first-person completion claim lacks its own matching successful receipt.
 fn check_turn(text: &str, outputs: &[crate::TurnOutput]) -> Vec<Defect> {
     let mut found = check(text);
-    let claims = completion_claims(text);
-    if !claims.is_empty() && !all_claims_have_receipts(&claims, outputs) {
+    if unmatched_completion_claim_count(text, outputs) > 0 {
         found.push(Defect::UnreceiptedCompletionClaim);
         found.sort();
         found.dedup();
@@ -1036,8 +1040,22 @@ fn negated_completion(
         .find(|(_, (word, _, _))| matches!(word.as_str(), "filed" | "fixed" | "sent"))
         .map(|(at, _)| at);
     let inherited_end = previous_action.unwrap_or(preceding.len());
-    let inherited_negation = has_negation_in_verb_prefix(&preceding[clause_start..inherited_end]);
     let local_start = previous_action.map_or(clause_start, |at| at + 1);
+    // "did not sign and send it" shares one negation, but "and then" (or
+    // "and also", "and afterwards", "and later") after the negation starts a
+    // new action: in "did not file it and then sent it" the second verb is a
+    // positive claim of its own and still needs its receipt.
+    let clause = &preceding[clause_start..];
+    let negated_at = (0..clause.len()).find(|&at| has_negation_in_verb_prefix(&clause[at..=at]));
+    let sequenced = negated_at.is_some_and(|negated| {
+        clause.windows(2).enumerate().any(|(at, pair)| {
+            at > negated
+                && pair[0].0 == "and"
+                && matches!(pair[1].0.as_str(), "then" | "also" | "afterwards" | "later")
+        })
+    });
+    let inherited_negation =
+        !sequenced && has_negation_in_verb_prefix(&preceding[clause_start..inherited_end]);
     let local_coordination = preceding
         .iter()
         .enumerate()
@@ -1370,7 +1388,7 @@ fn receipt_matches_claim(claim: &CompletionClaim, output: &crate::TurnOutput) ->
         && terms_match_one_value(&claim.target.recipient, &recipients)
 }
 
-fn all_claims_have_receipts(claims: &[CompletionClaim], outputs: &[crate::TurnOutput]) -> bool {
+fn unmatched_claim_count(claims: &[CompletionClaim], outputs: &[crate::TurnOutput]) -> usize {
     let claims: Vec<_> = claims.iter().collect::<BTreeSet<_>>().into_iter().collect();
     let mut receipts: BTreeMap<String, Option<&crate::TurnOutput>> = BTreeMap::new();
     for output in outputs {
@@ -1387,17 +1405,16 @@ fn all_claims_have_receipts(claims: &[CompletionClaim], outputs: &[crate::TurnOu
         }
     }
     let outputs: Vec<_> = receipts.into_values().flatten().collect();
-    if claims.len() > outputs.len() {
-        return false;
-    }
     let mut assigned = vec![None; outputs.len()];
     for claim_index in 0..claims.len() {
         let mut seen = vec![false; outputs.len()];
-        if !assign_receipt(claim_index, &claims, &outputs, &mut assigned, &mut seen) {
-            return false;
-        }
+        assign_receipt(claim_index, &claims, &outputs, &mut assigned, &mut seen);
     }
-    true
+    claims.len()
+        - assigned
+            .iter()
+            .filter(|assigned| assigned.is_some())
+            .count()
 }
 
 fn assign_receipt(
@@ -1499,6 +1516,28 @@ mod completion_claim_tests {
             standard_for_turn(Occasion::Reply, claim, &[])
                 .contains(&Defect::UnreceiptedCompletionClaim)
         );
+    }
+
+    #[test]
+    fn unmatched_claim_count_reports_each_missing_receipt() {
+        let claim = "I filed the billing outage incident. I sent the queue-lag alert.";
+        let filed = output(
+            "pagerduty.incident.create",
+            pagerduty_create_args("billing outage", "billing-outage", "Investigate it."),
+            Some("receipt-billing"),
+        );
+        let sent = output(
+            "microsoft-teams.message.send",
+            teams_send_args("Queue-lag alert: the worker is behind."),
+            Some("receipt-queue-lag"),
+        );
+
+        assert_eq!(unmatched_completion_claim_count(claim, &[]), 2);
+        assert_eq!(
+            unmatched_completion_claim_count(claim, std::slice::from_ref(&filed)),
+            1
+        );
+        assert_eq!(unmatched_completion_claim_count(claim, &[filed, sent]), 0);
     }
 
     #[test]
@@ -1826,6 +1865,27 @@ mod completion_claim_tests {
 
         assert!(negated_completion(claim, &words, action_index));
         assert!(!check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim));
+    }
+
+    #[test]
+    fn negation_does_not_carry_past_a_sequencing_coordinator() {
+        // Codex review on the public mirror (#1630): "and then" starts a new,
+        // positive action, so its claim still needs a receipt.
+        for claim in [
+            "I did not file the incident and then sent the alert.",
+            "I did not file the incident and also sent the alert.",
+        ] {
+            let words = word_spans(claim);
+            let action_index = words
+                .iter()
+                .position(|(word, _, _)| word == "sent")
+                .expect("completion action");
+            assert!(!negated_completion(claim, &words, action_index), "{claim}");
+            assert!(
+                check_turn(claim, &[]).contains(&Defect::UnreceiptedCompletionClaim),
+                "{claim}"
+            );
+        }
     }
 
     #[test]
